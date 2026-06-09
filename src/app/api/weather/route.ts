@@ -27,7 +27,7 @@ const WMO: Record<number, { label: string; icon: string }> = {
 }
 
 export async function GET() {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=America%2FMexico_City&forecast_days=4`
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weathercode,sunrise,sunset&timezone=America%2FMexico_City&forecast_days=4`
 
   const res = await fetch(url, { next: { revalidate: 1800 } })
   if (!res.ok) return NextResponse.json({ error: 'weather fetch failed' }, { status: 500 })
@@ -36,6 +36,9 @@ export async function GET() {
   const code = d.current.weathercode
   const meta = WMO[code] ?? { label: 'Desconocido', icon: '🌡️' }
 
+  const fmtSun = (iso: string) =>
+    new Date(iso).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true })
+
   return NextResponse.json({
     temp: Math.round(d.current.temperature_2m),
     feels: Math.round(d.current.apparent_temperature),
@@ -43,6 +46,7 @@ export async function GET() {
     wind: Math.round(d.current.windspeed_10m),
     label: meta.label,
     icon: meta.icon,
+    sun: { sunrise: fmtSun(d.daily.sunrise[0]), sunset: fmtSun(d.daily.sunset[0]) },
     forecast: d.daily.time.map((date: string, i: number) => ({
       date,
       max: Math.round(d.daily.temperature_2m_max[i]),

@@ -9,15 +9,16 @@ export type Item = {
   id: string
   title: string
   url: string
-  url2?: string
-  url3?: string
+  url2?: string | null
+  url3?: string | null
   section: string
-  subcategory?: string
+  subcategory?: string | null
   item_order: number
   section_order: number
   featured: boolean
-  description?: string
-  image?: string
-  badge?: string
+  description?: string | null
+  image?: string | null
+  badge?: string | null
   accent: string
+  keywords?: string[] | null
 }
