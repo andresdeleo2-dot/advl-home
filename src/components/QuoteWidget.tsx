@@ -19,24 +19,20 @@ const QUOTES: { text: string; author: string }[] = [
 
 export default function QuoteWidget() {
   const [i, setI] = useState(0)
-
-  useEffect(() => {
-    setI(Math.floor(Math.random() * QUOTES.length))
-  }, [])
-
+  useEffect(() => { setI(Math.floor(Math.random() * QUOTES.length)) }, [])
   const q = QUOTES[i]
   const next = () => setI(prev => (prev + 1 + Math.floor(Math.random() * (QUOTES.length - 1))) % QUOTES.length)
 
   return (
     <div className="rounded-2xl glass p-4">
       <div className="mb-2 flex items-center justify-between">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35">Frase del día</p>
-        <button onClick={next} className="rounded-lg bg-white/8 px-2 py-0.5 text-[10px] font-medium text-white/60 hover:bg-white/15">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-[#16365f]/45">Frase del día</p>
+        <button onClick={next} className="rounded-lg bg-[#2d6cdf]/8 px-2 py-0.5 text-[10px] font-semibold text-[#2d6cdf] hover:bg-[#2d6cdf]/16">
           Nueva
         </button>
       </div>
-      <p className="text-sm leading-relaxed text-white/85">“{q.text}”</p>
-      <p className="mt-1.5 text-[11px] text-white/40">— {q.author}</p>
+      <p className="text-sm leading-relaxed font-medium text-[#0f2340]">“{q.text}”</p>
+      <p className="mt-1.5 text-[11px] text-[#16365f]/55">— {q.author}</p>
     </div>
   )
 }

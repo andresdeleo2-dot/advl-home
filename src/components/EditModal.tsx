@@ -45,20 +45,18 @@ export default function EditModal({
   const preview = normalizeImageUrl(draft.image)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}>
-      <div
-        className="animate-fade flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl glass shadow-2xl sm:rounded-3xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-white/8 px-5 py-3.5">
-          <h3 className="text-base font-semibold">{isNew ? 'Nuevo acceso' : 'Editar acceso'}</h3>
-          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg text-white/50 hover:bg-white/10">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0f2340]/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}>
+      <div className="animate-fade flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl border border-[#16365f]/10 bg-white shadow-2xl sm:rounded-3xl"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-[#16365f]/10 px-5 py-3.5">
+          <h3 className="text-base font-semibold text-[#0f2340]">{isNew ? 'Nuevo acceso' : 'Editar acceso'}</h3>
+          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg text-[#16365f]/55 hover:bg-[#f1f6fc]">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          {error && <div className="rounded-xl bg-red-500/15 px-3 py-2 text-xs text-red-300">{error}</div>}
+          {error && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-xs text-red-600">{error}</div>}
 
           <Field label="Título *">
             <input value={draft.title ?? ''} onChange={e => set('title', e.target.value)} className={inputCls} placeholder="Nombre del acceso" />
@@ -104,7 +102,7 @@ export default function EditModal({
             <div className="flex items-center gap-2.5">
               {preview && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={preview} alt="" className="h-10 w-10 flex-shrink-0 rounded-lg object-cover ring-1 ring-white/10" />
+                <img src={preview} alt="" referrerPolicy="no-referrer" className="h-10 w-10 flex-shrink-0 rounded-lg object-cover ring-1 ring-[#16365f]/10" />
               )}
               <input value={draft.image ?? ''} onChange={e => set('image', e.target.value)} className={inputCls} placeholder="https://…" />
             </div>
@@ -115,30 +113,29 @@ export default function EditModal({
               <div className="flex gap-1.5">
                 {ACCENT_OPTIONS.map(a => (
                   <button key={a} onClick={() => set('accent', a)} title={a}
-                    className={`h-6 w-6 rounded-full ring-2 transition ${draft.accent === a ? 'ring-white' : 'ring-transparent'}`}
+                    className={`h-6 w-6 rounded-full ring-2 transition ${draft.accent === a ? 'ring-[#0f2340]' : 'ring-transparent'}`}
                     style={{ background: ACCENT_BG[a] }} />
                 ))}
               </div>
             </Field>
             <label className="flex cursor-pointer items-center gap-2 pt-4 text-sm">
-              <input type="checkbox" checked={!!draft.featured} onChange={e => set('featured', e.target.checked)} className="h-4 w-4 accent-amber-500" />
-              <span className="text-white/70">⭐ Favorito</span>
+              <input type="checkbox" checked={!!draft.featured} onChange={e => set('featured', e.target.checked)} className="h-4 w-4 accent-[#2d6cdf]" />
+              <span className="text-[#16365f]/75">⭐ Favorito</span>
             </label>
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-white/8 px-5 py-3.5">
+        <div className="flex items-center justify-between gap-2 border-t border-[#16365f]/10 px-5 py-3.5">
           {!isNew ? (
-            <button
-              onClick={() => { if (confirm(`¿Eliminar "${item!.title}"?`)) onDelete(item!).then(onClose) }}
-              className="rounded-xl px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-500/15">
+            <button onClick={() => { if (confirm(`¿Eliminar "${item!.title}"?`)) onDelete(item!).then(onClose) }}
+              className="rounded-xl px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-500/10">
               Eliminar
             </button>
           ) : <span />}
           <div className="flex gap-2">
-            <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-white/60 hover:bg-white/8">Cancelar</button>
+            <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-[#16365f]/65 hover:bg-[#f1f6fc]">Cancelar</button>
             <button onClick={submit} disabled={saving}
-              className="rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-[#1a1407] hover:brightness-110 disabled:opacity-50">
+              className="rounded-xl bg-[#2d6cdf] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[#2d6cdf]/25 hover:bg-[#5d99ff] disabled:opacity-50">
               {saving ? 'Guardando…' : isNew ? 'Crear' : 'Guardar'}
             </button>
           </div>
@@ -148,17 +145,17 @@ export default function EditModal({
   )
 }
 
-const inputCls = 'w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 outline-none placeholder:text-white/25 focus:border-amber-400/50'
+const inputCls = 'w-full rounded-xl border border-[#16365f]/12 bg-white px-3 py-2 text-sm text-[#0f2340] outline-none placeholder:text-[#16365f]/35 focus:border-[#2d6cdf]/60'
 
 const ACCENT_BG: Record<string, string> = {
-  copper: '#d97706', blue: '#3b82f6', green: '#10b981', purple: '#8b5cf6',
+  copper: '#d97706', blue: '#2d6cdf', green: '#10b981', purple: '#8b5cf6',
   red: '#ef4444', cyan: '#06b6d4', orange: '#f97316',
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-white/40">{label}</span>
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-[#16365f]/50">{label}</span>
       {children}
     </label>
   )

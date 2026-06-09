@@ -62,11 +62,11 @@ export default function TimerWidget() {
   const targetTime = target ? new Date(target).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true }) : null
 
   return (
-    <div className={`rounded-2xl glass p-4 transition-colors ${fired ? 'ring-1 ring-red-400/40' : ''}`}>
+    <div className={`rounded-2xl glass p-4 transition-colors ${fired ? 'ring-1 ring-red-400/50' : ''}`}>
       <div className="mb-2 flex items-center justify-between">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-white/35">Temporizador</p>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-[#16365f]/45">Temporizador</p>
         {target !== null && (
-          <button onClick={reset} className="rounded-lg bg-white/8 px-2 py-0.5 text-[10px] font-medium text-white/60 hover:bg-white/15">
+          <button onClick={reset} className="rounded-lg bg-[#16365f]/8 px-2 py-0.5 text-[10px] font-semibold text-[#16365f]/65 hover:bg-[#16365f]/16">
             Reiniciar
           </button>
         )}
@@ -74,11 +74,11 @@ export default function TimerWidget() {
 
       {target === null ? (
         <>
-          <p className="mb-2.5 text-xs text-white/45">Elige una alarma rápida:</p>
+          <p className="mb-2.5 text-xs text-[#16365f]/55">Elige una alarma rápida:</p>
           <div className="grid grid-cols-4 gap-1.5">
             {PRESETS.map(p => (
               <button key={p.label} onClick={() => start(p.min)}
-                className="rounded-xl bg-white/8 py-2 text-xs font-semibold text-white/80 hover:bg-amber-500/20">
+                className="rounded-xl bg-[#f1f6fc] py-2 text-xs font-bold text-[#16365f] ring-1 ring-[#16365f]/8 hover:bg-[#2d6cdf]/12 hover:text-[#2d6cdf]">
                 {p.label}
               </button>
             ))}
@@ -86,10 +86,10 @@ export default function TimerWidget() {
         </>
       ) : (
         <div className="text-center">
-          <p className={`tabular-nums font-light tracking-tight ${fired ? 'text-red-300 text-3xl pulse-ring rounded-xl' : 'text-white text-4xl'}`}>
+          <p className={`tabular-nums font-light tracking-tight ${fired ? 'text-red-500 text-3xl pulse-ring rounded-xl' : 'text-[#0f2340] text-4xl'}`}>
             {fired ? '+' : ''}{fmt}
           </p>
-          <p className="mt-1 text-[11px] text-white/40">
+          <p className="mt-1 text-[11px] text-[#16365f]/50">
             {fired ? 'Tiempo transcurrido desde la alarma' : `Suena a las ${targetTime}`}
           </p>
         </div>
