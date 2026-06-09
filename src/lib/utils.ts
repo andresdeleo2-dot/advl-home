@@ -42,25 +42,50 @@ export function matchesQuery(item: Item, q: string): boolean {
   return haystack.includes(needle)
 }
 
-// Detecta URLs en una descripción y las parte en segmentos para renderizar links
-export type DescSegment = { type: 'text' | 'link'; content: string; href?: string }
-export function parseDescription(text?: string | null): DescSegment[] {
-  if (!text) return []
+// Etiqueta corta y legible para un link (host + tipo de recurso de Google)
+export function shortLinkLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '')
+    if (host.includes('drive.google.com')) {
+      if (/\/folders\//.test(u.pathname)) return 'Carpeta Drive'
+      return 'Archivo Drive'
+    }
+    if (host.includes('docs.google.com')) {
+      if (u.pathname.includes('/spreadsheets/')) return 'Hoja de cálculo'
+      if (u.pathname.includes('/document/')) return 'Documento'
+      if (u.pathname.includes('/presentation/')) return 'Presentación'
+      return 'Google Docs'
+    }
+    if (host.includes('script.google.com')) return 'Apps Script'
+    return host
+  } catch {
+    return 'Abrir link'
+  }
+}
+
+// Separa la descripción en texto plano y la lista de links detectados
+export type ParsedDescription = { text: string; links: { url: string; label: string }[] }
+export function parseDescription(text?: string | null): ParsedDescription {
+  if (!text) return { text: '', links: [] }
   const urlRegex = /(https?:\/\/[^\s]+)/g
-  const segments: DescSegment[] = []
-  let lastIndex = 0
+  const links: { url: string; label: string }[] = []
+  const seen = new Set<string>()
   let m: RegExpExecArray | null
   while ((m = urlRegex.exec(text)) !== null) {
-    if (m.index > lastIndex) {
-      segments.push({ type: 'text', content: text.slice(lastIndex, m.index) })
-    }
-    segments.push({ type: 'link', content: m[0], href: m[0] })
-    lastIndex = m.index + m[0].length
+    const clean = m[0].replace(/[).,]+$/, '')
+    if (seen.has(clean)) continue
+    seen.add(clean)
+    links.push({ url: clean, label: shortLinkLabel(clean) })
   }
-  if (lastIndex < text.length) {
-    segments.push({ type: 'text', content: text.slice(lastIndex) })
-  }
-  return segments
+  // Texto sin las URLs crudas, limpiando etiquetas tipo "Carpeta:" colgantes
+  const cleanText = text
+    .replace(urlRegex, '')
+    .replace(/\s*[:|-]\s*$/gm, '')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+  return { text: cleanText, links }
 }
 
 // Agrupa items por sección (respetando section_order) y luego por subcategoría

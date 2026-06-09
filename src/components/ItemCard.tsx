@@ -27,7 +27,7 @@ export default function ItemCard({
   const img = normalizeImageUrl(item.image)
   const favicon = getFaviconUrl(item.url)
   const dot = ACCENT_DOT[item.accent] ?? ACCENT_DOT.blue
-  const descSegments = parseDescription(item.description)
+  const desc = parseDescription(item.description)
 
   return (
     <div className="group relative flex flex-col rounded-2xl glass glass-hover p-3 transition-all duration-200 hover:-translate-y-0.5">
@@ -73,17 +73,23 @@ export default function ItemCard({
             </span>
           </div>
         </div>
-
-        {descSegments.length > 0 && (
-          <p className="clamp-2 text-[11px] leading-snug text-[#16365f]/55">
-            {descSegments.map((s, i) =>
-              s.type === 'link'
-                ? <span key={i} className="text-[#2d6cdf]">{s.content}</span>
-                : <span key={i}>{s.content}</span>
-            )}
-          </p>
-        )}
       </a>
+
+      {desc.text && (
+        <p className="clamp-2 mt-2 text-[11px] leading-snug text-[#16365f]/55">{desc.text}</p>
+      )}
+
+      {desc.links.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {desc.links.map((l, i) => (
+            <a key={i} href={l.url} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg bg-[#2d6cdf]/8 px-2 py-1 text-[10px] font-semibold text-[#2d6cdf] hover:bg-[#2d6cdf]/16">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+              {l.label}
+            </a>
+          ))}
+        </div>
+      )}
 
       {(item.url2 || item.url3) && (
         <div className="mt-2.5 flex gap-1.5 border-t border-[#16365f]/8 pt-2">
