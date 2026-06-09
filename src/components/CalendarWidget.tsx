@@ -27,7 +27,10 @@ export default function CalendarWidget() {
   const [events, setEvents] = useState<CalEvent[] | null>(null)
 
   useEffect(() => {
-    fetch('/api/calendar').then(r => r.json()).then(setEvents)
+    fetch('/api/calendar')
+      .then(r => r.json())
+      .then(data => setEvents(Array.isArray(data) ? data : []))
+      .catch(() => setEvents([]))
   }, [])
 
   if (!events) return <div className="h-full animate-pulse rounded-xl bg-white/5" />
