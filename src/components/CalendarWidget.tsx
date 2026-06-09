@@ -39,7 +39,7 @@ export default function CalendarWidget() {
         <div className="flex items-center gap-1">
           {(['agenda', 'semana'] as const).map(v => (
             <button key={v} onClick={() => setView(v)}
-              className={`rounded-lg px-2 py-0.5 text-[10px] font-medium capitalize ${view === v ? 'bg-blue-500/25 text-blue-200' : 'text-white/45 hover:bg-white/8'}`}>
+              className={`rounded-lg px-2 py-0.5 text-[10px] font-medium capitalize ${view === v ? 'bg-amber-500/20 text-amber-100' : 'text-white/45 hover:bg-white/8'}`}>
               {v}
             </button>
           ))}
@@ -56,8 +56,8 @@ export default function CalendarWidget() {
           {!events && <p className="px-4 py-6 text-center text-sm text-white/30">Cargando…</p>}
           {events && events.length === 0 && <p className="px-4 py-6 text-center text-sm text-white/30">Sin eventos esta semana</p>}
           {events?.map(ev => (
-            <div key={ev.id} className={`flex items-start gap-3 px-4 py-2.5 ${isToday(ev.start, ev.allDay) ? 'bg-blue-500/8' : ''}`}>
-              <div className={`mt-1 h-2 w-2 flex-shrink-0 rounded-full ${isToday(ev.start, ev.allDay) ? 'bg-blue-400' : 'bg-white/25'}`} />
+            <div key={ev.id} className={`flex items-start gap-3 px-4 py-2.5 ${isToday(ev.start, ev.allDay) ? 'bg-amber-500/10' : ''}`}>
+              <div className={`mt-1 h-2 w-2 flex-shrink-0 rounded-full ${isToday(ev.start, ev.allDay) ? 'bg-amber-400' : 'bg-white/25'}`} />
               <div className="min-w-0">
                 <p className="clamp-1 text-sm font-medium text-white/85">{ev.title}</p>
                 <p className="text-[11px] text-white/35">{fmt(ev.start, ev.allDay)}</p>

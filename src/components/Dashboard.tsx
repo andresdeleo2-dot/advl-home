@@ -112,9 +112,8 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
       <header className="border-b border-white/5">
         <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-3 px-5 py-3.5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-sm font-bold shadow-lg shadow-blue-500/25">
-              {CONFIG.logoText}
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="ADVL" className="h-11 w-auto drop-shadow-[0_2px_8px_rgba(212,175,55,0.35)]" />
             <div>
               <h1 className="text-base font-semibold leading-tight">{CONFIG.siteName}</h1>
               <p className="text-[11px] text-white/35">Dashboard personal</p>
@@ -128,7 +127,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <HeaderBtn href={CONFIG.quickLinks.codigo} label="Código" />
             </div>
             <button onClick={() => setModal('new')}
-              className="flex items-center gap-1.5 rounded-xl bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 hover:bg-blue-400">
+              className="flex items-center gap-1.5 rounded-xl bg-gold px-3 py-2 text-sm font-semibold text-[#1a1407] shadow-lg shadow-amber-500/25 hover:brightness-110">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
               <span className="hidden sm:inline">Nuevo</span>
             </button>
@@ -153,7 +152,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
                 <span className="text-white/40">{items.length} accesos · {categories.length} categorías</span>
               </div>
               <button onClick={() => setEditMode(e => !e)}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${editMode ? 'bg-blue-500 text-white' : 'glass glass-hover text-white/65'}`}>
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${editMode ? 'bg-gold text-[#1a1407]' : 'glass glass-hover text-white/65'}`}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                 {editMode ? 'Editando' : 'Modo edición'}
               </button>
@@ -165,7 +164,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <input
                 value={rawQuery} onChange={e => setRawQuery(e.target.value)}
                 placeholder="Buscar por nombre, url, categoría, descripción…"
-                className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-sm outline-none placeholder:text-white/30 focus:border-blue-400/50"
+                className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-sm outline-none placeholder:text-white/30 focus:border-amber-400/50"
               />
             </div>
 
@@ -216,7 +215,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
                   {group.subgroups.map((sub, i) => (
                     <div key={i} className="mb-4">
                       {sub.subcategory && (
-                        <p className="mb-2 ml-0.5 text-[11px] font-medium text-blue-300/60">{sub.subcategory}</p>
+                        <p className="mb-2 ml-0.5 text-[11px] font-medium text-amber-300/70">{sub.subcategory}</p>
                       )}
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
                         {sub.items.map(item => (
@@ -266,7 +265,7 @@ function HeaderBtn({ href, label }: { href: string; label: string }) {
 function Chip({ children, active, onClick, accent }: { children: React.ReactNode; active?: boolean; onClick?: () => void; accent?: 'amber' }) {
   const activeCls = accent === 'amber'
     ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/30'
-    : 'bg-blue-500/20 text-blue-200 ring-1 ring-blue-400/30'
+    : 'bg-amber-500/20 text-amber-100 ring-1 ring-amber-400/30'
   return (
     <button onClick={onClick}
       className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? activeCls : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>

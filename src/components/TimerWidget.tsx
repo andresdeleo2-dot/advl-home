@@ -78,7 +78,7 @@ export default function TimerWidget() {
           <div className="grid grid-cols-4 gap-1.5">
             {PRESETS.map(p => (
               <button key={p.label} onClick={() => start(p.min)}
-                className="rounded-xl bg-white/8 py-2 text-xs font-semibold text-white/80 hover:bg-blue-500/25">
+                className="rounded-xl bg-white/8 py-2 text-xs font-semibold text-white/80 hover:bg-amber-500/20">
                 {p.label}
               </button>
             ))}

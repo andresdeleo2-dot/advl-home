@@ -6,7 +6,7 @@ import { normalizeImageUrl, getFaviconUrl, parseDescription } from '@/lib/utils'
 
 const ACCENT_GLOW: Record<string, string> = {
   copper: 'group-hover:shadow-amber-500/20',
-  blue:   'group-hover:shadow-blue-500/25',
+  blue:   'group-hover:shadow-amber-500/25',
   green:  'group-hover:shadow-emerald-500/20',
   purple: 'group-hover:shadow-purple-500/20',
   red:    'group-hover:shadow-red-500/20',
@@ -14,7 +14,7 @@ const ACCENT_GLOW: Record<string, string> = {
   orange: 'group-hover:shadow-orange-500/20',
 }
 const ACCENT_DOT: Record<string, string> = {
-  copper: 'bg-amber-400', blue: 'bg-blue-400', green: 'bg-emerald-400',
+  copper: 'bg-amber-400', blue: 'bg-amber-400', green: 'bg-emerald-400',
   purple: 'bg-purple-400', red: 'bg-red-400', cyan: 'bg-cyan-400', orange: 'bg-orange-400',
 }
 
@@ -93,7 +93,7 @@ export default function ItemCard({
           <p className="clamp-2 text-[11px] leading-snug text-white/45">
             {descSegments.map((s, i) =>
               s.type === 'link'
-                ? <span key={i} className="text-blue-300">{s.content}</span>
+                ? <span key={i} className="text-amber-200">{s.content}</span>
                 : <span key={i}>{s.content}</span>
             )}
           </p>
@@ -111,7 +111,7 @@ export default function ItemCard({
           )}
           {item.url3 && (
             <a href={item.url3} target="_blank" rel="noopener noreferrer"
-              className="flex-1 rounded-lg bg-blue-500/10 py-1 text-center text-[10px] font-medium text-blue-300/90 hover:bg-blue-500/20">
+              className="flex-1 rounded-lg bg-amber-500/10 py-1 text-center text-[10px] font-medium text-amber-200/90 hover:bg-amber-500/20">
               Código
             </a>
           )}

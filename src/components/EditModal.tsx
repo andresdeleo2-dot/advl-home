@@ -121,7 +121,7 @@ export default function EditModal({
               </div>
             </Field>
             <label className="flex cursor-pointer items-center gap-2 pt-4 text-sm">
-              <input type="checkbox" checked={!!draft.featured} onChange={e => set('featured', e.target.checked)} className="h-4 w-4 accent-blue-500" />
+              <input type="checkbox" checked={!!draft.featured} onChange={e => set('featured', e.target.checked)} className="h-4 w-4 accent-amber-500" />
               <span className="text-white/70">⭐ Favorito</span>
             </label>
           </div>
@@ -138,7 +138,7 @@ export default function EditModal({
           <div className="flex gap-2">
             <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-white/60 hover:bg-white/8">Cancelar</button>
             <button onClick={submit} disabled={saving}
-              className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-400 disabled:opacity-50">
+              className="rounded-xl bg-gold px-4 py-2 text-sm font-semibold text-[#1a1407] hover:brightness-110 disabled:opacity-50">
               {saving ? 'Guardando…' : isNew ? 'Crear' : 'Guardar'}
             </button>
           </div>
@@ -148,7 +148,7 @@ export default function EditModal({
   )
 }
 
-const inputCls = 'w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 outline-none placeholder:text-white/25 focus:border-blue-400/50'
+const inputCls = 'w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 outline-none placeholder:text-white/25 focus:border-amber-400/50'
 
 const ACCENT_BG: Record<string, string> = {
   copper: '#d97706', blue: '#3b82f6', green: '#10b981', purple: '#8b5cf6',

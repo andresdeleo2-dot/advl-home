@@ -1,20 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --bg-0: #080b14;
-  --bg-1: #0c1120;
-  --bg-2: #111a30;
-  --accent: #4f7cff;
-  --accent-2: #7c5cff;
+  --bg-0: #0a0908;
+  --bg-1: #14110c;
+  --gold: #d4af37;
+  --gold-2: #e8c25a;
 }
 
 html, body { height: 100%; }
 
 body {
-  color: #e8ecf4;
+  color: #ece7dd;
   background:
-    radial-gradient(1200px 700px at 85% -10%, rgba(79,124,255,0.14), transparent 60%),
-    radial-gradient(900px 600px at 10% 0%, rgba(124,92,255,0.10), transparent 55%),
+    radial-gradient(1200px 700px at 85% -10%, rgba(212,175,55,0.12), transparent 60%),
+    radial-gradient(900px 600px at 8% 0%, rgba(180,130,40,0.08), transparent 55%),
     linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
   background-attachment: fixed;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
@@ -22,19 +21,19 @@ body {
 }
 
 .glass {
-  background: rgba(255, 255, 255, 0.045);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 250, 240, 0.04);
+  border: 1px solid rgba(212, 175, 55, 0.10);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
 .glass-hover:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 250, 240, 0.07);
+  border-color: rgba(212, 175, 55, 0.28);
 }
 
 *::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 99px; }
-*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+*::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.18); border-radius: 99px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(212,175,55,0.32); }
 *::-webkit-scrollbar-track { background: transparent; }
 
 .clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
@@ -43,5 +42,8 @@ body {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .animate-fade { animation: fadeIn 0.25s ease both; }
 
-@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(79,124,255,0.45); } 70% { box-shadow: 0 0 0 8px rgba(79,124,255,0); } 100% { box-shadow: 0 0 0 0 rgba(79,124,255,0); } }
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(212,175,55,0.5); } 70% { box-shadow: 0 0 0 8px rgba(212,175,55,0); } 100% { box-shadow: 0 0 0 0 rgba(212,175,55,0); } }
 .pulse-ring { animation: pulse-ring 1.8s infinite; }
+
+.text-gold { color: var(--gold-2); }
+.bg-gold { background: linear-gradient(135deg, var(--gold-2), var(--gold)); }
