@@ -2,6 +2,8 @@ import { supabase } from '@/lib/supabase'
 import type { Item } from '@/lib/supabase'
 import ItemCard from '@/components/ItemCard'
 import Clock from '@/components/Clock'
+import WeatherWidget from '@/components/WeatherWidget'
+import CalendarWidget from '@/components/CalendarWidget'
 
 export const revalidate = 300
 
@@ -34,8 +36,9 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen bg-[#0f0f13] text-white">
+      {/* Header */}
       <header className="sticky top-0 z-10 border-b border-white/5 bg-[#0f0f13]/90 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
+        <div className="mx-auto flex max-w-[1400px] items-center justify-between px-6 py-3">
           <span className="text-sm font-semibold tracking-widest uppercase text-white/40">
             advl
           </span>
@@ -43,33 +46,42 @@ export default async function Home() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8 space-y-10">
-        {featured.length > 0 && (
-          <section>
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-white/30">
-              Destacados
-            </h2>
-            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-              {featured.map(item => (
-                <ItemCard key={item.id} item={item} featured />
-              ))}
-            </div>
-          </section>
-        )}
+      <div className="mx-auto flex max-w-[1400px] gap-6 px-6 py-8">
+        {/* Main content */}
+        <main className="flex-1 min-w-0 space-y-10">
+          {featured.length > 0 && (
+            <section>
+              <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-white/30">
+                Destacados
+              </h2>
+              <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                {featured.map(item => (
+                  <ItemCard key={item.id} item={item} featured />
+                ))}
+              </div>
+            </section>
+          )}
 
-        {sections.map(({ section, items: sectionItems }) => (
-          <section key={section}>
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-white/30">
-              {section}
-            </h2>
-            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-              {sectionItems.map(item => (
-                <ItemCard key={item.id} item={item} />
-              ))}
-            </div>
-          </section>
-        ))}
-      </main>
+          {sections.map(({ section, items: sectionItems }) => (
+            <section key={section}>
+              <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-white/30">
+                {section}
+              </h2>
+              <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                {sectionItems.map(item => (
+                  <ItemCard key={item.id} item={item} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </main>
+
+        {/* Sidebar */}
+        <aside className="hidden lg:flex flex-col gap-4 w-72 flex-shrink-0">
+          <WeatherWidget />
+          <CalendarWidget />
+        </aside>
+      </div>
     </div>
   )
 }
