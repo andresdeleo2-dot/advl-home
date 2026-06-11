@@ -24,22 +24,33 @@ export function getFaviconUrl(url: string): string | null {
   }
 }
 
+// Normaliza texto para búsqueda: minúsculas y sin acentos
+export function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+}
+
 // Búsqueda tolerante por título, url, categoría, subcategoría, descripción y keywords
+// Soporta varias palabras: todas deben aparecer (en cualquier orden)
 export function matchesQuery(item: Item, q: string): boolean {
   if (!q) return true
-  const needle = q.toLowerCase().trim()
-  const haystack = [
-    item.title,
-    item.url,
-    item.section,
-    item.subcategory,
-    item.description,
-    ...(item.keywords ?? []),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-  return haystack.includes(needle)
+  const haystack = normalizeText(
+    [
+      item.title,
+      item.url,
+      item.section,
+      item.subcategory,
+      item.description,
+      ...(item.keywords ?? []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+  )
+  const terms = normalizeText(q).split(/\s+/).filter(Boolean)
+  return terms.every(t => haystack.includes(t))
 }
 
 // Etiqueta corta y legible para un link (host + tipo de recurso de Google)

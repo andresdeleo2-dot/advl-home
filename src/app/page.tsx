@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase'
 import type { Item } from '@/lib/supabase'
 import Dashboard from '@/components/Dashboard'
 
-export const dynamic = 'force-dynamic'
+export const revalidate = 300
 
 async function getItems(): Promise<Item[]> {
   const { data } = await supabase

@@ -1,9 +1,9 @@
 'use client'
 
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { Item } from '@/lib/supabase'
 import { CONFIG } from '@/lib/config'
-import { matchesQuery, groupItems } from '@/lib/utils'
+import { matchesQuery, groupItems, getFaviconUrl } from '@/lib/utils'
 import ItemCard from './ItemCard'
 import HeaderStats from './HeaderStats'
 import WeatherWidget from './WeatherWidget'
@@ -17,6 +17,20 @@ function isFlujo(section: string) {
   return section.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim() === 'flujo'
 }
 
+type Recent = { id: string; title: string; url: string; ts: number }
+const RECENT_KEY = 'advl_recent_v1'
+const RECENT_MAX = 8
+
+function loadRecents(): Recent[] {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') } catch { return [] }
+}
+
+function greetingFor(hour: number) {
+  if (hour >= 5 && hour < 12) return 'Buenos días'
+  if (hour >= 12 && hour < 19) return 'Buenas tardes'
+  return 'Buenas noches'
+}
+
 export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   const [items, setItems] = useState<Item[]>(initialItems)
   const [rawQuery, setRawQuery] = useState('')
@@ -25,11 +39,42 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   const [showFav, setShowFav] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [modal, setModal] = useState<Item | 'new' | null>(null)
+  const [recents, setRecents] = useState<Recent[]>([])
+  const [greeting, setGreeting] = useState('')
+  const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Al montar: refrescar datos (la página es cacheada), cargar recientes y saludo
+  useEffect(() => {
+    setRecents(loadRecents())
+    const hourMx = Number(new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/Mexico_City', hour: '2-digit', hour12: false,
+    }).format(new Date()))
+    setGreeting(greetingFor(hourMx))
+    fetch('/api/items').then(r => r.json()).then(j => { if (j.ok) setItems(j.data) }).catch(() => {})
+  }, [])
+
+  // Debounce de búsqueda
   useEffect(() => {
     const t = setTimeout(() => setQuery(rawQuery), 200)
     return () => clearTimeout(t)
   }, [rawQuery])
+
+  const showToast = useCallback((msg: string, error = false) => {
+    setToast({ msg, error })
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 2600)
+  }, [])
+
+  const trackOpen = useCallback((item: Item) => {
+    setRecents(prev => {
+      const next = [{ id: item.id, title: item.title, url: item.url, ts: Date.now() },
+        ...prev.filter(r => r.id !== item.id)].slice(0, RECENT_MAX)
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+  }, [])
 
   const categories = useMemo(() => {
     const set = new Set<string>()
@@ -61,6 +106,34 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   const grouped = useMemo(() => groupItems(filtered), [filtered])
   const resultCount = filtered.length
 
+  // Atajos de teclado: / o ⌘K enfoca búsqueda, Esc limpia, Enter abre primer resultado
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (document.activeElement as HTMLElement)?.tagName
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA'
+
+      if ((e.key === '/' && !typing) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
+        e.preventDefault()
+        searchRef.current?.focus()
+        searchRef.current?.select()
+        return
+      }
+      if (e.key === 'Escape' && document.activeElement === searchRef.current) {
+        setRawQuery('')
+        searchRef.current?.blur()
+        return
+      }
+      if (e.key === 'Enter' && document.activeElement === searchRef.current && filtered.length > 0) {
+        const first = filtered[0]
+        trackOpen(first)
+        window.open(first.url, '_blank', 'noopener')
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [filtered, trackOpen])
+
+  // ---- CRUD optimista ----
   const toggleFav = async (item: Item) => {
     const prev = items
     const next = !item.featured
@@ -71,7 +144,11 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
         body: JSON.stringify({ featured: next }),
       })
       if (!r.ok) throw new Error('fallo')
-    } catch { setItems(prev) }
+      showToast(next ? '⭐ Agregado a favoritos' : 'Quitado de favoritos')
+    } catch {
+      setItems(prev)
+      showToast('No se pudo guardar el favorito', true)
+    }
   }
 
   const saveItem = async (draft: Partial<Item>, isNew: boolean) => {
@@ -83,6 +160,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
       const j = await r.json()
       if (!j.ok) throw new Error(j.error || 'No se pudo crear')
       setItems(prev => [...prev, j.data])
+      showToast('Acceso creado')
     } else {
       const prev = items
       setItems(items.map(i => i.id === draft.id ? { ...i, ...draft } as Item : i))
@@ -92,6 +170,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
       })
       const j = await r.json()
       if (!j.ok) { setItems(prev); throw new Error(j.error || 'No se pudo guardar') }
+      showToast('Acceso guardado')
     }
   }
 
@@ -99,13 +178,57 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
     const prev = items
     setItems(items.filter(i => i.id !== item.id))
     const r = await fetch(`/api/items/${item.id}`, { method: 'DELETE' })
-    if (!r.ok) setItems(prev)
+    if (!r.ok) {
+      setItems(prev)
+      showToast('No se pudo eliminar', true)
+    } else {
+      showToast('Acceso eliminado')
+    }
+  }
+
+  // Reordenar dentro de su subgrupo (sección + subcategoría)
+  const moveItem = async (item: Item, dir: -1 | 1) => {
+    const siblings = items
+      .filter(i => i.section === item.section && (i.subcategory || '') === (item.subcategory || ''))
+      .sort((a, b) => (a.item_order ?? 999) - (b.item_order ?? 999))
+    const idx = siblings.findIndex(i => i.id === item.id)
+    const target = idx + dir
+    if (target < 0 || target >= siblings.length) return
+
+    // Reasignar orden secuencial (10, 20, 30…) con el item movido en su nueva posición
+    const reordered = [...siblings]
+    reordered.splice(idx, 1)
+    reordered.splice(target, 0, item)
+    const changes = new Map<string, number>()
+    reordered.forEach((it, i) => {
+      const newOrder = (i + 1) * 10
+      if (it.item_order !== newOrder) changes.set(it.id, newOrder)
+    })
+    if (changes.size === 0) return
+
+    const prev = items
+    setItems(items.map(i => changes.has(i.id) ? { ...i, item_order: changes.get(i.id)! } : i))
+    try {
+      const results = await Promise.all(
+        Array.from(changes.entries()).map(([id, item_order]) =>
+          fetch(`/api/items/${id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_order }),
+          })
+        )
+      )
+      if (results.some(r => !r.ok)) throw new Error('fallo')
+    } catch {
+      setItems(prev)
+      showToast('No se pudo reordenar', true)
+    }
   }
 
   const refresh = async () => {
     const r = await fetch('/api/items')
     const j = await r.json()
-    if (j.ok) setItems(j.data)
+    if (j.ok) { setItems(j.data); showToast('Datos actualizados') }
+    else showToast('No se pudo actualizar', true)
   }
 
   return (
@@ -118,7 +241,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
             <img src="/logo.png" alt="ADVL" className="h-11 w-auto drop-shadow-[0_2px_8px_rgba(0,0,0,0.35)]" />
             <div>
               <h1 className="text-base font-semibold leading-tight">{CONFIG.siteName}</h1>
-              <p className="text-[11px] text-white/55">Dashboard personal</p>
+              <p className="text-[11px] text-white/55">{greeting || 'Dashboard personal'}</p>
             </div>
           </div>
 
@@ -163,9 +286,14 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
 
             <div className="relative mb-3">
               <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#16365f]/40" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-              <input value={rawQuery} onChange={e => setRawQuery(e.target.value)}
+              <input ref={searchRef} value={rawQuery} onChange={e => setRawQuery(e.target.value)}
                 placeholder="Buscar por nombre, url, categoria, descripcion..."
-                className="w-full rounded-2xl border border-white/20 bg-white py-2.5 pl-10 pr-4 text-sm text-[#0f2340] outline-none placeholder:text-[#16365f]/40 focus:border-white" />
+                className="w-full rounded-2xl border border-white/20 bg-white py-2.5 pl-10 pr-24 text-sm text-[#0f2340] outline-none placeholder:text-[#16365f]/40 focus:border-white" />
+              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-1 text-[10px] text-[#16365f]/40 sm:flex">
+                <kbd className="rounded border border-[#16365f]/15 bg-[#f1f6fc] px-1.5 py-0.5 font-sans">⌘K</kbd>
+                <span>o</span>
+                <kbd className="rounded border border-[#16365f]/15 bg-[#f1f6fc] px-1.5 py-0.5 font-sans">/</kbd>
+              </span>
             </div>
 
             <div className="flex flex-wrap gap-1.5">
@@ -179,9 +307,27 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
 
             <p className="mt-3 text-[11px] text-white/45">
               {resultCount} {resultCount === 1 ? 'resultado' : 'resultados'}
+              {query && ' · Enter abre el primero'}
               {editMode && ' · modo edicion activo'}
             </p>
           </div>
+
+          {/* RECIENTES */}
+          {recents.length > 0 && !query && (
+            <section className="mb-5">
+              <h2 className="mb-2 text-[11px] font-bold uppercase tracking-widest text-[#16365f]/40">Recientes</h2>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {recents.map(r => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <a key={r.id} href={r.url} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full glass glass-hover px-3 py-1.5 text-xs font-semibold text-[#16365f]/80">
+                    <img src={getFaviconUrl(r.url) ?? ''} alt="" className="h-3.5 w-3.5 rounded-sm" />
+                    {r.title}
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* FAVORITOS */}
           {!showFav && favorites.length > 0 && (
@@ -190,10 +336,10 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <div className="flex gap-2.5 overflow-x-auto pb-2">
                 {favorites.map(fav => (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <a key={fav.id} href={fav.url} target="_blank" rel="noopener noreferrer"
+                  <a key={fav.id} href={fav.url} target="_blank" rel="noopener noreferrer" onClick={() => trackOpen(fav)}
                     className="flex w-[88px] flex-shrink-0 flex-col items-center gap-1.5 rounded-2xl glass glass-hover p-2.5 text-center transition hover:-translate-y-0.5">
                     <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-[#f1f6fc] ring-1 ring-[#16365f]/8">
-                      <img src={`https://www.google.com/s2/favicons?domain=${(() => { try { return new URL(fav.url).hostname } catch { return '' } })()}&sz=64`} alt="" className="h-5 w-5" />
+                      <img src={getFaviconUrl(fav.url) ?? ''} alt="" className="h-5 w-5" />
                     </span>
                     <span className="clamp-1 w-full text-[10px] font-medium text-[#16365f]/75">{fav.title}</span>
                   </a>
@@ -230,7 +376,9 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
                       )}
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
                         {sub.items.map(item => (
-                          <ItemCard key={item.id} item={item} editMode={editMode} onToggleFav={toggleFav} onEdit={(it) => setModal(it)} />
+                          <ItemCard key={item.id} item={item} editMode={editMode}
+                            onToggleFav={toggleFav} onEdit={(it) => setModal(it)}
+                            onMove={moveItem} onOpen={trackOpen} />
                         ))}
                       </div>
                     </div>
@@ -258,6 +406,13 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           onDelete={deleteItem}
           onClose={() => setModal(null)}
         />
+      )}
+
+      {/* TOAST */}
+      {toast && (
+        <div className={`animate-fade fixed bottom-4 right-4 z-[60] rounded-xl px-4 py-2.5 text-sm font-medium text-white shadow-2xl ${toast.error ? 'bg-red-600' : 'bg-[#0f2340]'}`}>
+          {toast.msg}
+        </div>
       )}
     </div>
   )

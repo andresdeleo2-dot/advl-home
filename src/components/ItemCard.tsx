@@ -16,12 +16,14 @@ function Initials({ title }: { title: string }) {
 }
 
 export default function ItemCard({
-  item, editMode, onToggleFav, onEdit,
+  item, editMode, onToggleFav, onEdit, onMove, onOpen,
 }: {
   item: Item
   editMode?: boolean
   onToggleFav?: (item: Item) => void
   onEdit?: (item: Item) => void
+  onMove?: (item: Item, dir: -1 | 1) => void
+  onOpen?: (item: Item) => void
 }) {
   const [imgError, setImgError] = useState(false)
   const img = normalizeImageUrl(item.image)
@@ -34,10 +36,20 @@ export default function ItemCard({
       {/* Controls */}
       <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         {editMode && (
-          <button onClick={(e) => { e.preventDefault(); onEdit?.(item) }} title="Editar"
-            className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#16365f]/8 text-[#16365f]/70 hover:bg-[#16365f]/16">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-          </button>
+          <>
+            <button onClick={(e) => { e.preventDefault(); onMove?.(item, -1) }} title="Mover antes"
+              className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#16365f]/8 text-[#16365f]/70 hover:bg-[#16365f]/16">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <button onClick={(e) => { e.preventDefault(); onMove?.(item, 1) }} title="Mover después"
+              className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#16365f]/8 text-[#16365f]/70 hover:bg-[#16365f]/16">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button onClick={(e) => { e.preventDefault(); onEdit?.(item) }} title="Editar"
+              className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#16365f]/8 text-[#16365f]/70 hover:bg-[#16365f]/16">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+          </>
         )}
         <button onClick={(e) => { e.preventDefault(); onToggleFav?.(item) }}
           title={item.featured ? 'Quitar de favoritos' : 'Marcar favorito'}
@@ -52,7 +64,7 @@ export default function ItemCard({
         </span>
       )}
 
-      <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex flex-1 flex-col gap-2">
+      <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen?.(item)} className="flex flex-1 flex-col gap-2">
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#f1f6fc] ring-1 ring-[#16365f]/8">
             {img && !imgError ? (
