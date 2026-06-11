@@ -22,7 +22,25 @@ export default function EditModal({
     item_order: 999, section_order: 999, featured: false,
   })
   const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const uploadImage = async (file: File) => {
+    setError(null)
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const r = await fetch('/api/upload', { method: 'POST', body: form })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'No se pudo subir')
+      setDraft(d => ({ ...d, image: j.url }))
+    } catch (e) {
+      setError(`Imagen: ${String(e instanceof Error ? e.message : e)}`)
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const set = <K extends keyof Item>(k: K, v: Item[K]) => setDraft(d => ({ ...d, [k]: v }))
 
@@ -98,13 +116,18 @@ export default function EditModal({
             <textarea value={draft.description ?? ''} onChange={e => set('description', e.target.value)} rows={2} className={inputCls} placeholder="opcional" />
           </Field>
 
-          <Field label="Imagen (URL o Google Drive)">
+          <Field label="Imagen (sube un archivo o pega URL / Google Drive)">
             <div className="flex items-center gap-2.5">
               {preview && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={preview} alt="" referrerPolicy="no-referrer" className="h-10 w-10 flex-shrink-0 rounded-lg object-cover ring-1 ring-[#16365f]/10" />
               )}
               <input value={draft.image ?? ''} onChange={e => set('image', e.target.value)} className={inputCls} placeholder="https://…" />
+              <label className={`flex-shrink-0 cursor-pointer rounded-xl px-3 py-2 text-sm font-semibold transition ${uploading ? 'bg-[#f1f6fc] text-[#16365f]/40' : 'bg-[#2d6cdf]/10 text-[#2d6cdf] hover:bg-[#2d6cdf]/20'}`}>
+                {uploading ? 'Subiendo…' : 'Subir'}
+                <input type="file" accept="image/*" className="hidden" disabled={uploading}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadImage(f); e.target.value = '' }} />
+              </label>
             </div>
           </Field>
 
