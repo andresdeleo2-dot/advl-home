@@ -42,6 +42,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   const [recents, setRecents] = useState<Recent[]>([])
   const [greeting, setGreeting] = useState('')
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null)
+  const [dragId, setDragId] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -224,6 +225,71 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
     }
   }
 
+  // Drag & drop: soltar sobre otra tarjeta coloca el item en esa posición (mismo grupo)
+  const reorderTo = async (sourceId: string, target: Item) => {
+    const source = items.find(i => i.id === sourceId)
+    if (!source || source.id === target.id) return
+    if (source.section !== target.section || (source.subcategory || '') !== (target.subcategory || '')) {
+      showToast('Solo puedes reordenar dentro del mismo grupo', true)
+      return
+    }
+    const siblings = items
+      .filter(i => i.section === target.section && (i.subcategory || '') === (target.subcategory || ''))
+      .sort((a, b) => (a.item_order ?? 999) - (b.item_order ?? 999))
+    const from = siblings.findIndex(i => i.id === source.id)
+    const to = siblings.findIndex(i => i.id === target.id)
+    if (from < 0 || to < 0) return
+
+    const reordered = [...siblings]
+    reordered.splice(from, 1)
+    reordered.splice(to, 0, source)
+    const changes = new Map<string, number>()
+    reordered.forEach((it, i) => {
+      const newOrder = (i + 1) * 10
+      if (it.item_order !== newOrder) changes.set(it.id, newOrder)
+    })
+    if (changes.size === 0) return
+
+    const prev = items
+    setItems(items.map(i => changes.has(i.id) ? { ...i, item_order: changes.get(i.id)! } : i))
+    try {
+      const results = await Promise.all(
+        Array.from(changes.entries()).map(([id, item_order]) =>
+          fetch(`/api/items/${id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_order }),
+          })
+        )
+      )
+      if (results.some(r => !r.ok)) throw new Error('fallo')
+      showToast('Orden actualizado')
+    } catch {
+      setItems(prev)
+      showToast('No se pudo reordenar', true)
+    }
+  }
+
+  const copyUrl = useCallback(async (item: Item) => {
+    try {
+      await navigator.clipboard.writeText(item.url)
+      showToast('URL copiada')
+    } catch {
+      showToast('No se pudo copiar', true)
+    }
+  }, [showToast])
+
+  const logout = async () => {
+    try {
+      const { createBrowserClient } = await import('@supabase/ssr')
+      const sb = createBrowserClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      )
+      await sb.auth.signOut()
+    } catch { /* noop */ }
+    window.location.href = '/login'
+  }
+
   const refresh = async () => {
     const r = await fetch('/api/items')
     const j = await r.json()
@@ -262,6 +328,12 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               className="flex h-9 w-9 items-center justify-center rounded-xl band-glass band-glass-hover text-white/80">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             </button>
+            {!!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && (
+              <button onClick={logout} title="Cerrar sesion"
+                className="flex h-9 w-9 items-center justify-center rounded-xl band-glass band-glass-hover text-white/80">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -308,7 +380,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
             <p className="mt-3 text-[11px] text-white/45">
               {resultCount} {resultCount === 1 ? 'resultado' : 'resultados'}
               {query && ' · Enter abre el primero'}
-              {editMode && ' · modo edicion activo'}
+              {editMode && ' · arrastra las tarjetas para reordenar'}
             </p>
           </div>
 
@@ -378,7 +450,11 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
                         {sub.items.map(item => (
                           <ItemCard key={item.id} item={item} editMode={editMode}
                             onToggleFav={toggleFav} onEdit={(it) => setModal(it)}
-                            onMove={moveItem} onOpen={trackOpen} />
+                            onMove={moveItem} onOpen={trackOpen} onCopy={copyUrl}
+                            dragging={dragId === item.id}
+                            onDragStart={() => setDragId(item.id)}
+                            onDragEnd={() => setDragId(null)}
+                            onDropOn={(target) => { if (dragId) { reorderTo(dragId, target); setDragId(null) } }} />
                         ))}
                       </div>
                     </div>

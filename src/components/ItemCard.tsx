@@ -16,7 +16,8 @@ function Initials({ title }: { title: string }) {
 }
 
 export default function ItemCard({
-  item, editMode, onToggleFav, onEdit, onMove, onOpen,
+  item, editMode, onToggleFav, onEdit, onMove, onOpen, onCopy,
+  dragging, onDragStart, onDragEnd, onDropOn,
 }: {
   item: Item
   editMode?: boolean
@@ -24,15 +25,28 @@ export default function ItemCard({
   onEdit?: (item: Item) => void
   onMove?: (item: Item, dir: -1 | 1) => void
   onOpen?: (item: Item) => void
+  onCopy?: (item: Item) => void
+  dragging?: boolean
+  onDragStart?: () => void
+  onDragEnd?: () => void
+  onDropOn?: (target: Item) => void
 }) {
   const [imgError, setImgError] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const img = normalizeImageUrl(item.image)
   const favicon = getFaviconUrl(item.url)
   const dot = ACCENT_DOT[item.accent] ?? ACCENT_DOT.blue
   const desc = parseDescription(item.description)
 
   return (
-    <div className="group relative flex flex-col rounded-2xl glass glass-hover p-3 transition-all duration-200 hover:-translate-y-0.5">
+    <div
+      draggable={!!editMode}
+      onDragStart={editMode ? (e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.() } : undefined}
+      onDragEnd={editMode ? () => { setDragOver(false); onDragEnd?.() } : undefined}
+      onDragOver={editMode ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true) } : undefined}
+      onDragLeave={editMode ? () => setDragOver(false) : undefined}
+      onDrop={editMode ? (e) => { e.preventDefault(); setDragOver(false); onDropOn?.(item) } : undefined}
+      className={`group relative flex flex-col rounded-2xl glass glass-hover p-3 transition-all duration-200 hover:-translate-y-0.5 ${editMode ? 'cursor-grab active:cursor-grabbing' : ''} ${dragging ? 'opacity-40' : ''} ${dragOver ? 'ring-2 ring-[#2d6cdf]' : ''}`}>
       {/* Controls */}
       <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         {editMode && (
@@ -51,6 +65,10 @@ export default function ItemCard({
             </button>
           </>
         )}
+        <button onClick={(e) => { e.preventDefault(); onCopy?.(item) }} title="Copiar URL"
+          className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#16365f]/8 text-[#16365f]/45 hover:bg-[#16365f]/16">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
         <button onClick={(e) => { e.preventDefault(); onToggleFav?.(item) }}
           title={item.featured ? 'Quitar de favoritos' : 'Marcar favorito'}
           className={`flex h-6 w-6 items-center justify-center rounded-lg ${item.featured ? 'text-amber-500 opacity-100' : 'bg-[#16365f]/8 text-[#16365f]/45 hover:bg-[#16365f]/16'}`}>
@@ -64,7 +82,7 @@ export default function ItemCard({
         </span>
       )}
 
-      <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen?.(item)} className="flex flex-1 flex-col gap-2">
+      <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen?.(item)} draggable={false} className="flex flex-1 flex-col gap-2">
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#f1f6fc] ring-1 ring-[#16365f]/8">
             {img && !imgError ? (
