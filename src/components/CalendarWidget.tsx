@@ -1,9 +1,37 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CONFIG } from '@/lib/config'
 
 type CalEvent = { id: string; title: string; start: string; end: string; allDay: boolean }
+
+const DAY_NAMES = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do']
+
+function getWeekDays() {
+  const today = new Date()
+  const dayOfWeek = today.getDay()
+  const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1
+  const monday = new Date(today)
+  monday.setDate(today.getDate() - daysFromMonday)
+  monday.setHours(0, 0, 0, 0)
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return d
+  })
+}
+
+function dayKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function evDayKey(ev: CalEvent) {
+  const raw = ev.allDay ? ev.start : ev.start.slice(0, 10)
+  return raw
+}
+
+function fmtTime(start: string) {
+  return new Date(start).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+}
 
 function fmt(start: string, allDay: boolean) {
   const d = new Date(allDay ? start + 'T12:00:00' : start)
@@ -11,15 +39,15 @@ function fmt(start: string, allDay: boolean) {
   if (allDay) return date
   return date + ' · ' + d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
 }
+
 function isToday(start: string, allDay: boolean) {
   const d = new Date(allDay ? start + 'T12:00:00' : start)
   return d.toDateString() === new Date().toDateString()
 }
 
-const EMBED_BASE = 'https://calendar.google.com/calendar/embed'
-const srcParams =
-  `src=${encodeURIComponent(CONFIG.calendars.primary)}&src=${encodeURIComponent(CONFIG.calendars.secondary)}` +
-  `&ctz=America%2FMexico_City&showTitle=0&showPrint=0&showCalendars=0&showTz=0`
+function todayMidnight() {
+  const d = new Date(); d.setHours(0, 0, 0, 0); return d
+}
 
 export default function CalendarWidget() {
   const [view, setView] = useState<'agenda' | 'semana'>('agenda')
@@ -31,6 +59,14 @@ export default function CalendarWidget() {
       .then(d => setEvents(Array.isArray(d) ? d : []))
       .catch(() => setEvents([]))
   }, [])
+
+  const weekDays = getWeekDays()
+  const todayMs = todayMidnight().getTime()
+
+  const upcomingEvents = events?.filter(ev => {
+    const d = new Date(ev.allDay ? ev.start + 'T23:59:00' : ev.start)
+    return d.getTime() >= todayMs
+  })
 
   return (
     <div className="flex flex-col rounded-2xl glass overflow-hidden">
@@ -54,8 +90,8 @@ export default function CalendarWidget() {
       {view === 'agenda' ? (
         <div className="flex flex-col divide-y divide-[#16365f]/8 overflow-y-auto" style={{ maxHeight: 280 }}>
           {!events && <p className="px-4 py-6 text-center text-sm text-[#16365f]/40">Cargando…</p>}
-          {events && events.length === 0 && <p className="px-4 py-6 text-center text-sm text-[#16365f]/40">Sin eventos esta semana</p>}
-          {events?.map(ev => (
+          {events && upcomingEvents?.length === 0 && <p className="px-4 py-6 text-center text-sm text-[#16365f]/40">Sin eventos próximos</p>}
+          {upcomingEvents?.map(ev => (
             <div key={ev.id} className={`flex items-start gap-3 px-4 py-2.5 ${isToday(ev.start, ev.allDay) ? 'bg-[#2d6cdf]/8' : ''}`}>
               <div className={`mt-1 h-2 w-2 flex-shrink-0 rounded-full ${isToday(ev.start, ev.allDay) ? 'bg-[#2d6cdf]' : 'bg-[#16365f]/25'}`} />
               <div className="min-w-0">
@@ -66,12 +102,38 @@ export default function CalendarWidget() {
           ))}
         </div>
       ) : (
-        <iframe
-          title="Google Calendar"
-          src={`${EMBED_BASE}?${srcParams}&mode=WEEK`}
-          className="w-full border-0"
-          style={{ height: 320 }}
-        />
+        <div className="px-2 pb-3 pt-1">
+          {!events && <p className="py-6 text-center text-sm text-[#16365f]/40">Cargando…</p>}
+          {events && (
+            <div className="grid grid-cols-7 gap-1">
+              {weekDays.map((day, i) => {
+                const key = dayKey(day)
+                const isCurrentDay = day.getTime() === todayMs
+                const isPast = day.getTime() < todayMs
+                const dayEvents = events.filter(ev => evDayKey(ev) === key)
+                return (
+                  <div key={i} className="flex flex-col items-stretch min-w-0">
+                    <div className={`flex flex-col items-center rounded-xl py-1 mb-1 ${isCurrentDay ? 'bg-[#2d6cdf]' : isPast ? 'bg-[#16365f]/4' : 'bg-[#16365f]/6'}`}>
+                      <span className={`text-[8px] font-bold uppercase tracking-wide ${isCurrentDay ? 'text-white/75' : 'text-[#16365f]/45'}`}>{DAY_NAMES[i]}</span>
+                      <span className={`text-sm font-bold leading-tight ${isCurrentDay ? 'text-white' : isPast ? 'text-[#16365f]/40' : 'text-[#0f2340]'}`}>{day.getDate()}</span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {dayEvents.map(ev => (
+                        <div key={ev.id} title={ev.title}
+                          className={`rounded px-1 py-0.5 ${isPast ? 'bg-[#16365f]/6 text-[#16365f]/40' : 'bg-[#2d6cdf]/12 text-[#2d6cdf]'}`}>
+                          {!ev.allDay && (
+                            <p className="text-[8px] font-semibold leading-tight opacity-70 tabular-nums">{fmtTime(ev.start)}</p>
+                          )}
+                          <p className="text-[9px] font-medium leading-tight overflow-hidden" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>{ev.title}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

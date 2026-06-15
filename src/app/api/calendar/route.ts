@@ -12,13 +12,19 @@ export async function GET() {
   if (!key) return NextResponse.json({ error: 'no api key' }, { status: 500 })
 
   const now = new Date()
-  const timeMin = now.toISOString()
-  const timeMax = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()
+  // Start from Monday of current week so the week view has full data
+  const dayOfWeek = now.getDay()
+  const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1
+  const startOfWeek = new Date(now)
+  startOfWeek.setDate(now.getDate() - daysFromMonday)
+  startOfWeek.setHours(0, 0, 0, 0)
+  const timeMin = startOfWeek.toISOString()
+  const timeMax = new Date(startOfWeek.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
 
   const results = await Promise.all(
     CALENDAR_IDS.map(id =>
       fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events?singleEvents=true&orderBy=startTime&timeMin=${timeMin}&timeMax=${timeMax}&maxResults=10&key=${key}`,
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events?singleEvents=true&orderBy=startTime&timeMin=${timeMin}&timeMax=${timeMax}&maxResults=50&key=${key}`,
         { next: { revalidate: 900 } }
       ).then(r => r.json())
     )
@@ -34,7 +40,6 @@ export async function GET() {
       color: (e as Record<string, unknown>).colorId,
     })))
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
-    .slice(0, 15)
 
   return NextResponse.json(events)
 }
