@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { Item } from '@/lib/supabase'
 import { CONFIG } from '@/lib/config'
-import { matchesQuery, groupItems, getFaviconUrl } from '@/lib/utils'
+import { matchesQuery, groupItems, getFaviconUrl, normalizeImageUrl } from '@/lib/utils'
 import ItemCard from './ItemCard'
 import HeaderStats from './HeaderStats'
 import WeatherWidget from './WeatherWidget'
@@ -12,6 +12,26 @@ import TimerWidget from './TimerWidget'
 import CalendarWidget from './CalendarWidget'
 import FlujoCalendar from './FlujoCalendar'
 import EditModal from './EditModal'
+
+function FavIcon({ item }: { item: Item }) {
+  const [fallback, setFallback] = useState(false)
+  const img = normalizeImageUrl(item.image)
+  const favicon = getFaviconUrl(item.url)
+  const initials = item.title.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+  if (!fallback && img) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={img} alt="" className="h-9 w-9 object-cover" referrerPolicy="no-referrer" onError={() => setFallback(true)} />
+    )
+  }
+  if (favicon) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={favicon} alt="" className="h-5 w-5" />
+    )
+  }
+  return <span className="text-sm font-bold text-[#16365f]/70">{initials}</span>
+}
 
 function isFlujo(section: string) {
   return section.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim() === 'flujo'
@@ -411,7 +431,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
                   <a key={fav.id} href={fav.url} target="_blank" rel="noopener noreferrer" onClick={() => trackOpen(fav)}
                     className="flex w-[88px] flex-shrink-0 flex-col items-center gap-1.5 rounded-2xl glass glass-hover p-2.5 text-center transition hover:-translate-y-0.5">
                     <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-[#f1f6fc] ring-1 ring-[#16365f]/8">
-                      <img src={getFaviconUrl(fav.url) ?? ''} alt="" className="h-5 w-5" />
+                      <FavIcon item={fav} />
                     </span>
                     <span className="clamp-1 w-full text-[10px] font-medium text-[#16365f]/75">{fav.title}</span>
                   </a>
