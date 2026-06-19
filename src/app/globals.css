@@ -1,63 +1,119 @@
+/* ============================================================
+   ADVL — globals.css  (rediseño de marca, drop-in)
+   Sustituye src/app/globals.css. Conserva los nombres de clase
+   existentes (.band, .glass, .glass-hover, .band-glass…) para
+   que el re-skin no rompa el markup actual.
+   Fuentes: Cormorant Garamond (editorial) + Hanken Grotesk (UI).
+   ============================================================ */
 @import "tailwindcss";
 
+/* Importa las fuentes en app/layout.tsx con next/font (ver README),
+   o vía <link> de Google Fonts:
+   Cormorant+Garamond:ital,wght@0,500;0,600;1,500;1,600
+   Hanken+Grotesk:wght@400;500;600;700  */
+
 :root {
-  --ink-950: #0f2340;
-  --ink-900: #16365f;
-  --ink-800: #255186;
-  --ink-700: #5278ab;
-  --blue-500: #2d6cdf;
-  --blue-400: #5d99ff;
-  --teal-400: #22a6b6;
-  --line: rgba(22, 54, 95, 0.09);
+  /* Navy / ink */
+  --ink-950: #0F2340;
+  --ink-900: #16365F;
+  --ink-800: #173A63;
+  --ink-700: #3E5C86;
+
+  /* Dorado (acento principal — del león) */
+  --gold-300: #E7C56B;
+  --gold-500: #C2933A;
+  --gold-700: #A87A2C;
+
+  /* Acentos sobrios para puntos de categoría */
+  --c-blue:  #2E5A9E;
+  --c-teal:  #3E8E8E;
+  --c-brown: #B07A56;
+  --c-violet:#7A6FB0;
+  --c-slate: #5B6B86;
+
+  /* Superficies cálidas */
+  --bg:       #F6F4EE;   /* fondo de página (crema casi blanca) */
+  --card:     #FFFFFF;   /* tarjetas */
+  --card-2:   #FBFAF6;   /* inputs / tiles */
+  --line:     rgba(15, 35, 64, 0.09); /* hairline */
+
+  --text:     #14233D;
+  --muted:    rgba(20, 35, 61, 0.50);
+  --faint:    rgba(20, 35, 61, 0.34);
+
+  --font-ui:    'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-serif: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
 }
 
 html, body { height: 100%; }
 
 body {
-  color: var(--ink-950);
-  background:
-    radial-gradient(circle at top left, rgba(93, 153, 255, 0.12), transparent 24%),
-    radial-gradient(circle at 100% 0%, rgba(34, 166, 182, 0.09), transparent 22%),
-    linear-gradient(180deg, #fbfdff 0%, #f1f6fc 100%);
-  background-attachment: fixed;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);              /* plano y limpio, sin gradientes ruidosos */
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
-/* Light glass card */
-.glass {
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid var(--line);
-  box-shadow: 0 14px 28px rgba(15, 35, 64, 0.06);
-}
-.glass-hover:hover {
-  border-color: rgba(45, 108, 223, 0.32);
-  box-shadow: 0 18px 30px rgba(15, 35, 64, 0.1);
+/* Línea de marca superior (opcional, encima del header) */
+.brand-rule {
+  height: 3px;
+  background: linear-gradient(90deg, var(--ink-900) 0%, var(--gold-500) 55%, var(--gold-300) 100%);
 }
 
-/* Dark blue header band */
+/* Tarjeta clara */
+.glass {
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(15, 35, 64, 0.04);
+}
+.glass-hover { transition: transform .18s, border-color .18s, box-shadow .18s; }
+.glass-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(194, 147, 58, 0.50);            /* dorado */
+  box-shadow: 0 14px 26px -18px rgba(15, 35, 64, 0.45);
+}
+
+/* Banda navy del header / paneles oscuros */
 .band {
-  background: linear-gradient(180deg, rgba(15, 35, 64, 0.98), rgba(22, 60, 114, 0.92));
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(155deg, var(--ink-800) 0%, #0E2240 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .band-glass {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.11);
 }
-.band-glass-hover:hover {
-  background: rgba(255, 255, 255, 0.2);
+.band-glass-hover:hover { background: rgba(255, 255, 255, 0.13); }
+
+/* Botón / chip activo dorado (reemplaza el azul de los estados activos) */
+.gold-fill {
+  background: linear-gradient(135deg, var(--gold-300), var(--gold-500));
+  color: #1B1305;
+  border: none;
+  box-shadow: 0 8px 16px -8px rgba(194, 147, 58, 0.85);
 }
 
-*::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-thumb { background: rgba(45,108,223,0.2); border-radius: 99px; }
-*::-webkit-scrollbar-thumb:hover { background: rgba(45,108,223,0.34); }
+/* Micro-etiqueta (versalitas espaciadas) */
+.eyebrow {
+  font: 700 10px/1 var(--font-ui);
+  letter-spacing: .20em;
+  text-transform: uppercase;
+  color: rgba(15, 35, 64, 0.40);
+}
+
+/* Display serif para momentos editoriales (temperatura, temporizador, frases) */
+.serif { font-family: var(--font-serif); }
+
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb { background: rgba(15, 35, 64, 0.18); border-radius: 99px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(194, 147, 58, 0.55); }
 *::-webkit-scrollbar-track { background: transparent; }
 
 .clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
-@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.animate-fade { animation: fadeIn 0.25s ease both; }
+/* Card action buttons: invisible until the card group is hovered */
+.advl-card .advl-act { opacity: 0; transition: opacity .15s; }
+.advl-card:hover .advl-act { opacity: 1; }
 
-@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(45,108,223,0.45); } 70% { box-shadow: 0 0 0 8px rgba(45,108,223,0); } 100% { box-shadow: 0 0 0 0 rgba(45,108,223,0); } }
-.pulse-ring { animation: pulse-ring 1.8s infinite; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.animate-fade { animation: fadeIn 0.25s ease both; }

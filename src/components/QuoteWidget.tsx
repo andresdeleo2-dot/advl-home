@@ -15,6 +15,7 @@ const QUOTES: { text: string; author: string }[] = [
   { text: 'La paciencia es amarga, pero su fruto es dulce.', author: 'Aristóteles' },
   { text: 'Un objetivo sin un plan es solo un deseo.', author: 'A. de Saint-Exupéry' },
   { text: 'El mejor momento para empezar fue ayer. El segundo mejor es hoy.', author: 'Proverbio' },
+  { text: 'La estrategia sin criterio es ruido; el criterio sin estrategia, indecisión.', author: 'Principio ADVL' },
 ]
 
 export default function QuoteWidget() {
@@ -26,13 +27,16 @@ export default function QuoteWidget() {
   return (
     <div className="rounded-2xl glass p-4">
       <div className="mb-2 flex items-center justify-between">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-[#16365f]/45">Frase del día</p>
-        <button onClick={next} className="rounded-lg bg-[#2d6cdf]/8 px-2 py-0.5 text-[10px] font-semibold text-[#2d6cdf] hover:bg-[#2d6cdf]/16">
+        <p className="eyebrow">Frase del día</p>
+        <button onClick={next}
+          className="rounded-full border border-[rgba(194,147,58,0.4)] bg-[rgba(194,147,58,0.08)] px-2.5 py-1 text-[10px] font-semibold text-[#A87A2C] hover:bg-[rgba(194,147,58,0.16)]">
           Nueva
         </button>
       </div>
-      <p className="text-sm leading-relaxed font-medium text-[#0f2340]">“{q.text}”</p>
-      <p className="mt-1.5 text-[11px] text-[#16365f]/55">— {q.author}</p>
+      <p className="serif mt-2 font-medium italic leading-snug text-[#16365F]" style={{ fontSize: 19, lineHeight: 1.32 }}>
+        &ldquo;{q.text}&rdquo;
+      </p>
+      <p className="mt-2.5 text-[10px] font-semibold tracking-[.06em] text-[rgba(15,35,64,0.5)]">— {q.author}</p>
     </div>
   )
 }

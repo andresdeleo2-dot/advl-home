@@ -49,40 +49,40 @@ export default function HeaderStats() {
   return (
     <div className="flex items-center gap-2">
       {weather && (
-        <div className="hidden sm:flex items-center gap-1.5 rounded-xl band-glass px-2.5 py-1.5 text-white">
+        <div className="hidden sm:flex items-center gap-1.5 rounded-[10px] band-glass px-2.5 py-1.5 text-white">
           <span className="text-base leading-none">{weather.icon}</span>
-          <span className="text-sm font-semibold">{weather.temp}°</span>
+          <span className="text-[13px] font-semibold">{weather.temp}°</span>
         </div>
       )}
 
       {sun && (
-        <div className="hidden md:flex items-center gap-2 rounded-xl band-glass px-2.5 py-1.5 text-[11px] text-white/75">
-          <span title="Amanecer">🌅 {sun.sunrise}</span>
-          <span title="Atardecer">🌇 {sun.sunset}</span>
+        <div className="hidden md:flex items-center gap-2 rounded-[10px] band-glass px-2.5 py-1.5 text-[11px] text-white/75">
+          <span title="Amanecer">↑ {sun.sunrise}</span>
+          <span title="Atardecer">↓ {sun.sunset}</span>
         </div>
       )}
 
       <div className="relative" ref={ref}>
         <button onClick={() => setOpen(o => !o)}
-          className="flex items-center gap-2 rounded-xl band-glass band-glass-hover px-3 py-1.5 text-white">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-white/55">{active.short}</span>
-          <span className="text-sm font-semibold tabular-nums">{timeIn(active.tz)}</span>
+          className="flex items-center gap-2 rounded-[10px] band-glass band-glass-hover px-3 py-1.5 text-white">
+          <span className="text-[10px] font-semibold uppercase tracking-[.16em] text-white/55">{active.short}</span>
+          <span className="text-[13px] font-semibold tabular-nums">{timeIn(active.tz)}</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
             className={`text-white/60 transition-transform ${open ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6"/></svg>
         </button>
 
         {open && (
-          <div className="animate-fade absolute right-0 z-30 mt-2 w-64 rounded-2xl border border-[#16365f]/10 bg-white p-2 shadow-2xl">
+          <div className="animate-fade absolute right-0 z-30 mt-2 w-64 rounded-2xl border border-[rgba(15,35,64,0.09)] bg-white p-1.5 shadow-2xl">
             {CONFIG.clocks.map((c, i) => {
               const isActive = i === zoneIdx
               return (
-                <button key={c.tz} onClick={() => { setZoneIdx(i); }}
-                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition ${isActive ? 'bg-[#2d6cdf]/10 ring-1 ring-[#2d6cdf]/20' : 'hover:bg-[#f1f6fc]'}`}>
+                <button key={c.tz} onClick={() => { setZoneIdx(i) }}
+                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition ${isActive ? 'bg-[rgba(194,147,58,0.10)] ring-1 ring-[rgba(194,147,58,0.25)]' : 'hover:bg-[#FBFAF6]'}`}>
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-[#0f2340]">{c.label}</p>
-                    <p className="text-[11px] capitalize text-[#16365f]/55">{dateIn(c.tz)}</p>
+                    <p className="text-[11px] capitalize text-[rgba(20,35,61,0.55)]">{dateIn(c.tz)}</p>
                   </div>
-                  <span className="ml-3 whitespace-nowrap text-sm font-bold tabular-nums text-[#2d6cdf]">{timeIn(c.tz)}</span>
+                  <span className={`ml-3 whitespace-nowrap text-sm font-bold tabular-nums ${isActive ? 'text-[#C2933A]' : 'text-[#16365F]'}`}>{timeIn(c.tz)}</span>
                 </button>
               )
             })}

@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+
 const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
 
 function dateOnly(d: Date) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()) }
@@ -7,7 +9,6 @@ function addDays(d: Date, n: number) { return new Date(d.getFullYear(), d.getMon
 function diffDays(a: Date, b: Date) { return Math.round((b.getTime() - a.getTime()) / 86400000) }
 function mondayIdx(d: Date) { return (d.getDay() + 6) % 7 }
 
-// Periodo de gasto: del 23 de un mes al 22 del siguiente
 function getPeriod(today: Date) {
   let start: Date, end: Date
   if (today.getDate() >= 23) {
@@ -32,6 +33,8 @@ function countWeekends(from: Date, to: Date) {
 }
 
 export default function FlujoCalendar() {
+  const [open, setOpen] = useState(false)
+
   const today = dateOnly(new Date())
   const now = new Date()
   const { start, end } = getPeriod(today)
@@ -42,68 +45,89 @@ export default function FlujoCalendar() {
   const daysToCutoff = Math.max(0, Math.ceil((periodEndExcl.getTime() - now.getTime()) / 86400000))
   const weekends = countWeekends(addDays(today, 1), end)
 
-  // Construir días del grid
-  const cells: { date: Date }[] = []
-  for (let d = new Date(start); d <= end; d = addDays(d, 1)) cells.push({ date: new Date(d) })
-  const offset = mondayIdx(start)
+  // Full current month calendar
+  const calYear = today.getMonth() >= 0 ? today.getFullYear() : today.getFullYear() - 1
+  const calMonth = today.getMonth()
+  const firstOfMonth = new Date(calYear, calMonth, 1)
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate()
+  const monthOffset = mondayIdx(firstOfMonth)
 
-  const fmtLong = (d: Date) => `${d.getDate()}-${MONTHS[d.getMonth()]}`
+  const fmtShort = (d: Date) => `${MONTHS[d.getMonth()].slice(0, 3)}`
+  const monthLabel = `${MONTHS[calMonth]} ${calYear}`
 
   return (
     <div className="rounded-2xl glass p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[#16365f]/45">Periodo de gasto</p>
-          <h4 className="mt-0.5 text-2xl font-semibold text-[#0f2340]">{fmtLong(start)} → {fmtLong(end)}</h4>
+      {/* Collapsible header */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between gap-2 text-left"
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+        <div className="flex items-center gap-2">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+            className="flex-shrink-0 transition-transform duration-200"
+            style={{ color: '#B58B35', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+            <path d="m9 18 6-6-6-6"/>
+          </svg>
+          <span className="eyebrow">Periodo de gasto · {fmtShort(start)}→{fmtShort(end)}</span>
         </div>
-        <div className="flex gap-2">
-          <div className="min-w-[84px] rounded-xl bg-[#f3f8ff] px-3 py-2 text-center ring-1 ring-[#16365f]/8">
-            <p className="text-[10px] text-[#16365f]/60">Días al corte</p>
-            <p className="text-2xl font-extrabold leading-none text-[#0f2340]">{daysToCutoff}</p>
-          </div>
-          <div className="min-w-[84px] rounded-xl bg-[#edf9fd] px-3 py-2 text-center ring-1 ring-[#b7e8ef]">
-            <p className="text-[10px] text-[#16365f]/60">Fines de semana</p>
-            <p className="text-2xl font-extrabold leading-none text-[#16798d]">{weekends}</p>
-          </div>
+        <span className="text-[11px] font-semibold text-[rgba(20,35,61,0.5)]">
+          {daysToCutoff}d · {weekends} fin{weekends !== 1 ? 'es' : ''}
+        </span>
+      </button>
+
+      {/* Always-visible: progress bar */}
+      <div className="mt-3">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-[#F1EFE7]">
+          <div className="h-full rounded-full" style={{ width: `${progress}%`, background: 'linear-gradient(90deg,#E7C56B,#C2933A)' }} />
         </div>
+        <p className="mt-1.5 text-[11px] text-[rgba(20,35,61,0.5)]">
+          Día {elapsed} de {totalDays} · {daysToCutoff} restantes
+        </p>
       </div>
 
-      {/* Progreso */}
-      <div className="mt-4">
-        <p className="mb-1 text-xs text-[#16365f]/55">Progreso del periodo</p>
-        <div className="h-3 w-full overflow-hidden rounded-full bg-[#dbe8f5]">
-          <div className="h-full rounded-full bg-gradient-to-r from-[#2d6cdf] to-[#22a6b6]" style={{ width: `${progress}%` }} />
-        </div>
-        <p className="mt-1.5 text-xs text-[#16365f]/55">{elapsed}/{totalDays} días transcurridos · {daysToCutoff} restantes</p>
-      </div>
+      {/* Expandable: full month calendar */}
+      {open && (
+        <div className="mt-4 border-t border-[rgba(15,35,64,0.08)] pt-4 animate-fade">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="serif font-semibold capitalize text-[#16365F]" style={{ fontSize: 19 }}>{monthLabel}</span>
+            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-[rgba(20,35,61,0.5)]">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#C2933A]" />
+              período
+            </span>
+          </div>
 
-      {/* Calendario */}
-      <p className="mt-4 text-[10px] font-bold uppercase tracking-widest text-[#16365f]/45">Calendario 23 → 22</p>
-      <div className="mt-2 grid grid-cols-7 gap-1 text-center text-[10px] font-bold uppercase tracking-wider text-[#16365f]/40">
-        {['L', 'M', 'Mi', 'J', 'V', 'S', 'D'].map((d, i) => <div key={i}>{d}</div>)}
-      </div>
-      <div className="mt-1 grid grid-cols-7 gap-1">
-        {Array.from({ length: offset }).map((_, i) => <div key={`gap-${i}`} />)}
-        {cells.map(({ date }) => {
-          const isToday = date.getTime() === today.getTime()
-          const isPast = date < today
-          const isWeekend = [5, 6, 0].includes(date.getDay())
-          const isCutoff = date.getTime() === end.getTime()
-          let cls = 'rounded-lg border py-1.5 text-center text-xs '
-          if (isCutoff) cls += 'bg-[#fff6ea] border-[#ffd29a] text-[#b06719] '
-          else if (isWeekend) cls += 'bg-[#edf9fd] border-[#b7e8ef] text-[#16798d] '
-          else cls += 'bg-white border-[#dbe7ef] text-[#0f2340] '
-          if (isPast && !isToday) cls += 'opacity-45 '
-          if (isToday) cls += 'ring-2 ring-[#2d6cdf] ring-offset-1 '
-          const showMonth = date.getDate() === 23 || date.getDate() === 1 || isCutoff
-          return (
-            <div key={date.getTime()} className={cls}>
-              <div className="font-bold">{date.getDate()}</div>
-              {showMonth && <div className="text-[8px] opacity-70">{MONTHS[date.getMonth()].slice(0, 3)}</div>}
-            </div>
-          )
-        })}
-      </div>
+          <div className="grid grid-cols-7 gap-1 text-center">
+            {['L', 'M', 'Mi', 'J', 'V', 'S', 'D'].map((d, i) => (
+              <div key={i} className="eyebrow pb-1">{d}</div>
+            ))}
+            {Array.from({ length: monthOffset }).map((_, i) => <div key={`g-${i}`} />)}
+            {Array.from({ length: daysInMonth }, (_, i) => {
+              const d = i + 1
+              const date = new Date(calYear, calMonth, d)
+              const isCurrentDay = date.getTime() === today.getTime()
+              const isPast = date < today
+              const isCutoff = date.getDate() === end.getDate() && date.getMonth() === end.getMonth()
+              const isInPeriod = date >= start && date <= end
+
+              let cls = 'aspect-square flex flex-col items-center justify-center rounded-lg border text-xs '
+              if (isCurrentDay) {
+                return (
+                  <div key={d} className={cls + 'border-transparent font-bold text-[#1B1305]'}
+                    style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)' }}>
+                    {d}
+                  </div>
+                )
+              }
+              if (isCutoff) cls += 'bg-[#FFF6EA] border-[#FFD29A] text-[#B06719] font-semibold '
+              else if (isInPeriod) cls += 'bg-white border-[rgba(15,35,64,0.09)] text-[#14233D] '
+              else cls += 'bg-transparent border-transparent text-[rgba(20,35,61,0.28)] '
+              if (isPast && !isCurrentDay && !isCutoff) cls += 'opacity-45 '
+
+              return <div key={d} className={cls}><span className="font-semibold">{d}</span></div>
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -63,22 +63,22 @@ export default function TimerWidget() {
 
   return (
     <div className={`rounded-2xl glass p-4 transition-colors ${fired ? 'ring-1 ring-red-400/50' : ''}`}>
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-[#16365f]/45">Temporizador</p>
+      <div className="mb-3 flex items-center justify-between">
+        <p className="eyebrow">Temporizador</p>
         {target !== null && (
-          <button onClick={reset} className="rounded-lg bg-[#16365f]/8 px-2 py-0.5 text-[10px] font-semibold text-[#16365f]/65 hover:bg-[#16365f]/16">
-            Reiniciar
+          <button onClick={reset} className="rounded-lg border border-[rgba(15,35,64,0.12)] bg-white px-2 py-0.5 text-[10px] font-semibold text-[rgba(20,35,61,0.6)] hover:border-[rgba(194,147,58,0.5)]">
+            Detener
           </button>
         )}
       </div>
 
       {target === null ? (
         <>
-          <p className="mb-2.5 text-xs text-[#16365f]/55">Elige una alarma rápida:</p>
-          <div className="grid grid-cols-4 gap-1.5">
+          <p className="mb-2.5 text-xs text-[rgba(20,35,61,0.5)]">Elige una alarma rápida</p>
+          <div className="grid grid-cols-2 gap-2">
             {PRESETS.map(p => (
               <button key={p.label} onClick={() => start(p.min)}
-                className="rounded-xl bg-[#f1f6fc] py-2 text-xs font-bold text-[#16365f] ring-1 ring-[#16365f]/8 hover:bg-[#2d6cdf]/12 hover:text-[#2d6cdf]">
+                className="rounded-[10px] border border-[rgba(15,35,64,0.12)] bg-[#FBFAF6] py-2.5 text-xs font-bold text-[#16365F] hover:border-[rgba(194,147,58,0.55)] hover:bg-white">
                 {p.label}
               </button>
             ))}
@@ -86,12 +86,17 @@ export default function TimerWidget() {
         </>
       ) : (
         <div className="text-center">
-          <p className={`tabular-nums font-light tracking-tight ${fired ? 'text-red-500 text-3xl pulse-ring rounded-xl' : 'text-[#0f2340] text-4xl'}`}>
+          <p className={`serif tabular-nums font-semibold ${fired ? 'text-red-500' : 'text-[#10233F]'}`}
+            style={{ fontSize: fired ? 36 : 48, lineHeight: 1 }}>
             {fired ? '+' : ''}{fmt}
           </p>
-          <p className="mt-1 text-[11px] text-[#16365f]/50">
+          <p className="mt-1.5 text-[11px] text-[rgba(20,35,61,0.5)]">
             {fired ? 'Tiempo transcurrido desde la alarma' : `Suena a las ${targetTime}`}
           </p>
+          <button onClick={reset}
+            className="mt-3 w-full rounded-[10px] border border-[rgba(15,35,64,0.13)] bg-white px-4 py-2 text-xs font-semibold text-[rgba(20,35,61,0.7)] hover:border-[rgba(194,147,58,0.5)]">
+            Detener
+          </button>
         </div>
       )}
     </div>
