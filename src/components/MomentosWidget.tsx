@@ -104,7 +104,7 @@ export default function MomentosWidget() {
           const hoy = e.daysUntil === 0
           const hace = fmtHace(e.yearsAgo)
           return (
-            <a key={e.id} href={VIDA_URL} target="_blank" rel="noopener noreferrer"
+            <a key={e.id} href={`${VIDA_URL}?r=${e.id}`} target="_blank" rel="noopener noreferrer"
               className={`flex items-start gap-3 px-4 py-2.5 no-underline transition hover:bg-[rgba(15,35,64,0.03)] ${hoy ? 'bg-[rgba(194,147,58,0.06)]' : ''}`}>
               <div className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full"
                 style={{ background: colorDe(e.tipo) }} />
