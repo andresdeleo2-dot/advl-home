@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   const { data, error } = await supabase
     .from('vida')
-    .select('id, titulo, tipo, fecha, fecha_fin, nota, personas, importancia, outstanding')
+    .select('id, titulo, tipo, fecha, fecha_fin, nota, personas, fotos, importancia, outstanding')
     .eq('es_personal', true)
     .not('fecha', 'is', null)
     .order('fecha', { ascending: true })

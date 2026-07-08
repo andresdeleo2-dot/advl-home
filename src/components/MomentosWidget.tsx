@@ -1,21 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import MomentoModal, { type Momento } from './MomentoModal'
 
 const VIDA_URL = 'https://mi-vida-neon.vercel.app/vida'
 const WINDOW_DAYS = 14 // efemérides de las próximas ~2 semanas
-
-type Momento = {
-  id: number
-  titulo: string
-  tipo: string
-  fecha: string
-  fecha_fin: string | null
-  nota: string | null
-  personas: string[] | null
-  importancia: number | null
-  outstanding: boolean
-}
 
 // Color por tipo (mismo criterio visual que mi-vida)
 const TIPO_COLOR: Record<string, string> = {
@@ -68,6 +57,7 @@ function fmtHace(years: number) {
 
 export default function MomentosWidget() {
   const [momentos, setMomentos] = useState<Momento[] | null>(null)
+  const [selected, setSelected] = useState<Momento | null>(null)
 
   useEffect(() => {
     fetch('/api/momentos')
@@ -104,8 +94,8 @@ export default function MomentosWidget() {
           const hoy = e.daysUntil === 0
           const hace = fmtHace(e.yearsAgo)
           return (
-            <a key={e.id} href={`${VIDA_URL}?r=${e.id}`} target="_blank" rel="noopener noreferrer"
-              className={`flex items-start gap-3 px-4 py-2.5 no-underline transition hover:bg-[rgba(15,35,64,0.03)] ${hoy ? 'bg-[rgba(194,147,58,0.06)]' : ''}`}>
+            <button key={e.id} onClick={() => setSelected(e)}
+              className={`flex w-full items-start gap-3 px-4 py-2.5 text-left transition hover:bg-[rgba(15,35,64,0.03)] ${hoy ? 'bg-[rgba(194,147,58,0.06)]' : ''}`}>
               <div className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full"
                 style={{ background: colorDe(e.tipo) }} />
               <div className="min-w-0 flex-1">
@@ -116,10 +106,12 @@ export default function MomentosWidget() {
                   {e.tipo && <span> · {e.tipo}</span>}
                 </p>
               </div>
-            </a>
+            </button>
           )
         })}
       </div>
+
+      {selected && <MomentoModal momento={selected} onClose={() => setSelected(null)} />}
     </div>
   )
 }
