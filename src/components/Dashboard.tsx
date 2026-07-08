@@ -10,6 +10,7 @@ import WeatherWidget from './WeatherWidget'
 import QuoteWidget from './QuoteWidget'
 import TimerWidget from './TimerWidget'
 import CalendarWidget from './CalendarWidget'
+import MomentosWidget from './MomentosWidget'
 import FlujoCalendar from './FlujoCalendar'
 import EditModal from './EditModal'
 
@@ -460,6 +461,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           <TimerWidget />
           <QuoteWidget />
           <CalendarWidget />
+          <MomentosWidget />
         </aside>
       </div>
 
