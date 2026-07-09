@@ -3,16 +3,19 @@ import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
-// Momentos especiales = recuerdos personales de la app "mi-vida" (misma base Supabase).
-// Devuelve los recuerdos con fecha para que el cliente calcule las efemérides de la semana.
-export async function GET() {
-  const { data, error } = await supabase
-    .from('vida')
-    .select('id, titulo, tipo, fecha, fecha_fin, nota, personas, fotos, importancia, outstanding')
-    .eq('es_personal', true)
-    .not('fecha', 'is', null)
-    .order('fecha', { ascending: true })
+const FIELDS = 'id, titulo, tipo, fecha, fecha_fin, nota, descripcion, personas, fotos, importancia, outstanding, relevancia'
 
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true, data })
+// Momentos especiales = datos de la app "mi-vida" (misma base Supabase).
+// Devuelve el dataset completo: recuerdos personales + contexto (mundo),
+// para que el popup pueda mostrar la misma info que el lector de mi-vida.
+export async function GET() {
+  const [rec, ctx] = await Promise.all([
+    supabase.from('vida').select(FIELDS).eq('es_personal', true).order('fecha', { ascending: true }),
+    supabase.from('vida').select(FIELDS).eq('es_personal', false).order('fecha', { ascending: true }),
+  ])
+
+  if (rec.error) return NextResponse.json({ ok: false, error: rec.error.message }, { status: 500 })
+  if (ctx.error) return NextResponse.json({ ok: false, error: ctx.error.message }, { status: 500 })
+
+  return NextResponse.json({ ok: true, recuerdos: rec.data ?? [], contexto: ctx.data ?? [] })
 }

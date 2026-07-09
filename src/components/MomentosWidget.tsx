@@ -28,6 +28,7 @@ function midnight(d: Date) {
 
 // Calcula la próxima efeméride (mismo día-mes) dentro de la ventana
 function efemeride(m: Momento, today: Date): Efemeride | null {
+  if (!m.fecha) return null
   const orig = new Date(m.fecha + 'T12:00:00')
   if (isNaN(orig.getTime())) return null
   const month = orig.getMonth()
@@ -56,18 +57,22 @@ function fmtHace(years: number) {
 }
 
 export default function MomentosWidget() {
-  const [momentos, setMomentos] = useState<Momento[] | null>(null)
+  const [recuerdos, setRecuerdos] = useState<Momento[] | null>(null)
+  const [contexto, setContexto] = useState<Momento[]>([])
   const [selected, setSelected] = useState<Momento | null>(null)
 
   useEffect(() => {
     fetch('/api/momentos')
       .then(r => r.json())
-      .then(j => setMomentos(j.ok && Array.isArray(j.data) ? j.data : []))
-      .catch(() => setMomentos([]))
+      .then(j => {
+        setRecuerdos(j.ok && Array.isArray(j.recuerdos) ? j.recuerdos : [])
+        setContexto(j.ok && Array.isArray(j.contexto) ? j.contexto : [])
+      })
+      .catch(() => { setRecuerdos([]); setContexto([]) })
   }, [])
 
   const today = midnight(new Date())
-  const efemerides = momentos
+  const efemerides = recuerdos
     ?.map(m => efemeride(m, today))
     .filter((e): e is Efemeride => e !== null)
     .sort((a, b) => a.daysUntil - b.daysUntil || (b.importancia ?? 0) - (a.importancia ?? 0))
@@ -84,10 +89,10 @@ export default function MomentosWidget() {
       </div>
 
       <div className="flex flex-col divide-y divide-[rgba(15,35,64,0.07)] overflow-y-auto" style={{ maxHeight: 280 }}>
-        {!momentos && (
+        {!recuerdos && (
           <p className="px-4 py-6 text-center text-sm text-[rgba(20,35,61,0.4)]">Cargando…</p>
         )}
-        {momentos && efemerides?.length === 0 && (
+        {recuerdos && efemerides?.length === 0 && (
           <p className="px-4 py-6 text-center text-sm text-[rgba(20,35,61,0.4)]">Sin efemérides estos días</p>
         )}
         {efemerides?.map(e => {
@@ -111,7 +116,15 @@ export default function MomentosWidget() {
         })}
       </div>
 
-      {selected && <MomentoModal momento={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <MomentoModal
+          recuerdo={selected}
+          todos={efemerides ?? []}
+          allRecuerdos={recuerdos ?? []}
+          contexto={contexto}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   )
 }
