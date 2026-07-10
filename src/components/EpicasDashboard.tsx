@@ -46,6 +46,17 @@ function fmtDue(s: string) {
   const d = new Date(s + 'T00:00:00'); if (isNaN(d.getTime())) return s
   return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })
 }
+function todayISO(): string {
+  const d = new Date(); const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+/** Etiqueta de mes ("Julio 2026") para agrupar terminadas; '' → "Sin fecha". */
+function monthLabel(s: string): string {
+  if (!s) return 'Sin fecha'
+  const d = new Date(s + 'T00:00:00'); if (isNaN(d.getTime())) return 'Sin fecha'
+  const l = d.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
+  return l.charAt(0).toUpperCase() + l.slice(1)
+}
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x))
 
 /** Rellena arrays faltantes por si algún registro viejo trae null. */
@@ -97,6 +108,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [sortBy, setSortBy] = useState<'Pendientes' | 'Progreso' | 'Nombre'>('Pendientes')
   const [compact, setCompact] = useState(false)
   const [showRowKpi, setShowRowKpi] = useState(true)
+  const [showDone, setShowDone] = useState(false)
   const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
   const [catFilter, setCatFilter] = useState<string>('todas')
   const [taskEdit, setTaskEdit] = useState<{ epicId: string; index: number | null } | null>(null)
@@ -200,7 +212,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Interacciones inline en la destacada ───────────────── */
   const setTaskStatus = (e: Epica, ti: number, v: string) => {
-    const tasks = clone(e.tasks); tasks[ti].status = v
+    const tasks = clone(e.tasks)
+    tasks[ti].status = v
+    if (v === 'Terminada') { if (!tasks[ti].doneAt) tasks[ti].doneAt = todayISO() }
+    else delete tasks[ti].doneAt
     patchEpic(e.id, { tasks })
   }
   const setTaskDue = (e: Epica, ti: number, v: string) => {
@@ -233,6 +248,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
     const links = (taskDraft.links || []).map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.label || l.url)
     const t: EpicaTask = { t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: taskDraft.note || '', links }
+    if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
     if (!t.t) { closeTaskEdit(); return }
     const tasks = clone(e.tasks)
     if (taskEdit.index != null) tasks[taskEdit.index] = t
@@ -272,7 +288,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     d.name = (d.name || '').trim() || 'Nueva épica'
     d.kpis = (d.kpis || []).filter(k => (k.v || '').trim() || (k.l || '').trim())
     d.routines = (d.routines || []).filter(r => (r.t || '').trim()).map(r => ({ t: r.t, days: r.days || [false, false, false, false, false, false, false] }))
-    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => ({ t: t.t, status: t.status || 'Por hacer', due: t.due || '', note: t.note || '', links: t.links || [] }))
+    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => {
+      const st = t.status || 'Por hacer'
+      const out: EpicaTask = { t: t.t, status: st, due: t.due || '', note: t.note || '', links: t.links || [] }
+      if (st === 'Terminada') out.doneAt = t.doneAt || todayISO()
+      return out
+    })
     d.links = (d.links || []).filter(l => (l.l || '').trim() || (l.url || '').trim())
     d.links.forEach(l => { if (!l.type) l.type = 'Otro' })
     if (!d.links.some(l => l.primary) && d.links.length) d.links[0].primary = true
@@ -358,12 +379,55 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // conteos por estado para chips
   const fStateCounts = TS_ORDER.map(s => ({ s, n: featured.tasks.filter(t => t.status === s).length })).filter(x => x.n > 0)
 
-  // grupos de tareas (con índice original para editar)
+  // grupos de tareas activas (con índice original para editar)
   const indexed = featured.tasks.map((t, i) => ({ ...t, _i: i }))
-  const taskGroups = TS_ORDER.map(s => {
+  const ACTIVE_ORDER = ['En curso', 'Esperando', 'Por hacer']
+  const taskGroups = ACTIVE_ORDER.map(s => {
     const ts = taskStyle(s)
     return { key: s, color: ts.c, label: ts.group, items: indexed.filter(t => t.status === s) }
   }).filter(g => g.items.length > 0)
+
+  // Terminadas: por fecha (doneAt o due) desc, agrupadas por mes
+  const doneItems = indexed.filter(t => t.status === 'Terminada')
+  const doneKey = (t: (typeof indexed)[number]) => {
+    const s = t.doneAt || t.due
+    if (!s) return -Infinity
+    const d = new Date(s + 'T00:00:00'); return isNaN(d.getTime()) ? -Infinity : d.getTime()
+  }
+  const doneSorted = [...doneItems].sort((a, b) => doneKey(b) - doneKey(a))
+  const doneMonths: { label: string; items: typeof doneSorted }[] = []
+  doneSorted.forEach(t => {
+    const lab = monthLabel(t.doneAt || t.due || '')
+    const g = doneMonths.find(x => x.label === lab)
+    if (g) g.items.push(t); else doneMonths.push({ label: lab, items: [t] })
+  })
+
+  const renderTaskRow = (t: (typeof indexed)[number]) => {
+    const ts = taskStyle(t.status)
+    const done = t.status === 'Terminada'
+    const dt = dueTone(t.due, done)
+    return (
+      <div key={t._i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+        <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
+          {TASK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <div onClick={() => openTaskEdit(featured.id, t._i)} title="Editar tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
+          {t.note && <div className="ep-note" style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 2 }} dangerouslySetInnerHTML={{ __html: t.note }} />}
+          {t.links && t.links.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
+              {t.links.map((l, li) => (
+                <a key={li} href={l.url || '#'} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
+              ))}
+            </div>
+          )}
+        </div>
+        {done
+          ? <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: '#2E6E6E' }}>{(t.doneAt || t.due) ? '✓ ' + fmtDue(t.doneAt || t.due) : '✓'}</span>
+          : <input type="date" value={t.due} onChange={e => setTaskDue(featured, t._i, e.target.value)} title={t.due ? `${fmtDue(t.due)} · ${dt.label}` : 'Sin fecha de entrega'} style={{ flexShrink: 0, border: `1px solid ${dt.border}`, borderRadius: 8, padding: '5px 7px', fontSize: 11.5, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} />}
+      </div>
+    )
+  }
 
   function renderEditor() {
     if (!editing) return null
@@ -709,33 +773,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.3)' }}>{g.items.length}</span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    {g.items.map(t => {
-                      const ts = taskStyle(t.status)
-                      const done = t.status === 'Terminada'
-                      const dt = dueTone(t.due, done)
-                      return (
-                        <div key={t._i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
-                          <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
-                            {TASK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                          <div onClick={() => openTaskEdit(featured.id, t._i)} title="Editar tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
-                            {t.note && <div className="ep-note" style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 2 }} dangerouslySetInnerHTML={{ __html: t.note }} />}
-                            {t.links && t.links.length > 0 && (
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
-                                {t.links.map((l, li) => (
-                                  <a key={li} href={l.url || '#'} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <input type="date" value={t.due} onChange={e => setTaskDue(featured, t._i, e.target.value)} title={t.due ? `${fmtDue(t.due)} · ${dt.label}` : 'Sin fecha de entrega'} style={{ flexShrink: 0, border: `1px solid ${dt.border}`, borderRadius: 8, padding: '5px 7px', fontSize: 11.5, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} />
-                        </div>
-                      )
-                    })}
+                    {g.items.map(renderTaskRow)}
                   </div>
                 </div>
               ))}
+
+              {taskGroups.length === 0 && doneItems.length === 0 && (
+                <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.4)', padding: '4px 0 8px' }}>Sin tareas aún. Usa “+ Tarea”.</div>
+              )}
+
+              {/* TERMINADAS — colapsable, por mes */}
+              {doneItems.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <button onClick={() => setShowDone(v => !v)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.08)', background: '#fff', borderRadius: 10, padding: '9px 12px', fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: '#2E6E6E', textTransform: 'uppercase' }}>
+                    <span style={{ height: 7, width: 7, borderRadius: 99, background: '#2E6E6E' }} />
+                    Terminadas <span style={{ color: 'rgba(20,35,61,0.4)' }}>{doneItems.length}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.4)', transform: showDone ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+                  </button>
+                  {showDone && (
+                    <div style={{ marginTop: 8 }}>
+                      {doneMonths.map(mg => (
+                        <div key={mg.label} style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.38)', margin: '4px 0 2px' }}>{mg.label} · {mg.items.length}</div>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {mg.items.map(renderTaskRow)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

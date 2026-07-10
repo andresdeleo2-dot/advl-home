@@ -27,7 +27,7 @@ export type Item = {
 export type EpicaKpi = { v: string; l: string }
 export type EpicaRoutine = { t: string; days: boolean[] }
 export type EpicaTaskLink = { label: string; url: string }
-export type EpicaTask = { t: string; status: string; due: string; note: string; links?: EpicaTaskLink[] }
+export type EpicaTask = { t: string; status: string; due: string; note: string; links?: EpicaTaskLink[]; doneAt?: string }
 export type EpicaLink = { l: string; url: string; type: string; primary?: boolean }
 
 export type Epica = {
