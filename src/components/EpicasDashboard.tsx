@@ -69,15 +69,17 @@ function daysUntil(s: string): number | null {
   return Math.round((d.getTime() - now.getTime()) / 86400000)
 }
 
-/** Color de una fecha de entrega según vencimiento. */
+/** Color de una fecha de entrega según qué tan cerca está el vencimiento.
+ *  Rangos finos para que un abanico de fechas se vea como un abanico de colores. */
 function dueTone(due: string, done: boolean) {
   if (done) return { c: '#2E6E6E', border: 'rgba(62,142,142,0.35)', bg: '#fff', label: 'lista' }
   const dl = daysUntil(due)
   if (dl == null) return { c: 'rgba(20,35,61,0.5)', border: 'rgba(15,35,64,0.12)', bg: '#fff', label: 'sin fecha' }
-  if (dl < 0) return { c: '#B0522E', border: 'rgba(176,82,46,0.55)', bg: 'rgba(176,82,46,0.07)', label: 'vencida' }
-  if (dl <= 7) return { c: '#B0522E', border: 'rgba(176,82,46,0.4)', bg: 'rgba(176,82,46,0.04)', label: 'esta semana' }
-  if (dl <= 30) return { c: '#A87A2C', border: 'rgba(194,147,58,0.5)', bg: 'rgba(194,147,58,0.08)', label: 'próxima' }
-  return { c: '#2E6E6E', border: 'rgba(62,142,142,0.3)', bg: '#fff', label: 'al día' }
+  if (dl < 0)   return { c: '#B0522E', border: 'rgba(176,82,46,0.6)',  bg: 'rgba(176,82,46,0.10)', label: 'vencida' }
+  if (dl <= 7)  return { c: '#C2410C', border: 'rgba(194,65,12,0.5)',  bg: 'rgba(194,65,12,0.08)',  label: 'esta semana' }
+  if (dl <= 21) return { c: '#A87A2C', border: 'rgba(194,147,58,0.55)', bg: 'rgba(194,147,58,0.12)', label: 'próximas semanas' }
+  if (dl <= 45) return { c: '#6F7F3E', border: 'rgba(111,127,62,0.5)',  bg: 'rgba(111,127,62,0.09)', label: 'este mes' }
+  return { c: '#2E6E6E', border: 'rgba(62,142,142,0.35)', bg: 'rgba(62,142,142,0.06)', label: 'al día' }
 }
 function primaryDash(e: Epica) {
   const prim = (e.links || []).find(l => l.primary)
@@ -505,7 +507,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
               <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Próximos vencimientos</span>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                {([['#B0522E', 'Vencida / esta semana'], ['#A87A2C', 'Próxima ≤30d'], ['#2E6E6E', 'Al día']] as const).map(([c, l]) => (
+                {([['#B0522E', 'Vencida'], ['#C2410C', 'Esta semana'], ['#A87A2C', '≤3 sem'], ['#6F7F3E', 'Este mes'], ['#2E6E6E', 'Al día']] as const).map(([c, l]) => (
                   <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: c }} />{l}</span>
                 ))}
               </div>
