@@ -128,3 +128,9 @@ body {
 .ep-live { animation: epPulse 2.4s ease-out infinite; }
 .ep-pop  { animation: epPop .3s ease both; }
 .ep-modal { animation: epPop .25s ease both; }
+
+/* Editor de notas (contenteditable) y render de notas ricas */
+[contenteditable][data-ph]:empty::before { content: attr(data-ph); color: rgba(20, 35, 61, 0.35); pointer-events: none; }
+.ep-rt ul, .ep-note ul { margin: 4px 0; padding-left: 20px; }
+.ep-rt li, .ep-note li { margin: 2px 0; }
+.ep-rt b, .ep-note b, .ep-rt strong, .ep-note strong { font-weight: 700; }

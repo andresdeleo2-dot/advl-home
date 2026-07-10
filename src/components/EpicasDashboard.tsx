@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import Link from 'next/link'
-import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink } from '@/lib/supabase'
+import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink } from '@/lib/supabase'
 
 /* ─── Tokens de marca (del handoff) ─────────────────────────── */
 const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
@@ -100,7 +100,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
   const [catFilter, setCatFilter] = useState<string>('todas')
   const [taskEdit, setTaskEdit] = useState<{ epicId: string; index: number | null } | null>(null)
-  const [taskDraft, setTaskDraft] = useState<EpicaTask>({ t: '', status: 'Por hacer', due: '', note: '' })
+  const [taskDraft, setTaskDraft] = useState<EpicaTask>({ t: '', status: 'Por hacer', due: '', note: '', links: [] })
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // refresca desde el server al montar (revalidate corto en el page)
@@ -219,14 +219,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Popup de edición por tarea ─────────────────────────── */
   const openTaskEdit = (epicId: string, index: number | null) => {
     const e = epics.find(x => x.id === epicId)
-    setTaskDraft(index != null && e ? clone(e.tasks[index]) : { t: '', status: 'Por hacer', due: '', note: '' })
+    if (index != null && e) {
+      const t = clone(e.tasks[index])
+      setTaskDraft({ ...t, links: t.links || [] })
+    } else {
+      setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [] })
+    }
     setTaskEdit({ epicId, index })
   }
   const closeTaskEdit = () => setTaskEdit(null)
   const saveTask = () => {
     if (!taskEdit) return
     const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
-    const t = { t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: (taskDraft.note || '').trim() }
+    const links = (taskDraft.links || []).map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.label || l.url)
+    const t: EpicaTask = { t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: taskDraft.note || '', links }
     if (!t.t) { closeTaskEdit(); return }
     const tasks = clone(e.tasks)
     if (taskEdit.index != null) tasks[taskEdit.index] = t
@@ -266,7 +272,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     d.name = (d.name || '').trim() || 'Nueva épica'
     d.kpis = (d.kpis || []).filter(k => (k.v || '').trim() || (k.l || '').trim())
     d.routines = (d.routines || []).filter(r => (r.t || '').trim()).map(r => ({ t: r.t, days: r.days || [false, false, false, false, false, false, false] }))
-    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => ({ t: t.t, status: t.status || 'Por hacer', due: t.due || '', note: t.note || '' }))
+    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => ({ t: t.t, status: t.status || 'Por hacer', due: t.due || '', note: t.note || '', links: t.links || [] }))
     d.links = (d.links || []).filter(l => (l.l || '').trim() || (l.url || '').trim())
     d.links.forEach(l => { if (!l.type) l.type = 'Otro' })
     if (!d.links.some(l => l.primary) && d.links.length) d.links[0].primary = true
@@ -714,7 +720,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           </select>
                           <div onClick={() => openTaskEdit(featured.id, t._i)} title="Editar tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
                             <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
-                            {t.note && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 2 }}>{t.note}</div>}
+                            {t.note && <div className="ep-note" style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 2 }} dangerouslySetInnerHTML={{ __html: t.note }} />}
+                            {t.links && t.links.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
+                                {t.links.map((l, li) => (
+                                  <a key={li} href={l.url || '#'} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <input type="date" value={t.due} onChange={e => setTaskDue(featured, t._i, e.target.value)} title={t.due ? `${fmtDue(t.due)} · ${dt.label}` : 'Sin fecha de entrega'} style={{ flexShrink: 0, border: `1px solid ${dt.border}`, borderRadius: 8, padding: '5px 7px', fontSize: 11.5, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} />
                         </div>
@@ -845,8 +858,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {taskDraft.due && <button onClick={() => setTaskDraft(d => ({ ...d, due: '' }))} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '9px 12px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>Quitar</button>}
                 </div>
 
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={lbl}>Links</label>
+                  <button onClick={() => setTaskDraft(d => ({ ...d, links: [...(d.links || []), { label: '', url: '' }] }))} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 8, padding: '5px 10px', fontSize: 11, fontWeight: 700, marginTop: 16 }}>+ Link</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {(taskDraft.links || []).map((l, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+                      <input value={l.label} onChange={e => setTaskDraft(d => { const links = [...(d.links || [])]; links[i] = { ...links[i], label: e.target.value }; return { ...d, links } })} placeholder="Nombre" style={{ ...inpSmall, flex: '0 0 120px' }} />
+                      <input value={l.url} onChange={e => setTaskDraft(d => { const links = [...(d.links || [])]; links[i] = { ...links[i], url: e.target.value }; return { ...d, links } })} placeholder="https://…" style={{ ...inpSmall, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 12 }} />
+                      <button onClick={() => setTaskDraft(d => ({ ...d, links: (d.links || []).filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
+                    </div>
+                  ))}
+                </div>
+
                 <label style={lbl}>Nota</label>
-                <textarea value={taskDraft.note} onChange={e => setTaskDraft(d => ({ ...d, note: e.target.value }))} placeholder="Opcional…" rows={2} style={areaBig} />
+                <RichText value={taskDraft.note || ''} onChange={v => setTaskDraft(d => ({ ...d, note: v }))} placeholder="Negritas (B), cursiva (I) y viñetas (• Lista)…" />
 
                 <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
                   {!isNew && <button onClick={deleteTask} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '11px 14px', fontSize: 12.5, fontWeight: 700 }}>Eliminar</button>}
@@ -901,6 +928,40 @@ const goldBtn: CSSProperties = {
   border: 'none', cursor: 'pointer', borderRadius: 12, fontWeight: 800, color: '#1B1305',
   background: 'linear-gradient(135deg,#E7C56B,#C2933A)', boxShadow: '0 10px 20px -10px rgba(194,147,58,.9)',
   fontFamily: 'inherit', padding: '10px 16px', fontSize: 13,
+}
+
+/* ─── Editor de notas: negritas + viñetas (contenteditable) ─────── */
+function RichText({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (el && el.innerHTML !== (value || '')) el.innerHTML = value || ''
+  }, [value])
+  const exec = (cmd: string) => {
+    const el = ref.current; if (!el) return
+    el.focus()
+    document.execCommand(cmd, false)
+    onChange(el.innerHTML)
+  }
+  const rtBtn: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 7, padding: '4px 9px', fontSize: 12, color: 'rgba(20,35,61,0.7)', lineHeight: 1 }
+  return (
+    <div style={{ border: '1px solid rgba(15,35,64,0.14)', borderRadius: 11, overflow: 'hidden', background: '#fff' }}>
+      <div style={{ display: 'flex', gap: 5, padding: 6, borderBottom: '1px solid rgba(15,35,64,0.08)', background: '#FBFAF6' }}>
+        <button type="button" title="Negrita" onMouseDown={e => { e.preventDefault(); exec('bold') }} style={{ ...rtBtn, fontWeight: 800 }}>B</button>
+        <button type="button" title="Cursiva" onMouseDown={e => { e.preventDefault(); exec('italic') }} style={{ ...rtBtn, fontStyle: 'italic' }}>I</button>
+        <button type="button" title="Viñetas" onMouseDown={e => { e.preventDefault(); exec('insertUnorderedList') }} style={rtBtn}>• Lista</button>
+      </div>
+      <div
+        ref={ref}
+        className="ep-rt"
+        contentEditable
+        suppressContentEditableWarning
+        data-ph={placeholder}
+        onInput={e => onChange((e.target as HTMLDivElement).innerHTML)}
+        style={{ minHeight: 74, padding: '10px 12px', fontSize: 13.5, lineHeight: 1.5, color: '#14233D', outline: 'none' }}
+      />
+    </div>
+  )
 }
 
 /* ─── Íconos ─────────────────────────────────────────────────── */
