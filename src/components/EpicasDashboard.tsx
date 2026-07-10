@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import Link from 'next/link'
 import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink } from '@/lib/supabase'
+import HeaderStats from './HeaderStats'
+import QuoteWidget from './QuoteWidget'
+import TimerWidget from './TimerWidget'
+import WeatherWidget from './WeatherWidget'
 
 /* ─── Tokens de marca (del handoff) ─────────────────────────── */
 const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
@@ -976,12 +980,14 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 10, background: 'rgba(62,142,142,0.16)', border: '1px solid rgba(120,200,190,0.25)', padding: '8px 12px', fontSize: 11.5, fontWeight: 700, color: '#B9E2DA' }}>
+            <HeaderStats />
+            <WidgetsDropdown />
+            <span className="ep-hide-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 10, background: 'rgba(62,142,142,0.16)', border: '1px solid rgba(120,200,190,0.25)', padding: '8px 12px', fontSize: 11.5, fontWeight: 700, color: '#B9E2DA' }}>
               <span className="ep-live" style={{ height: 7, width: 7, borderRadius: 99, background: '#5FD0BE' }} />Supabase · {sourceCount} fuentes
             </span>
             <Link href="/" className="band-glass" style={{ borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>← Accesos</Link>
             <button onClick={onNew} style={{ ...goldBtn, display: 'flex', alignItems: 'center', gap: 6, padding: '9px 15px', fontSize: 12 }}>
-              <span style={{ fontSize: 16, lineHeight: 1, marginTop: -1 }}>+</span> Nueva épica
+              <span style={{ fontSize: 16, lineHeight: 1, marginTop: -1 }}>+</span> <span className="ep-hide-xs">Nueva</span> épica
             </button>
           </div>
         </div>
@@ -994,6 +1000,32 @@ const goldBtn: CSSProperties = {
   border: 'none', cursor: 'pointer', borderRadius: 12, fontWeight: 800, color: '#1B1305',
   background: 'linear-gradient(135deg,#E7C56B,#C2933A)', boxShadow: '0 10px 20px -10px rgba(194,147,58,.9)',
   fontFamily: 'inherit', padding: '10px 16px', fontSize: 13,
+}
+
+/* Dropdown de widgets extra (clima ampliado, frase, temporizador) en el header */
+function WidgetsDropdown() {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function onDoc(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} className="band-glass band-glass-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)', cursor: 'pointer' }}>
+        <span style={{ fontSize: 13, lineHeight: 1 }}>✦</span> Widgets
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ opacity: 0.6, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="animate-fade" style={{ position: 'absolute', right: 0, zIndex: 40, marginTop: 8, width: 320, maxWidth: '86vw', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <WeatherWidget />
+          <QuoteWidget />
+          <TimerWidget />
+        </div>
+      )}
+    </div>
+  )
 }
 
 /* ─── Editor de notas: negritas + viñetas (contenteditable) ─────── */

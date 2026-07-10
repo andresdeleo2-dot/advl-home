@@ -138,3 +138,7 @@ body {
 .ep-rt i, .ep-note i, .ep-rt em, .ep-note em { font-style: italic; }
 .ep-rt:focus { outline: none; }
 .ep-note:last-child, .ep-note > :last-child { margin-bottom: 0; }
+
+/* Utilidades responsive del header de Épicas */
+@media (max-width: 640px) { .ep-hide-sm { display: none !important; } }
+@media (max-width: 400px) { .ep-hide-xs { display: none !important; } }
