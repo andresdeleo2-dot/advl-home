@@ -256,7 +256,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <p style={{ fontSize: 15, marginBottom: 18 }}>Aún no hay épicas. Crea tu primer gran frente.</p>
           <button onClick={openNew} style={goldBtn}>+ Nueva épica</button>
         </div>
-        {editing && <EditorModal />}
+        {editing && renderEditor()}
       </div>
     )
   }
@@ -276,7 +276,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return { key: s, color: ts.c, label: ts.group, items: indexed.filter(t => t.status === s) }
   }).filter(g => g.items.length > 0)
 
-  function EditorModal() {
+  function renderEditor() {
     if (!editing) return null
     const d = editing
     const isEdit = editMode === 'edit'
@@ -648,7 +648,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
       </div>
 
-      {editing && <EditorModal />}
+      {editing && renderEditor()}
 
       {toast && (
         <div style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)' }}>{toast.msg}</div>
