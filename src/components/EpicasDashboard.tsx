@@ -348,7 +348,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Estilos compartidos ────────────────────────────────── */
   const lbl: CSSProperties = { display: 'block', font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 7, marginTop: 16 }
   const inpBig: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 11, padding: '11px 13px', fontSize: 15, color: '#14233D', background: '#fff', outline: 'none' }
-  const areaBig: CSSProperties = { ...inpBig, resize: 'vertical' }
   const inpSmall: CSSProperties = { flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#14233D', background: '#fff', outline: 'none' }
   const inpNarrow: CSSProperties = { ...inpSmall, flex: '0 0 64px', width: 64 }
   const monoInp: CSSProperties = { ...inpSmall, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 12 }
@@ -450,7 +449,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <input value={d.name} onChange={e => patchDraft(x => ({ ...x, name: e.target.value }))} placeholder="Ej. Inmuebles" style={inpBig} />
 
             <label style={lbl}>Descripción</label>
-            <textarea value={d.description || ''} onChange={e => patchDraft(x => ({ ...x, description: e.target.value }))} placeholder="Qué abarca esta épica…" rows={2} style={areaBig} />
+            <RichText value={d.description || ''} onChange={v => patchDraft(x => ({ ...x, description: v }))} placeholder="Qué abarca esta épica… (negritas, cursiva, viñetas)" />
 
             <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 6 }}>
               <div style={{ flex: '1 1 200px' }}>
@@ -534,13 +533,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         return <button key={s} onClick={() => patchDraft(x => { x.tasks[i].status = s; return x })} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button>
                       })}
                     </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>Entrega</span>
-                        <input type="date" value={t.due} onChange={e => patchDraft(x => { x.tasks[i].due = e.target.value; return x })} style={dateInp} />
-                      </div>
-                      <input value={t.note} onChange={e => patchDraft(x => { x.tasks[i].note = e.target.value; return x })} placeholder="Nota (opcional)" style={inpSmall} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>Entrega</span>
+                      <input type="date" value={t.due} onChange={e => patchDraft(x => { x.tasks[i].due = e.target.value; return x })} style={dateInp} />
                     </div>
+                    <RichText value={t.note || ''} onChange={v => patchDraft(x => { x.tasks[i].note = v; return x })} placeholder="Nota (negritas, cursiva, viñetas)…" />
                   </div>
                 ))}
               </div>
@@ -665,7 +662,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => toggleArchive(featured)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}>{featured.archived ? 'Desarchivar' : 'Archivar'}</button>
               </div>
               <h1 className="serif" style={{ fontWeight: 600, fontSize: 46, lineHeight: 1, margin: '0 0 8px', color: '#10233F' }}>{featured.name}</h1>
-              {featured.description && <p style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }}>{featured.description}</p>}
+              {featured.description && <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }} dangerouslySetInnerHTML={{ __html: featured.description }} />}
 
               {featured.kpis.length > 0 && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(90px,1fr))', gap: 14, marginBottom: 22 }}>
