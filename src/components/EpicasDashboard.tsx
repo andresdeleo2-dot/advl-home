@@ -99,6 +99,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [showRowKpi, setShowRowKpi] = useState(true)
   const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
   const [catFilter, setCatFilter] = useState<string>('todas')
+  const [taskEdit, setTaskEdit] = useState<{ epicId: string; index: number | null } | null>(null)
+  const [taskDraft, setTaskDraft] = useState<EpicaTask>({ t: '', status: 'Por hacer', due: '', note: '' })
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // refresca desde el server al montar (revalidate corto en el page)
@@ -212,6 +214,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const toggleArchive = (e: Epica) => {
     patchEpic(e.id, { archived: !e.archived })
     showToast(e.archived ? 'Épica reactivada' : 'Épica archivada')
+  }
+
+  /* ─── Popup de edición por tarea ─────────────────────────── */
+  const openTaskEdit = (epicId: string, index: number | null) => {
+    const e = epics.find(x => x.id === epicId)
+    setTaskDraft(index != null && e ? clone(e.tasks[index]) : { t: '', status: 'Por hacer', due: '', note: '' })
+    setTaskEdit({ epicId, index })
+  }
+  const closeTaskEdit = () => setTaskEdit(null)
+  const saveTask = () => {
+    if (!taskEdit) return
+    const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
+    const t = { t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: (taskDraft.note || '').trim() }
+    if (!t.t) { closeTaskEdit(); return }
+    const tasks = clone(e.tasks)
+    if (taskEdit.index != null) tasks[taskEdit.index] = t
+    else tasks.push(t)
+    patchEpic(e.id, { tasks })
+    closeTaskEdit()
+  }
+  const deleteTask = () => {
+    if (!taskEdit || taskEdit.index == null) { closeTaskEdit(); return }
+    const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
+    const tasks = clone(e.tasks).filter((_, i) => i !== taskEdit.index)
+    patchEpic(e.id, { tasks })
+    closeTaskEdit()
   }
 
   /* ─── Modal ──────────────────────────────────────────────── */
@@ -488,6 +516,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <TopBar sourceCount={sourceCount} onNew={openNew} />
 
       <div style={{ maxWidth: 1360, margin: '0 auto', padding: '22px 18px 60px' }}>
+        {/* SELECTOR DE ÉPICA — lo primero: elige el frente a ver */}
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 9, flexWrap: 'wrap' }}>
+            <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.4)' }}>Elige una épica</div>
+            <button onClick={openNew} style={{ cursor: 'pointer', border: '1px dashed rgba(15,35,64,0.22)', background: 'transparent', borderRadius: 10, padding: '6px 12px', fontSize: 11.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>+ Nueva épica</button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+            {visibleEpics.map(e => {
+              const on = !!featured && e.id === featured.id
+              const pend = pendCount(e)
+              return (
+                <button key={e.id} onClick={() => setFeaturedId(e.id)} title={e.name} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', border: on ? `1.5px solid ${e.color}` : '1px solid rgba(15,35,64,0.12)', background: on ? '#fff' : 'rgba(255,255,255,0.55)', color: on ? '#10233F' : 'rgba(20,35,61,0.6)', boxShadow: on ? '0 6px 16px -10px rgba(15,35,64,0.5)' : 'none' }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                  {e.name}
+                  {pend > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: on ? e.color : 'rgba(20,35,61,0.4)' }}>{pend}</span>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         {/* OVERVIEW */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 26 }}>
           {overview.map((t, i) => (
@@ -642,6 +691,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11 }}>
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>Tareas</span>
                 <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>{pendCount(featured)} activas · {fDone} terminadas</span>
+                <span style={{ flex: 1 }} />
+                <button onClick={() => openTaskEdit(featured.id, null)} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 8, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}>+ Tarea</button>
               </div>
 
               {taskGroups.map(g => (
@@ -661,7 +712,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
                             {TASK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
-                          <div style={{ minWidth: 0, flex: 1 }}>
+                          <div onClick={() => openTaskEdit(featured.id, t._i)} title="Editar tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
                             <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
                             {t.note && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 2 }}>{t.note}</div>}
                           </div>
@@ -759,6 +810,55 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       </div>
 
       {editing && renderEditor()}
+
+      {taskEdit && (() => {
+        const ep = epics.find(e => e.id === taskEdit.epicId)
+        const isNew = taskEdit.index == null
+        const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
+        return (
+          <div onClick={closeTaskEdit} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 20px' }}>
+            <div onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 440, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: ep?.color || '#2E5A9E' }} />
+              <div style={{ padding: '18px 22px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div>
+                    <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.4)', marginBottom: 5 }}>{isNew ? 'Nueva tarea' : 'Editar tarea'}</div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{ep?.name}</div>
+                  </div>
+                  <button onClick={closeTaskEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+
+                <label style={lbl}>Tarea</label>
+                <input autoFocus value={taskDraft.t} onChange={e => setTaskDraft(d => ({ ...d, t: e.target.value }))} placeholder="¿Qué hay que hacer?" style={inpBig} />
+
+                <label style={lbl}>Estado</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {TASK_STATUSES.map(s => {
+                    const on = taskDraft.status === s; const ts = taskStyle(s)
+                    return <button key={s} onClick={() => setTaskDraft(d => ({ ...d, status: s }))} style={{ cursor: 'pointer', borderRadius: 8, padding: '7px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button>
+                  })}
+                </div>
+
+                <label style={lbl}>Fecha de entrega</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <input type="date" value={taskDraft.due} onChange={e => setTaskDraft(d => ({ ...d, due: e.target.value }))} style={{ ...inpBig, flex: 1, fontWeight: 600, border: `1px solid ${dt.border}`, color: dt.c, background: dt.bg }} />
+                  {taskDraft.due && <button onClick={() => setTaskDraft(d => ({ ...d, due: '' }))} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '9px 12px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>Quitar</button>}
+                </div>
+
+                <label style={lbl}>Nota</label>
+                <textarea value={taskDraft.note} onChange={e => setTaskDraft(d => ({ ...d, note: e.target.value }))} placeholder="Opcional…" rows={2} style={areaBig} />
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+                  {!isNew && <button onClick={deleteTask} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '11px 14px', fontSize: 12.5, fontWeight: 700 }}>Eliminar</button>}
+                  <span style={{ flex: 1 }} />
+                  <button onClick={closeTaskEdit} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 10, padding: '11px 16px', fontSize: 12.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
+                  <button onClick={saveTask} style={{ ...goldBtn, padding: '11px 20px', fontSize: 12.5 }}>Guardar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {toast && (
         <div style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)' }}>{toast.msg}</div>
