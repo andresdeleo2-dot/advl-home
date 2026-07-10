@@ -35,6 +35,8 @@ export type Epica = {
   color: string
   description: string | null
   status: string            // En curso | En riesgo | Al día | En pausa
+  categoria: string | null
+  archived: boolean
   source_table: string | null
   source_sync: string | null
   epic_order: number

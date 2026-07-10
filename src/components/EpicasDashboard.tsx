@@ -46,23 +46,38 @@ function fmtDue(s: string) {
   const d = new Date(s + 'T00:00:00'); if (isNaN(d.getTime())) return s
   return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })
 }
-function isOverdue(s: string) {
-  if (!s) return false
-  const d = new Date(s + 'T00:00:00'); if (isNaN(d.getTime())) return false
-  const now = new Date(); now.setHours(0, 0, 0, 0)
-  return d < now
-}
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x))
 
 /** Rellena arrays faltantes por si algún registro viejo trae null. */
 function normalize(e: Epica): Epica {
   return {
     ...e,
+    categoria: e.categoria ?? null,
+    archived: !!e.archived,
     kpis: e.kpis || [],
     routines: (e.routines || []).map(r => ({ t: r.t, days: (r.days && r.days.length === 7) ? r.days : [false, false, false, false, false, false, false] })),
     tasks: e.tasks || [],
     links: e.links || [],
   }
+}
+
+/** Días hasta una fecha YYYY-MM-DD (negativo = ya pasó, null = sin fecha). */
+function daysUntil(s: string): number | null {
+  if (!s) return null
+  const d = new Date(s + 'T00:00:00'); if (isNaN(d.getTime())) return null
+  const now = new Date(); now.setHours(0, 0, 0, 0)
+  return Math.round((d.getTime() - now.getTime()) / 86400000)
+}
+
+/** Color de una fecha de entrega según vencimiento. */
+function dueTone(due: string, done: boolean) {
+  if (done) return { c: '#2E6E6E', border: 'rgba(62,142,142,0.35)', bg: '#fff', label: 'lista' }
+  const dl = daysUntil(due)
+  if (dl == null) return { c: 'rgba(20,35,61,0.5)', border: 'rgba(15,35,64,0.12)', bg: '#fff', label: 'sin fecha' }
+  if (dl < 0) return { c: '#B0522E', border: 'rgba(176,82,46,0.55)', bg: 'rgba(176,82,46,0.07)', label: 'vencida' }
+  if (dl <= 7) return { c: '#B0522E', border: 'rgba(176,82,46,0.4)', bg: 'rgba(176,82,46,0.04)', label: 'esta semana' }
+  if (dl <= 30) return { c: '#A87A2C', border: 'rgba(194,147,58,0.5)', bg: 'rgba(194,147,58,0.08)', label: 'próxima' }
+  return { c: '#2E6E6E', border: 'rgba(62,142,142,0.3)', bg: '#fff', label: 'al día' }
 }
 function primaryDash(e: Epica) {
   const prim = (e.links || []).find(l => l.primary)
@@ -80,6 +95,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [sortBy, setSortBy] = useState<'Pendientes' | 'Progreso' | 'Nombre'>('Pendientes')
   const [compact, setCompact] = useState(false)
   const [showRowKpi, setShowRowKpi] = useState(true)
+  const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
+  const [catFilter, setCatFilter] = useState<string>('todas')
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // refresca desde el server al montar (revalidate corto en el page)
@@ -115,22 +132,52 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
   }
 
-  const featured = useMemo(() => epics.find(e => e.id === featuredId) || epics[0] || null, [epics, featuredId])
+  /* ─── Derivados de filtros (activas / archivadas / categoría) ─ */
+  const activeEpics = useMemo(() => epics.filter(e => !e.archived), [epics])
+  const archivedCount = useMemo(() => epics.filter(e => e.archived).length, [epics])
+  const categorias = useMemo(() => {
+    const m: Record<string, number> = {}
+    activeEpics.forEach(e => { const c = (e.categoria || '').trim(); if (c) m[c] = (m[c] || 0) + 1 })
+    return m
+  }, [activeEpics])
+  const visibleEpics = useMemo(() => epics.filter(e => {
+    if (estadoFilter === 'activas' && e.archived) return false
+    if (estadoFilter === 'archivadas' && !e.archived) return false
+    if (catFilter !== 'todas' && (e.categoria || '') !== catFilter) return false
+    return true
+  }), [epics, estadoFilter, catFilter])
 
-  /* ─── Overview ───────────────────────────────────────────── */
+  const featured = useMemo(() => visibleEpics.find(e => e.id === featuredId) || visibleEpics[0] || epics[0] || null, [visibleEpics, featuredId, epics])
+
+  /* ─── Próximos vencimientos (tareas con fecha ≤45d o vencidas) ─ */
+  const vencimientos = useMemo(() => {
+    const items: { id: string; epica: string; color: string; task: string; due: string; dl: number }[] = []
+    activeEpics.forEach(e => {
+      (e.tasks || []).forEach(t => {
+        if (t.status === 'Terminada' || !t.due) return
+        const dl = daysUntil(t.due)
+        if (dl == null || dl > 45) return
+        items.push({ id: e.id, epica: e.name, color: e.color, task: t.t, due: t.due, dl })
+      })
+    })
+    return items.sort((a, b) => a.dl - b.dl)
+  }, [activeEpics])
+
+  /* ─── Overview (sobre épicas activas, no archivadas) ─────────── */
   const overview = useMemo(() => {
-    const total = epics.length
-    const activas = epics.filter(e => e.status !== 'En pausa').length
-    const tareasActivas = epics.reduce((n, e) => n + pendCount(e), 0)
-    const prom = total ? Math.round(epics.reduce((n, e) => n + pctOf(e), 0) / total) : 0
-    const riesgo = epics.filter(e => e.status === 'En riesgo').length
+    const src = activeEpics
+    const total = src.length
+    const activas = src.filter(e => e.status !== 'En pausa').length
+    const tareasActivas = src.reduce((n, e) => n + pendCount(e), 0)
+    const prom = total ? Math.round(src.reduce((n, e) => n + pctOf(e), 0) / total) : 0
+    const riesgo = src.filter(e => e.status === 'En riesgo').length
     return [
       { label: 'Épicas activas', value: String(activas), hint: `de ${total}`, hintColor: 'rgba(20,35,61,0.45)' },
       { label: 'Tareas activas', value: String(tareasActivas), hint: 'por hacer', hintColor: 'rgba(20,35,61,0.45)' },
       { label: 'Progreso prom.', value: `${prom}%`, hint: 'global', hintColor: '#2E6E6E' },
       { label: 'En riesgo', value: String(riesgo), hint: riesgo ? 'requieren foco' : 'todo bien', hintColor: riesgo ? '#B0522E' : '#2E6E6E' },
     ]
-  }, [epics])
+  }, [activeEpics])
 
   const sourceCount = useMemo(
     () => epics.reduce((n, e) => n + (e.source_table ? 1 : 0) + (e.links?.length || 0), 0),
@@ -139,13 +186,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Lista (resto, ordenada) ────────────────────────────── */
   const rest = useMemo(() => {
-    const others = epics.filter(e => e.id !== (featured?.id))
+    const others = visibleEpics.filter(e => e.id !== (featured?.id))
     const sorted = [...others]
     if (sortBy === 'Pendientes') sorted.sort((a, b) => pendCount(b) - pendCount(a))
     else if (sortBy === 'Progreso') sorted.sort((a, b) => pctOf(b) - pctOf(a))
     else sorted.sort((a, b) => a.name.localeCompare(b.name, 'es'))
     return sorted
-  }, [epics, featured, sortBy])
+  }, [visibleEpics, featured, sortBy])
 
   /* ─── Interacciones inline en la destacada ───────────────── */
   const setTaskStatus = (e: Epica, ti: number, v: string) => {
@@ -160,12 +207,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const routines = clone(e.routines); routines[ri].days[di] = !routines[ri].days[di]
     patchEpic(e.id, { routines })
   }
+  const toggleArchive = (e: Epica) => {
+    patchEpic(e.id, { archived: !e.archived })
+    showToast(e.archived ? 'Épica reactivada' : 'Épica archivada')
+  }
 
   /* ─── Modal ──────────────────────────────────────────────── */
   const openNew = () => {
     setEditMode('new')
     setEditing({
       id: null, name: '', color: '#2E5A9E', description: '', status: 'En curso',
+      categoria: '', archived: false,
       source_table: '', source_sync: null, epic_order: epics.length,
       kpis: [{ v: '', l: '' }], routines: [], tasks: [{ t: '', status: 'Por hacer', due: '', note: '' }],
       links: [{ l: 'Dashboard', url: '', primary: true, type: 'Dashboard' }],
@@ -191,6 +243,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
     const payload = {
       name: d.name, color: d.color, description: d.description || null, status: d.status,
+      categoria: (d.categoria || '').trim() || null, archived: !!d.archived,
       source_table: d.source_table || null, source_sync: d.source_sync || null, epic_order: d.epic_order,
       kpis: d.kpis, routines: d.routines, tasks: d.tasks, links: d.links,
     }
@@ -317,6 +370,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   })}
                 </div>
               </div>
+              <div style={{ flex: '1 1 200px' }}>
+                <label style={lbl}>Categoría</label>
+                <input list="ep-cats" value={d.categoria || ''} onChange={e => patchDraft(x => ({ ...x, categoria: e.target.value }))} placeholder="Ej. Finanzas, Patrimonio…" style={inpBig} />
+                <datalist id="ep-cats">{Object.keys(categorias).map(c => <option key={c} value={c} />)}</datalist>
+              </div>
             </div>
 
             {/* Fuente de datos */}
@@ -441,6 +499,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           ))}
         </div>
 
+        {/* PRÓXIMOS VENCIMIENTOS */}
+        {vencimientos.length > 0 && (
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 26 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
+              <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Próximos vencimientos</span>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {([['#B0522E', 'Vencida / esta semana'], ['#A87A2C', 'Próxima ≤30d'], ['#2E6E6E', 'Al día']] as const).map(([c, l]) => (
+                  <span key={l} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: c }} />{l}</span>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {vencimientos.slice(0, 8).map((v, i) => {
+                const dt = dueTone(v.due, false)
+                return (
+                  <div key={i} onClick={() => setFeaturedId(v.id)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 2px', borderBottom: '1px solid rgba(15,35,64,0.06)', cursor: 'pointer', fontSize: 13 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 99, flexShrink: 0, background: dt.c }} />
+                    <span style={{ width: 150, flexShrink: 0, fontWeight: 600, color: '#16365F', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.epica}</span>
+                    <span style={{ flex: 1, minWidth: 0, color: 'rgba(20,35,61,0.6)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.task}</span>
+                    <span style={{ flexShrink: 0, fontWeight: 700, color: dt.c }}>{v.dl < 0 ? `Vencida · ${fmtDue(v.due)}` : v.dl === 0 ? 'Hoy' : `En ${v.dl} d · ${fmtDue(v.due)}`}</span>
+                  </div>
+                )
+              })}
+            </div>
+            {vencimientos.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', paddingTop: 9 }}>+ {vencimientos.length - 8} más</div>}
+          </div>
+        )}
+
         {/* DESTACADA */}
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.20em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.4)', marginBottom: 10 }}>Épica destacada</div>
         <div className="ep-pop" style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderRadius: 20, boxShadow: '0 24px 50px -34px rgba(15,35,64,0.5)', overflow: 'hidden', marginBottom: 34 }}>
@@ -452,7 +538,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <span style={{ height: 11, width: 11, borderRadius: 99, background: featured.color }} />
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)' }}>Épica</span>
                 <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: fSt.bg, color: fSt.color }}>{featured.status}</span>
+                {featured.categoria && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: 'rgba(15,35,64,0.06)', color: 'rgba(20,35,61,0.6)' }}>{featured.categoria}</span>}
+                {featured.archived && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: 'rgba(20,35,61,0.08)', color: 'rgba(20,35,61,0.5)' }}>Archivada</span>}
                 <button onClick={() => openEdit(featured.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}><PencilIcon /> Editar</button>
+                <button onClick={() => toggleArchive(featured)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}>{featured.archived ? 'Desarchivar' : 'Archivar'}</button>
               </div>
               <h1 className="serif" style={{ fontWeight: 600, fontSize: 46, lineHeight: 1, margin: '0 0 8px', color: '#10233F' }}>{featured.name}</h1>
               {featured.description && <p style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }}>{featured.description}</p>}
@@ -564,7 +653,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {g.items.map(t => {
                       const ts = taskStyle(t.status)
                       const done = t.status === 'Terminada'
-                      const overdue = isOverdue(t.due) && !done
+                      const dt = dueTone(t.due, done)
                       return (
                         <div key={t._i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
                           <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
@@ -574,7 +663,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
                             {t.note && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 2 }}>{t.note}</div>}
                           </div>
-                          <input type="date" value={t.due} onChange={e => setTaskDue(featured, t._i, e.target.value)} title={t.due ? fmtDue(t.due) : 'Fecha de entrega'} style={{ flexShrink: 0, border: `1px solid ${overdue ? 'rgba(176,82,46,0.5)' : 'rgba(15,35,64,0.12)'}`, borderRadius: 8, padding: '5px 7px', fontSize: 11.5, color: overdue ? '#B0522E' : 'rgba(20,35,61,0.6)', background: overdue ? 'rgba(176,82,46,0.06)' : '#fff', outline: 'none' }} />
+                          <input type="date" value={t.due} onChange={e => setTaskDue(featured, t._i, e.target.value)} title={t.due ? `${fmtDue(t.due)} · ${dt.label}` : 'Sin fecha de entrega'} style={{ flexShrink: 0, border: `1px solid ${dt.border}`, borderRadius: 8, padding: '5px 7px', fontSize: 11.5, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} />
                         </div>
                       )
                     })}
@@ -586,6 +675,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
 
         {/* LISTA */}
+        {/* filtros: estado (activas/archivadas) + categoría */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px', alignItems: 'center', marginBottom: 14 }}>
+          <div style={{ display: 'inline-flex', background: 'rgba(15,35,64,0.05)', borderRadius: 11, padding: 3 }}>
+            {([['activas', 'Activas', activeEpics.length], ['archivadas', 'Archivadas', archivedCount], ['todas', 'Todas', epics.length]] as const).map(([k, label, n]) => (
+              <button key={k} onClick={() => setEstadoFilter(k)} style={{ border: 'none', cursor: 'pointer', borderRadius: 9, padding: '7px 13px', fontSize: 12.5, fontWeight: 600, background: estadoFilter === k ? '#fff' : 'transparent', color: estadoFilter === k ? '#10233F' : 'rgba(20,35,61,0.5)', boxShadow: estadoFilter === k ? '0 1px 2px rgba(15,35,64,0.1)' : 'none' }}>{label} <span style={{ opacity: .55, fontWeight: 500 }}>{n}</span></button>
+            ))}
+          </div>
+          {Object.keys(categorias).length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, alignItems: 'center' }}>
+              {([['todas', 'Todas']] as [string, string][]).concat(Object.keys(categorias).sort().map(c => [c, c] as [string, string])).map(([k, label]) => {
+                const on = catFilter === k; const n = k === 'todas' ? null : categorias[k]
+                return <button key={k} onClick={() => setCatFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '6px 12px', fontSize: 12, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}{n != null ? ' · ' + n : ''}</button>
+              })}
+            </div>
+          )}
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
           <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{rest.length}</span>
           <h2 style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', margin: 0 }}>Todas las épicas</h2>
@@ -611,6 +717,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span className="serif" style={{ fontWeight: 600, fontSize: 18, color: '#10233F', lineHeight: 1 }}>{e.name}</span>
                     <span style={{ fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: st.bg, color: st.color }}>{e.status}</span>
+                    {e.categoria && <span style={{ fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'rgba(15,35,64,0.06)', color: 'rgba(20,35,61,0.55)' }}>{e.categoria}</span>}
+                    {e.archived && <span style={{ fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'rgba(20,35,61,0.08)', color: 'rgba(20,35,61,0.45)' }}>Archivada</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{pend > 0 ? `${pend} tareas activas` : 'Al corriente'}</span>

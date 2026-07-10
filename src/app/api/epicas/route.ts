@@ -25,6 +25,8 @@ export async function POST(req: Request) {
       color: body.color || '#2E5A9E',
       description: body.description || null,
       status: body.status || 'En curso',
+      categoria: body.categoria || null,
+      archived: !!body.archived,
       source_table: body.source_table || null,
       source_sync: body.source_sync || null,
       epic_order: Number(body.epic_order) || 0,

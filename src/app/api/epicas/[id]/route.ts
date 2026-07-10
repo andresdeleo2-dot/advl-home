@@ -8,8 +8,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const { id } = await params
     const body = await req.json()
     const allowed = [
-      'name', 'color', 'description', 'status', 'source_table', 'source_sync',
-      'epic_order', 'kpis', 'routines', 'tasks', 'links',
+      'name', 'color', 'description', 'status', 'categoria', 'archived',
+      'source_table', 'source_sync', 'epic_order', 'kpis', 'routines', 'tasks', 'links',
     ]
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
     for (const key of allowed) {
