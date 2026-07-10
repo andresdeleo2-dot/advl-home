@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import Link from 'next/link'
 import type { Item } from '@/lib/supabase'
 import { CONFIG } from '@/lib/config'
 import { matchesQuery, groupItems, getFaviconUrl, normalizeImageUrl } from '@/lib/utils'
@@ -296,6 +297,9 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           <div className="flex items-center gap-2">
             <HeaderStats />
             <div className="hidden items-center gap-1.5 lg:flex">
+              <Link href="/epicas"
+                className="rounded-[10px] px-3 py-2 text-[12px] font-bold text-[#1B1305]"
+                style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', boxShadow: '0 8px 16px -8px rgba(194,147,58,.85)' }}>Épicas</Link>
               <a href={CONFIG.quickLinks.excel} target="_blank" rel="noopener noreferrer"
                 className="rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">Excel</a>
               <a href={CONFIG.quickLinks.codigo} target="_blank" rel="noopener noreferrer"

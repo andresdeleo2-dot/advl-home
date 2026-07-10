@@ -117,3 +117,14 @@ body {
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .animate-fade { animation: fadeIn 0.25s ease both; }
+
+/* Épicas — animaciones del prototipo de diseño */
+@keyframes epPop { from { opacity: 0; transform: scale(.97) translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes epPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(62,142,142,0.35); }
+  70%  { box-shadow: 0 0 0 6px rgba(62,142,142,0); }
+  100% { box-shadow: 0 0 0 0 rgba(62,142,142,0); }
+}
+.ep-live { animation: epPulse 2.4s ease-out infinite; }
+.ep-pop  { animation: epPop .3s ease both; }
+.ep-modal { animation: epPop .25s ease both; }
