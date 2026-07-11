@@ -300,6 +300,8 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <Link href="/epicas"
                 className="rounded-[10px] px-3 py-2 text-[12px] font-bold text-[#1B1305]"
                 style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', boxShadow: '0 8px 16px -8px rgba(194,147,58,.85)' }}>Épicas</Link>
+              <Link href="/personas"
+                className="rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">Personas</Link>
               <a href={CONFIG.quickLinks.excel} target="_blank" rel="noopener noreferrer"
                 className="rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">Excel</a>
               <a href={CONFIG.quickLinks.codigo} target="_blank" rel="noopener noreferrer"
