@@ -12,7 +12,7 @@ const VIDA_URL = 'https://mi-vida-neon.vercel.app/vida'
 const PERSONAS_URL = `${VIDA_URL}?vista=personas`
 const MES3 = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
-type Momento = { id: number; titulo: string; fecha: string | null; outstanding: boolean; personas: string[] | null }
+type Momento = { id: number; titulo: string; fecha: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null }
 type Prox = { id: number; titulo: string; personas: string[]; days: number; dia: number; mes: number; años: number }
 
 export default function ExcepcionalesWidget() {
@@ -38,7 +38,7 @@ export default function ExcepcionalesWidget() {
   const lista = useMemo<Prox[]>(() => {
     const hoy = new Date(); hoy.setHours(12, 0, 0, 0)
     return momentos.map(m => {
-      if (!m.outstanding || !m.fecha) return null
+      if (!m.fecha || !(m.recordar === true || (m.recordar !== false && m.outstanding))) return null
       const parts = m.fecha.split('-').map(Number)
       const y = parts[0], mm = parts[1], d = parts[2]
       if (!y || !mm || !d) return null
@@ -74,7 +74,7 @@ export default function ExcepcionalesWidget() {
       {open && (
         <div className="animate-fade" style={{ position: 'absolute', right: 0, zIndex: 40, marginTop: 8, width: 330, maxWidth: '86vw', background: '#10233F', border: '1px solid rgba(200,162,76,.4)', borderRadius: 14, boxShadow: '0 24px 60px -16px rgba(8,18,36,.8)', overflow: 'hidden' }}>
           <div style={{ padding: '11px 15px 9px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#C8A24C', borderBottom: '1px solid rgba(255,255,255,.09)' }}>
-            ✦ Fechas a recordar
+            🔔 Fechas a recordar
           </div>
           <div style={{ maxHeight: 300, overflowY: 'auto', padding: '6px 0' }}>
             {lista.slice(0, 12).map(c => (
