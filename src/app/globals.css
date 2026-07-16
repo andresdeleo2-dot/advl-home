@@ -24,6 +24,11 @@
   --gold-500: #C2933A;
   --gold-700: #A87A2C;
 
+  /* Azul de datos (tracking de peso — coincide con la línea "Peso" de la gráfica) */
+  --blue-400: #5B8DEF;
+  --blue-500: #2D6CDF;
+  --blue-600: #1F57BF;
+
   /* Acentos sobrios para puntos de categoría */
   --c-blue:  #2E5A9E;
   --c-teal:  #3E8E8E;
@@ -142,3 +147,73 @@ body {
 /* Utilidades responsive del header de Épicas */
 @media (max-width: 640px) { .ep-hide-sm { display: none !important; } }
 @media (max-width: 400px) { .ep-hide-xs { display: none !important; } }
+
+/* ============================================================
+   Épicas — vista móvil (celular ≤ 640px).
+   Los estilos base son inline (mayor especificidad), así que
+   estas reglas usan !important para reacomodar en pantalla chica.
+   ============================================================ */
+@media (max-width: 640px) {
+  /* Tarjeta destacada: paneles a ancho completo, menos padding, título más chico */
+  .ep-featured-panel {
+    flex-basis: 100% !important;
+    min-width: 0 !important;
+    padding: 20px 18px !important;
+  }
+  .ep-featured-right { border-left: none !important; border-top: 1px solid rgba(15,35,64,0.08) !important; }
+  .ep-featured-title { font-size: 32px !important; }
+
+  /* Filas "Todas las épicas": de columnas fijas a tarjeta apilada.
+     La barra de color pasa a ser un acento superior de ancho completo. */
+  .ep-row {
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 9px 12px !important;
+    padding: 13px 15px !important;
+  }
+  .ep-row-bar {
+    order: 0;
+    flex: 1 1 100% !important;
+    width: auto !important;
+    height: 3px !important;
+    align-self: auto !important;
+  }
+  .ep-row-name { order: 1; flex: 1 1 100% !important; min-width: 0 !important; }
+  .ep-row-kpi { display: none !important; }
+  .ep-row-progress { order: 2; flex: 1 1 auto !important; min-width: 110px !important; }
+  .ep-row-edit { order: 3; }
+  .ep-row-arrow { order: 4; }
+
+  /* Próximos vencimientos: nombre + fecha arriba, tarea debajo a ancho completo */
+  .ep-venc-row { flex-wrap: wrap !important; gap: 6px 10px !important; }
+  .ep-venc-epica { width: auto !important; flex: 1 1 auto !important; }
+  .ep-venc-date { margin-left: auto; }
+  .ep-venc-task { order: 3; flex: 1 1 100% !important; font-size: 12px; }
+
+  /* Modales: menos padding lateral en pantalla chica */
+  .ep-modal-head { padding: 16px 18px 14px !important; }
+  .ep-modal-body { padding: 8px 18px 18px !important; max-height: 78vh !important; }
+}
+
+/* ============================================================
+   Plan de hoy — interacción y vista móvil
+   ============================================================ */
+.plan-row:hover { background: rgba(15, 35, 64, 0.02) !important; }
+.plan-check:hover { border-color: #C2933A !important; color: rgba(194,147,58,0.55) !important; }
+.plan-grip:active { cursor: grabbing; }
+.plan-day:hover { background: rgba(15, 35, 64, 0.02); }
+.plan-daystrip { scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.backlog-row:hover { background: rgba(194, 147, 58, 0.06); }
+
+@media (max-width: 640px) {
+  .plan-body  { padding: 18px 16px !important; }
+  .plan-mast  { gap: 12px !important; }
+  .plan-grip  { display: none !important; }   /* en celular se reordena con el menú ⋯ */
+  .plan-num   { font-size: 22px !important; min-width: 26px !important; }
+  .plan-title { font-size: 14.5px !important; }
+  .plan-date  { font-size: 24px !important; }
+  .plan-row   { gap: 10px !important; }
+  .plan-daystrip .plan-day { min-width: 52px !important; height: 58px !important; }
+  .plan-day-num { font-size: 20px !important; }
+  .plan-day-lbl { font-size: 9px !important; }
+}

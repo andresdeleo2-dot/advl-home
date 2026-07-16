@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import Link from 'next/link'
+import SiteHeader from '@/components/SiteHeader'
 import {
   ResponsiveContainer, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts'
-import { addRegistro } from './actions'
+import { addRegistro, updateRegistro, deleteRegistro } from './actions'
 import type { PesoRecord } from './page'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -17,6 +17,47 @@ const H2 = HEIGHT_M * HEIGHT_M
 function fmtDate(d: string) {
   const [y, m, dd] = d.split('-')
   return `${dd}/${m}/${y.slice(2)}`
+}
+
+// Días transcurridos de la fecha `a` a la fecha `b` (ambas 'YYYY-MM-DD').
+function daysBetween(a: string, b: string) {
+  const ms = new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()
+  return Math.round(ms / 86_400_000)
+}
+
+// Diferencia de calendario exacta (años/meses/días) de la fecha `a` (más antigua) a `b`.
+function diffYMD(a: string, b: string) {
+  const [ay, am, ad] = a.split('-').map(Number)
+  const [by, bm, bd] = b.split('-').map(Number)
+  let years = by - ay
+  let months = bm - am
+  let days = bd - ad
+  if (days < 0) {
+    months -= 1
+    days += new Date(by, bm - 1, 0).getDate() // días del mes anterior a `b`
+  }
+  if (months < 0) {
+    years -= 1
+    months += 12
+  }
+  return { years, months, days }
+}
+
+// Intervalo legible y exacto entre dos fechas 'YYYY-MM-DD': "5 d", "2 sem 6 d", "3 meses 16 d".
+function fmtGap(a: string, b: string) {
+  const total = daysBetween(a, b)
+  if (total <= 0) return 'mismo día'
+  if (total < 7) return `${total} d`
+  if (total < 30) {
+    const w = Math.floor(total / 7), d = total % 7
+    return d ? `${w} sem ${d} d` : `${w} sem`
+  }
+  const { years, months, days } = diffYMD(a, b)
+  const parts: string[] = []
+  if (years) parts.push(`${years} año${years > 1 ? 's' : ''}`)
+  if (months) parts.push(`${months} mes${months > 1 ? 'es' : ''}`)
+  if (days) parts.push(`${days} d`)
+  return parts.join(' ') || `${total} d`
 }
 
 // ── Classification ───────────────────────────────────────────────────────────
@@ -237,6 +278,8 @@ const FORM_FIELDS = [
 
 export default function PesoClient({ initialData }: { initialData: PesoRecord[] }) {
   const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState<PesoRecord | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [activeMetrics, setActiveMetrics] = useState<Set<string>>(DEFAULT_ACTIVE)
   const lastDate = initialData[initialData.length - 1]?.fecha ?? ''
@@ -272,6 +315,9 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
   const rangeFirst = inRange[0] ?? null
   const rangeLast = inRange[inRange.length - 1] ?? null
 
+  // History newest-first (for the table + interval calc)
+  const historyRows = useMemo(() => [...initialData].reverse(), [initialData])
+
   function toggleMetric(key: string) {
     setActiveMetrics(prev => {
       const next = new Set(prev)
@@ -288,22 +334,49 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
   const hasPct = activeMetrics.has('pct_grasa') || activeMetrics.has('pct_musculo')
   const hasOther = METRICS.filter(m => m.yAxis === 'other').some(m => activeMetrics.has(m.key))
 
+  function openAdd() {
+    setEditing(null)
+    setShowForm(v => !v)
+  }
+  function openEdit(r: PesoRecord) {
+    setEditing(r)
+    setShowForm(true)
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  function closeForm() {
+    setShowForm(false)
+    setEditing(null)
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setSaving(true)
-    await addRegistro(new FormData(e.currentTarget))
+    const fd = new FormData(e.currentTarget)
+    if (editing) await updateRegistro(fd)
+    else await addRegistro(fd)
     setSaving(false)
-    setShowForm(false)
+    closeForm()
+  }
+
+  async function handleDelete(r: PesoRecord) {
+    if (typeof window !== 'undefined' &&
+        !window.confirm(`¿Borrar la medición del ${fmtDate(r.fecha)}? Esta acción no se puede deshacer.`)) return
+    setDeletingId(r.id)
+    await deleteRegistro(r.id)
+    setDeletingId(null)
   }
 
   if (!initialData.length) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="glass rounded-2xl p-10 text-center max-w-md">
-          <h1 className="text-xl font-bold text-[var(--ink-950)] mb-2">Sin datos aún</h1>
-          <p className="text-sm text-[var(--ink-700)]">Crea la tabla en Supabase e inserta registros.</p>
+      <>
+        <SiteHeader title="Peso" subtitle="Salud · ADVL" />
+        <div className="min-h-[60vh] flex items-center justify-center px-4">
+          <div className="glass rounded-2xl p-10 text-center max-w-md">
+            <h1 className="text-xl font-bold text-[var(--ink-950)] mb-2">Sin datos aún</h1>
+            <p className="text-sm text-[var(--ink-700)]">Crea la tabla en Supabase e inserta registros.</p>
+          </div>
         </div>
-      </div>
+      </>
     )
   }
 
@@ -311,13 +384,12 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
   const latest = initialData[initialData.length - 1]
 
   return (
-    <div className="min-h-screen px-4 py-10 max-w-5xl mx-auto space-y-6">
+    <>
+      <SiteHeader title="Peso" subtitle="Salud · ADVL" />
+      <div className="px-4 py-8 max-w-5xl mx-auto space-y-6">
 
-      {/* ── Header ── */}
+      {/* ── Título de sección ── */}
       <div>
-        <Link href="/" className="text-sm text-[var(--ink-700)] hover:text-[var(--blue-500)] transition-colors mb-3 inline-block">
-          ← Inicio
-        </Link>
         <div className="flex items-end justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-3xl font-bold text-[var(--ink-950)]">Tracking de Peso</h1>
@@ -326,37 +398,57 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
             </p>
           </div>
           <button
-            onClick={() => setShowForm(v => !v)}
-            className="bg-[var(--blue-500)] hover:bg-[var(--ink-800)] text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors"
+            onClick={openAdd}
+            className="bg-[var(--blue-500)] hover:bg-[var(--blue-600)] text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
           >
             {showForm ? 'Cancelar' : '+ Nueva medición'}
           </button>
         </div>
       </div>
 
-      {/* ── Add form ── */}
+      {/* ── Add / edit form ── */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 grid grid-cols-2 md:grid-cols-4 gap-3 animate-fade">
-          {FORM_FIELDS.map(f => (
-            <div key={f.name}>
-              <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">{f.label}</label>
-              <input
-                name={f.name} type={f.type}
-                step={'step' in f ? f.step : undefined}
-                required={'required' in f ? f.required : false}
-                className="w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20"
-              />
-            </div>
-          ))}
-          <div className="col-span-2 md:col-span-4 flex justify-end pt-1">
-            <button type="submit" disabled={saving}
-              className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--ink-800)] transition-colors"
+        <form key={editing?.id ?? 'new'} onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 animate-fade">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-[var(--ink-950)]">
+              {editing ? `Editar medición · ${fmtDate(editing.fecha)}` : 'Nueva medición'}
+            </h2>
+            {editing && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[var(--blue-500)]/10 text-[var(--blue-600)]">Editando</span>
+            )}
+          </div>
+          {editing && <input type="hidden" name="id" value={editing.id} />}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {FORM_FIELDS.map(f => (
+              <div key={f.name}>
+                <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">{f.label}</label>
+                <input
+                  name={f.name} type={f.type}
+                  step={'step' in f ? f.step : undefined}
+                  required={'required' in f ? f.required : false}
+                  defaultValue={editing ? (editing[f.name] ?? '') as string | number : ''}
+                  className="w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 pt-4">
+            <button type="button" onClick={closeForm}
+              className="text-sm font-medium px-4 py-2 rounded-xl border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors"
             >
-              {saving ? 'Guardando…' : 'Guardar'}
+              Cancelar
+            </button>
+            <button type="submit" disabled={saving}
+              className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--blue-600)] transition-colors shadow-sm"
+            >
+              {saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Guardar'}
             </button>
           </div>
         </form>
       )}
+
+      {/* ── Summary tiles ── */}
+      <SummaryTiles data={initialData} />
 
       {/* ── Combined chart ── */}
       <div className="glass rounded-2xl p-6 animate-fade">
@@ -370,7 +462,7 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
                 className="text-xs font-medium px-3 py-1.5 rounded-full border transition-all"
                 style={activeMetrics.has(m.key)
                   ? { background: m.color, color: '#fff', borderColor: m.color }
-                  : { background: 'transparent', color: '#5278ab', borderColor: 'rgba(22,54,95,0.15)' }
+                  : { background: 'transparent', color: '#3E5C86', borderColor: 'rgba(15,35,64,0.28)' }
                 }
               >
                 {m.label}
@@ -427,33 +519,35 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
       </div>
 
       {/* ── Range selector ── */}
-      <div className="glass rounded-2xl px-6 py-4">
-        <div className="flex items-center flex-wrap gap-4">
-          <span className="text-sm font-semibold text-[var(--ink-950)] shrink-0">Rango de análisis</span>
-          <div className="flex items-center gap-2 flex-wrap">
+      <div className="glass rounded-2xl px-4 sm:px-6 py-4">
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-3">
+          <span className="text-sm font-semibold text-[var(--ink-950)] shrink-0 w-full sm:w-auto">Rango de análisis</span>
+          <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
             <label className="text-xs text-[var(--ink-700)]">Desde</label>
             <input type="date" value={trendFrom} onChange={e => setTrendFrom(e.target.value)}
-              className="border border-[var(--line)] rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)]"
+              className="flex-1 sm:flex-none min-w-0 border border-[var(--line)] rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)]"
             />
             <label className="text-xs text-[var(--ink-700)]">Hasta</label>
             <input type="date" value={trendTo} onChange={e => setTrendTo(e.target.value)}
-              className="border border-[var(--line)] rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)]"
+              className="flex-1 sm:flex-none min-w-0 border border-[var(--line)] rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)]"
             />
           </div>
-          {[{ label: '1 mes', months: 1 }, { label: '3 meses', months: 3 }, { label: '6 meses', months: 6 }, { label: 'Todo', months: 999 }]
-            .map(({ label, months }) => (
-              <button key={label} onClick={() => {
-                const from = new Date(lastDate)
-                if (months < 999) from.setMonth(from.getMonth() - months)
-                else from.setFullYear(from.getFullYear() - 10)
-                setTrendFrom(from.toISOString().slice(0, 10))
-                setTrendTo(lastDate)
-              }}
-                className="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] hover:border-[var(--blue-500)] hover:text-[var(--blue-500)] transition-colors text-[var(--ink-700)]"
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            {[{ label: '1 mes', months: 1 }, { label: '3 meses', months: 3 }, { label: '6 meses', months: 6 }, { label: 'Todo', months: 999 }]
+              .map(({ label, months }) => (
+                <button key={label} onClick={() => {
+                  const from = new Date(lastDate)
+                  if (months < 999) from.setMonth(from.getMonth() - months)
+                  else from.setFullYear(from.getFullYear() - 10)
+                  setTrendFrom(from.toISOString().slice(0, 10))
+                  setTrendTo(lastDate)
+                }}
+                  className="flex-1 sm:flex-none whitespace-nowrap text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors text-[var(--ink-700)]"
+                >
+                  {label}
+                </button>
+              ))}
+          </div>
         </div>
       </div>
 
@@ -491,33 +585,111 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
       <div className="glass rounded-2xl overflow-hidden">
         <div className="px-6 py-4 border-b border-[var(--line)]">
           <h2 className="text-base font-semibold text-[var(--ink-950)]">Historial completo</h2>
+          <p className="text-xs text-[var(--ink-700)] mt-0.5">La columna «Intervalo» muestra el tiempo desde la medición anterior.</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-700)]">
-                {['Fecha', 'Peso', '% Grasa', '% Músculo', 'IMC', 'RMR', 'Edad corp.', 'Gr. visc.'].map(h => (
-                  <th key={h} className="px-4 py-3 text-right first:text-left border-b border-[var(--line)]">{h}</th>
+                {['Fecha', 'Intervalo', 'Peso', '% Grasa', '% Músculo', 'IMC', 'RMR', 'Edad corp.', 'Gr. visc.', ''].map((h, i) => (
+                  <th key={h || `act-${i}`} className={`px-4 py-3 border-b border-[var(--line)] ${i === 0 ? 'text-left' : i >= 9 ? 'text-right' : 'text-right'}`}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {[...initialData].reverse().map((r, i) => (
-                <tr key={r.id} className={`border-b border-[var(--line)] last:border-0 hover:bg-blue-50/30 transition-colors ${i % 2 !== 0 ? 'bg-[var(--line)]/10' : ''}`}>
-                  <td className="px-4 py-3 font-medium tabular-nums">{fmtDate(r.fecha)}</td>
-                  <td className="px-4 py-3 text-right font-semibold text-[var(--blue-500)] tabular-nums">{r.peso ?? '—'}</td>
-                  <td className="px-4 py-3 text-right text-red-500 tabular-nums">{r.pct_grasa ?? '—'}</td>
-                  <td className="px-4 py-3 text-right text-green-600 tabular-nums">{r.pct_musculo ?? '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{r.imc ?? '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{r.rmr ?? '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{r.edad_corporal ?? '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{r.grasa_visceral ?? '—'}</td>
-                </tr>
-              ))}
+              {historyRows.map((r, i) => {
+                const older = historyRows[i + 1]
+                return (
+                  <tr key={r.id} className={`border-b border-[var(--line)] last:border-0 hover:bg-blue-50/30 transition-colors ${i % 2 !== 0 ? 'bg-[var(--line)]/10' : ''}`}>
+                    <td className="px-4 py-3 font-medium tabular-nums whitespace-nowrap">{fmtDate(r.fecha)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap text-[var(--ink-700)]"
+                      title={older ? `${fmtGap(older.fecha, r.fecha)} desde la medición del ${fmtDate(older.fecha)}` : undefined}>
+                      {older ? fmtGap(older.fecha, r.fecha) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-[var(--blue-500)] tabular-nums">{r.peso ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-red-500 tabular-nums">{r.pct_grasa ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-green-600 tabular-nums">{r.pct_musculo ?? '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{r.imc ?? '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{r.rmr ?? '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{r.edad_corporal ?? '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{r.grasa_visceral ?? '—'}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button onClick={() => openEdit(r)} title="Editar"
+                          className="text-xs font-medium px-2 py-1 rounded-md text-[var(--ink-700)] hover:text-[var(--blue-600)] hover:bg-blue-50 transition-colors">
+                          Editar
+                        </button>
+                        <button onClick={() => handleDelete(r)} disabled={deletingId === r.id} title="Borrar"
+                          className="text-xs font-medium px-2 py-1 rounded-md text-[var(--ink-700)] hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50">
+                          {deletingId === r.id ? '…' : 'Borrar'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
       </div>
+      </div>
+    </>
+  )
+}
+
+// ── Summary tiles (panorama de un vistazo) ───────────────────────────────────
+
+const SUMMARY_KEYS: (keyof PesoRecord)[] = ['peso', 'pct_grasa', 'grasa_visceral', 'pct_musculo']
+
+function SummaryTiles({ data }: { data: PesoRecord[] }) {
+  if (data.length < 1) return null
+
+  const latest = data[data.length - 1]
+  // Referencia: la medición más reciente con al menos ~30 días de antigüedad; si no hay, la primera.
+  const target = new Date(latest.fecha + 'T00:00:00')
+  target.setDate(target.getDate() - 30)
+  const targetStr = target.toISOString().slice(0, 10)
+  const reference = [...data].reverse().find(r => r.fecha <= targetStr && r.id !== latest.id) ?? data[0]
+  const spanDays = daysBetween(reference.fecha, latest.fecha)
+
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {SUMMARY_KEYS.map(key => {
+        const def = METRICS.find(m => m.key === key)!
+        const cur = latest[key] as number | null
+        const prev = reference[key] as number | null
+        if (cur == null) return null
+
+        const delta = prev != null && spanDays > 0 ? cur - prev : null
+        const isGood = delta == null || def.goodDir === 'neutral'
+          ? null
+          : def.goodDir === 'down' ? delta <= 0 : delta >= 0
+        const arrow = delta == null ? '' : delta > 0 ? '↑' : delta < 0 ? '↓' : '→'
+        const deltaColor = isGood == null ? '#3E5C86' : isGood ? '#22c55e' : '#ef4444'
+        const deltaStr = delta == null ? null
+          : `${delta > 0 ? '+' : ''}${Number.isInteger(delta) ? delta : delta.toFixed(1)}${def.unit ? ' ' + def.unit : ''}`
+        const cls = def.classify ? def.classify(cur) : null
+
+        return (
+          <div key={key} className="glass rounded-2xl px-4 py-3.5">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: def.color }} />
+              <span className="text-xs font-medium text-[var(--ink-700)] truncate">{def.label}</span>
+            </div>
+            <div className="text-2xl font-bold tabular-nums leading-none" style={{ color: def.color }}>
+              {cur}{def.unit === '%' ? '%' : ''}
+            </div>
+            {cls && (
+              <div className="text-xs font-medium mt-1" style={{ color: cls.color }}>{cls.label}</div>
+            )}
+            <div className="text-xs mt-1.5 tabular-nums" style={{ color: deltaColor }}>
+              {deltaStr
+                ? <>{arrow} {deltaStr} <span className="text-[var(--ink-700)]">· {fmtGap(reference.fecha, latest.fecha)}</span></>
+                : <span className="text-[var(--ink-700)]">Sin dato previo</span>}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
