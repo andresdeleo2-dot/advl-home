@@ -8,6 +8,7 @@ import { matchesQuery, groupItems, getFaviconUrl, normalizeImageUrl } from '@/li
 import ItemCard from './ItemCard'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
+import ExcepcionalesWidget from './ExcepcionalesWidget'
 import WeatherWidget from './WeatherWidget'
 import QuoteWidget from './QuoteWidget'
 import TimerWidget from './TimerWidget'
@@ -298,6 +299,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           <div className="flex items-center gap-2">
             <HeaderStats />
             <CumplesWidget />
+            <ExcepcionalesWidget />
             <Link href="/epicas"
               className="flex items-center gap-1.5 rounded-[10px] px-3 py-2 text-[12px] font-bold text-[#1B1305]"
               style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', boxShadow: '0 8px 16px -8px rgba(194,147,58,.85)' }}>

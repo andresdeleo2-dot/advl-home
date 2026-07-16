@@ -5,6 +5,7 @@ import Link from 'next/link'
 import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry } from '@/lib/supabase'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
+import ExcepcionalesWidget from './ExcepcionalesWidget'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 
 /* ─── Tokens de marca (del handoff) ─────────────────────────── */
@@ -2637,6 +2638,7 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <HeaderStats />
             <CumplesWidget />
+            <ExcepcionalesWidget />
             <WidgetsDropdown />
             <SpecialsDropdown />
             <span className="ep-hide-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 10, background: 'rgba(62,142,142,0.16)', border: '1px solid rgba(120,200,190,0.25)', padding: '8px 12px', fontSize: 11.5, fontWeight: 700, color: '#B9E2DA' }}>

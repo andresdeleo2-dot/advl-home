@@ -4,6 +4,7 @@ import Link from 'next/link'
 import type { ReactNode } from 'react'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
+import ExcepcionalesWidget from './ExcepcionalesWidget'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 
 /* Header de marca compartido (banda navy con logo, relojes/clima, Widgets y Especiales).
@@ -39,6 +40,7 @@ export default function SiteHeader({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <HeaderStats />
             <CumplesWidget />
+            <ExcepcionalesWidget />
             <WidgetsDropdown />
             <SpecialsDropdown />
             {extra}
