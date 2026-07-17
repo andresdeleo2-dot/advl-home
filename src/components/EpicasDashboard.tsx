@@ -6,6 +6,7 @@ import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
+import FavoritosStrip from './FavoritosStrip'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 
 /* ─── Tokens de marca (del handoff) ─────────────────────────── */
@@ -1901,6 +1902,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <TopBar sourceCount={sourceCount} onNew={openNew} />
 
       <div style={{ maxWidth: 1360, margin: '0 auto', padding: '22px 18px 60px' }}>
+        {/* ACCESOS RÁPIDOS — favoritos del home, plegables para no robar espacio */}
+        <FavoritosStrip />
+
         {/* PLAN DE HOY — enfoque del día, lo primero de la página */}
         {renderPlanToday()}
 
