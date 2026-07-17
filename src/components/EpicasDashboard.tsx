@@ -130,11 +130,6 @@ function primaryDash(e: Epica) {
 type Prio = 'alta' | 'media' | 'baja'
 const PRIO_RANK: Record<Prio, number> = { alta: 0, media: 1, baja: 2 }
 
-function yesterdayISO(): string {
-  const d = new Date(); d.setDate(d.getDate() - 1)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
 function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1) }
 function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n)
@@ -471,7 +466,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Plan de hoy: derivados ─────────────────────────────── */
   const today = todayISO()
   const isToday = viewDate === today
-  const yPlan = yesterdayISO()
   const planKey = (eId: string, i: number) => `${eId}:${i}`
   const planItems = useMemo(() => {
     const arr: { e: Epica; t: EpicaTask; i: number }[] = []
@@ -491,11 +485,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     epicsRef.current.forEach(e => (e.tasks || []).forEach(t => { if (t.plan === dateISO) m = Math.max(m, t.planOrder ?? 0) }))
     return m
   }
-  const yesterdayPend = useMemo(() => {
-    const arr: { e: Epica; i: number }[] = []
-    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan === yPlan && t.status !== 'Terminada') arr.push({ e, i }) }))
-    return arr
-  }, [activeEpics, yPlan])
+  // Días que llevas con una tarea (desde que la creaste; si no hay fecha de creación, desde que la planeaste).
+  const diasCon = (t: EpicaTask): number => {
+    const desde = t.createdAt || t.plan
+    if (!desde) return 0
+    const d = Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(desde + 'T00:00:00').getTime()) / 86400000)
+    return d > 0 ? d : 0
+  }
+  // ARRASTRADAS: tareas planeadas para un día YA PASADO y sin terminar → se muestran
+  // en el enfoque de hoy (no se pierden), marcadas y con "desde hace N días".
+  const arrastradas = useMemo(() => {
+    if (viewDate !== today) return [] as { e: Epica; t: EpicaTask; i: number }[]
+    const arr: { e: Epica; t: EpicaTask; i: number }[] = []
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && t.plan < today && t.status !== 'Terminada') arr.push({ e, t, i }) }))
+    return arr.sort((a, b) => (a.t.plan || '').localeCompare(b.t.plan || ''))
+  }, [activeEpics, viewDate, today])
   // conteo de tareas por día (para la tira y el calendario)
   const planCounts = useMemo(() => {
     const m = new Map<string, { total: number; done: number }>()
@@ -627,16 +631,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setPlanSort('plan')
     showToast('Orden fijado')
   }
-  const bringYesterday = () => {
+  // Trae al plan de hoy TODAS las pendientes de días anteriores (reprograma plan=hoy).
+  const bringOverdue = () => {
     let base = maxPlanOrderFor(today)
     const byEpic = new Map<string, { e: Epica; idx: number[] }>()
-    yesterdayPend.forEach(x => { if (!byEpic.has(x.e.id)) byEpic.set(x.e.id, { e: x.e, idx: [] }); byEpic.get(x.e.id)!.idx.push(x.i) })
+    arrastradas.forEach(x => { if (!byEpic.has(x.e.id)) byEpic.set(x.e.id, { e: x.e, idx: [] }); byEpic.get(x.e.id)!.idx.push(x.i) })
     byEpic.forEach(({ e, idx }) => {
       const tasks = clone(e.tasks)
       idx.forEach(i => { base += 1000; tasks[i].plan = today; if (!tasks[i].priority) tasks[i].priority = prioFromDue(tasks[i].due); tasks[i].planOrder = base })
       patchEpic(e.id, { tasks })
     })
-    showToast(`${yesterdayPend.length} ${yesterdayPend.length === 1 ? 'pendiente' : 'pendientes'} de ayer al plan`)
+    showToast(`${arrastradas.length} ${arrastradas.length === 1 ? 'pendiente traída' : 'pendientes traídas'} a hoy`)
   }
 
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
@@ -1220,6 +1225,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
             </button>
             <span style={{ padding: '2px 8px', borderRadius: 99, font: '700 10.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}` }}>{t.due ? fmtDue(t.due) : 'sin fecha'}</span>
+            {t.plan && t.plan < today && (
+              <span title={`Se planeó para el ${fmtDue(t.plan)} y sigue pendiente`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, color: '#B0522E', background: 'rgba(176,82,46,0.10)', border: '1px solid rgba(176,82,46,0.4)', borderRadius: 99, padding: '1px 8px' }}>⏳ de días anteriores</span>
+            )}
+            {diasCon(t) >= 1 && (
+              <span title={`Llevas ${diasCon(t)} día${diasCon(t) === 1 ? '' : 's'} con esta tarea${t.createdAt ? ` (creada el ${fmtDue(t.createdAt)})` : ''}`} style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>🕐 {diasCon(t)}d</span>
+            )}
             {(t.progressLog || []).some(x => x.d === viewDate) && <span title="Avanzaste en esta tarea este día" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '1px 7px' }}>✎ avancé</span>}
             {t.subtasks && t.subtasks.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: t.subtasks.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {t.subtasks.filter(s => s.done).length}/{t.subtasks.length} · {Math.round((t.subtasks.filter(s => s.done).length / t.subtasks.length) * 100)}%</span>}
             {typeof t.progress === 'number' && (
@@ -1336,11 +1347,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )
           })()}
 
-          {isToday && !empty && yesterdayPend.length > 0 && !hideYesterday && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16, padding: '9px 13px', borderRadius: 11, background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.35)' }}>
-              <span style={{ fontSize: 12.5, color: '#A87A2C', fontWeight: 600, flex: 1 }}>Tienes {yesterdayPend.length} {yesterdayPend.length === 1 ? 'pendiente' : 'pendientes'} de ayer</span>
-              <button onClick={bringYesterday} style={{ border: 'none', background: 'transparent', color: '#A87A2C', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Traer al plan →</button>
-              <button onClick={() => setHideYesterday(true)} title="Descartar" style={{ border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', cursor: 'pointer', fontSize: 14 }}>✕</button>
+          {isToday && arrastradas.length > 0 && !hideYesterday && (
+            <div style={{ marginTop: 16, borderRadius: 13, background: 'rgba(176,82,46,0.06)', border: '1px solid rgba(176,82,46,0.28)', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 13px', background: 'rgba(176,82,46,0.08)' }}>
+                <span style={{ fontSize: 14 }}>⏳</span>
+                <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#B0522E' }}>De días anteriores</span>
+                <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(176,82,46,0.6)' }}>{arrastradas.length}</span>
+                <span style={{ flex: 1 }} />
+                <button onClick={bringOverdue} title="Reprogramar todas para hoy" style={{ border: 'none', background: 'transparent', color: '#B0522E', font: '800 11.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Traer todas a hoy →</button>
+                <button onClick={() => setHideYesterday(true)} title="Ocultar por ahora" style={{ border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}>✕</button>
+              </div>
+              <div style={{ padding: '2px 6px 4px' }}>
+                {arrastradas.map(({ e, t, i }) => {
+                  const dc = diasCon(t)
+                  const late = Math.round((new Date(today + 'T00:00:00').getTime() - new Date((t.plan || today) + 'T00:00:00').getTime()) / 86400000)
+                  const dt = dueTone(t.due, false)
+                  return (
+                    <div key={planKey(e.id, i)} onClick={() => setTaskView({ eId: e.id, i })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 9, cursor: 'pointer' }}
+                      onMouseEnter={ev => (ev.currentTarget.style.background = 'rgba(176,82,46,0.05)')} onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                      <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: 99, background: e.color }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>{e.name}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: '#B0522E' }}>· se planeó hace {late}{late === 1 ? ' día' : ' días'}</span>
+                          {dc >= 1 && <span title="Desde que empezaste con esta tarea" style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>· 🕐 {dc}{dc === 1 ? ' día' : ' días'} en esto</span>}
+                          {t.due && <span style={{ fontSize: 10, fontWeight: 700, color: dt.c }}>· {fmtDue(t.due)}</span>}
+                        </div>
+                      </div>
+                      <button onClick={ev => { ev.stopPropagation(); planTaskToDay(e, i, today) }} title="Traer solo esta a hoy" style={{ flexShrink: 0, border: '1px solid rgba(176,82,46,0.4)', background: '#fff', color: '#B0522E', borderRadius: 8, padding: '4px 9px', font: '800 11px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Hoy →</button>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
 
@@ -1366,9 +1405,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 </div>
               )}
-              {isToday && yesterdayPend.length > 0 && (
+              {isToday && arrastradas.length > 0 && (
                 <div style={{ marginTop: 16 }}>
-                  <button onClick={bringYesterday} style={{ border: 'none', background: 'transparent', color: '#A87A2C', font: '700 12.5px var(--font-ui)', cursor: 'pointer' }}>Traer {yesterdayPend.length} {yesterdayPend.length === 1 ? 'pendiente' : 'pendientes'} de ayer →</button>
+                  <button onClick={bringOverdue} style={{ border: 'none', background: 'transparent', color: '#B0522E', font: '700 12.5px var(--font-ui)', cursor: 'pointer' }}>Traer {arrastradas.length} {arrastradas.length === 1 ? 'pendiente' : 'pendientes'} de días anteriores →</button>
                 </div>
               )}
             </div>
@@ -1901,7 +1940,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     <div style={{ minHeight: '100%' }}>
       <TopBar sourceCount={sourceCount} onNew={openNew} />
 
-      <div style={{ maxWidth: 1360, margin: '0 auto', padding: '22px 18px 60px' }}>
+      <div className="ep-shell" style={{ maxWidth: 1360, margin: '0 auto', padding: '22px 18px 60px' }}>
         {/* ACCESOS RÁPIDOS — favoritos del home, plegables para no robar espacio */}
         <FavoritosStrip />
 
@@ -2311,7 +2350,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
                     <div className="serif" style={{ fontWeight: 600, fontSize: 27, lineHeight: 1.05, color: '#10233F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</div>
-                    {t.createdAt && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 7 }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</div>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
+                      {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
+                      {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
+                      {t.plan && t.plan < today && t.status !== 'Terminada' && <span style={{ fontSize: 11, fontWeight: 700, color: '#B0522E' }}>⏳ pendiente de días anteriores</span>}
+                    </div>
                   </div>
                   <button onClick={() => setTaskView(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>

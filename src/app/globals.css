@@ -217,3 +217,18 @@ body {
   .plan-day-num { font-size: 20px !important; }
   .plan-day-lbl { font-size: 9px !important; }
 }
+
+/* ============================================================
+   Épicas — pulido móvil general: contenedor y encabezados
+   (los encabezados de las 3 apps comparten header.band)
+   ============================================================ */
+@media (max-width: 640px) {
+  .ep-shell { padding: 16px 12px 48px !important; }
+  header.band { margin: 10px 10px 0 !important; padding: 13px 15px !important; }
+  header.band .serif { font-size: 22px !important; }
+}
+@media (max-width: 400px) {
+  .ep-shell { padding: 14px 10px 44px !important; }
+  header.band { padding: 12px 13px !important; }
+  header.band img { height: 32px !important; }
+}
