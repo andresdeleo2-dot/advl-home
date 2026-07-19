@@ -373,6 +373,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
   const [catFilter, setCatFilter] = useState<string>('todas')
   const [taskEdit, setTaskEdit] = useState<{ epicId: string; index: number | null } | null>(null)
+  // Épica DESTINO del editor. Se guarda aparte de taskEdit.epicId (que es la de origen)
+  // porque el índice de la tarea sólo tiene sentido dentro del array de su épica actual.
+  const [taskEditTarget, setTaskEditTarget] = useState<string>('')
   const [taskView, setTaskView] = useState<{ eId: string; i: number } | null>(null) // vista de tarea (solo lectura)
   const [taskDraft, setTaskDraft] = useState<EpicaTask>({ t: '', status: 'Por hacer', due: '', note: '', links: [] })
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1180,6 +1183,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
     }
     setTaskEdit({ epicId, index })
+    setTaskEditTarget(epicId)
   }
   /** Crea una tarea ya planeada para el día que estás viendo en el enfoque. */
   const newTaskForDay = (day: string) => {
@@ -1218,11 +1222,29 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (taskDraft.repeatUntil) t.repeatUntil = taskDraft.repeatUntil; else delete t.repeatUntil
     } else { delete t.repeat; delete t.repeatUntil }
     if (taskEdit.index == null && !t.createdAt) t.createdAt = todayISO()   // registra la creación
-    const tasks = clone(e.tasks)
-    if (taskEdit.index != null) tasks[taskEdit.index] = t
-    else tasks.push(t)
-    patchEpic(e.id, { tasks })
+
+    // Épica destino: puede diferir de la de origen si la cambiaste en el editor.
+    const target = epics.find(x => x.id === taskEditTarget) || e
+    const moved = taskEdit.index != null && target.id !== e.id
+
+    if (taskEdit.index == null) {
+      const tasks = clone(target.tasks); tasks.push(t)
+      patchEpic(target.id, { tasks })
+    } else if (moved) {
+      // Cambiar de épica es sacar de un array y meter en otro: dos patches.
+      const fromTasks = clone(e.tasks).filter((_, idx) => idx !== taskEdit.index)
+      const toTasks = clone(target.tasks); toTasks.push(t)
+      patchEpic(e.id, { tasks: fromTasks })
+      patchEpic(target.id, { tasks: toTasks })
+      invalidateTaskRefs(e.id)   // el splice reindexa la épica de origen
+      setFeaturedId(target.id)   // para que no "desaparezca" de la vista
+    } else {
+      const tasks = clone(e.tasks)
+      tasks[taskEdit.index] = t
+      patchEpic(e.id, { tasks })
+    }
     closeTaskEdit()
+    if (moved) showToast(`Movida a ${target.name}`)
     if (newPlan && newPlan !== viewDate && orig.plan !== newPlan) {
       showToast(`Planeada para ${relLong(newPlan).toLowerCase()}`, false, { label: 'Ver', fn: () => setViewDate(newPlan) })
     }
@@ -3100,25 +3122,37 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       })()}
 
       {taskEdit && (() => {
-        const ep = epics.find(e => e.id === taskEdit.epicId)
+        const ep = epics.find(e => e.id === taskEdit.epicId)        // épica de origen
+        const target = epics.find(e => e.id === taskEditTarget) || ep // épica destino (editable)
         const isNew = taskEdit.index == null
+        const willMove = !isNew && !!target && !!ep && target.id !== ep.id
         const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
         return (
           <div onClick={closeTaskEdit} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 20px', overflow: 'auto' }}>
             <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 620, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
-              <div style={{ height: 4, background: ep?.color || '#2E5A9E' }} />
+              <div style={{ height: 4, background: target?.color || ep?.color || '#2E5A9E' }} />
               <div style={{ padding: '20px 26px 22px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
                   <div>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>{isNew ? 'Nueva tarea' : 'Editar tarea'}</div>
-                    {/* Al crear desde el enfoque (que cruza todas las épicas) hay que poder
-                        elegir a cuál pertenece; al editar, la épica ya está fijada. */}
-                    {isNew && activeEpics.length > 1
-                      ? <select value={taskEdit.epicId} aria-label="Épica de la tarea"
-                          onChange={ev => { const id = ev.target.value; setTaskEdit(v => (v ? { ...v, epicId: id } : v)) }}
-                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontWeight: 600, color: '#16365F', background: '#fff', outline: 'none', maxWidth: 260 }}>
-                          {activeEpics.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-                        </select>
+                    {/* La épica es editable en ambos casos: al crear porque el enfoque cruza
+                        todas, y al editar porque una tarea puede haber caído en la equivocada. */}
+                    {activeEpics.length > 1
+                      ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                          <span style={{ width: 9, height: 9, borderRadius: 99, background: target?.color || ep?.color, flexShrink: 0 }} />
+                          <select value={taskEditTarget} aria-label="Épica de la tarea"
+                            onChange={ev => setTaskEditTarget(ev.target.value)}
+                            style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontWeight: 600, color: '#16365F', background: '#fff', outline: 'none', maxWidth: 240 }}>
+                            {activeEpics.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                          </select>
+                          {willMove && (
+                            <span style={{ font: '700 10.5px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.32)', borderRadius: 99, padding: '2px 9px' }}>
+                              se moverá desde {ep?.name}
+                            </span>
+                          )}
+                        </div>
+                      )
                       : <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{ep?.name}</div>}
                   </div>
                   <button aria-label="Cerrar editor de tarea" onClick={closeTaskEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
@@ -3140,7 +3174,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
                   <input type="range" min={0} max={100} step={5} value={taskDraft.progress ?? 0}
                     onChange={e => setTaskDraft(d => ({ ...d, progress: Number(e.target.value) }))}
-                    style={{ flex: 1, height: 6, cursor: 'pointer', accentColor: ep?.color || '#C2933A' }} />
+                    style={{ flex: 1, height: 6, cursor: 'pointer', accentColor: target?.color || ep?.color || '#C2933A' }} />
                   <span className="serif" style={{ fontSize: 22, fontWeight: 600, color: '#10233F', minWidth: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{taskDraft.progress ?? 0}%</span>
                   <button onClick={() => setTaskDraft(d => ({ ...d, progress: 100 }))} style={{ cursor: 'pointer', border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 9, padding: '8px 12px', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>100%</button>
                 </div>
