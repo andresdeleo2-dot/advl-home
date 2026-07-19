@@ -32,6 +32,9 @@ export type EpicaRoutine = {
 }
 export type EpicaTaskLink = { label: string; url: string }
 export type EpicaSubtask = { t: string; done: boolean }
+/** Recurrencia de una tarea: "cada N días / semanas / meses".
+ *  La tarea NO se duplica: al completarla se reprograma sola a la siguiente fecha. */
+export type EpicaRepeat = { every: number; unit: 'dia' | 'semana' | 'mes' }
 export type EpicaTask = {
   t: string; status: string; due: string; note: string
   links?: EpicaTaskLink[]; doneAt?: string
@@ -44,6 +47,9 @@ export type EpicaTask = {
   progressLog?: EpicaProgressEntry[]   // bitácora: días en que se avanzó (con nota opcional)
   createdAt?: string                   // 'YYYY-MM-DD' de creación de la tarea
   planStatusPrev?: string              // estado previo a que el plan de HOY lo forzara a "En curso"
+  repeat?: EpicaRepeat                 // si existe, al completarla se reprograma en vez de terminarse
+  repeatUntil?: string                 // 'YYYY-MM-DD' opcional: fin de la serie
+  repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)
 }
 export type EpicaProgressEntry = { d: string; note?: string; pct?: number } // d = 'YYYY-MM-DD', pct = % al final de ese día
 export type EpicaLink = { l: string; url: string; type: string; primary?: boolean }

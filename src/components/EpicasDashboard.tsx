@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import Link from 'next/link'
-import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry } from '@/lib/supabase'
+import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
@@ -63,6 +63,40 @@ function monthLabel(s: string): string {
   return l.charAt(0).toUpperCase() + l.slice(1)
 }
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x))
+
+/* ─── Recurrencia ─────────────────────────────────────────────
+   Una tarea que se repite no se duplica: al completarla se reprograma
+   a su siguiente fecha. Así el backlog no se llena de copias y la
+   bitácora de la tarea conserva todo su historial en un solo lugar. */
+
+/** Suma meses conservando el día; si el mes destino es más corto, cae en su último día
+ *  (31 de enero + 1 mes → 28/29 de febrero, no el 3 de marzo). */
+function addMonths(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const t = new Date(y, m - 1 + n, 1)
+  const lastDay = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate()
+  t.setDate(Math.min(d, lastDay))
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`
+}
+/** Siguiente ocurrencia después de `after`. Si completaste con retraso, salta los
+ *  ciclos perdidos en vez de dejarte una fecha ya vencida. */
+function nextOccurrence(from: string, r: EpicaRepeat, after: string): string {
+  const every = Math.max(1, Math.round(r.every || 1))
+  const step = (iso: string) => r.unit === 'mes'
+    ? addMonths(iso, every)
+    : addDays(iso, every * (r.unit === 'semana' ? 7 : 1))
+  let d = step(from)
+  for (let guard = 0; d <= after && guard < 500; guard++) d = step(d)
+  return d
+}
+function repeatLabel(r: EpicaRepeat): string {
+  const n = Math.max(1, Math.round(r.every || 1))
+  if (r.unit === 'dia') return n === 1 ? 'cada día' : `cada ${n} días`
+  if (r.unit === 'semana') return n === 1 ? 'cada semana' : `cada ${n} semanas`
+  return n === 1 ? 'cada mes' : `cada ${n} meses`
+}
+const REPEAT_TONE = { c: '#7A6FB0', bg: 'rgba(122,111,176,0.10)', border: 'rgba(122,111,176,0.32)' }
 
 /** Registra el % del día de hoy en la bitácora (upsert). No muta arrays compartidos. */
 function upsertProgressPct(task: EpicaTask, pct: number) {
@@ -304,6 +338,7 @@ type Prefs = {
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
+  backlogView: 'tabla' | 'tablero'
   backlogDone: boolean; backlogFEpica: string; backlogFStatus: string; backlogFPrio: string
   featuredId: string | null
 }
@@ -311,7 +346,7 @@ const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
   planSort: 'plan', planFilter: 'todas', epicSort: 'grupo', epicFilter: 'todas',
-  backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' },
+  backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
 }
@@ -366,6 +401,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
   const [backlogFPrio, setBacklogFPrio] = useState<string>('todas')
   const [backlogQ, setBacklogQ] = useState('')                 // búsqueda de texto en el backlog
+  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero'>('tabla')
+  const [boardDrag, setBoardDrag] = useState<string | null>(null)      // key de la tarjeta arrastrada
+  const [boardOverCol, setBoardOverCol] = useState<string | null>(null)
+  const boardDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [backlogSel, setBacklogSel] = useState<Set<string>>(new Set())
   const [backlogEdit, setBacklogEdit] = useState(false)        // edición inline tipo Excel en el backlog
   const [editCell, setEditCell] = useState<{ key: string; field: 'title' | 'progress'; val: string } | null>(null) // celda en edición (input controlado)
@@ -440,6 +479,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setPlanSort(p.planSort); setPlanFilter(p.planFilter)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
+    setBacklogView(p.backlogView)
     setBacklogFEpica(p.backlogFEpica); setBacklogFStatus(p.backlogFStatus); setBacklogFPrio(p.backlogFPrio)
     // La épica destacada se restaura tal cual: loadEpics conserva el valor previo
     // si el id sigue existiendo, y si no cae en la primera de la lista.
@@ -450,12 +490,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter,
-      epicSort, epicFilter, backlogOpen, backlogSort, backlogDone,
+      epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter,
-      epicSort, epicFilter, backlogOpen, backlogSort, backlogDone,
+      epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
 
   // El día se recalcula solo: una pestaña abierta pasada la medianoche seguía
@@ -766,11 +806,49 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); if (v) tasks[i].priority = v as Prio; else delete tasks[i].priority
     patchEpic(e.id, { tasks })
   }
+  /** Completar una tarea. Si se repite, en vez de terminarse se reprograma a su
+   *  siguiente fecha y se apunta el ciclo cumplido. Es el único camino de completado
+   *  (plan y tablero), para que la recurrencia no dependa de por dónde la marcaste. */
   const completeFromPlan = (e: Epica, i: number) => {
+    const snap = clone(e.tasks[i])
     const tasks = clone(e.tasks)
-    tasks[i].planPrev = tasks[i].status
-    tasks[i].status = 'Terminada'
-    tasks[i].doneAt = todayISO()
+    const t = tasks[i]
+    const done = todayISO()
+
+    if (t.repeat && t.status !== 'Terminada') {
+      const base = t.plan || done
+      const next = nextOccurrence(base, t.repeat, done)
+      const seriesOver = !!t.repeatUntil && next > t.repeatUntil
+      t.repeatDone = [...(t.repeatDone || []), done].slice(-60)
+
+      if (seriesOver) {
+        t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done
+        delete t.repeat
+      } else {
+        if (t.due && t.due === base) t.due = next    // la entrega acompaña al ciclo
+        t.plan = next
+        t.planOrder = maxPlanOrderFor(next) + 1000
+        t.status = t.planStatusPrev || 'Por hacer'   // vuelve a su estado de reposo
+        delete t.planStatusPrev; delete t.doneAt
+        delete t.progress                            // el avance es de cada ciclo, no acumulado
+      }
+      patchEpic(e.id, { tasks })
+      const undo = () => {
+        const ep = epicsRef.current.find(x => x.id === e.id); if (!ep) return
+        const back = clone(ep.tasks)
+        if (back[i]?.t !== snap.t) return             // el array cambió: no toques otra tarea
+        back[i] = snap
+        patchEpic(e.id, { tasks: back })
+      }
+      showToast(
+        seriesOver ? 'Hecha ✓ · serie terminada' : `Hecha ✓ · vuelve ${relLong(next).toLowerCase()}`,
+        false, { label: 'Deshacer', fn: undo })
+      return
+    }
+
+    t.planPrev = t.status
+    t.status = 'Terminada'
+    t.doneAt = done
     patchEpic(e.id, { tasks })
   }
   const uncompleteFromPlan = (e: Epica, i: number) => {
@@ -879,6 +957,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     delete t.plan; delete t.priority; delete t.planOrder; applyPlanStatus(t, '')
   }, 'quitadas del plan')
   const planBulkPrio = (p: Prio) => planBulk(t => { t.priority = p }, `· prioridad ${p}`)
+
+  /* ─── Tablero: arrastrar tarjetas entre columnas ──────────────
+     Pointer events (no HTML5 drag) para que también funcione en táctil.
+     Un umbral de 6px distingue "arrastrar" de "clic para abrir la tarea". */
+  const onCardDown = (ev: React.PointerEvent, key: string) => {
+    boardDragRef.current = { key, x: ev.clientX, y: ev.clientY, moved: false }
+    try { (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId) } catch { /* noop */ }
+  }
+  const onCardMove = (ev: React.PointerEvent) => {
+    const d = boardDragRef.current; if (!d) return
+    if (!d.moved) {
+      if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 6) return
+      d.moved = true; setBoardDrag(d.key)
+    }
+    const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+    setBoardOverCol((el?.closest('[data-col]') as HTMLElement | null)?.dataset.col ?? null)
+  }
+  const onCardUp = (ev: React.PointerEvent, x: { e: Epica; t: EpicaTask; i: number }) => {
+    const d = boardDragRef.current
+    boardDragRef.current = null
+    const col = boardOverCol
+    setBoardDrag(null); setBoardOverCol(null)
+    if (!d) return
+    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }   // fue un clic
+    if (!col || col === x.t.status) return
+    // Soltar en "Terminada" pasa por el mismo camino que el check del plan,
+    // para que una tarea recurrente se reprograme en vez de terminarse.
+    if (col === 'Terminada') completeFromPlan(x.e, x.i)
+    else setTaskStatus(x.e, x.i, col)
+    void ev
+  }
+  const onCardCancel = () => { boardDragRef.current = null; setBoardDrag(null); setBoardOverCol(null) }
 
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
   const computeDropIndex = (clientY: number) => {
@@ -1102,6 +1212,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (subs.length) t.subtasks = subs; else delete t.subtasks
     if (typeof taskDraft.progress === 'number' && taskDraft.progress > 0) t.progress = Math.max(0, Math.min(100, taskDraft.progress)); else delete t.progress
     if ((orig.progress ?? 0) !== (t.progress ?? 0)) upsertProgressPct(t, t.progress ?? 0)   // registra el cambio de avance de hoy
+    // Recurrencia: se guarda sólo si sigue activa, y `hasta` sólo si hay recurrencia
+    if (taskDraft.repeat) {
+      t.repeat = { every: Math.max(1, Math.round(taskDraft.repeat.every || 1)), unit: taskDraft.repeat.unit }
+      if (taskDraft.repeatUntil) t.repeatUntil = taskDraft.repeatUntil; else delete t.repeatUntil
+    } else { delete t.repeat; delete t.repeatUntil }
     if (taskEdit.index == null && !t.createdAt) t.createdAt = todayISO()   // registra la creación
     const tasks = clone(e.tasks)
     if (taskEdit.index != null) tasks[taskEdit.index] = t
@@ -1530,6 +1645,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {diasCon(t) >= 1 && (
               <span title={`Llevas ${diasCon(t)} día${diasCon(t) === 1 ? '' : 's'} con esta tarea${t.createdAt ? ` (creada el ${fmtDue(t.createdAt)})` : ''}`} style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>🕐 {diasCon(t)}d</span>
             )}
+            {t.repeat && (
+              <span title={`Se repite ${repeatLabel(t.repeat)}${t.repeatUntil ? ` hasta el ${fmtDue(t.repeatUntil)}` : ''}`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 8px' }}>↻ {repeatLabel(t.repeat)}</span>
+            )}
             {(t.progressLog || []).some(x => x.d === viewDate) && <span title="Avanzaste en esta tarea este día" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '1px 7px' }}>✎ avancé</span>}
             {t.subtasks && t.subtasks.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: t.subtasks.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {t.subtasks.filter(s => s.done).length}/{t.subtasks.length} · {Math.round((t.subtasks.filter(s => s.done).length / t.subtasks.length) * 100)}%</span>}
             {typeof t.progress === 'number' && (
@@ -1949,13 +2068,102 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  /** Tablero tipo Trello: una columna por estado, tarjetas arrastrables entre ellas.
+   *  Comparte los filtros y la búsqueda del backlog; el filtro de estado se ignora
+   *  aquí porque las columnas SON los estados. */
+  const renderBoard = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+    const DONE_CAP = 12
+    return (
+      <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '2px 17px 18px', alignItems: 'flex-start' }}>
+        {TASK_STATUSES.map(status => {
+          const ts = taskStyle(status)
+          const all = rows.filter(x => x.t.status === status)
+          const isDone = status === 'Terminada'
+          // Las terminadas se acumulan sin fin: se muestran las más recientes.
+          const sorted = isDone
+            ? [...all].sort((a, b) => (b.t.doneAt || '').localeCompare(a.t.doneAt || ''))
+            : [...all].sort((a, b) =>
+                (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) ||
+                ((a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')))
+          const shown = isDone ? sorted.slice(0, DONE_CAP) : sorted
+          const over = boardOverCol === status && !!boardDrag
+
+          return (
+            <div key={status} data-col={status}
+              style={{ flex: '1 1 250px', minWidth: 250, maxWidth: 420, borderRadius: 15, background: over ? 'rgba(194,147,58,0.07)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', transition: 'background .15s, border-color .15s' }}>
+              <div style={{ height: 3, background: ts.c }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px 9px' }}>
+                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: ts.c }}>{ts.label}</span>
+                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: 'rgba(20,35,61,0.5)' }}>{all.length}</span>
+                <span style={{ flex: 1 }} />
+                <button onClick={() => { const target = featured?.id || activeEpics[0]?.id; if (target) openTaskEdit(target, null, { status }) }}
+                  aria-label={`Nueva tarea en ${ts.label}`} title={`Nueva tarea en ${ts.label}`}
+                  style={{ height: 24, width: 24, borderRadius: 7, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 15, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '0 9px 11px', minHeight: 76 }}>
+                {shown.length === 0 && (
+                  <div style={{ borderRadius: 11, border: '1px dashed rgba(15,35,64,0.14)', padding: '18px 10px', textAlign: 'center', fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>
+                    {over ? 'Suelta aquí' : 'Sin tareas'}
+                  </div>
+                )}
+                {shown.map(x => {
+                  const { e, t, i } = x
+                  const k = e.id + ':' + i
+                  const dragging = boardDrag === k
+                  const dt = dueTone(t.due, t.status === 'Terminada')
+                  const ps = prioStyle(t.priority)
+                  const subs = t.subtasks || []
+                  return (
+                    <div key={k}
+                      onPointerDown={ev => onCardDown(ev, k)} onPointerMove={onCardMove}
+                      onPointerUp={ev => onCardUp(ev, x)} onPointerCancel={onCardCancel}
+                      title={`${t.t} — arrastra para cambiar de estado`}
+                      style={{ position: 'relative', background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${ps.accent}`, borderRadius: 11, padding: '10px 11px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 18px 30px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: boardDrag && !dragging ? 0.55 : 1, transform: dragging ? 'rotate(-1.2deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: t.status === 'Terminada' ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none', lineHeight: 1.3 }}>{t.t}</div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}
+                        </span>
+                        {t.due && <span style={{ font: '700 10px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 7px' }}>{fmtDue(t.due)}</span>}
+                        {t.plan && <span title={`Planeada para ${fmtDue(t.plan)}`} style={{ font: '700 10px var(--font-ui)', color: '#2E5A9E', background: 'rgba(46,90,158,0.08)', border: '1px solid rgba(46,90,158,0.28)', borderRadius: 99, padding: '1px 7px' }}>◷ {fmtDue(t.plan)}</span>}
+                        {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 10px var(--font-ui)', color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 7px' }}>↻ {repeatLabel(t.repeat)}</span>}
+                        {subs.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: subs.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {subs.filter(s => s.done).length}/{subs.length}</span>}
+                      </div>
+
+                      {typeof t.progress === 'number' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7 }}>
+                          <span style={{ flex: 1, height: 4, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+                            <span style={{ display: 'block', width: `${t.progress}%`, height: '100%', background: e.color }} />
+                          </span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                {isDone && all.length > DONE_CAP && (
+                  <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', padding: '2px 4px' }}>+ {all.length - DONE_CAP} más terminadas · véelas en la tabla</div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   const renderBacklog = () => {
     const bq = norm(backlogQ.trim())
+    const isBoard = backlogView === 'tablero'
     const rows: { e: Epica; t: EpicaTask; i: number }[] = []
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
-      if (!backlogDone && t.status === 'Terminada') return
+      // En el tablero las terminadas son una columna, así que siempre entran;
+      // y el filtro de estado se ignora porque las columnas SON los estados.
+      if (!backlogDone && !isBoard && t.status === 'Terminada') return
       if (backlogFEpica !== 'todas' && e.id !== backlogFEpica) return
-      if (backlogFStatus !== 'todas' && t.status !== backlogFStatus) return
+      if (!isBoard && backlogFStatus !== 'todas' && t.status !== backlogFStatus) return
       if (backlogFPrio !== 'todas' && (t.priority || '') !== backlogFPrio) return
       if (bq && !(norm(t.t).includes(bq) || norm(e.name).includes(bq)
         || norm(t.note || '').includes(bq)
@@ -2034,12 +2242,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
     return (
       <div id="backlog" className="glass" style={{ borderRadius: 16, overflow: 'hidden', marginTop: 34, scrollMarginTop: 16 }}>
-        <button onClick={() => setBacklogOpen(v => !v)} aria-expanded={backlogOpen} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', border: 'none', background: 'transparent', padding: '15px 17px' }}>
-          <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{rows.length}</span>
-          <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Backlog · todas las tareas</span>
-          <span style={{ flex: 1 }} />
-          <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: backlogOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
-        </button>
+        {/* El interruptor de vista es interactivo, así que no puede ir DENTRO del
+            botón que pliega: el encabezado es un contenedor con dos controles. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px' }}>
+          <button onClick={() => setBacklogOpen(v => !v)} aria-expanded={backlogOpen} aria-controls="backlog-body"
+            style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, textAlign: 'left' }}>
+            <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{rows.length}</span>
+            <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Backlog · todas las tareas</span>
+          </button>
+          {backlogOpen && (
+            <div role="group" aria-label="Vista del backlog" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+              {([['tabla', 'Tabla'], ['tablero', 'Tablero']] as const).map(([v, label]) => {
+                const on = backlogView === v
+                return (
+                  <button key={v} aria-pressed={on} onClick={() => setBacklogView(v)}
+                    style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '5px 12px', font: '700 11px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s' }}>{label}</button>
+                )
+              })}
+            </div>
+          )}
+          <button onClick={() => setBacklogOpen(v => !v)} aria-label={backlogOpen ? 'Plegar backlog' : 'Desplegar backlog'}
+            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 4, fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: backlogOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</button>
+        </div>
         {backlogOpen && (
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 17px 10px', flexWrap: 'wrap' }}>
@@ -2054,10 +2278,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <option value="todas">Todas las épicas</option>
                 {activeEpics.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select>
-              <select value={backlogFStatus} onChange={e => setBacklogFStatus(e.target.value)} title="Filtrar por estado" style={filterSel}>
-                <option value="todas">Todo estado</option>
-                {TASK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+              {/* En el tablero las columnas son los estados: el filtro sobraría */}
+              {!isBoard && (
+                <select value={backlogFStatus} onChange={e => setBacklogFStatus(e.target.value)} title="Filtrar por estado" style={filterSel}>
+                  <option value="todas">Todo estado</option>
+                  {TASK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              )}
               <select value={backlogFPrio} onChange={e => setBacklogFPrio(e.target.value)} title="Filtrar por prioridad" style={filterSel}>
                 <option value="todas">Toda prioridad</option>
                 <option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option>
@@ -2068,9 +2295,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {(backlogFEpica !== 'todas' || backlogFStatus !== 'todas' || backlogFPrio !== 'todas') && (
                 <button onClick={() => { setBacklogFEpica('todas'); setBacklogFStatus('todas'); setBacklogFPrio('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>Limpiar filtros</button>
               )}
-              <button onClick={() => setBacklogEdit(v => !v)} aria-label="Editar la tabla como hoja de cálculo" title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '6px 12px', fontSize: 11.5, fontWeight: 700, border: backlogEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(backlogEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{backlogEdit ? '✓ Listo' : '✎ Editar tabla'}</button>
+              {/* La edición tipo hoja de cálculo sólo aplica a la tabla */}
+              {!isBoard && (
+                <button onClick={() => setBacklogEdit(v => !v)} aria-label="Editar la tabla como hoja de cálculo" title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '6px 12px', fontSize: 11.5, fontWeight: 700, border: backlogEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(backlogEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{backlogEdit ? '✓ Listo' : '✎ Editar tabla'}</button>
+              )}
               <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{backlogEdit ? 'Edita cualquier celda · las fechas abren calendario' : 'Clic en encabezado = ordenar · en fila = ver/editar · casilla = seleccionar'}</span>
+              <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{isBoard ? 'Arrastra una tarjeta a otra columna para cambiar su estado · clic para abrirla' : backlogEdit ? 'Edita cualquier celda · las fechas abren calendario' : 'Clic en encabezado = ordenar · en fila = ver/editar · casilla = seleccionar'}</span>
             </div>
 
             {someSel && (
@@ -2094,6 +2324,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )}
 
+            {isBoard ? renderBoard(rows) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
                 <thead>
@@ -2133,6 +2364,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </tbody>
               </table>
             </div>
+            )}
           </div>
         )}
       </div>
@@ -2730,6 +2962,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
                       {t.plan && t.plan < today && t.status !== 'Terminada' && <span style={{ fontSize: 11, fontWeight: 700, color: '#B0522E' }}>⏳ pendiente de días anteriores</span>}
                     </div>
+                    {t.repeat && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 9, padding: '6px 11px', borderRadius: 99, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}` }}>
+                        <span style={{ font: '700 11.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻ Se repite {repeatLabel(t.repeat)}</span>
+                        {(t.repeatDone?.length ?? 0) > 0 && <span style={{ fontSize: 11, color: REPEAT_TONE.c }}>· {t.repeatDone!.length} {t.repeatDone!.length === 1 ? 'ciclo cumplido' : 'ciclos cumplidos'}</span>}
+                        {t.repeatUntil && <span style={{ fontSize: 11, color: REPEAT_TONE.c }}>· hasta {fmtDue(t.repeatUntil)}</span>}
+                      </div>
+                    )}
                   </div>
                   <button aria-label="Cerrar detalle de tarea" onClick={() => setTaskView(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
@@ -2918,6 +3157,70 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     return <input type="date" value={taskDraft.plan || ''} onChange={e => setTaskDraft(d => ({ ...d, plan: e.target.value }))} style={{ borderRadius: 99, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', outline: 'none', border: custom ? '1px solid rgba(194,147,58,0.55)' : '1px solid rgba(15,35,64,0.14)', background: custom ? 'rgba(194,147,58,0.10)' : '#fff', color: custom ? '#A87A2C' : 'rgba(20,35,61,0.6)' }} />
                   })()}
                 </div>
+
+                {/* REPETIR — presets para lo común, personalizado para el resto */}
+                <label style={lbl}>Repetir</label>
+                <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: -4, marginBottom: 8 }}>
+                  Al marcarla como hecha no se termina: vuelve sola a tu enfoque en la siguiente fecha.
+                </div>
+                {(() => {
+                  const r = taskDraft.repeat
+                  const presets: [string, EpicaRepeat | null][] = [
+                    ['No se repite', null],
+                    ['Cada día', { every: 1, unit: 'dia' }],
+                    ['Cada semana', { every: 1, unit: 'semana' }],
+                    ['Cada mes', { every: 1, unit: 'mes' }],
+                  ]
+                  const isPreset = (x: EpicaRepeat | null) =>
+                    x === null ? !r : !!r && r.every === x.every && r.unit === x.unit
+                  const custom = !!r && !presets.some(([, x]) => x !== null && isPreset(x))
+                  return (
+                    <>
+                      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {presets.map(([label, x]) => {
+                          const on = isPreset(x)
+                          return (
+                            <button key={label} onClick={() => setTaskDraft(d => {
+                              const n = { ...d }
+                              if (x) n.repeat = { ...x }; else { delete n.repeat; delete n.repeatUntil }
+                              return n
+                            })} style={{ borderRadius: 99, padding: '8px 13px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', border: on ? `1px solid ${REPEAT_TONE.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? REPEAT_TONE.c : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}</button>
+                          )
+                        })}
+                        <button onClick={() => setTaskDraft(d => ({ ...d, repeat: d.repeat ? { ...d.repeat, every: Math.max(2, d.repeat.every) } : { every: 2, unit: 'semana' } }))}
+                          style={{ borderRadius: 99, padding: '8px 13px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', border: custom ? `1px solid ${REPEAT_TONE.c}` : '1px solid rgba(15,35,64,0.14)', background: custom ? REPEAT_TONE.bg : '#fff', color: custom ? REPEAT_TONE.c : 'rgba(20,35,61,0.6)' }}>Personalizado…</button>
+                      </div>
+
+                      {r && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 11, padding: '11px 13px', borderRadius: 12, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}` }}>
+                          <span style={{ font: '700 12.5px var(--font-ui)', color: REPEAT_TONE.c }}>Cada</span>
+                          <input type="number" min={1} max={99} value={r.every} aria-label="Cada cuántos"
+                            onChange={ev => { const v = Math.max(1, Math.min(99, Number(ev.target.value) || 1)); setTaskDraft(d => (d.repeat ? { ...d, repeat: { ...d.repeat, every: v } } : d)) }}
+                            style={{ width: 62, boxSizing: 'border-box', border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 9, padding: '7px 9px', fontSize: 13, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none' }} />
+                          <select value={r.unit} aria-label="Unidad de repetición"
+                            onChange={ev => { const u = ev.target.value as EpicaRepeat['unit']; setTaskDraft(d => (d.repeat ? { ...d, repeat: { ...d.repeat, unit: u } } : d)) }}
+                            style={{ cursor: 'pointer', border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 9, padding: '7px 9px', fontSize: 13, fontWeight: 600, color: '#14233D', background: '#fff', outline: 'none' }}>
+                            <option value="dia">{r.every === 1 ? 'día' : 'días'}</option>
+                            <option value="semana">{r.every === 1 ? 'semana' : 'semanas'}</option>
+                            <option value="mes">{r.every === 1 ? 'mes' : 'meses'}</option>
+                          </select>
+                          <span style={{ width: 1, alignSelf: 'stretch', background: REPEAT_TONE.border }} />
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                            <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: REPEAT_TONE.c }}>Hasta</span>
+                            <input type="date" value={taskDraft.repeatUntil || ''} aria-label="Fin de la serie (opcional)"
+                              onChange={ev => setTaskDraft(d => { const v = ev.target.value; const n = { ...d }; if (v) n.repeatUntil = v; else delete n.repeatUntil; return n })}
+                              style={{ border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 9, padding: '6px 8px', fontSize: 12, fontWeight: 600, color: '#14233D', background: '#fff', outline: 'none' }} />
+                          </label>
+                          {taskDraft.plan && (
+                            <span style={{ flexBasis: '100%', fontSize: 11.5, color: REPEAT_TONE.c }}>
+                              Se repite <strong>{repeatLabel(r)}</strong> · la siguiente sería el {fmtDue(nextOccurrence(taskDraft.plan, r, taskDraft.plan))}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
 
                 <label style={lbl}>Prioridad</label>
                 {!taskDraft.priority && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: -4, marginBottom: 8 }}>Sugerida por la fecha — toca para fijarla.</div>}
