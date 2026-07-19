@@ -1059,15 +1059,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
 
   /* ─── Popup de edición por tarea ─────────────────────────── */
-  const openTaskEdit = (epicId: string, index: number | null) => {
+  /** `seed` prellena el borrador de una tarea nueva (p. ej. el día del plan
+   *  desde el que se creó), para no tener que elegirlo a mano. */
+  const openTaskEdit = (epicId: string, index: number | null, seed?: Partial<EpicaTask>) => {
     const e = epics.find(x => x.id === epicId)
     if (index != null && e) {
       const t = clone(e.tasks[index])
       setTaskDraft({ ...t, links: t.links || [] })
     } else {
-      setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [] })
+      setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
     }
     setTaskEdit({ epicId, index })
+  }
+  /** Crea una tarea ya planeada para el día que estás viendo en el enfoque. */
+  const newTaskForDay = (day: string) => {
+    const target = featured?.id || activeEpics[0]?.id
+    if (!target) { showToast('Crea una épica primero', true); return }
+    openTaskEdit(target, null, { plan: day })
   }
   const closeTaskEdit = () => setTaskEdit(null)
   const saveTask = () => {
@@ -1604,7 +1612,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)', whiteSpace: 'nowrap' }}><span className="serif" style={{ fontSize: 18, color: '#10233F' }}>{planDone.length}</span> de {planTotal} hechas</span>
                 </div>
               )}
-              <button onClick={() => setPickerOpen(true)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Agregar</button>
+              {/* Dos caminos distintos: traer algo que ya existe, o crear algo nuevo.
+                  Antes sólo existía el primero y "+ Agregar" no dejaba crear nada. */}
+              <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
+              <button onClick={() => newTaskForDay(viewDate)} title={`Crear una tarea nueva planeada para ${relLong(viewDate).toLowerCase()}`} style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
           </div>
 
@@ -1678,7 +1689,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ padding: '28px 12px 12px', textAlign: 'center' }}>
               <div className="serif" style={{ fontSize: 27, color: '#10233F', margin: '4px 0 6px', lineHeight: 1.1 }}>{isToday ? 'Aún no defines tu enfoque de hoy.' : `Nada planeado para ${daysUntil(viewDate) === 1 ? 'mañana' : 'el ' + weekdayAbbr(viewDate).toLowerCase()}.`}</div>
               <div style={{ fontSize: 13.5, color: 'rgba(20,35,61,0.55)', maxWidth: 380, margin: '0 auto 18px' }}>{isToday ? 'Elige las pocas cosas que de verdad moverán la aguja hoy.' : 'Adelántate: agenda lo que quieras avanzar ese día.'}</div>
-              <button onClick={() => setPickerOpen(true)} style={{ ...goldBtn, padding: '11px 22px' }}>Elegir tareas</button>
+              <div style={{ display: 'flex', gap: 9, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <button onClick={() => setPickerOpen(true)} style={{ ...goldBtn, padding: '11px 22px' }}>Elegir del backlog</button>
+                <button onClick={() => newTaskForDay(viewDate)} style={{ border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: '#16365F', borderRadius: 11, padding: '11px 20px', font: '700 13px var(--font-ui)', cursor: 'pointer' }}>+ Nueva tarea</button>
+              </div>
               {suggestions.length > 0 && (
                 <div style={{ marginTop: 20 }}>
                   <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }}>{isToday ? 'Sugerencias para hoy' : 'Para ese día'}</div>
@@ -2858,7 +2872,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
                   <div>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>{isNew ? 'Nueva tarea' : 'Editar tarea'}</div>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{ep?.name}</div>
+                    {/* Al crear desde el enfoque (que cruza todas las épicas) hay que poder
+                        elegir a cuál pertenece; al editar, la épica ya está fijada. */}
+                    {isNew && activeEpics.length > 1
+                      ? <select value={taskEdit.epicId} aria-label="Épica de la tarea"
+                          onChange={ev => { const id = ev.target.value; setTaskEdit(v => (v ? { ...v, epicId: id } : v)) }}
+                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontWeight: 600, color: '#16365F', background: '#fff', outline: 'none', maxWidth: 260 }}>
+                          {activeEpics.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                        </select>
+                      : <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{ep?.name}</div>}
                   </div>
                   <button aria-label="Cerrar editor de tarea" onClick={closeTaskEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
