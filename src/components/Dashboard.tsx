@@ -65,6 +65,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   const [recents, setRecents] = useState<Recent[]>([])
   const [greeting, setGreeting] = useState('')
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null)
+  const [loadError, setLoadError] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -75,7 +76,12 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
       timeZone: 'America/Mexico_City', hour: '2-digit', hour12: false,
     }).format(new Date()))
     setGreeting(greetingFor(hourMx))
-    fetch('/api/items').then(r => r.json()).then(j => { if (j.ok) setItems(j.data) }).catch(() => {})
+    // Antes esto era `.catch(() => {})`: si la carga fallaba se veían los datos del SSR
+    // sin ninguna señal de que estaban rancios.
+    fetch('/api/items')
+      .then(r => r.json())
+      .then(j => { if (!j.ok) throw new Error(j.error); setItems(j.data); setLoadError(false) })
+      .catch(() => setLoadError(true))
   }, [])
 
   useEffect(() => {
@@ -272,10 +278,19 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   }
 
   const refresh = async () => {
-    const r = await fetch('/api/items')
-    const j = await r.json()
-    if (j.ok) { setItems(j.data); showToast('Datos actualizados') }
-    else showToast('No se pudo actualizar', true)
+    try {
+      const r = await fetch('/api/items')
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error)
+      setItems(j.data); setLoadError(false); showToast('Datos actualizados')
+    } catch {
+      setLoadError(true); showToast('No se pudo actualizar', true)
+    }
+  }
+
+  const clearRecents = () => {
+    try { localStorage.removeItem(RECENT_KEY) } catch { /* noop */ }
+    setRecents([])
   }
 
   return (
@@ -334,6 +349,15 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
 
       <div className="mx-auto flex max-w-[1500px] flex-col gap-6 px-5 py-5 lg:flex-row lg:items-start">
         <main className="min-w-0 flex-1">
+          {/* Aviso de carga fallida: lo que se ve puede estar desactualizado */}
+          {loadError && (
+            <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-[rgba(176,82,46,0.32)] bg-[rgba(176,82,46,0.08)] px-4 py-3">
+              <span className="text-[13px] font-semibold text-[#B0522E]">No se pudieron cargar los accesos.</span>
+              <span className="text-[12px] text-[rgba(20,35,61,0.55)]">Lo que ves puede estar desactualizado.</span>
+              <button onClick={refresh} className="ml-auto rounded-[9px] border border-[rgba(176,82,46,0.4)] bg-white px-3.5 py-1.5 text-[12px] font-bold text-[#B0522E]">Reintentar</button>
+            </div>
+          )}
+
           {/* COMMAND PANEL */}
           <div className="mb-6 rounded-2xl glass p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -383,7 +407,10 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           {/* RECIENTES */}
           {recents.length > 0 && !query && (
             <section className="mb-5">
-              <h2 className="eyebrow mb-2.5">Recientes</h2>
+              <div className="mb-2.5 flex items-center gap-2.5">
+                <h2 className="eyebrow">Recientes</h2>
+                <button onClick={clearRecents} className="text-[10px] font-semibold text-[rgba(20,35,61,0.5)] underline hover:text-[#B0522E]">Limpiar</button>
+              </div>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {recents.map(r => (
                   // eslint-disable-next-line @next/next/no-img-element
