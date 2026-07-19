@@ -199,6 +199,15 @@ body {
    Plan de hoy — interacción y vista móvil
    ============================================================ */
 .plan-row:hover { background: rgba(15, 35, 64, 0.02) !important; }
+
+/* Casilla de selección múltiple del enfoque: discreta hasta que la necesitas.
+   Se revela al pasar el cursor, al enfocarla con teclado, o cuando ya hay algo
+   seleccionado (para que se vea qué está marcado sin tener que hacer hover). */
+.plan-sel { opacity: 0; transition: opacity .15s; }
+.plan-row:hover .plan-sel,
+.plan-sel:focus-visible,
+.plan-sel[data-on] { opacity: 1; }
+@media (hover: none) { .plan-sel { opacity: 1; } }   /* en táctil no hay hover */
 .plan-check:hover { border-color: #C2933A !important; color: rgba(194,147,58,0.55) !important; }
 .plan-grip:active { cursor: grabbing; }
 .plan-day:hover { background: rgba(15, 35, 64, 0.02); }

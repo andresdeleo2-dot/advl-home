@@ -260,6 +260,19 @@ function GripIcon() {
 }
 const norm = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
+/** Posición de un popover anclado a su fila: hacia abajo por defecto, hacia arriba
+ *  cuando no cabe (en las últimas filas el menú se salía del borde visible). */
+function popPos(up: boolean, gap: number): CSSProperties {
+  return up
+    ? { position: 'absolute', bottom: '100%', right: 0, marginBottom: gap }
+    : { position: 'absolute', top: '100%', right: 0, marginTop: gap }
+}
+/** ¿Hay espacio bajo el botón para un popover de `h` px? */
+function shouldFlipUp(el: HTMLElement, h: number) {
+  const r = el.getBoundingClientRect()
+  return window.innerHeight - r.bottom < h && r.top > h
+}
+
 /** Props para que un elemento clicable sea alcanzable y accionable por teclado.
  *  Varias filas de la página eran divs con onClick: invisibles para Tab y Enter.
  *  `asRow` omite role="button", que sobre un <tr> rompería la semántica de tabla. */
@@ -338,6 +351,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [pickerEpica, setPickerEpica] = useState<string>('todas')
   const [prioMenu, setPrioMenu] = useState<string | null>(null)   // key con popover de prioridad abierto
   const [rowMenu, setRowMenu] = useState<string | null>(null)     // key con menú ⋯ abierto
+  const [rowMenuUp, setRowMenuUp] = useState(false)               // ⋯ abre hacia arriba si no cabe abajo
+  const [prioMenuUp, setPrioMenuUp] = useState(false)
   const [doneOpen, setDoneOpen] = useState(true)
   const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'>('plan')  // orden del enfoque
   const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance'>('todas')          // filtro del enfoque
@@ -357,6 +372,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [logExpanded, setLogExpanded] = useState(false)        // ver toda la bitácora de avance
   const [draggingKey, setDraggingKey] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
+  const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
+  const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
   const [hideYesterday, setHideYesterday] = useState(false)
   const [viewDate, setViewDate] = useState<string>(todayISO())               // día del plan en vista
   const [calOpen, setCalOpen] = useState(false)                              // popover de mes (masthead)
@@ -523,6 +540,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return () => document.removeEventListener('mousedown', onDoc)
   }, [rowMenu, prioMenu, calOpen, movePick])
 
+  // La selección son índices de tareas planeadas para el día en vista: al cambiar de día
+  // dejan de tener sentido.
+  useEffect(() => { setPlanSel(new Set()) }, [viewDate])
+
   // centra el chip del día seleccionado en la tira
   useEffect(() => {
     dayStripRef.current?.querySelector('[data-day-selected]')
@@ -664,12 +685,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }))
     return m
   }, [activeEpics])
-  // ventana de 14 días de la tira; en fechas lejanas se recentra alrededor del objetivo
+  // Ventana de la tira: 6 días atrás + hoy + 13 adelante. Los días pasados
+  // importan para reprogramar lo que quedó pendiente sin abrir el calendario.
+  const STRIP_BACK = 6
+  const STRIP_LEN = 20
   const stripDays = useMemo(() => {
     const o = daysUntil(viewDate)
-    const inBase = o != null && o >= 0 && o <= 13
-    const start = inBase ? today : addDays(viewDate, -3)
-    return Array.from({ length: 14 }, (_, i) => addDays(start, i))
+    const inBase = o != null && o >= -STRIP_BACK && o <= STRIP_LEN - STRIP_BACK - 1
+    const start = inBase ? addDays(today, -STRIP_BACK) : addDays(viewDate, -STRIP_BACK)
+    return Array.from({ length: STRIP_LEN }, (_, i) => addDays(start, i))
   }, [today, viewDate])
 
   /* ─── Plan de hoy: acciones (cada tarjeta = 1 patchEpic) ──── */
@@ -802,6 +826,60 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     showToast(`${arrastradas.length} ${arrastradas.length === 1 ? 'pendiente traída' : 'pendientes traídas'} a hoy`)
   }
 
+  /* ─── Selección múltiple en el enfoque ───────────────────── */
+  const togglePlanSel = (key: string) => setPlanSel(prev => {
+    const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n
+  })
+  const planSelGroup = () => {
+    const m = new Map<string, number[]>()
+    planSel.forEach(key => {
+      const idx = key.lastIndexOf(':')
+      const eId = key.slice(0, idx); const i = Number(key.slice(idx + 1))
+      if (!m.has(eId)) m.set(eId, []); m.get(eId)!.push(i)
+    })
+    return m
+  }
+  /** Aplica una mutación a toda la selección: un patch por épica tocada. */
+  const planBulk = (mutate: (t: EpicaTask) => void, msg: string) => {
+    const count = planSel.size
+    planSelGroup().forEach((idxs, eId) => {
+      const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
+      const tasks = clone(ep.tasks)
+      idxs.forEach(i => { if (tasks[i]) mutate(tasks[i]) })
+      patchEpic(eId, { tasks })
+    })
+    showToast(`${count} ${msg}`); setPlanSel(new Set())
+  }
+  const planBulkMove = (day: string) => {
+    if (!day) return
+    const count = planSel.size
+    let base = maxPlanOrderFor(day)
+    planSelGroup().forEach((idxs, eId) => {
+      const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
+      const tasks = clone(ep.tasks)
+      idxs.forEach(i => {
+        const t = tasks[i]; if (!t) return
+        base += 1000
+        t.plan = day
+        if (!t.priority) t.priority = prioFromDue(t.due)
+        t.planOrder = base
+        applyPlanStatus(t, day)
+      })
+      patchEpic(eId, { tasks })
+    })
+    setPlanSel(new Set())
+    showToast(`${count} ${count === 1 ? 'movida' : 'movidas'} a ${relLong(day).toLowerCase()}`, false,
+      day !== viewDate ? { label: 'Ver', fn: () => setViewDate(day) } : undefined)
+  }
+  const planBulkDone = () => planBulk(t => {
+    if (t.status === 'Terminada') return
+    t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = todayISO()
+  }, 'marcadas como terminadas')
+  const planBulkRemove = () => planBulk(t => {
+    delete t.plan; delete t.priority; delete t.planOrder; applyPlanStatus(t, '')
+  }, 'quitadas del plan')
+  const planBulkPrio = (p: Prio) => planBulk(t => { t.priority = p }, `· prioridad ${p}`)
+
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
   const computeDropIndex = (clientY: number) => {
     const rows = Array.from(planListRef.current?.querySelectorAll('[data-plan-row]') || []) as HTMLElement[]
@@ -878,6 +956,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setRowMenu(k => (touches(k) ? null : k))
     setPrioMenu(k => (touches(k) ? null : k))
     setEditCell(c => (touches(c?.key ?? null) ? null : c))
+    setPlanSel(prev => {
+      if (![...prev].some(touches)) return prev
+      return new Set([...prev].filter(k => !touches(k)))
+    })
     removeUndoRef.current = null
   }
 
@@ -1276,7 +1358,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const insLine = <div style={{ height: 2, background: '#C2933A', borderRadius: 99, margin: '3px 0' }} />
 
   const renderPrioPopover = ({ current, onPick }: { current?: Prio; onPick: (p: Prio) => void }) => (
-    <div data-pop className="animate-fade" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 50, background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6, width: 152 }}>
+    <div data-pop className="animate-fade" style={{ ...popPos(prioMenuUp, 6), zIndex: 50, background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6, width: 152 }}>
       {(['alta', 'media', 'baja'] as Prio[]).map(p => {
         const ps = prioStyle(p); const on = (current || 'media') === p
         return (
@@ -1296,7 +1378,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <button disabled={disabled} onClick={fn} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 8, cursor: disabled ? 'default' : 'pointer', background: 'transparent', color: disabled ? 'rgba(20,35,61,0.3)' : danger ? '#B0522E' : '#16365F', fontSize: 12.5, fontWeight: 600 }}>{label}</button>
     )
     return (
-      <div data-pop className="animate-fade" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 50, background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6, width: 196 }}>
+      <div data-pop className="animate-fade" style={{ ...popPos(rowMenuUp, 6), zIndex: 50, background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6, width: 196 }}>
         {planSort === 'plan' && <>
           {mi('↑  Subir', () => movePlan(key, 'up'), pos === 0)}
           {mi('↓  Bajar', () => movePlan(key, 'down'), pos === total - 1)}
@@ -1383,15 +1465,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const c = planCounts.get(d)
           const allDone = !!c && c.done === c.total
           const over = dragOverDay === d && !sel
-          const lblColor = sel ? '#E7C56B' : isT ? '#A87A2C' : 'rgba(20,35,61,0.5)'
-          const numColor = sel ? '#F3EFE6' : ((c && c.total > 0) || isT ? '#10233F' : 'rgba(16,35,64,0.4)')
+          const past = d < today
+          const pend = c ? c.total - c.done : 0
+          const pastPend = past && pend > 0            // día pasado con tareas sin terminar
+          const lblColor = sel ? '#E7C56B' : isT ? '#A87A2C' : pastPend ? '#B0522E' : 'rgba(20,35,61,0.5)'
+          const numColor = sel ? '#F3EFE6' : pastPend ? '#B0522E' : ((c && c.total > 0) || isT ? '#10233F' : 'rgba(16,35,64,0.4)')
           return (
             <button key={d} data-day={d} data-day-selected={sel || undefined} onClick={() => { setViewDate(d); setCalMonth(d.slice(0, 7)) }} className="plan-day"
-              style={{ flexShrink: 0, minWidth: 58, height: 62, padding: '0 6px', borderRadius: 14, border: over ? '1.5px solid #C2933A' : sel ? '1px solid #10233F' : isT ? '1px solid rgba(194,147,58,0.45)' : '1px solid rgba(15,35,64,0.10)', background: over ? 'rgba(194,147,58,0.12)' : sel ? '#10233F' : '#fff', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, scrollSnapAlign: 'start', boxShadow: sel ? '0 8px 18px -10px rgba(15,35,64,.55)' : 'none' }}>
+              style={{ flexShrink: 0, minWidth: 58, height: 62, padding: '0 6px', borderRadius: 14, border: over ? '1.5px solid #C2933A' : sel ? '1px solid #10233F' : isT ? '1px solid rgba(194,147,58,0.45)' : pastPend ? '1px solid rgba(176,82,46,0.35)' : '1px solid rgba(15,35,64,0.10)', background: over ? 'rgba(194,147,58,0.12)' : sel ? '#10233F' : pastPend ? 'rgba(176,82,46,0.05)' : '#fff', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, scrollSnapAlign: 'start', opacity: past && !sel && !pastPend ? 0.55 : 1, boxShadow: sel ? '0 8px 18px -10px rgba(15,35,64,.55)' : 'none' }}>
               <span className="plan-day-lbl" style={{ font: '700 10px/1 var(--font-ui)', textTransform: 'uppercase', letterSpacing: '.06em', color: lblColor }}>{relShort(d)}</span>
               <span className="serif plan-day-num" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, fontVariantNumeric: 'tabular-nums', color: numColor }}>{dayNum(d)}</span>
               {c && c.total > 0
-                ? <span style={{ height: 16, padding: '0 6px', borderRadius: 99, display: 'flex', alignItems: 'center', font: '700 10px/1 var(--font-ui)', background: allDone ? (sel ? 'rgba(231,197,107,0.22)' : 'rgba(62,142,142,0.14)') : (sel ? 'rgba(255,255,255,0.16)' : 'rgba(194,147,58,0.14)'), color: allDone ? (sel ? '#E7C56B' : '#2E6E6E') : (sel ? '#F3EFE6' : '#A87A2C') }}>{allDone ? '✓' : c.total}</span>
+                ? <span title={pastPend ? `${pend} sin terminar` : undefined} style={{ height: 16, padding: '0 6px', borderRadius: 99, display: 'flex', alignItems: 'center', font: '700 10px/1 var(--font-ui)', background: allDone ? (sel ? 'rgba(231,197,107,0.22)' : 'rgba(62,142,142,0.14)') : pastPend && !sel ? 'rgba(176,82,46,0.14)' : (sel ? 'rgba(255,255,255,0.16)' : 'rgba(194,147,58,0.14)'), color: allDone ? (sel ? '#E7C56B' : '#2E6E6E') : pastPend && !sel ? '#B0522E' : (sel ? '#F3EFE6' : '#A87A2C') }}>{allDone ? '✓' : pastPend ? pend : c.total}</span>
                 : <span style={{ width: 3, height: 3, borderRadius: 99, background: sel ? 'rgba(255,255,255,0.3)' : 'rgba(15,35,64,0.16)' }} />}
             </button>
           )
@@ -1406,9 +1491,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const ps = prioStyle(t.priority)
     const dt = dueTone(t.due, false)
     const dragging = draggingKey === key
+    const selected = planSel.has(key)
     return (
       <div key={key} data-plan-row data-key={key} className="plan-row"
-        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 6px', borderBottom: '1px solid rgba(15,35,64,0.06)', transition: 'background .18s, box-shadow .12s', borderRadius: dragging ? 12 : 0, background: dragging ? '#FFFDF8' : 'transparent', boxShadow: dragging ? '0 18px 30px -18px rgba(15,35,64,0.45)' : 'none', opacity: draggingKey && !dragging ? 0.7 : 1 }}>
+        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 6px', borderBottom: '1px solid rgba(15,35,64,0.06)', transition: 'background .18s, box-shadow .12s', borderRadius: dragging || selected ? 12 : 0, background: dragging ? '#FFFDF8' : selected ? 'rgba(16,35,64,0.045)' : 'transparent', boxShadow: dragging ? '0 18px 30px -18px rgba(15,35,64,0.45)' : 'none', opacity: draggingKey && !dragging ? 0.7 : 1 }}>
+        <button onClick={() => togglePlanSel(key)} className="plan-sel" data-on={selected || undefined}
+          aria-label={selected ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para acciones en lote)"
+          style={{ flexShrink: 0, height: 20, width: 20, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: selected ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: selected ? '#10233F' : '#fff', color: '#fff' }}>
+          {selected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+        </button>
         <button onClick={ev => { if (ev.detail > 1) return; completeFromPlan(e, i) }} aria-label="Marcar terminada" title="Marcar terminada" className="plan-check"
           style={{ flexShrink: 0, height: 30, width: 30, borderRadius: 99, border: '1.5px solid rgba(15,35,64,0.25)', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'transparent', transition: 'border-color .15s, color .15s' }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
@@ -1449,12 +1540,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, position: 'relative' }}>
-          <button data-pop onClick={ev => { ev.stopPropagation(); setPrioMenu(prioMenu === key ? null : key); setRowMenu(null) }} title={`Prioridad: ${ps.label}`} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}>
+          <button data-pop onClick={ev => { ev.stopPropagation(); setPrioMenuUp(shouldFlipUp(ev.currentTarget, 150)); setPrioMenu(prioMenu === key ? null : key); setRowMenu(null) }} title={`Prioridad: ${ps.label}`} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}>
             <PrioBars p={t.priority} />
           </button>
           {prioMenu === key && renderPrioPopover({ current: t.priority, onPick: p => setPriority(e, i, p) })}
           {!noDrag && <span className="plan-grip" onPointerDown={ev => onGripDown(ev, key)} onPointerMove={onGripMove} onPointerUp={onGripUp} onPointerCancel={onGripCancel} title="Arrastra para reordenar" style={{ color: 'rgba(20,35,61,0.55)', cursor: 'grab', touchAction: 'none', display: 'flex', alignItems: 'center' }}><GripIcon /></span>}
-          <button data-pop onClick={ev => { ev.stopPropagation(); setRowMenu(rowMenu === key ? null : key); setPrioMenu(null) }} aria-label="Más acciones" title="Más acciones" style={{ height: 26, width: 26, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>⋯</button>
+          <button data-pop onClick={ev => { ev.stopPropagation(); setRowMenuUp(shouldFlipUp(ev.currentTarget, 330)); setRowMenu(rowMenu === key ? null : key); setPrioMenu(null) }} aria-label="Más acciones" title="Más acciones" style={{ height: 30, width: 30, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>⋯</button>
           {rowMenu === key && renderRowMenu({ x, pos, total: planPend.length })}
         </div>
       </div>
@@ -1645,9 +1736,44 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {!manual && planFilter === 'todas' && list.length > 1 && <button onClick={() => commitPlanOrder(list)} aria-label="Guardar este orden como el orden manual" title="Guardar este orden como el orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', font: '700 11px var(--font-ui)' }}>Fijar este orden</button>}
                       </div>
                     )}
-                    {manual && planFilter === 'todas' && filtered.length > 1 && (
+                    {manual && planFilter === 'todas' && filtered.length > 1 && planSel.size === 0 && (
                       <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}>En orden de arriba hacia abajo · el 01 es por dónde empiezas · arrastra para reordenar.</div>
                     )}
+
+                    {/* ACCIONES EN LOTE — aparece al seleccionar filas del enfoque */}
+                    {planSel.size > 0 && (() => {
+                      const listKeys = list.map(x => planKey(x.e.id, x.i))
+                      const allSel = listKeys.length > 0 && listKeys.every(k => planSel.has(k))
+                      const btn: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(255,255,255,0.22)', background: 'rgba(255,255,255,0.10)', color: '#fff', borderRadius: 8, padding: '6px 10px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }
+                      return (
+                        <div className="animate-fade" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: '#10233F', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
+                          <span style={{ font: '800 11.5px var(--font-ui)', color: '#E7C56B', whiteSpace: 'nowrap' }}>{planSel.size} {planSel.size === 1 ? 'seleccionada' : 'seleccionadas'}</span>
+                          <button onClick={() => setPlanSel(allSel ? new Set() : new Set(listKeys))} style={btn}>{allSel ? 'Ninguna' : 'Todas'}</button>
+                          <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
+
+                          <button onClick={() => planBulkMove(addDays(viewDate, 1))} style={btn}>→ Mañana</button>
+                          {viewDate !== today && <button onClick={() => planBulkMove(today)} style={btn}>Hoy</button>}
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Mover a</span>
+                            <input type="date" value={planMoveDay} aria-label="Mover la selección a una fecha"
+                              onChange={ev => { const v = ev.target.value; setPlanMoveDay(''); planBulkMove(v) }}
+                              style={{ ...btn, cursor: 'pointer', colorScheme: 'dark' }} />
+                          </label>
+                          <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
+
+                          <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Prioridad</span>
+                          {(['alta', 'media', 'baja'] as Prio[]).map(p => (
+                            <button key={p} onClick={() => planBulkPrio(p)} style={btn}>{prioStyle(p).label}</button>
+                          ))}
+                          <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
+
+                          <button onClick={planBulkDone} style={{ ...btn, border: '1px solid rgba(62,142,142,0.5)', background: 'rgba(62,142,142,0.25)' }}>✓ Terminar</button>
+                          <button onClick={planBulkRemove} style={{ ...btn, border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.22)' }}>Quitar del plan</button>
+                          <span style={{ flex: 1 }} />
+                          <button onClick={() => setPlanSel(new Set())} aria-label="Limpiar selección" style={{ ...btn, padding: '6px 9px' }}>✕</button>
+                        </div>
+                      )
+                    })()}
                     <div ref={planListRef}>
                       {list.map((x, pos) => (
                         <div key={planKey(x.e.id, x.i)}>
