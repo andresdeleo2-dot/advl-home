@@ -1187,6 +1187,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (routineWeek === mondayISO(todayISO())) r.days = wk   // mantiene `days` sincronizado con la semana actual
     patchEpic(e.id, { routines })
   }
+  // marca/desmarca una rutina en una semana y día concretos (vista semana del enfoque)
+  const toggleRoutineWeekDay = (e: Epica, ri: number, monday: string, di: number) => {
+    const routines = clone(e.routines)
+    const r = routines[ri]
+    if (!r.weeks) r.weeks = {}
+    const wk = (r.weeks[monday] && r.weeks[monday].length === 7) ? r.weeks[monday] : [false, false, false, false, false, false, false]
+    wk[di] = !wk[di]
+    r.weeks[monday] = wk
+    if (monday === mondayISO(todayISO())) r.days = wk   // mantiene `days` sincronizado con la semana actual
+    patchEpic(e.id, { routines })
+  }
   // marca/desmarca HOY para una rutina (usado en "Rutinas de hoy" del enfoque), sin depender de routineWeek
   const toggleRoutineToday = (e: Epica, ri: number) => {
     const monday = mondayISO(todayISO())
@@ -1799,6 +1810,64 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         })}
         {planFilter !== 'todas' && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>· filtro aplicado a los 7 días</span>}
       </div>
+
+      {/* RUTINAS DE LA SEMANA — las diarias: un habit-tracker de 7 celdas por rutina,
+          alineado con los días del tablero. Es lo que en día vive como "Rutinas de hoy". */}
+      {(() => {
+        const routines = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
+        if (routines.length === 0) return null
+        const cols = 'minmax(116px,1.3fr) repeat(7,1fr)'
+        return (
+          <div style={{ marginBottom: 14, borderRadius: 14, border: '1px solid rgba(15,35,64,0.08)', background: '#fff', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+              <span style={{ height: 7, width: 7, borderRadius: 99, background: '#A87A2C' }} />
+              <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Rutinas de la semana</span>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{routines.length}</span>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ minWidth: 460 }}>
+                {/* cabecera de días (misma retícula que las filas) */}
+                <div style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'end', gap: 4, padding: '7px 11px 5px' }}>
+                  <span />
+                  {days.map(d => {
+                    const isTd = d === today; const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7; const we = wd >= 5
+                    return (
+                      <div key={d} style={{ textAlign: 'center' }}>
+                        <div style={{ font: '700 9px/1 var(--font-ui)', textTransform: 'uppercase', letterSpacing: '.03em', color: isTd ? '#A87A2C' : we ? 'rgba(20,35,61,0.38)' : 'rgba(20,35,61,0.5)' }}>{DAYNAMES[wd].slice(0, 2)}</div>
+                        <div className="serif" style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2, color: isTd ? '#A87A2C' : '#10233F' }}>{dayNum(d)}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+                {routines.map(({ e, r, ri }) => {
+                  const wk = getRoutineWeek(r, monday)
+                  const n = wk.filter(Boolean).length
+                  const nc = n >= 5 ? '#2E6E6E' : n >= 3 ? '#A87A2C' : 'rgba(20,35,61,0.42)'
+                  return (
+                    <div key={e.id + ':' + ri} style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', gap: 4, padding: '5px 11px', borderTop: '1px solid rgba(15,35,64,0.05)' }}>
+                      <button onClick={() => setRoutineStat({ eId: e.id, ri })} title={`Ver estadísticas de ${r.t}`} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t}</span>
+                        <span style={{ fontSize: 9.5, fontWeight: 800, color: nc, flexShrink: 0 }}>{n}/7</span>
+                      </button>
+                      {days.map((d, di) => {
+                        const on = wk[di]; const isTd = d === today; const future = d > today
+                        return (
+                          <button key={d} onClick={() => toggleRoutineWeekDay(e, ri, monday, di)} aria-label={`${r.t} · ${DAYNAMES[di]} ${dayNum(d)}`} title={`${r.t} · ${DAYNAMES[di]} ${dayNum(d)}`}
+                            style={{ height: 26, borderRadius: 7, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: on ? 'none' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.12)', background: on ? e.color : future ? 'rgba(15,35,64,0.015)' : '#fff', opacity: future && !on ? 0.55 : 1, color: '#fff', transition: 'background .12s' }}>
+                            {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {days.map(d => {
           const list = byDay.get(d)!.filter(x => passF(x.t)).sort(cmp)
