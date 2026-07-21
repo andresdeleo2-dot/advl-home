@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
 import HeaderStats from './HeaderStats'
@@ -294,20 +295,22 @@ function GripIcon() {
 }
 const norm = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
-/** Posiciona un popover como `fixed` respecto a su botón ancla. Es `fixed` a propósito:
- *  el contenedor del plan tiene overflow:hidden, que recortaba un popover absolute
- *  aunque se volteara. Fixed escapa ese recorte y se ancla al viewport; se voltea
- *  hacia arriba si no cabe abajo y limita su alto para nunca salirse de pantalla. */
-function fixedMenuStyle(rect: DOMRect | null, width: number): CSSProperties {
-  if (typeof window === 'undefined' || !rect) return { position: 'absolute', top: '100%', right: 0, marginTop: 6 }
-  const gap = 6
-  const spaceBelow = window.innerHeight - rect.bottom
-  const spaceAbove = rect.top
-  const up = spaceBelow < 240 && spaceAbove > spaceBelow
-  const common: CSSProperties = { position: 'fixed', zIndex: 80, width, right: Math.max(8, window.innerWidth - rect.right) }
-  return up
-    ? { ...common, bottom: window.innerHeight - rect.top + gap, maxHeight: Math.max(160, spaceAbove - gap - 10), overflowY: 'auto' }
-    : { ...common, top: rect.bottom + gap, maxHeight: Math.max(160, spaceBelow - gap - 10), overflowY: 'auto' }
+/** Estilo de un popover anclado a su botón, con coordenadas absolutas de viewport
+ *  (left/top). Se usa dentro de un portal a document.body: así ningún ancestro con
+ *  overflow:hidden ni transform (las animaciones ep-pop/animate-fade crean un bloque
+ *  contenedor que rompía el `fixed`) lo desplaza o recorta. Se voltea hacia arriba si
+ *  no cabe abajo, alinea su borde derecho con el del botón y se ciñe al viewport. */
+function popoverStyle(rect: DOMRect | null, width: number, estHeight: number): CSSProperties {
+  if (typeof window === 'undefined' || !rect) return { position: 'fixed', top: -9999, left: -9999 }
+  const gap = 6, margin = 8
+  const vw = window.innerWidth, vh = window.innerHeight
+  let left = rect.right - width                       // alinea el borde derecho con el botón
+  left = Math.max(margin, Math.min(left, vw - width - margin))
+  const spaceBelow = vh - rect.bottom
+  const up = spaceBelow < estHeight + gap && rect.top > spaceBelow
+  const top = up ? Math.max(margin, rect.top - gap - estHeight) : rect.bottom + gap
+  const maxHeight = Math.max(140, (up ? rect.top - gap : vh - rect.bottom - gap) - margin)
+  return { position: 'fixed', zIndex: 80, left, top, width, maxHeight, overflowY: 'auto' }
 }
 
 /** Props para que un elemento clicable sea alcanzable y accionable por teclado.
@@ -586,8 +589,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if ((ev.target as HTMLElement | null)?.closest?.('[data-pop]')) return
       setRowMenu(null); setPrioMenu(null); setCalOpen(false); setMovePick(null)
     }
+    // El popover del ⋯/prioridad se ancla por coordenadas de viewport (portal): al
+    // hacer scroll dejaría de seguir a su botón, así que se cierra.
+    const onScroll = () => { setRowMenu(null); setPrioMenu(null) }
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    window.addEventListener('scroll', onScroll, true)
+    return () => { document.removeEventListener('mousedown', onDoc); window.removeEventListener('scroll', onScroll, true) }
   }, [rowMenu, prioMenu, calOpen, movePick])
 
   // La selección son índices de tareas planeadas para el día en vista: al cambiar de día
@@ -1547,8 +1554,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // re-animaba todo). Como funciones que devuelven JSX se reconcilian normalmente.
   const insLine = <div style={{ height: 2, background: '#C2933A', borderRadius: 99, margin: '3px 0' }} />
 
-  const renderPrioPopover = ({ current, onPick }: { current?: Prio; onPick: (p: Prio) => void }) => (
-    <div data-pop className="animate-fade" style={{ ...fixedMenuStyle(menuRect, 152), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
+  const renderPrioPopover = ({ current, onPick }: { current?: Prio; onPick: (p: Prio) => void }) => createPortal(
+    <div data-pop className="animate-fade" style={{ ...popoverStyle(menuRect, 152, 156), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
       {(['alta', 'media', 'baja'] as Prio[]).map(p => {
         const ps = prioStyle(p); const on = (current || 'media') === p
         return (
@@ -1558,7 +1565,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </button>
         )
       })}
-    </div>
+    </div>,
+    document.body
   )
 
   const renderRowMenu = ({ x, pos, total }: { x: { e: Epica; t: EpicaTask; i: number }; pos: number; total: number }) => {
@@ -1567,8 +1575,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const mi = (label: string, fn: () => void, disabled = false, danger = false) => (
       <button disabled={disabled} onClick={fn} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 8, cursor: disabled ? 'default' : 'pointer', background: 'transparent', color: disabled ? 'rgba(20,35,61,0.3)' : danger ? '#B0522E' : '#16365F', fontSize: 12.5, fontWeight: 600 }}>{label}</button>
     )
-    return (
-      <div data-pop className="animate-fade" style={{ ...fixedMenuStyle(menuRect, 200), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
+    return createPortal(
+      <div data-pop className="animate-fade" style={{ ...popoverStyle(menuRect, 200, 340), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
         {planSort === 'plan' && <>
           {mi('↑  Subir', () => movePlan(key, 'up'), pos === 0)}
           {mi('↓  Bajar', () => movePlan(key, 'down'), pos === total - 1)}
@@ -1587,7 +1595,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
         <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
         {mi('Quitar del plan', () => removeFromPlan(e, i), false, true)}
-      </div>
+      </div>,
+      document.body
     )
   }
 
