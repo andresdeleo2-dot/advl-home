@@ -1811,64 +1811,35 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         {planFilter !== 'todas' && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>· filtro aplicado a los 7 días</span>}
       </div>
 
-      {/* RUTINAS DE LA SEMANA — las diarias: un habit-tracker de 7 celdas por rutina,
-          alineado con los días del tablero. Es lo que en día vive como "Rutinas de hoy". */}
       {(() => {
-        const routines = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
-        if (routines.length === 0) return null
-        const cols = 'minmax(116px,1.3fr) repeat(7,1fr)'
-        return (
-          <div style={{ marginBottom: 14, borderRadius: 14, border: '1px solid rgba(15,35,64,0.08)', background: '#fff', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
-              <span style={{ height: 7, width: 7, borderRadius: 99, background: '#A87A2C' }} />
-              <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Rutinas de la semana</span>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{routines.length}</span>
-            </div>
-            <div style={{ overflowX: 'auto' }}>
-              <div style={{ minWidth: 460 }}>
-                {/* cabecera de días (misma retícula que las filas) */}
-                <div style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'end', gap: 4, padding: '7px 11px 5px' }}>
-                  <span />
-                  {days.map(d => {
-                    const isTd = d === today; const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7; const we = wd >= 5
-                    return (
-                      <div key={d} style={{ textAlign: 'center' }}>
-                        <div style={{ font: '700 9px/1 var(--font-ui)', textTransform: 'uppercase', letterSpacing: '.03em', color: isTd ? '#A87A2C' : we ? 'rgba(20,35,61,0.38)' : 'rgba(20,35,61,0.5)' }}>{DAYNAMES[wd].slice(0, 2)}</div>
-                        <div className="serif" style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2, color: isTd ? '#A87A2C' : '#10233F' }}>{dayNum(d)}</div>
-                      </div>
-                    )
-                  })}
-                </div>
-                {routines.map(({ e, r, ri }) => {
-                  const wk = getRoutineWeek(r, monday)
-                  const n = wk.filter(Boolean).length
-                  const nc = n >= 5 ? '#2E6E6E' : n >= 3 ? '#A87A2C' : 'rgba(20,35,61,0.42)'
-                  return (
-                    <div key={e.id + ':' + ri} style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', gap: 4, padding: '5px 11px', borderTop: '1px solid rgba(15,35,64,0.05)' }}>
-                      <button onClick={() => setRoutineStat({ eId: e.id, ri })} title={`Ver estadísticas de ${r.t}`} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
-                        <span style={{ fontSize: 12, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t}</span>
-                        <span style={{ fontSize: 9.5, fontWeight: 800, color: nc, flexShrink: 0 }}>{n}/7</span>
-                      </button>
-                      {days.map((d, di) => {
-                        const on = wk[di]; const isTd = d === today; const future = d > today
-                        return (
-                          <button key={d} onClick={() => toggleRoutineWeekDay(e, ri, monday, di)} aria-label={`${r.t} · ${DAYNAMES[di]} ${dayNum(d)}`} title={`${r.t} · ${DAYNAMES[di]} ${dayNum(d)}`}
-                            style={{ height: 26, borderRadius: 7, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: on ? 'none' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.12)', background: on ? e.color : future ? 'rgba(15,35,64,0.015)' : '#fff', opacity: future && !on ? 0.55 : 1, color: '#fff', transition: 'background .12s' }}>
-                            {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-        )
-      })()}
-
+      // Rutinas ("las diarias") + tablero en UN solo contenedor, para que las celdas
+      // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
+      // nombra las rutinas; cada columna trae sus celdas de ese día arriba.
+      const routines = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
+      const HEADER_H = 46, ROW_H = 30, railW = 132
+      return (
       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
+        {/* RIEL: nombres de las rutinas, alineados con sus celdas en cada columna */}
+        {routines.length > 0 && (
+          <div style={{ flex: `0 0 ${railW}px`, width: railW, boxSizing: 'border-box', border: '1px solid transparent' }}>
+            <div style={{ height: HEADER_H, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid transparent' }}>
+              <span style={{ height: 6, width: 6, borderRadius: 99, background: '#A87A2C' }} />
+              <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Rutinas</span>
+            </div>
+            {routines.map(({ e, r, ri }) => {
+              const wk = getRoutineWeek(r, monday); const n = wk.filter(Boolean).length
+              const nc = n >= 5 ? '#2E6E6E' : n >= 3 ? '#A87A2C' : 'rgba(20,35,61,0.42)'
+              return (
+                <button key={e.id + ':' + ri} onClick={() => setRoutineStat({ eId: e.id, ri })} title={`Ver estadísticas de ${r.t}`}
+                  style={{ height: ROW_H, width: '100%', boxSizing: 'border-box', borderTop: '1px solid rgba(15,35,64,0.05)', borderLeft: 'none', borderRight: 'none', borderBottom: 'none', display: 'flex', alignItems: 'center', gap: 6, background: 'transparent', cursor: 'pointer', padding: '0 2px', textAlign: 'left' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 9.5, fontWeight: 800, color: nc, flexShrink: 0 }}>{n}/7</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
         {days.map(d => {
           const list = byDay.get(d)!.filter(x => passF(x.t)).sort(cmp)
           const isTd = d === today
@@ -1881,9 +1852,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const allDone = list.length > 0 && pend === 0
           return (
             <div key={d} data-weekday={d}
-              style={{ flex: '1 1 168px', minWidth: 168, maxWidth: 320, borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.05)' : isWeekend ? 'rgba(15,35,64,0.02)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', opacity: past && !over ? 0.85 : 1, transition: 'background .15s, border-color .15s' }}>
-              {/* Cabecera del día */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 10px 7px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+              style={{ flex: '1 1 150px', minWidth: 150, maxWidth: 320, boxSizing: 'border-box', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.05)' : isWeekend ? 'rgba(15,35,64,0.02)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', opacity: past && !over ? 0.85 : 1, transition: 'background .15s, border-color .15s' }}>
+              {/* Cabecera del día — altura fija para que las rutinas cuadren con el riel */}
+              <div style={{ height: HEADER_H, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 7, padding: '0 10px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
                 <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
                 {list.length > 0 && (
@@ -1893,6 +1864,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => newTaskForDay(d)} aria-label={`Nueva tarea para ${dateLabel(d)}`} title="Nueva tarea este día"
                   style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 14, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
               </div>
+
+              {/* Rutinas de este día — una celda por rutina, alineada con el riel de nombres */}
+              {routines.length > 0 && (
+                <div style={{ padding: '0 8px', background: isTd ? 'rgba(194,147,58,0.03)' : 'transparent' }}>
+                  {routines.map(({ e, r, ri }) => {
+                    const on = getRoutineWeek(r, monday)[wd]; const future = d > today
+                    return (
+                      <div key={e.id + ':' + ri} style={{ height: ROW_H, boxSizing: 'border-box', borderTop: '1px solid rgba(15,35,64,0.05)', display: 'flex', alignItems: 'center' }}>
+                        <button onClick={() => toggleRoutineWeekDay(e, ri, monday, wd)} aria-label={`${r.t} · ${DAYNAMES[wd]} ${dayNum(d)}`} title={`${r.t} · ${DAYNAMES[wd]} ${dayNum(d)}${on ? ' · hecha' : ''}`}
+                          style={{ flex: 1, height: 22, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: on ? 'none' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.12)', background: on ? e.color : future ? 'rgba(15,35,64,0.015)' : '#fff', opacity: future && !on ? 0.55 : 1, color: '#fff', transition: 'background .12s' }}>
+                          {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                        </button>
+                      </div>
+                    )
+                  })}
+                  <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '7px 0 1px' }} />
+                </div>
+              )}
 
               {/* Tarjetas del día */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: '8px', minHeight: 64 }}>
@@ -1934,6 +1923,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })}
       </div>
+      )
+      })()}
       </>
     )
   }
