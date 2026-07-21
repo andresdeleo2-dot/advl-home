@@ -294,17 +294,20 @@ function GripIcon() {
 }
 const norm = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
-/** Posición de un popover anclado a su fila: hacia abajo por defecto, hacia arriba
- *  cuando no cabe (en las últimas filas el menú se salía del borde visible). */
-function popPos(up: boolean, gap: number): CSSProperties {
+/** Posiciona un popover como `fixed` respecto a su botón ancla. Es `fixed` a propósito:
+ *  el contenedor del plan tiene overflow:hidden, que recortaba un popover absolute
+ *  aunque se volteara. Fixed escapa ese recorte y se ancla al viewport; se voltea
+ *  hacia arriba si no cabe abajo y limita su alto para nunca salirse de pantalla. */
+function fixedMenuStyle(rect: DOMRect | null, width: number): CSSProperties {
+  if (typeof window === 'undefined' || !rect) return { position: 'absolute', top: '100%', right: 0, marginTop: 6 }
+  const gap = 6
+  const spaceBelow = window.innerHeight - rect.bottom
+  const spaceAbove = rect.top
+  const up = spaceBelow < 240 && spaceAbove > spaceBelow
+  const common: CSSProperties = { position: 'fixed', zIndex: 80, width, right: Math.max(8, window.innerWidth - rect.right) }
   return up
-    ? { position: 'absolute', bottom: '100%', right: 0, marginBottom: gap }
-    : { position: 'absolute', top: '100%', right: 0, marginTop: gap }
-}
-/** ¿Hay espacio bajo el botón para un popover de `h` px? */
-function shouldFlipUp(el: HTMLElement, h: number) {
-  const r = el.getBoundingClientRect()
-  return window.innerHeight - r.bottom < h && r.top > h
+    ? { ...common, bottom: window.innerHeight - rect.top + gap, maxHeight: Math.max(160, spaceAbove - gap - 10), overflowY: 'auto' }
+    : { ...common, top: rect.bottom + gap, maxHeight: Math.max(160, spaceBelow - gap - 10), overflowY: 'auto' }
 }
 
 /** Props para que un elemento clicable sea alcanzable y accionable por teclado.
@@ -390,8 +393,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [pickerEpica, setPickerEpica] = useState<string>('todas')
   const [prioMenu, setPrioMenu] = useState<string | null>(null)   // key con popover de prioridad abierto
   const [rowMenu, setRowMenu] = useState<string | null>(null)     // key con menú ⋯ abierto
-  const [rowMenuUp, setRowMenuUp] = useState(false)               // ⋯ abre hacia arriba si no cabe abajo
-  const [prioMenuUp, setPrioMenuUp] = useState(false)
+  const [menuRect, setMenuRect] = useState<DOMRect | null>(null)  // ancla del popover (⋯ o prioridad) abierto
   const [doneOpen, setDoneOpen] = useState(true)
   const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'>('plan')  // orden del enfoque
   const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance'>('todas')          // filtro del enfoque
@@ -1535,7 +1537,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const insLine = <div style={{ height: 2, background: '#C2933A', borderRadius: 99, margin: '3px 0' }} />
 
   const renderPrioPopover = ({ current, onPick }: { current?: Prio; onPick: (p: Prio) => void }) => (
-    <div data-pop className="animate-fade" style={{ ...popPos(prioMenuUp, 6), zIndex: 50, background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6, width: 152 }}>
+    <div data-pop className="animate-fade" style={{ ...fixedMenuStyle(menuRect, 152), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
       {(['alta', 'media', 'baja'] as Prio[]).map(p => {
         const ps = prioStyle(p); const on = (current || 'media') === p
         return (
@@ -1555,7 +1557,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <button disabled={disabled} onClick={fn} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 8, cursor: disabled ? 'default' : 'pointer', background: 'transparent', color: disabled ? 'rgba(20,35,61,0.3)' : danger ? '#B0522E' : '#16365F', fontSize: 12.5, fontWeight: 600 }}>{label}</button>
     )
     return (
-      <div data-pop className="animate-fade" style={{ ...popPos(rowMenuUp, 6), zIndex: 50, background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6, width: 196 }}>
+      <div data-pop className="animate-fade" style={{ ...fixedMenuStyle(menuRect, 200), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
         {planSort === 'plan' && <>
           {mi('↑  Subir', () => movePlan(key, 'up'), pos === 0)}
           {mi('↓  Bajar', () => movePlan(key, 'down'), pos === total - 1)}
@@ -1721,12 +1723,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, position: 'relative' }}>
-          <button data-pop onClick={ev => { ev.stopPropagation(); setPrioMenuUp(shouldFlipUp(ev.currentTarget, 150)); setPrioMenu(prioMenu === key ? null : key); setRowMenu(null) }} title={`Prioridad: ${ps.label}`} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}>
+          <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setPrioMenu(prioMenu === key ? null : key); setRowMenu(null) }} title={`Prioridad: ${ps.label}`} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}>
             <PrioBars p={t.priority} />
           </button>
           {prioMenu === key && renderPrioPopover({ current: t.priority, onPick: p => setPriority(e, i, p) })}
           {!noDrag && <span className="plan-grip" onPointerDown={ev => onGripDown(ev, key)} onPointerMove={onGripMove} onPointerUp={onGripUp} onPointerCancel={onGripCancel} title="Arrastra para reordenar" style={{ color: 'rgba(20,35,61,0.55)', cursor: 'grab', touchAction: 'none', display: 'flex', alignItems: 'center' }}><GripIcon /></span>}
-          <button data-pop onClick={ev => { ev.stopPropagation(); setRowMenuUp(shouldFlipUp(ev.currentTarget, 330)); setRowMenu(rowMenu === key ? null : key); setPrioMenu(null) }} aria-label="Más acciones" title="Más acciones" style={{ height: 30, width: 30, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>⋯</button>
+          <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setRowMenu(rowMenu === key ? null : key); setPrioMenu(null) }} aria-label="Más acciones" title="Más acciones" style={{ height: 30, width: 30, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>⋯</button>
           {rowMenu === key && renderRowMenu({ x, pos, total: planPend.length })}
         </div>
       </div>
@@ -1763,14 +1765,43 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
       if (t.plan && byDay.has(t.plan)) byDay.get(t.plan)!.push({ e, t, i })
     }))
-    // Total de la semana para el anillo del masthead
-    let wkTotal = 0, wkDone = 0
-    byDay.forEach(list => list.forEach(x => { wkTotal++; if (x.t.status === 'Terminada') wkDone++ }))
+    // Filtro y orden compartidos con la vista de día (planFilter / planSort)
+    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+      : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
+      : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : true
+    type WeekRow = { e: Epica; t: EpicaTask; i: number }
+    const cmp = (a: WeekRow, b: WeekRow) => {
+      // terminadas siempre al fondo de su columna
+      const df = (a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)
+      if (df) return df
+      if (planSort === 'prioridad') return (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) || ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9))
+      if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
+      if (planSort === 'avance') return (b.t.progress || 0) - (a.t.progress || 0)
+      if (planSort === 'epica') return a.e.name.localeCompare(b.e.name, 'es')
+      return (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
+    }
 
     return (
-      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, marginTop: 4, alignItems: 'flex-start' }}>
+      <>
+      {/* Filtros y orden — mismos controles que en la vista de día */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
+        <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar dentro de cada día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="plan">Orden manual</option>
+          <option value="prioridad">Prioridad</option>
+          <option value="entrega">Entrega</option>
+          <option value="avance">Avance</option>
+          <option value="epica">Épica</option>
+        </select>
+        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+          const on = planFilter === k
+          return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+        })}
+        {planFilter !== 'todas' && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>· filtro aplicado a los 7 días</span>}
+      </div>
+      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {days.map(d => {
-          const list = byDay.get(d)!
+          const list = byDay.get(d)!.filter(x => passF(x.t)).sort(cmp)
           const isTd = d === today
           const past = d < today
           const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7   // 0 = lunes
@@ -1799,10 +1830,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {list.length === 0 && (
                   <button onClick={() => newTaskForDay(d)} style={{ borderRadius: 10, border: '1px dashed rgba(15,35,64,0.14)', background: 'transparent', padding: '14px 8px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: over ? '#A87A2C' : 'rgba(20,35,61,0.4)', cursor: 'pointer' }}>{over ? 'Soltar aquí' : '+ Agregar'}</button>
                 )}
-                {list
-                  .sort((a, b) => (a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)
-                    || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)))
-                  .map(x => {
+                {list.map(x => {
                     const { e, t, i } = x
                     const k = planKey(e.id, i)
                     const dragging = weekDrag === k
@@ -1837,6 +1865,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })}
       </div>
+      </>
     )
   }
 
