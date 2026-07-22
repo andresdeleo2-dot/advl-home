@@ -282,6 +282,25 @@ function PrioBars({ p, size = 14 }: { p: Prio | undefined; size?: number }) {
     </svg>
   )
 }
+/* ─── Dificultad de la tarea ───────────────────────────────── */
+type Dif = 'facil' | 'media' | 'dificil'
+function difStyle(d: Dif | undefined) {
+  const m: Record<Dif, { n: number; c: string; bg: string; border: string; label: string }> = {
+    facil:   { n: 1, c: '#2E6E6E', bg: 'rgba(62,142,142,0.10)',  border: 'rgba(62,142,142,0.32)', label: 'Fácil' },
+    media:   { n: 2, c: '#A87A2C', bg: 'rgba(194,147,58,0.12)',  border: 'rgba(194,147,58,0.34)', label: 'Media' },
+    dificil: { n: 3, c: '#B0522E', bg: 'rgba(176,82,46,0.10)',   border: 'rgba(176,82,46,0.34)', label: 'Difícil' },
+  }
+  return m[d || 'media']
+}
+/** Tres puntos ascendentes (distintos de las barras de prioridad) para codificar dificultad. */
+function DifDots({ d, size = 12 }: { d: Dif | undefined; size?: number }) {
+  const ds = difStyle(d)
+  return (
+    <svg width={size * 1.6} height={size} viewBox="0 0 22 12" style={{ display: 'block' }}>
+      {[0, 1, 2].map(i => <circle key={i} cx={3 + i * 8} cy={6} r={2.6} fill={i < ds.n ? ds.c : 'rgba(20,35,61,0.16)'} />)}
+    </svg>
+  )
+}
 function ProgressRing({ pct, done }: { pct: number; done: boolean }) {
   const size = 42, sw = 4, r = (size - sw) / 2, c = 2 * Math.PI * r
   const off = c * (1 - Math.max(0, Math.min(100, pct)) / 100)
@@ -827,6 +846,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[i].priority = p
     patchEpic(e.id, { tasks }); setPrioMenu(null); setRowMenu(null)
   }
+  // Fija (o quita, si repites la misma) la dificultad de una tarea
+  const setDifficulty = (e: Epica, i: number, d: Dif) => {
+    const tasks = clone(e.tasks)
+    if (tasks[i].difficulty === d) delete tasks[i].difficulty; else tasks[i].difficulty = d
+    patchEpic(e.id, { tasks })
+  }
   const setPriorityVal = (e: Epica, i: number, v: string) => {
     const tasks = clone(e.tasks); if (v) tasks[i].priority = v as Prio; else delete tasks[i].priority
     patchEpic(e.id, { tasks })
@@ -1265,8 +1290,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
     else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
     if (!t.t) { closeTaskEdit(); return }
-    // Prioridad y día del plan editados desde el modal
+    // Prioridad, dificultad y día del plan editados desde el modal
     if (taskDraft.priority) t.priority = taskDraft.priority; else delete t.priority
+    if (taskDraft.difficulty) t.difficulty = taskDraft.difficulty; else delete t.difficulty
     const newPlan = (taskDraft.plan || '').trim()
     if (newPlan) {
       if (orig.plan !== newPlan || t.planOrder == null) t.planOrder = maxPlanOrderFor(newPlan) + 1000  // al final de ese día
@@ -1730,6 +1756,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
             </button>
             <span style={{ padding: '2px 8px', borderRadius: 99, font: '700 10.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}` }}>{t.due ? fmtDue(t.due) : 'sin fecha'}</span>
+            {t.difficulty && (() => { const ds = difStyle(t.difficulty); return (
+              <span title={`Dificultad: ${ds.label}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}` }}><DifDots d={t.difficulty} size={10} />{ds.label}</span>
+            )})()}
             {t.plan && t.plan < today && (
               <span title={`Se planeó para el ${fmtDue(t.plan)} y sigue pendiente`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, color: '#B0522E', background: 'rgba(176,82,46,0.10)', border: '1px solid rgba(176,82,46,0.4)', borderRadius: 99, padding: '1px 8px' }}>⏳ de días anteriores</span>
             )}
@@ -1937,6 +1966,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
                           {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 6px' }}>{fmtDue(t.due)}</span>}
                           {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 9.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻</span>}
+                          {t.difficulty && <span title={`Dificultad: ${difStyle(t.difficulty).label}`} style={{ display: 'inline-flex', alignItems: 'center' }}><DifDots d={t.difficulty} size={9} /></span>}
                           {typeof t.progress === 'number' && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>}
                         </div>
                       </div>
@@ -2415,6 +2445,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {t.due && <span style={{ font: '700 10px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 7px' }}>{fmtDue(t.due)}</span>}
                         {t.plan && <span title={`Planeada para ${fmtDue(t.plan)}`} style={{ font: '700 10px var(--font-ui)', color: '#2E5A9E', background: 'rgba(46,90,158,0.08)', border: '1px solid rgba(46,90,158,0.28)', borderRadius: 99, padding: '1px 7px' }}>◷ {fmtDue(t.plan)}</span>}
                         {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 10px var(--font-ui)', color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 7px' }}>↻ {repeatLabel(t.repeat)}</span>}
+                        {t.difficulty && <span title={`Dificultad: ${difStyle(t.difficulty).label}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: '700 10px var(--font-ui)', color: difStyle(t.difficulty).c, background: difStyle(t.difficulty).bg, border: `1px solid ${difStyle(t.difficulty).border}`, borderRadius: 99, padding: '1px 7px' }}><DifDots d={t.difficulty} size={9} />{difStyle(t.difficulty).label}</span>}
                         {subs.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: subs.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {subs.filter(s => s.done).length}/{subs.length}</span>}
                       </div>
 
@@ -3279,6 +3310,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 </div>
 
+                {/* Dificultad (editable) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Dificultad</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(['facil', 'media', 'dificil'] as Dif[]).map(dd => { const on = t.difficulty === dd; const dsy = difStyle(dd); return <button key={dd} onClick={() => setDifficulty(ep, i, dd)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '8px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${dsy.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? dsy.bg : '#fff' }}><DifDots d={dd} /><span style={{ font: '700 10px var(--font-ui)', color: on ? dsy.c : 'rgba(20,35,61,0.5)' }}>{dsy.label}</span></button> })}
+                  </div>
+                </div>
+
                 {/* Avance (editable) */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span style={eb}>Avance</span><span style={{ fontSize: 12, fontWeight: 800, color: '#10233F' }}>{t.progress ?? 0}%</span></div>
@@ -3532,6 +3571,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const on = taskDraft.priority === p
                     const suggested = !taskDraft.priority && prioFromDue(taskDraft.due) === p
                     return <button key={p} onClick={() => setTaskDraft(d => ({ ...d, priority: p }))} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '9px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${ps.c}` : suggested ? `1.5px dashed ${ps.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.08)' : '#fff' }}><PrioBars p={p} /><span style={{ font: '700 10px var(--font-ui)', color: on || suggested ? ps.c : 'rgba(20,35,61,0.5)' }}>{ps.label}</span></button>
+                  })}
+                </div>
+
+                <label style={lbl}>Dificultad</label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['facil', 'media', 'dificil'] as Dif[]).map(dd => {
+                    const dsy = difStyle(dd); const on = taskDraft.difficulty === dd
+                    return <button key={dd} onClick={() => setTaskDraft(d => ({ ...d, difficulty: d.difficulty === dd ? undefined : dd }))} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '9px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${dsy.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? dsy.bg : '#fff' }}><DifDots d={dd} /><span style={{ font: '700 10px var(--font-ui)', color: on ? dsy.c : 'rgba(20,35,61,0.5)' }}>{dsy.label}</span></button>
                   })}
                 </div>
 
