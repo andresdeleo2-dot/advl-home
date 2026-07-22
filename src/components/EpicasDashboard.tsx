@@ -1837,14 +1837,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  Cada columna es un día; las tarjetas se arrastran entre días para reprogramar. */
   const renderPlanWeek = () => {
     const monday = mondayISO(viewDate)
+    const sunday = addDays(monday, 6)
     const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i))
+    const inWeek = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= monday && t.plan <= sunday
+    // Épicas con tareas ESTA semana: son las únicas que aparecen en el filtro por épica.
+    const weekEpics = activeEpics.filter(e => (e.tasks || []).some(inWeek))
+    // Si el filtro apunta a una épica que no tiene tareas esta semana, se comporta como
+    // "todas" (sin resetear el estado: al volver a una semana con esa épica, se reactiva).
+    const effWeekEpica = weekEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
     // Tareas planeadas de la semana, agrupadas por día. Las de días pasados sin terminar
     // se muestran en su día (quedaron ahí), para no perderlas de vista.
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
       if (!t.plan || !byDay.has(t.plan) || t.status === ARCHIVED) return
-      if (weekEpica !== 'todas' && e.id !== weekEpica) return
+      if (effWeekEpica !== 'todas' && e.id !== effWeekEpica) return
       if (weekDif !== 'todas' && (t.difficulty || '') !== weekDif) return
       byDay.get(t.plan)!.push({ e, t, i })
     }))
@@ -1882,9 +1889,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         })}
         <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
         {/* Filtro por épica */}
-        <select value={weekEpica} onChange={e => setWeekEpica(e.target.value)} title="Filtrar por épica" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
-          <option value="todas">Todas las épicas</option>
-          {activeEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
+        {/* Sólo lista las épicas con tareas ESTA semana (o "sin épicas" si no hay ninguna) */}
+        <select value={effWeekEpica} onChange={e => setWeekEpica(e.target.value)} disabled={weekEpics.length === 0} title="Filtrar por épica" style={{ cursor: weekEpics.length === 0 ? 'default' : 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: effWeekEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', opacity: weekEpics.length === 0 ? 0.55 : 1 }}>
+          <option value="todas">{weekEpics.length === 0 ? 'Sin épicas esta semana' : 'Todas las épicas'}</option>
+          {weekEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
         </select>
         {/* Filtro por dificultad */}
         <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
@@ -1893,7 +1901,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <option value="media">Media</option>
           <option value="dificil">Difícil</option>
         </select>
-        {(planFilter !== 'todas' || weekEpica !== 'todas' || weekDif !== 'todas') && (
+        {(planFilter !== 'todas' || effWeekEpica !== 'todas' || weekDif !== 'todas') && (
           <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>
         )}
       </div>
@@ -1903,7 +1911,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
       // nombra las rutinas; cada columna trae sus celdas de ese día arriba.
       const routines = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
-        .filter(x => weekEpica === 'todas' || x.e.id === weekEpica)   // respetan el filtro por épica
+        .filter(x => effWeekEpica === 'todas' || x.e.id === effWeekEpica)   // respetan el filtro por épica
       const showRoutines = routines.length > 0 && routinesOpen
       const HEADER_H = 46, ROW_H = 30, railW = 132
       return (
