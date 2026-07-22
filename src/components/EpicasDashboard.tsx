@@ -2674,7 +2674,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => setBacklogEdit(v => !v)} aria-label="Editar la tabla como hoja de cálculo" title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '6px 12px', fontSize: 11.5, fontWeight: 700, border: backlogEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(backlogEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{backlogEdit ? '✓ Listo' : '✎ Editar tabla'}</button>
               )}
               <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{isBoard ? 'Arrastra una tarjeta a otra columna para cambiar su estado · clic para abrirla' : backlogEdit ? 'Edita cualquier celda · las fechas abren calendario' : 'Clic en encabezado = ordenar · en fila = ver/editar · casilla = seleccionar'}</span>
+              <span className="ep-hide-sm" style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{isBoard ? 'Arrastra una tarjeta a otra columna para cambiar su estado · clic para abrirla' : backlogEdit ? 'Edita cualquier celda · las fechas abren calendario' : 'Clic en encabezado = ordenar · en fila = ver/editar · casilla = seleccionar'}</span>
+              {/* Crear tarea desde el backlog: usa la épica del filtro si hay una */}
+              <button onClick={() => { const target = defaultEpicId(); if (target) openTaskEdit(target, null); else showToast('Crea una épica primero', true) }}
+                title={backlogFEpica !== 'todas' ? `Nueva tarea en ${activeEpics.find(e => e.id === backlogFEpica)?.name || 'esta épica'}` : 'Nueva tarea'}
+                style={{ ...goldBtn, padding: '7px 13px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
 
             {someSel && (
