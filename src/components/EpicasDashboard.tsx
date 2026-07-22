@@ -367,6 +367,7 @@ type Prefs = {
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
   planMode: 'dia' | 'semana'
+  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
@@ -377,7 +378,7 @@ type Prefs = {
 const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
-  planSort: 'plan', planFilter: 'todas', planMode: 'dia', epicSort: 'grupo', epicFilter: 'todas',
+  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, epicSort: 'grupo', epicFilter: 'todas',
   backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
@@ -448,6 +449,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
   const [planMode, setPlanMode] = useState<'dia' | 'semana'>('dia') // enfoque diario vs semanal
+  const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
+  const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
+  const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -515,6 +519,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
+    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
@@ -528,11 +533,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
+      weekEpica, weekDif, routinesOpen,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
+      weekEpica, weekDif, routinesOpen,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
 
@@ -850,6 +857,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const setDifficulty = (e: Epica, i: number, d: Dif) => {
     const tasks = clone(e.tasks)
     if (tasks[i].difficulty === d) delete tasks[i].difficulty; else tasks[i].difficulty = d
+    patchEpic(e.id, { tasks })
+  }
+  // Cicla la dificultad sin abrir el editor: (sin) → fácil → media → difícil → (sin)
+  const cycleDifficulty = (e: Epica, i: number) => {
+    const order: (Dif | undefined)[] = [undefined, 'facil', 'media', 'dificil']
+    const cur = e.tasks[i]?.difficulty
+    const next = order[(order.indexOf(cur) + 1 + order.length) % order.length]
+    const tasks = clone(e.tasks)
+    if (next) tasks[i].difficulty = next; else delete tasks[i].difficulty
     patchEpic(e.id, { tasks })
   }
   const setPriorityVal = (e: Epica, i: number, v: string) => {
@@ -1827,7 +1843,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
-      if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED) byDay.get(t.plan)!.push({ e, t, i })
+      if (!t.plan || !byDay.has(t.plan) || t.status === ARCHIVED) return
+      if (weekEpica !== 'todas' && e.id !== weekEpica) return
+      if (weekDif !== 'todas' && (t.difficulty || '') !== weekDif) return
+      byDay.get(t.plan)!.push({ e, t, i })
     }))
     // Filtro y orden compartidos con la vista de día (planFilter / planSort)
     const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
@@ -1861,7 +1880,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const on = planFilter === k
           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
         })}
-        {planFilter !== 'todas' && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>· filtro aplicado a los 7 días</span>}
+        <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
+        {/* Filtro por épica */}
+        <select value={weekEpica} onChange={e => setWeekEpica(e.target.value)} title="Filtrar por épica" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="todas">Todas las épicas</option>
+          {activeEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
+        </select>
+        {/* Filtro por dificultad */}
+        <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="todas">Toda dificultad</option>
+          <option value="facil">Fácil</option>
+          <option value="media">Media</option>
+          <option value="dificil">Difícil</option>
+        </select>
+        {(planFilter !== 'todas' || weekEpica !== 'todas' || weekDif !== 'todas') && (
+          <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>
+        )}
       </div>
 
       {(() => {
@@ -1869,17 +1903,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
       // nombra las rutinas; cada columna trae sus celdas de ese día arriba.
       const routines = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
+        .filter(x => weekEpica === 'todas' || x.e.id === weekEpica)   // respetan el filtro por épica
+      const showRoutines = routines.length > 0 && routinesOpen
       const HEADER_H = 46, ROW_H = 30, railW = 132
       return (
       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {/* RIEL: nombres de las rutinas, alineados con sus celdas en cada columna */}
         {routines.length > 0 && (
           <div style={{ flex: `0 0 ${railW}px`, width: railW, boxSizing: 'border-box', border: '1px solid transparent' }}>
-            <div style={{ height: HEADER_H, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid transparent' }}>
+            <button onClick={() => setRoutinesOpen(o => !o)} aria-expanded={routinesOpen} title={routinesOpen ? 'Ocultar rutinas' : 'Mostrar rutinas'}
+              style={{ height: HEADER_H, width: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid transparent', border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }}>
               <span style={{ height: 6, width: 6, borderRadius: 99, background: '#A87A2C' }} />
               <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Rutinas</span>
-            </div>
-            {routines.map(({ e, r, ri }) => {
+              <span style={{ fontSize: 9.5, fontWeight: 800, color: 'rgba(20,35,61,0.4)' }}>{routines.length}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ marginLeft: 'auto', color: 'rgba(20,35,61,0.45)', transform: routinesOpen ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            {routinesOpen && routines.map(({ e, r, ri }) => {
               const wk = getRoutineWeek(r, monday); const n = wk.filter(Boolean).length
               const nc = n >= 5 ? '#2E6E6E' : n >= 3 ? '#A87A2C' : 'rgba(20,35,61,0.42)'
               return (
@@ -1919,7 +1958,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
 
               {/* Rutinas de este día — una celda por rutina, alineada con el riel de nombres */}
-              {routines.length > 0 && (
+              {showRoutines && (
                 <div style={{ padding: '0 8px', background: isTd ? 'rgba(194,147,58,0.03)' : 'transparent' }}>
                   {routines.map(({ e, r, ri }) => {
                     const on = getRoutineWeek(r, monday)[wd]; const future = d > today
@@ -1966,7 +2005,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
                           {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 6px' }}>{fmtDue(t.due)}</span>}
                           {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 9.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻</span>}
-                          {t.difficulty && <span title={`Dificultad: ${difStyle(t.difficulty).label}`} style={{ display: 'inline-flex', alignItems: 'center' }}><DifDots d={t.difficulty} size={9} /></span>}
+                          {/* Dificultad editable en la tarjeta: clic cicla sin fácil → media → difícil */}
+                          <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} onPointerDown={ev => ev.stopPropagation()}
+                            title={t.difficulty ? `Dificultad: ${difStyle(t.difficulty).label} · clic para cambiar` : 'Poner dificultad'}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer', border: 'none', borderRadius: 99, padding: t.difficulty ? '1px 6px' : '1px 3px', background: t.difficulty ? difStyle(t.difficulty).bg : 'transparent', color: t.difficulty ? difStyle(t.difficulty).c : 'rgba(20,35,61,0.4)' }}>
+                            <DifDots d={t.difficulty} size={9} />{t.difficulty && <span style={{ font: '700 9.5px var(--font-ui)' }}>{difStyle(t.difficulty).label}</span>}
+                          </button>
                           {typeof t.progress === 'number' && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>}
                         </div>
                       </div>
@@ -2445,7 +2489,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {t.due && <span style={{ font: '700 10px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 7px' }}>{fmtDue(t.due)}</span>}
                         {t.plan && <span title={`Planeada para ${fmtDue(t.plan)}`} style={{ font: '700 10px var(--font-ui)', color: '#2E5A9E', background: 'rgba(46,90,158,0.08)', border: '1px solid rgba(46,90,158,0.28)', borderRadius: 99, padding: '1px 7px' }}>◷ {fmtDue(t.plan)}</span>}
                         {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 10px var(--font-ui)', color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 7px' }}>↻ {repeatLabel(t.repeat)}</span>}
-                        {t.difficulty && <span title={`Dificultad: ${difStyle(t.difficulty).label}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: '700 10px var(--font-ui)', color: difStyle(t.difficulty).c, background: difStyle(t.difficulty).bg, border: `1px solid ${difStyle(t.difficulty).border}`, borderRadius: 99, padding: '1px 7px' }}><DifDots d={t.difficulty} size={9} />{difStyle(t.difficulty).label}</span>}
+                        <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} onPointerDown={ev => ev.stopPropagation()}
+                          title={t.difficulty ? `Dificultad: ${difStyle(t.difficulty).label} · clic para cambiar` : 'Poner dificultad'}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '700 10px var(--font-ui)', color: t.difficulty ? difStyle(t.difficulty).c : 'rgba(20,35,61,0.4)', background: t.difficulty ? difStyle(t.difficulty).bg : 'transparent', border: t.difficulty ? `1px solid ${difStyle(t.difficulty).border}` : '1px solid transparent', borderRadius: 99, padding: '1px 7px' }}><DifDots d={t.difficulty} size={9} />{t.difficulty && difStyle(t.difficulty).label}</button>
                         {subs.length > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: subs.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {subs.filter(s => s.done).length}/{subs.length}</span>}
                       </div>
 
