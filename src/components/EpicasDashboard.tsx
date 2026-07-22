@@ -452,6 +452,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
+  const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -632,6 +633,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // La selección son índices de tareas planeadas para el día en vista: al cambiar de día
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
+
+  // El dropdown de enlaces de la épica arranca cerrado cada vez que abres una tarea
+  useEffect(() => { setTaskLinksOpen(false) }, [taskView])
 
   // centra el chip del día seleccionado en la tira
   useEffect(() => {
@@ -3351,6 +3355,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                   <button aria-label="Cerrar detalle de tarea" onClick={() => setTaskView(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
+
+                {/* ENLACES DE LA ÉPICA — dropdown plegado por defecto con las conexiones de la épica */}
+                {(() => {
+                  const links = (ep.links || []).filter(l => l.url && l.url !== '#')
+                  if (links.length === 0) return null
+                  return (
+                    <div style={{ marginBottom: 16, borderRadius: 12, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden' }}>
+                      <button onClick={() => setTaskLinksOpen(o => !o)} aria-expanded={taskLinksOpen}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: '#FBFAF6', padding: '10px 12px' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 99, background: ep.color, flexShrink: 0 }} />
+                        <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.6)' }}>Enlaces de {ep.name}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{links.length}</span>
+                        <span style={{ flex: 1 }} />
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: taskLinksOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                      </button>
+                      {taskLinksOpen && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                          {links.map((l, li) => {
+                            const c = typeColor(l.type)
+                            return (
+                              <a key={li} href={l.url} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
+                                <span style={{ width: 7, height: 7, borderRadius: 99, background: c, flexShrink: 0 }} />
+                                {l.l}
+                              </a>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {/* Estado (editable) */}
                 <div style={{ marginBottom: 16 }}>
