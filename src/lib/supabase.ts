@@ -36,6 +36,7 @@ export type EpicaSubtask = { t: string; done: boolean }
  *  La tarea NO se duplica: al completarla se reprograma sola a la siguiente fecha. */
 export type EpicaRepeat = { every: number; unit: 'dia' | 'semana' | 'mes' }
 export type EpicaTask = {
+  id?: string                          // identidad estable (los índices se recorren al borrar/mover)
   t: string; status: string; due: string; note: string
   links?: EpicaTaskLink[]; doneAt?: string
   plan?: string                        // 'YYYY-MM-DD' del día para el que se planeó (vista "Plan de hoy")

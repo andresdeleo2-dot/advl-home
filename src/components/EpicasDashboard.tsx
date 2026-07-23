@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
+import { sanitizeHtml } from '@/lib/sanitize'
 import Link from 'next/link'
 import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
 import HeaderStats from './HeaderStats'
@@ -124,6 +125,12 @@ function progressDeltas(log: EpicaProgressEntry[]): Record<string, number> {
   return out
 }
 
+/** Id estable para una tarea. Las tareas se referencian por id (no por índice),
+ *  para que borrar o mover una no invalide las referencias abiertas. */
+function uid(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+  return c?.randomUUID ? c.randomUUID() : 't' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
 /** Rellena arrays faltantes por si algún registro viejo trae null. */
 function normalize(e: Epica): Epica {
   return {
@@ -137,7 +144,7 @@ function normalize(e: Epica): Epica {
       const weeks = (r.weeks && typeof r.weeks === 'object') ? r.weeks : (days.some(Boolean) ? { [mondayISO(todayISO())]: days } : {})
       return { t: r.t, days, weeks }
     }),
-    tasks: e.tasks || [],
+    tasks: (e.tasks || []).map(t => (t.id ? t : { ...t, id: uid() })),
     links: e.links || [],
   }
 }
@@ -421,11 +428,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [showDone, setShowDone] = useState(false)
   const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
   const [catFilter, setCatFilter] = useState<string>('todas')
-  const [taskEdit, setTaskEdit] = useState<{ epicId: string; index: number | null } | null>(null)
+  const [taskEdit, setTaskEdit] = useState<{ epicId: string; tid: string | null } | null>(null)
   // Épica DESTINO del editor. Se guarda aparte de taskEdit.epicId (que es la de origen)
   // porque el índice de la tarea sólo tiene sentido dentro del array de su épica actual.
   const [taskEditTarget, setTaskEditTarget] = useState<string>('')
-  const [taskView, setTaskView] = useState<{ eId: string; i: number } | null>(null) // vista de tarea (solo lectura)
+  const [taskView, setTaskView] = useState<{ eId: string; tid: string } | null>(null) // vista de tarea (solo lectura)
   const [taskDraft, setTaskDraft] = useState<EpicaTask>({ t: '', status: 'Por hacer', due: '', note: '', links: [] })
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -493,14 +500,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [viewDate, setViewDate] = useState<string>(todayISO())               // día del plan en vista
   const [calOpen, setCalOpen] = useState(false)                              // popover de mes (masthead)
   const [calMonth, setCalMonth] = useState<string>(() => todayISO().slice(0, 7)) // 'YYYY-MM'
-  const [movePick, setMovePick] = useState<{ eId: string; i: number } | null>(null) // "Mover a otro día…"
+  const [movePick, setMovePick] = useState<{ eId: string; tid: string } | null>(null) // "Mover a otro día…"
   const [dragOverDay, setDragOverDay] = useState<string | null>(null)        // chip de la tira bajo el drag
   const dayStripRef = useRef<HTMLDivElement>(null)
   const calRef = useRef<HTMLDivElement>(null)
   const dragKeyRef = useRef<string | null>(null)
   const planListRef = useRef<HTMLDivElement>(null)
   const epicsRef = useRef<Epica[]>(epics)
-  const removeUndoRef = useRef<{ eId: string; i: number; tText: string; snap: Partial<EpicaTask> } | null>(null)
+  const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
   useEffect(() => { epicsRef.current = epics }, [epics])
@@ -527,13 +534,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // Persiste UNA vez la migración de rutinas legadas (days → weeks[semana actual]),
         // para que normalize no re-atribuya el progreso a la semana equivocada en futuras cargas.
         raw.forEach(e => {
-          const needs = (e.routines || []).some(r => (!r.weeks || typeof r.weeks !== 'object') && Array.isArray(r.days) && r.days.some(Boolean))
-          if (needs) {
-            const ep = normed.find(n => n.id === e.id)
-            if (ep) fetch(`/api/epicas/${e.id}`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines: ep.routines }),
-            }).catch(() => {})
-          }
+          const ep = normed.find(n => n.id === e.id)
+          if (!ep) return
+          const body: Partial<Epica> = {}
+          if ((e.routines || []).some(r => (!r.weeks || typeof r.weeks !== 'object') && Array.isArray(r.days) && r.days.some(Boolean))) body.routines = ep.routines
+          // Persiste los ids de tarea recién generados, para que sean estables entre cargas
+          if ((e.tasks || []).some(t => !t.id)) body.tasks = ep.tasks
+          if (Object.keys(body).length) fetch(`/api/epicas/${e.id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+          }).catch(() => {})
         })
         setLoadError(null)
       }
@@ -768,7 +777,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Plan de hoy: derivados ─────────────────────────────── */
   const isToday = viewDate === today
-  const planKey = (eId: string, i: number) => `${eId}:${i}`
+  const planKey = (eId: string, t: EpicaTask) => `${eId}:${t.id}`
+  /** Resuelve una referencia estable (épica + id de tarea) al índice actual.
+   *  Devuelve null si la tarea ya no existe: así una referencia abierta (modal,
+   *  selección) simplemente deja de aplicar en vez de apuntar a otra tarea. */
+  const findTask = (eId: string, tid: string) => {
+    const e = epics.find(x => x.id === eId)
+    if (!e) return null
+    const i = (e.tasks || []).findIndex(t => t.id === tid)
+    return i < 0 ? null : { e, t: e.tasks[i], i }
+  }
+  /** Igual, pero contra el ref (para handlers async fuera del render). */
+  const findTaskRef = (eId: string, tid: string) => {
+    const e = epicsRef.current.find(x => x.id === eId)
+    if (!e) return null
+    const i = (e.tasks || []).findIndex(t => t.id === tid)
+    return i < 0 ? null : { e, t: e.tasks[i], i }
+  }
+  /** Parsea una clave "epicaId:taskId" a índice actual. */
+  const keyToTask = (key: string) => {
+    const c = key.lastIndexOf(':')
+    return findTaskRef(key.slice(0, c), key.slice(c + 1))
+  }
   const planItems = useMemo(() => {
     const arr: { e: Epica; t: EpicaTask; i: number }[] = []
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan === viewDate && t.status !== ARCHIVED) arr.push({ e, t, i }) }))
@@ -871,16 +901,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(e.id, { tasks })
     setRowMenu(null)
     if (withToast) {
-      removeUndoRef.current = { eId: e.id, i, tText: e.tasks[i].t, snap }
+      removeUndoRef.current = { eId: e.id, tid: e.tasks[i].id!, snap }
       showToast('Quitada del plan', false, {
         label: 'Deshacer', fn: () => {
           const u = removeUndoRef.current; if (!u) return
-          const ep = epicsRef.current.find(x => x.id === u.eId); if (!ep) return
-          const tk = clone(ep.tasks)
-          // Verifica identidad por si el array cambió de orden durante la ventana del toast
-          if (!tk[u.i] || tk[u.i].t !== u.tText) return
-          tk[u.i].plan = u.snap.plan; tk[u.i].priority = u.snap.priority; tk[u.i].planOrder = u.snap.planOrder
-          applyPlanStatus(tk[u.i], u.snap.plan || '')
+          const f = findTaskRef(u.eId, u.tid); if (!f) return   // la tarea ya no existe
+          const tk = clone(f.e.tasks)
+          tk[f.i].plan = u.snap.plan; tk[f.i].priority = u.snap.priority; tk[f.i].planOrder = u.snap.planOrder
+          applyPlanStatus(tk[f.i], u.snap.plan || '')
           patchEpic(u.eId, { tasks: tk })
         },
       })
@@ -966,7 +994,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   const movePlan = (key: string, dir: 'up' | 'down') => {
     const list = planPend
-    const idx = list.findIndex(x => planKey(x.e.id, x.i) === key)
+    const idx = list.findIndex(x => planKey(x.e.id, x.t) === key)
     if (idx < 0) return
     const swap = dir === 'up' ? idx - 1 : idx + 1
     if (swap < 0 || swap >= list.length) return
@@ -977,7 +1005,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   const commitReorder = (key: string, destIndex: number) => {
     const list = planPend
-    const from = list.findIndex(x => planKey(x.e.id, x.i) === key)
+    const from = list.findIndex(x => planKey(x.e.id, x.t) === key)
     if (from < 0) return
     const base = list.map(x => ({ e: x.e, i: x.i }))
     const without = base.filter((_, idx) => idx !== from)
@@ -1018,9 +1046,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planSelGroup = () => {
     const m = new Map<string, number[]>()
     planSel.forEach(key => {
-      const idx = key.lastIndexOf(':')
-      const eId = key.slice(0, idx); const i = Number(key.slice(idx + 1))
-      if (!m.has(eId)) m.set(eId, []); m.get(eId)!.push(i)
+      const f = keyToTask(key); if (!f) return    // la tarea ya no existe: se ignora
+      if (!m.has(f.e.id)) m.set(f.e.id, []); m.get(f.e.id)!.push(f.i)
     })
     return m
   }
@@ -1087,7 +1114,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const col = boardOverCol
     setBoardDrag(null); setBoardOverCol(null)
     if (!d) return
-    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }   // fue un clic
+    if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }   // fue un clic
     if (!col || col === x.t.status) return
     // Soltar en "Terminada" pasa por el mismo camino que el check del plan,
     // para que una tarea recurrente se reprograme en vez de terminarse.
@@ -1119,7 +1146,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const day = weekOverDay
     setWeekDrag(null); setWeekOverDay(null)
     if (!d) return
-    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }   // fue un clic
+    if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }   // fue un clic
     if (day && day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
   }
   const onWeekCancel = () => { weekDragRef.current = null; setWeekDrag(null); setWeekOverDay(null) }
@@ -1148,7 +1175,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const day = sprintOverDay, mon = sprintOverCol
     setSprintDrag(null); setSprintOverCol(null); setSprintOverDay(null)
     if (!d) return
-    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }   // fue un clic
+    if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }   // fue un clic
     if (!x.t.plan) return
     // Soltaste sobre un día → ese día exacto; sobre la columna → mismo día de esa semana
     let target = day
@@ -1172,7 +1199,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const d = calDragRef.current; calDragRef.current = null
     const day = calOverDay; setCalDrag(null); setCalOverDay(null)
     if (!d) return
-    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }
+    if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }
     if (day && day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
   }
   const onCalCancel = () => { calDragRef.current = null; setCalDrag(null); setCalOverDay(null) }
@@ -1200,7 +1227,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const d = tlDragRef.current; const off = tlOffset
     tlDragRef.current = null; setTlDragKey(null); setTlOffset(0)
     if (!d) return
-    if (!d.moved) { setTaskView({ eId: d.e.id, i: d.i }); return }
+    if (!d.moved) { setTaskView({ eId: d.e.id, tid: d.e.tasks[d.i]?.id! }); return }
     shiftTaskDates(d.e, d.i, Math.round(off / TL_DAY_W))
   }
   const onTlCancel = () => { tlDragRef.current = null; setTlDragKey(null); setTlOffset(0) }
@@ -1270,24 +1297,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[ti].t = t
     patchEpic(e.id, { tasks })
   }
-  /** Las tareas se referencian por índice (`epicaId:i`). Cualquier splice reindexa el array,
-   *  así que toda referencia abierta a esa épica deja de ser confiable: se cierra. */
-  const invalidateTaskRefs = (eId: string) => {
-    const touches = (k: string | null) => !!k && k.slice(0, k.lastIndexOf(':')) === eId
-    setTaskView(v => (v && v.eId === eId ? null : v))
-    setTaskEdit(v => (v && v.epicId === eId ? null : v))
-    setMovePick(v => (v && v.eId === eId ? null : v))
-    setRoutineStat(v => (v && v.eId === eId ? null : v))
-    setRowMenu(k => (touches(k) ? null : k))
-    setPrioMenu(k => (touches(k) ? null : k))
-    setEditCell(c => (touches(c?.key ?? null) ? null : c))
-    setPlanSel(prev => {
-      if (![...prev].some(touches)) return prev
-      return new Set([...prev].filter(k => !touches(k)))
-    })
-    removeUndoRef.current = null
-  }
-
   // Mueve una tarea a otra épica (saca de la actual, agrega a la destino). Limpia la selección (los índices cambian).
   const moveTaskToEpica = (fromE: Epica, i: number, toEId: string) => {
     if (fromE.id === toEId) return
@@ -1298,7 +1307,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(fromE.id, { tasks: fromTasks })
     patchEpic(toE.id, { tasks: toTasks })
     setBacklogSel(new Set())
-    invalidateTaskRefs(fromE.id)
   }
   /** Cambia el avance de una tarea.
    *  `defer` (arrastre del slider): pinta al instante y persiste UNA sola vez al soltar.
@@ -1408,15 +1416,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Popup de edición por tarea ─────────────────────────── */
   /** `seed` prellena el borrador de una tarea nueva (p. ej. el día del plan
    *  desde el que se creó), para no tener que elegirlo a mano. */
-  const openTaskEdit = (epicId: string, index: number | null, seed?: Partial<EpicaTask>) => {
-    const e = epics.find(x => x.id === epicId)
-    if (index != null && e) {
-      const t = clone(e.tasks[index])
-      setTaskDraft({ ...t, links: t.links || [] })
-    } else {
-      setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
-    }
-    setTaskEdit({ epicId, index })
+  const openTaskEdit = (epicId: string, tid: string | null, seed?: Partial<EpicaTask>) => {
+    const found = tid ? findTask(epicId, tid) : null
+    if (found) setTaskDraft({ ...clone(found.t), links: found.t.links || [] })
+    else setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
+    setTaskEdit({ epicId, tid })
     setTaskEditTarget(epicId)
   }
   /** Épica destino por defecto al crear una tarea: si estás filtrando por una épica
@@ -1432,10 +1436,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const saveTask = () => {
     if (!taskEdit) return
     const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
+    // Índice actual resuelto por id: nunca apunta a otra tarea aunque el array haya cambiado
+    const cur = taskEdit.tid ? findTask(taskEdit.epicId, taskEdit.tid) : null
+    const curIdx = cur?.i ?? null
     const links = (taskDraft.links || []).map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.label || l.url)
     // Preserva campos del plan (plan/priority/planOrder/planPrev) al reescribir la tarea
-    const orig: Partial<EpicaTask> = (taskEdit.index != null ? e.tasks[taskEdit.index] : {}) || {}
-    const t: EpicaTask = { ...orig, t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: taskDraft.note || '', links }
+    const orig: Partial<EpicaTask> = cur?.t || {}
+    const t: EpicaTask = { ...orig, t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: sanitizeHtml(taskDraft.note), links }
     if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
     else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
     if (!t.t) { closeTaskEdit(); return }
@@ -1459,26 +1466,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       t.repeat = { every: Math.max(1, Math.round(taskDraft.repeat.every || 1)), unit: taskDraft.repeat.unit }
       if (taskDraft.repeatUntil) t.repeatUntil = taskDraft.repeatUntil; else delete t.repeatUntil
     } else { delete t.repeat; delete t.repeatUntil }
-    if (taskEdit.index == null && !t.createdAt) t.createdAt = todayISO()   // registra la creación
+    if (curIdx == null) { t.id = t.id || uid(); if (!t.createdAt) t.createdAt = todayISO() }   // alta
 
     // Épica destino: puede diferir de la de origen si la cambiaste en el editor.
     const target = epics.find(x => x.id === taskEditTarget) || e
-    const moved = taskEdit.index != null && target.id !== e.id
+    const moved = curIdx != null && target.id !== e.id
 
-    if (taskEdit.index == null) {
+    if (curIdx == null) {
       const tasks = clone(target.tasks); tasks.push(t)
       patchEpic(target.id, { tasks })
     } else if (moved) {
       // Cambiar de épica es sacar de un array y meter en otro: dos patches.
-      const fromTasks = clone(e.tasks).filter((_, idx) => idx !== taskEdit.index)
+      const fromTasks = clone(e.tasks).filter((_, idx) => idx !== curIdx)
       const toTasks = clone(target.tasks); toTasks.push(t)
       patchEpic(e.id, { tasks: fromTasks })
       patchEpic(target.id, { tasks: toTasks })
-      invalidateTaskRefs(e.id)   // el splice reindexa la épica de origen
       setFeaturedId(target.id)   // para que no "desaparezca" de la vista
     } else {
       const tasks = clone(e.tasks)
-      tasks[taskEdit.index] = t
+      tasks[curIdx] = t
       patchEpic(e.id, { tasks })
     }
     closeTaskEdit()
@@ -1488,28 +1494,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
   }
   const deleteTask = () => {
-    if (!taskEdit || taskEdit.index == null) { closeTaskEdit(); return }
-    const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
-    const idx = taskEdit.index
-    if (!window.confirm(`¿Eliminar "${e.tasks[idx]?.t || 'esta tarea'}"? No se puede deshacer.`)) return
-    const tasks = clone(e.tasks).filter((_, i) => i !== idx)
+    if (!taskEdit?.tid) { closeTaskEdit(); return }
+    const found = findTask(taskEdit.epicId, taskEdit.tid)
+    if (!found) { closeTaskEdit(); return }
+    const { e, t, i: idx } = found
+    if (!window.confirm(`¿Eliminar "${t.t}"? No se puede deshacer.`)) return
+    const snap = clone(e.tasks)
+    const tasks = snap.filter((_, i) => i !== idx)
     patchEpic(e.id, { tasks })
-    // El splice reindexa: cierra todo lo que referencia tareas por índice en esta épica,
-    // o el siguiente clic actuaría sobre la tarea equivocada.
-    invalidateTaskRefs(e.id)
-    // El splice reindexa esta épica: remapea la selección del backlog para no golpear la tarea equivocada
-    setBacklogSel(prev => {
-      if (prev.size === 0) return prev
-      const n = new Set<string>()
-      prev.forEach(k => {
-        const c = k.lastIndexOf(':'); const eId = k.slice(0, c); const i = Number(k.slice(c + 1))
-        if (eId !== e.id) { n.add(k); return }
-        if (i === idx) return
-        n.add(eId + ':' + (i > idx ? i - 1 : i))
-      })
-      return n
-    })
+    // Con ids estables los índices ya no se invalidan: sólo limpiamos la selección
+    // de la tarea borrada y ofrecemos deshacer.
+    const k = planKey(e.id, t)
+    setBacklogSel(prev => { if (!prev.has(k)) return prev; const n = new Set(prev); n.delete(k); return n })
+    setPlanSel(prev => { if (!prev.has(k)) return prev; const n = new Set(prev); n.delete(k); return n })
     closeTaskEdit()
+    showToast('Tarea eliminada', false, { label: 'Deshacer', fn: () => patchEpic(e.id, { tasks: snap }) })
   }
 
   /* ─── Modal ──────────────────────────────────────────────── */
@@ -1539,7 +1538,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => {
       const st = t.status || 'Por hacer'
       // Conserva campos del plan (plan/priority/planOrder/planPrev) que no toca el editor
-      const out: EpicaTask = { ...t, t: t.t, status: st, due: t.due || '', note: t.note || '', links: t.links || [] }
+      const out: EpicaTask = { ...t, id: t.id || uid(), t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
       if (st === 'Terminada') out.doneAt = t.doneAt || todayISO()
       else delete out.doneAt   // evita arrastrar una fecha de terminación obsoleta
       return out
@@ -1549,7 +1548,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!d.links.some(l => l.primary) && d.links.length) d.links[0].primary = true
 
     const payload = {
-      name: d.name, color: d.color, description: d.description || null, status: d.status,
+      name: d.name, color: d.color, description: sanitizeHtml(d.description) || null, status: d.status,
       categoria: (d.categoria || '').trim() || null, archived: !!d.archived,
       source_table: d.source_table || null, source_sync: d.source_sync || null, epic_order: d.epic_order,
       kpis: d.kpis, routines: d.routines, tasks: d.tasks, links: d.links,
@@ -1696,7 +1695,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, marginTop: 1, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
           {PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <div {...clickable(() => setTaskView({ eId: featured.id, i: t._i }), `Ver tarea: ${t.t}`)} title="Ver tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
+        <div {...clickable(() => setTaskView({ eId: featured.id, tid: t.id! }), `Ver tarea: ${t.t}`)} title="Ver tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
           {(subs.length > 0 || typeof t.progress === 'number') && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
@@ -1711,7 +1710,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )}
             </div>
           )}
-          {t.note && <div className="ep-note" style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 3, maxHeight: 32, overflow: 'hidden', WebkitMaskImage: 'linear-gradient(180deg,#000 60%,transparent)' }} dangerouslySetInnerHTML={{ __html: t.note }} />}
+          {t.note && <div className="ep-note" style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 3, maxHeight: 32, overflow: 'hidden', WebkitMaskImage: 'linear-gradient(180deg,#000 60%,transparent)' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} />}
           {t.links && t.links.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
               {t.links.map((l, li) => (
@@ -1760,8 +1759,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   )
 
   const renderRowMenu = ({ x, pos, total }: { x: { e: Epica; t: EpicaTask; i: number }; pos: number; total: number }) => {
-    const { e, i } = x
-    const key = planKey(e.id, i)
+    const { e, t, i } = x
+    const key = planKey(e.id, t)
     const mi = (label: string, fn: () => void, disabled = false, danger = false) => (
       <button disabled={disabled} onClick={fn} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 8, cursor: disabled ? 'default' : 'pointer', background: 'transparent', color: disabled ? 'rgba(20,35,61,0.3)' : danger ? '#B0522E' : '#16365F', fontSize: 12.5, fontWeight: 600 }}>{label}</button>
     )
@@ -1774,7 +1773,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </>}
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', padding: '4px 10px 6px' }}>Mover a</div>
         {mi('→  Posponer a mañana', () => { planTaskToDay(e, i, addDays(viewDate, 1), { toast: true }); setRowMenu(null) })}
-        {mi('Mover a otro día…', () => { setRowMenu(null); setCalMonth((e.tasks[i]?.plan || viewDate).slice(0, 7)); setMovePick({ eId: e.id, i }) })}
+        {mi('Mover a otro día…', () => { setRowMenu(null); setCalMonth((e.tasks[i]?.plan || viewDate).slice(0, 7)); setMovePick({ eId: e.id, tid: t.id! }) })}
         <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', padding: '4px 10px 6px' }}>Prioridad</div>
         <div style={{ display: 'flex', gap: 5, padding: '0 8px 4px' }}>
@@ -1876,7 +1875,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   const renderPlanRow = (x: { e: Epica; t: EpicaTask; i: number }, pos: number, noDrag = false) => {
     const { e, t, i } = x
-    const key = planKey(e.id, i)
+    const key = planKey(e.id, t)
     const ps = prioStyle(t.priority)
     const dt = dueTone(t.due, false)
     const dragging = draggingKey === key
@@ -1899,7 +1898,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           {pos === 0 && <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 3 }}>Empieza aquí</div>}
-          <div className="plan-title" onClick={() => setTaskView({ eId: e.id, i })} title="Ver tarea" style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+          <div className="plan-title" onClick={() => setTaskView({ eId: e.id, tid: t.id! })} title="Ver tarea" style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
             <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
@@ -1951,12 +1950,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const renderDoneRow = (x: { e: Epica; t: EpicaTask; i: number }) => {
     const { e, t, i } = x
     return (
-      <div key={planKey(e.id, i)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 6px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+      <div key={planKey(e.id, t)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 6px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
         <button onClick={() => uncompleteFromPlan(e, i)} aria-label="Marcar sin terminar" title="Marcar sin terminar" style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 99, border: 'none', background: '#2E6E6E', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div onClick={() => setTaskView({ eId: e.id, i })} style={{ fontSize: 13.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)', textDecoration: 'line-through', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+          <div onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ fontSize: 13.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)', textDecoration: 'line-through', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} /><span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>{e.name}</span>
           </div>
@@ -2127,7 +2126,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 )}
                 {list.map(x => {
                     const { e, t, i } = x
-                    const k = planKey(e.id, i)
+                    const k = planKey(e.id, t)
                     const dragging = weekDrag === k
                     const tdone = t.status === 'Terminada'
                     const ps = prioStyle(t.priority)
@@ -2293,7 +2292,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {dayItems.map(x => {
                           const { e, t, i } = x
-                          const k = planKey(e.id, i)
+                          const k = planKey(e.id, t)
                           const dragging = sprintDrag === k
                           const tdone = t.status === 'Terminada'
                           const ps = prioStyle(t.priority)
@@ -2370,7 +2369,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const th = (key: string, label: string) => (
       <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: dayTableSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{dayTableSort.key === key ? (dayTableSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
     )
-    const allKeys = sorted.map(x => planKey(x.e.id, x.i))
+    const allKeys = sorted.map(x => planKey(x.e.id, x.t))
     const allSel = allKeys.length > 0 && allKeys.every(k => planSel.has(k))
     const cellInp: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 6, padding: '5px 7px', fontSize: 12.5, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }
     const sel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, background: '#fff', outline: 'none' }
@@ -2388,10 +2387,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </thead>
           <tbody>
             {sorted.map(({ e, t, i }, idx) => {
-              const k = planKey(e.id, i)
+              const k = planKey(e.id, t)
               const on = planSel.has(k)
               const done = t.status === 'Terminada'
-              const openView = () => setTaskView({ eId: e.id, i })
+              const openView = () => setTaskView({ eId: e.id, tid: t.id! })
               return (
                 <tr key={k} className="backlog-row" style={{ borderBottom: '1px solid rgba(15,35,64,0.06)', background: on ? 'rgba(194,147,58,0.06)' : 'transparent', cursor: edit ? 'default' : 'pointer' }}
                   onClick={edit ? undefined : ev => { if ((ev.target as HTMLElement).closest('input,button,select,a')) return; openView() }}>
@@ -2531,7 +2530,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       {inMonth && <button onClick={() => newTaskForDay(cd)} aria-label={`Nueva tarea ${fmtDue(cd)}`} title="Nueva tarea" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.5)', fontSize: 11, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>}
                     </div>
                     {shown.map(x => {
-                      const { e, t, i } = x; const k = planKey(e.id, i); const dragging = calDrag === k; const done = t.status === 'Terminada'
+                      const { e, t, i } = x; const k = planKey(e.id, t); const dragging = calDrag === k; const done = t.status === 'Terminada'
                       return (
                         <div key={k} onPointerDown={ev => onCalDown(ev, k)} onPointerMove={onCalMove} onPointerUp={() => onCalUp(x)} onPointerCancel={onCalCancel}
                           title={`${t.t} — arrastra a otro día`}
@@ -2609,13 +2608,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   const s = Math.min(idxOf(a), idxOf(b)), en = Math.max(idxOf(a), idxOf(b))
                   const dt = dueTone(t.due, done)
                   return (
-                    <div key={planKey(e.id, i)} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(15,35,64,0.05)', minHeight: 30 }}>
+                    <div key={planKey(e.id, t)} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(15,35,64,0.05)', minHeight: 30 }}>
                       <div style={{ flex: `0 0 ${railW}px`, width: railW, padding: '4px 12px', overflow: 'hidden' }}>
                         <span style={{ fontSize: 11.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.t}</span>
                       </div>
                       <div style={{ position: 'relative', width: trackW, height: 30 }}>
                         {(() => {
-                          const bk = planKey(e.id, i); const bdrag = tlDragKey === bk
+                          const bk = planKey(e.id, t); const bdrag = tlDragKey === bk
                           const off = bdrag ? tlOffset : 0
                           const snapped = bdrag ? Math.round(off / dayW) * dayW : 0
                           return (
@@ -2776,7 +2775,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   const late = Math.round((new Date(today + 'T00:00:00').getTime() - new Date((t.plan || today) + 'T00:00:00').getTime()) / 86400000)
                   const dt = dueTone(t.due, false)
                   return (
-                    <div key={planKey(e.id, i)} onClick={() => setTaskView({ eId: e.id, i })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 9, cursor: 'pointer' }}
+                    <div key={planKey(e.id, t)} onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 9, cursor: 'pointer' }}
                       onMouseEnter={ev => (ev.currentTarget.style.background = 'rgba(176,82,46,0.05)')} onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
                       <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: 99, background: e.color }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -2811,7 +2810,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {suggestions.slice(0, 4).map(s => {
                       const dt = dueTone(s.t.due, false)
                       return (
-                        <button key={planKey(s.e.id, s.i)} onClick={() => addToPlan(s.e, s.i)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', borderRadius: 99, padding: '6px 12px', fontSize: 12, fontWeight: 600, color: '#16365F' }}>
+                        <button key={planKey(s.e.id, s.t)} onClick={() => addToPlan(s.e, s.i)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', borderRadius: 99, padding: '6px 12px', fontSize: 12, fontWeight: 600, color: '#16365F' }}>
                           <span style={{ width: 7, height: 7, borderRadius: 99, background: s.e.color }} />{s.t.t}
                           <span style={{ fontSize: 10, fontWeight: 700, color: dt.c }}>{fmtDue(s.t.due)}</span>
                           <span style={{ color: '#A87A2C', fontWeight: 800 }}>+</span>
@@ -2844,7 +2843,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const list = manual ? filtered : [...filtered].sort(cmp)
                 const table = dayView === 'tabla'
                 const tableRows = planItems.filter(x => passF(x.t))   // pend + hechas, para la tabla
-                const visibleKeys = (table ? tableRows : list).map(x => planKey(x.e.id, x.i))
+                const visibleKeys = (table ? tableRows : list).map(x => planKey(x.e.id, x.t))
                 return (
                   <>
                     {planItems.length > 0 && (
@@ -2916,7 +2915,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {table ? renderDayTable(tableRows) : (
                       <div ref={planListRef}>
                         {list.map((x, pos) => (
-                          <div key={planKey(x.e.id, x.i)}>
+                          <div key={planKey(x.e.id, x.t)}>
                             {manual && draggingKey && dropIndex === pos && insLine}
                             {renderPlanRow(x, pos, !manual)}
                           </div>
@@ -2934,10 +2933,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
               {/* TRABAJADAS — tareas con avance registrado este día que NO están en el plan del día */}
               {(() => {
-                const inPlanKeys = new Set(planItems.map(x => planKey(x.e.id, x.i)))
+                const inPlanKeys = new Set(planItems.map(x => planKey(x.e.id, x.t)))
                 const worked: { e: Epica; t: EpicaTask; i: number }[] = []
                 activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
-                  if ((t.progressLog || []).some(x => x.d === viewDate) && !inPlanKeys.has(planKey(e.id, i))) worked.push({ e, t, i })
+                  if ((t.progressLog || []).some(x => x.d === viewDate) && !inPlanKeys.has(planKey(e.id, t))) worked.push({ e, t, i })
                 }))
                 if (worked.length === 0) return null
                 return (
@@ -2953,7 +2952,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       {worked.map(({ e, t, i }) => {
                         const done = t.status === 'Terminada'; const st = taskStyle(t.status)
                         return (
-                          <div key={planKey(e.id, i)} onClick={() => setTaskView({ eId: e.id, i })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                          <div key={planKey(e.id, t)} onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
                             <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(194,147,58,0.14)', color: '#A87A2C', fontSize: 11 }}>✎</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
@@ -3010,7 +3009,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const on = inPlan(x); const dt = dueTone(x.t.due, false)
       const otherDay = !!x.t.plan && x.t.plan !== viewDate
       return (
-        <button key={planKey(x.e.id, x.i)} onClick={ev => { if (ev.detail > 1) return; on ? removeFromPlan(x.e, x.i, false) : planTaskToDay(x.e, x.i, viewDate) }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', padding: '10px 11px', borderRadius: 10, cursor: 'pointer', border: on ? '1px solid rgba(194,147,58,0.35)' : '1px solid transparent', background: on ? 'rgba(194,147,58,0.08)' : 'transparent', borderLeft: on ? '2px solid #C2933A' : '2px solid transparent' }}>
+        <button key={planKey(x.e.id, x.t)} onClick={ev => { if (ev.detail > 1) return; on ? removeFromPlan(x.e, x.i, false) : planTaskToDay(x.e, x.i, viewDate) }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', padding: '10px 11px', borderRadius: 10, cursor: 'pointer', border: on ? '1px solid rgba(194,147,58,0.35)' : '1px solid transparent', background: on ? 'rgba(194,147,58,0.08)' : 'transparent', borderLeft: on ? '2px solid #C2933A' : '2px solid transparent' }}>
           <span style={{ flexShrink: 0, height: 20, width: 20, borderRadius: 99, border: on ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: on ? '#C2933A' : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
           <span style={{ flex: 1, minWidth: 0 }}>
             <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
@@ -3202,7 +3201,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const th = (key: string, label: string) => (
       <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: backlogSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{backlogSort.key === key ? (backlogSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
     )
-    const keyOf = (x: { e: Epica; i: number }) => x.e.id + ':' + x.i
+    const keyOf = (x: { e: Epica; t: EpicaTask }) => planKey(x.e.id, x.t)
     const allKeys = sorted.map(keyOf)
     const allSel = allKeys.length > 0 && allKeys.every(k => backlogSel.has(k))
     const someSel = backlogSel.size > 0
@@ -3212,7 +3211,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Edición masiva: agrupa la selección por épica y aplica en un patch por épica
     const bulkGroup = () => {
       const m = new Map<string, number[]>()
-      backlogSel.forEach(key => { const idx = key.lastIndexOf(':'); const eId = key.slice(0, idx); const i = Number(key.slice(idx + 1)); if (!m.has(eId)) m.set(eId, []); m.get(eId)!.push(i) })
+      backlogSel.forEach(key => { const f = keyToTask(key); if (!f) return; if (!m.has(f.e.id)) m.set(f.e.id, []); m.get(f.e.id)!.push(f.i) })
       return m
     }
     const bulkField = (mutate: (t: EpicaTask) => void, msg: string) => {
@@ -3247,7 +3246,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const tasks = clone(ep.tasks)
         idxs.sort((a, b) => b - a).forEach(i => { if (tasks[i]) tasks.splice(i, 1) })
         patchEpic(eId, { tasks })
-        invalidateTaskRefs(eId)
       })
       showToast(`${count} tareas eliminadas`); setBacklogSel(new Set())
     }
@@ -3357,7 +3355,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const ts = taskStyle(t.status); const dt = dueTone(t.due, t.status === 'Terminada'); const ps = prioStyle(t.priority)
                     const k = e.id + ':' + i; const sel = backlogSel.has(k)
                     return (
-                      <tr key={k} {...(backlogEdit ? {} : clickable(() => setTaskView({ eId: e.id, i }), `Ver tarea: ${t.t}`, true))} className="backlog-row" style={{ cursor: backlogEdit ? 'default' : 'pointer', borderBottom: '1px solid rgba(15,35,64,0.05)', background: sel ? 'rgba(194,147,58,0.10)' : undefined }}>
+                      <tr key={k} {...(backlogEdit ? {} : clickable(() => setTaskView({ eId: e.id, tid: t.id! }), `Ver tarea: ${t.t}`, true))} className="backlog-row" style={{ cursor: backlogEdit ? 'default' : 'pointer', borderBottom: '1px solid rgba(15,35,64,0.05)', background: sel ? 'rgba(194,147,58,0.10)' : undefined }}>
                         <td onClick={ev => ev.stopPropagation()} style={{ padding: '9px 0 9px 12px' }}><input type="checkbox" checked={sel} onChange={() => toggleOne(k)} style={{ cursor: 'pointer' }} /></td>
                         {backlogEdit ? (<>
                           <td style={{ padding: '6px 8px', minWidth: 200 }}>{(() => { const act = editCell?.key === k && editCell.field === 'title'; return <input value={act ? editCell!.val : t.t} onFocus={() => setEditCell({ key: k, field: 'title', val: t.t })} onChange={ev => setEditCell({ key: k, field: 'title', val: ev.target.value })} onBlur={() => { if (act) setTaskTitle(e, i, editCell!.val); setEditCell(null) }} style={editInp} /> })()}</td>
@@ -3734,7 +3732,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => toggleArchive(featured)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}>{featured.archived ? 'Desarchivar' : 'Archivar'}</button>
               </div>
               <h1 className="serif ep-featured-title" style={{ fontWeight: 600, fontSize: 46, lineHeight: 1, margin: '0 0 8px', color: '#10233F' }}>{featured.name}</h1>
-              {featured.description && <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }} dangerouslySetInnerHTML={{ __html: featured.description }} />}
+              {featured.description && <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(featured.description) }} />}
 
               {featured.kpis.length > 0 && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(90px,1fr))', gap: 14, marginBottom: 22 }}>
@@ -4045,25 +4043,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       {pickerOpen && renderPicker()}
 
       {movePick && (() => {
-        const ep = epicsRef.current.find(x => x.id === movePick.eId)
-        const cur = ep?.tasks[movePick.i]?.plan || viewDate
+        const found = findTask(movePick.eId, movePick.tid)
+        const cur = found?.t.plan || viewDate
         return (
           <div onClick={() => setMovePick(null)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 20px' }}>
             <div data-pop onClick={e => e.stopPropagation()}>
-              {renderMonthPopover(cur, iso => { if (ep) planTaskToDay(ep, movePick.i, iso, { toast: true }); setMovePick(null) })}
+              {renderMonthPopover(cur, iso => { if (found) planTaskToDay(found.e, found.i, iso, { toast: true }); setMovePick(null) })}
             </div>
           </div>
         )
       })()}
 
       {taskView && (() => {
-        const ep = epics.find(x => x.id === taskView.eId)   // estado en vivo para reflejar ediciones inline
-        const i = taskView.i
-        const t = ep?.tasks[i]
-        if (!ep || !t) return null
+        const found = findTask(taskView.eId, taskView.tid)   // se resuelve en cada render: nunca apunta a otra tarea
+        if (!found) return null
+        const { e: ep, t, i } = found
         const dt = dueTone(t.due, t.status === 'Terminada')
         const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }
-        const openEditFromView = () => { setTaskView(null); openTaskEdit(taskView.eId, i) }
+        const openEditFromView = () => { setTaskView(null); openTaskEdit(taskView.eId, t.id!) }
         return (
           <div onClick={() => setTaskView(null)} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 20px', overflow: 'auto' }}>
             <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
@@ -4228,7 +4225,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {t.note && (
                   <div style={{ marginBottom: 16 }}>
                     <div style={eb}>Nota</div>
-                    <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', maxHeight: 320, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: t.note }} />
+                    <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', maxHeight: 320, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} />
                   </div>
                 )}
 
@@ -4258,7 +4255,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       {taskEdit && (() => {
         const ep = epics.find(e => e.id === taskEdit.epicId)        // épica de origen
         const target = epics.find(e => e.id === taskEditTarget) || ep // épica destino (editable)
-        const isNew = taskEdit.index == null
+        const isNew = taskEdit.tid == null
         const willMove = !isNew && !!target && !!ep && target.id !== ep.id
         const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
         return (
