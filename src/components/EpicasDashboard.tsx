@@ -383,7 +383,7 @@ type Prefs = {
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
   planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes'
-  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean
+  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
@@ -394,7 +394,7 @@ type Prefs = {
 const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
-  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, epicSort: 'grupo', epicFilter: 'todas',
+  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, dayView: 'lista', epicSort: 'grupo', epicFilter: 'todas',
   backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
@@ -469,6 +469,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
+  const [dayView, setDayView] = useState<'lista' | 'tabla'>('lista') // vista de la lista del enfoque de día
+  const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'plan', dir: 'asc' })
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
@@ -541,7 +543,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
-    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone)
+    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
@@ -555,13 +557,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
 
@@ -891,6 +893,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const next = order[(order.indexOf(cur) + 1 + order.length) % order.length]
     const tasks = clone(e.tasks)
     if (next) tasks[i].difficulty = next; else delete tasks[i].difficulty
+    patchEpic(e.id, { tasks })
+  }
+  const setDifficultyVal = (e: Epica, i: number, v: string) => {
+    const tasks = clone(e.tasks); if (v) tasks[i].difficulty = v as Dif; else delete tasks[i].difficulty
     patchEpic(e.id, { tasks })
   }
   const setPriorityVal = (e: Epica, i: number, v: string) => {
@@ -2264,6 +2270,77 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  /** Tabla editable del enfoque de día (tipo hoja de cálculo): celdas modificables
+   *  inline, encabezados ordenables y selección para acciones en lote. */
+  const renderDayTable = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+    const dir = dayTableSort.dir === 'asc' ? 1 : -1
+    const cmp = (a: typeof rows[number], b: typeof rows[number]) => {
+      const k = dayTableSort.key; let r = 0
+      if (k === 't') r = a.t.t.localeCompare(b.t.t, 'es')
+      else if (k === 'epica') r = a.e.name.localeCompare(b.e.name, 'es')
+      else if (k === 'status') r = TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)
+      else if (k === 'priority') r = PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']
+      else if (k === 'difficulty') r = (a.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[a.t.difficulty] : 0) - (b.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[b.t.difficulty] : 0)
+      else if (k === 'progress') r = (a.t.progress || 0) - (b.t.progress || 0)
+      else if (k === 'due') r = (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
+      else r = (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
+      return r * dir || a.t.t.localeCompare(b.t.t, 'es')
+    }
+    const sorted = [...rows].sort(cmp)
+    const setSort = (key: string) => setDayTableSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
+    const th = (key: string, label: string) => (
+      <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: dayTableSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{dayTableSort.key === key ? (dayTableSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+    )
+    const allKeys = sorted.map(x => planKey(x.e.id, x.i))
+    const allSel = allKeys.length > 0 && allKeys.every(k => planSel.has(k))
+    const cellInp: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 6, padding: '5px 7px', fontSize: 12.5, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }
+    const sel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, background: '#fff', outline: 'none' }
+    const dInp: CSSProperties = { border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 600, color: '#14233D', background: '#fff', outline: 'none' }
+    return (
+      <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)' }}>
+              <th style={{ width: 34, padding: '8px 0 8px 12px' }}><input type="checkbox" checked={allSel} onChange={() => setPlanSel(allSel ? new Set() : new Set(allKeys))} title="Seleccionar todo" style={{ cursor: 'pointer' }} /></th>
+              {th('t', 'Tarea')}{th('epica', 'Épica')}{th('status', 'Estado')}{th('priority', 'Prioridad')}{th('difficulty', 'Dificultad')}{th('progress', 'Avance')}{th('plan', 'Hacer')}{th('due', 'Vence')}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(({ e, t, i }) => {
+              const k = planKey(e.id, i)
+              const on = planSel.has(k)
+              const done = t.status === 'Terminada'
+              return (
+                <tr key={k} className="backlog-row" style={{ borderBottom: '1px solid rgba(15,35,64,0.06)', background: on ? 'rgba(194,147,58,0.06)' : 'transparent' }}>
+                  <td style={{ padding: '0 0 0 12px' }}><input type="checkbox" checked={on} onChange={() => togglePlanSel(k)} style={{ cursor: 'pointer' }} /></td>
+                  <td style={{ padding: '4px 6px', minWidth: 220 }}>
+                    <input defaultValue={t.t} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== t.t) setTaskTitle(e, i, v) }} style={{ ...cellInp, textDecoration: done ? 'line-through' : 'none', color: done ? 'rgba(20,35,61,0.5)' : '#14233D' }} />
+                  </td>
+                  <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.6)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</span></td>
+                  <td style={{ padding: '4px 6px' }}>
+                    <select value={t.status} onChange={ev => setTaskStatus(e, i, ev.target.value)} style={{ ...sel, color: taskStyle(t.status).c }}>{PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                  </td>
+                  <td style={{ padding: '4px 6px' }}>
+                    <select value={t.priority || ''} onChange={ev => setPriorityVal(e, i, ev.target.value)} style={sel}><option value="">—</option>{(['alta', 'media', 'baja'] as Prio[]).map(p => <option key={p} value={p}>{prioStyle(p).label}</option>)}</select>
+                  </td>
+                  <td style={{ padding: '4px 6px' }}>
+                    <select value={t.difficulty || ''} onChange={ev => setDifficultyVal(e, i, ev.target.value)} style={sel}><option value="">—</option>{(['facil', 'media', 'dificil'] as Dif[]).map(d => <option key={d} value={d}>{difStyle(d).label}</option>)}</select>
+                  </td>
+                  <td style={{ padding: '4px 6px' }}>
+                    <input type="number" min={0} max={100} step={5} defaultValue={t.progress ?? 0} onBlur={ev => { const v = Math.max(0, Math.min(100, Number(ev.target.value) || 0)); if (v !== (t.progress ?? 0)) setTaskProgress(e, i, v) }} style={{ ...dInp, width: 62 }} />
+                  </td>
+                  <td style={{ padding: '4px 6px' }}><input type="date" value={t.plan || ''} onChange={ev => setTaskPlan(e, i, ev.target.value)} style={{ ...dInp, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }} /></td>
+                  <td style={{ padding: '4px 6px' }}><input type="date" value={t.due || ''} onChange={ev => setTaskDue(e, i, ev.target.value)} style={dInp} /></td>
+                </tr>
+              )
+            })}
+            {sorted.length === 0 && <tr><td colSpan={9} style={{ padding: '18px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>Nada planeado para este día.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
   const renderPlanToday = () => {
     const week = planMode === 'semana'
     const multi = planMode === '2sem' || planMode === '3sem' || planMode === 'mes'
@@ -2464,23 +2541,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 }
                 const manual = planSort === 'plan'
                 const list = manual ? filtered : [...filtered].sort(cmp)
+                const table = dayView === 'tabla'
+                const tableRows = planItems.filter(x => passF(x.t))   // pend + hechas, para la tabla
+                const visibleKeys = (table ? tableRows : list).map(x => planKey(x.e.id, x.i))
                 return (
                   <>
-                    {planPend.length > 0 && (
+                    {planItems.length > 0 && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-                        <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar el enfoque" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
-                          <option value="plan">Orden manual</option>
-                          <option value="prioridad">Prioridad</option>
-                          <option value="entrega">Entrega</option>
-                          <option value="avance">Avance</option>
-                          <option value="epica">Épica</option>
-                        </select>
+                        {/* Vista Lista | Tabla del enfoque de día */}
+                        <div role="group" aria-label="Vista del enfoque de día" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+                          {([['lista', 'Lista'], ['tabla', 'Tabla']] as const).map(([v, label]) => {
+                            const onv = dayView === v
+                            return <button key={v} aria-pressed={onv} onClick={() => setDayView(v)} style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '5px 11px', font: '700 11px var(--font-ui)', background: onv ? '#10233F' : 'transparent', color: onv ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+                          })}
+                        </div>
+                        {!table && (
+                          <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar el enfoque" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+                            <option value="plan">Orden manual</option>
+                            <option value="prioridad">Prioridad</option>
+                            <option value="entrega">Entrega</option>
+                            <option value="avance">Avance</option>
+                            <option value="epica">Épica</option>
+                          </select>
+                        )}
                         {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
                           const on = planFilter === k
                           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                         })}
                         <span style={{ flex: 1 }} />
-                        {!manual && planFilter === 'todas' && list.length > 1 && <button onClick={() => commitPlanOrder(list)} aria-label="Guardar este orden como el orden manual" title="Guardar este orden como el orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', font: '700 11px var(--font-ui)' }}>Fijar este orden</button>}
+                        {table && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>Clic en encabezado = ordenar · celdas editables</span>}
+                        {!table && !manual && planFilter === 'todas' && list.length > 1 && <button onClick={() => commitPlanOrder(list)} aria-label="Guardar este orden como el orden manual" title="Guardar este orden como el orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', font: '700 11px var(--font-ui)' }}>Fijar este orden</button>}
                       </div>
                     )}
                     {manual && planFilter === 'todas' && filtered.length > 1 && planSel.size === 0 && (
@@ -2489,7 +2579,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                     {/* ACCIONES EN LOTE — aparece al seleccionar filas del enfoque */}
                     {planSel.size > 0 && (() => {
-                      const listKeys = list.map(x => planKey(x.e.id, x.i))
+                      const listKeys = visibleKeys
                       const allSel = listKeys.length > 0 && listKeys.every(k => planSel.has(k))
                       const btn: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(255,255,255,0.22)', background: 'rgba(255,255,255,0.10)', color: '#fff', borderRadius: 8, padding: '6px 10px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }
                       return (
@@ -2521,20 +2611,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                       )
                     })()}
-                    <div ref={planListRef}>
-                      {list.map((x, pos) => (
-                        <div key={planKey(x.e.id, x.i)}>
-                          {manual && draggingKey && dropIndex === pos && insLine}
-                          {renderPlanRow(x, pos, !manual)}
-                        </div>
-                      ))}
-                      {manual && draggingKey && dropIndex === list.length && insLine}
-                    </div>
-                    {filtered.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.55)', padding: '6px 0' }}>Ninguna tarea del plan coincide con el filtro.</div>}
+                    {table ? renderDayTable(tableRows) : (
+                      <div ref={planListRef}>
+                        {list.map((x, pos) => (
+                          <div key={planKey(x.e.id, x.i)}>
+                            {manual && draggingKey && dropIndex === pos && insLine}
+                            {renderPlanRow(x, pos, !manual)}
+                          </div>
+                        ))}
+                        {manual && draggingKey && dropIndex === list.length && insLine}
+                      </div>
+                    )}
+                    {!table && filtered.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.55)', padding: '6px 0' }}>Ninguna tarea del plan coincide con el filtro.</div>}
                   </>
                 )
               })()}
-              {planPend.length === 0 && planDone.length > 0 && (
+              {dayView !== 'tabla' && planPend.length === 0 && planDone.length > 0 && (
                 <div style={{ fontSize: 13, color: '#2E6E6E', fontWeight: 600, padding: '10px 6px' }}>{isToday ? 'Todo hecho por hoy ✦' : 'Todo hecho este día ✦'}</div>
               )}
 
@@ -2579,7 +2671,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 )
               })()}
 
-              {planDone.length > 0 && (
+              {dayView !== 'tabla' && planDone.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <button onClick={() => setDoneOpen(v => !v)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.08)', background: '#fff', borderRadius: 10, padding: '9px 12px', font: '800 10.5px var(--font-ui)', letterSpacing: '.06em', color: '#2E6E6E', textTransform: 'uppercase' }}>
                     <span style={{ height: 7, width: 7, borderRadius: 99, background: '#2E6E6E' }} />
