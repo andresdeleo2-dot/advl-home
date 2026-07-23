@@ -382,7 +382,7 @@ type Prefs = {
   estadoFilter: 'activas' | 'archivadas' | 'todas'; catFilter: string
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
-  planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes'
+  planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline'
   weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; epicView: 'lista' | 'tabla'
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
@@ -464,13 +464,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
-  const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes'>('dia') // enfoque diario vs semanal
+  const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline'>('dia') // horizonte del enfoque
+  const [dayTableEdit, setDayTableEdit] = useState(false)          // edición inline de la tabla del día
+  const [calDrag, setCalDrag] = useState<string | null>(null)      // tarjeta arrastrada en el calendario
+  const [calOverDay, setCalOverDay] = useState<string | null>(null)
+  const calDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
   const [dayView, setDayView] = useState<'lista' | 'tabla'>('lista') // vista de la lista del enfoque de día
-  const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'plan', dir: 'asc' })
+  const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [epicView, setEpicView] = useState<'lista' | 'tabla'>('lista') // vista de "Todas las épicas"
   const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
@@ -1148,6 +1152,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (target && target !== x.t.plan) planTaskToDay(x.e, x.i, target, { toast: true })
   }
   const onSprintCancel = () => { sprintDragRef.current = null; setSprintDrag(null); setSprintOverCol(null); setSprintOverDay(null) }
+
+  /* ─── Calendario: arrastrar tarjetas entre días de la retícula ─── */
+  const onCalDown = (ev: React.PointerEvent, key: string) => {
+    calDragRef.current = { key, x: ev.clientX, y: ev.clientY, moved: false }
+    try { (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId) } catch { /* noop */ }
+  }
+  const onCalMove = (ev: React.PointerEvent) => {
+    const d = calDragRef.current; if (!d) return
+    if (!d.moved) { if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 6) return; d.moved = true; setCalDrag(d.key) }
+    const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+    setCalOverDay((el?.closest('[data-calday]') as HTMLElement | null)?.dataset.calday ?? null)
+  }
+  const onCalUp = (x: { e: Epica; t: EpicaTask; i: number }) => {
+    const d = calDragRef.current; calDragRef.current = null
+    const day = calOverDay; setCalDrag(null); setCalOverDay(null)
+    if (!d) return
+    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }
+    if (day && day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
+  }
+  const onCalCancel = () => { calDragRef.current = null; setCalDrag(null); setCalOverDay(null) }
 
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
   const computeDropIndex = (clientY: number) => {
@@ -2286,6 +2310,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /** Tabla editable del enfoque de día (tipo hoja de cálculo): celdas modificables
    *  inline, encabezados ordenables y selección para acciones en lote. */
   const renderDayTable = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+    const edit = dayTableEdit
+    const manual = dayTableSort.key === 'manual'
     const dir = dayTableSort.dir === 'asc' ? 1 : -1
     const cmp = (a: typeof rows[number], b: typeof rows[number]) => {
       const k = dayTableSort.key; let r = 0
@@ -2295,11 +2321,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       else if (k === 'priority') r = PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']
       else if (k === 'difficulty') r = (a.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[a.t.difficulty] : 0) - (b.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[b.t.difficulty] : 0)
       else if (k === 'progress') r = (a.t.progress || 0) - (b.t.progress || 0)
+      else if (k === 'plan') r = (a.t.plan || '9999-99').localeCompare(b.t.plan || '9999-99')
       else if (k === 'due') r = (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
-      else r = (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
-      return r * dir || a.t.t.localeCompare(b.t.t, 'es')
+      else r = (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)   // manual
+      return manual ? r : (r * dir || a.t.t.localeCompare(b.t.t, 'es'))
     }
     const sorted = [...rows].sort(cmp)
+    const move = (from: number, d: 'up' | 'down') => {
+      const to = d === 'up' ? from - 1 : from + 1
+      if (to < 0 || to >= sorted.length) return
+      const arr = sorted.map(x => ({ e: x.e, i: x.i }))
+      const [m] = arr.splice(from, 1); arr.splice(to, 0, m)
+      applyPlanOrder(arr)
+    }
     const setSort = (key: string) => setDayTableSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
     const th = (key: string, label: string) => (
       <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: dayTableSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{dayTableSort.key === key ? (dayTableSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
@@ -2309,59 +2343,266 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const cellInp: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 6, padding: '5px 7px', fontSize: 12.5, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }
     const sel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, background: '#fff', outline: 'none' }
     const dInp: CSSProperties = { border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 600, color: '#14233D', background: '#fff', outline: 'none' }
+    const arrow: CSSProperties = { height: 20, width: 20, borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 11, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }
     return (
       <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)' }}>
               <th style={{ width: 34, padding: '8px 0 8px 12px' }}><input type="checkbox" checked={allSel} onChange={() => setPlanSel(allSel ? new Set() : new Set(allKeys))} title="Seleccionar todo" style={{ cursor: 'pointer' }} /></th>
+              {!edit && <th style={{ width: 52, padding: '8px 6px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: manual ? '#A87A2C' : 'rgba(15,35,64,0.4)' }}>{manual ? 'Orden' : <button onClick={() => setSort('manual')} title="Orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(15,35,64,0.5)', font: 'inherit', textTransform: 'uppercase' }}>Manual</button>}</th>}
               {th('t', 'Tarea')}{th('epica', 'Épica')}{th('status', 'Estado')}{th('priority', 'Prioridad')}{th('difficulty', 'Dificultad')}{th('progress', 'Avance')}{th('plan', 'Hacer')}{th('due', 'Vence')}
             </tr>
           </thead>
           <tbody>
-            {sorted.map(({ e, t, i }) => {
+            {sorted.map(({ e, t, i }, idx) => {
               const k = planKey(e.id, i)
               const on = planSel.has(k)
               const done = t.status === 'Terminada'
+              const openView = () => setTaskView({ eId: e.id, i })
               return (
-                <tr key={k} className="backlog-row" style={{ borderBottom: '1px solid rgba(15,35,64,0.06)', background: on ? 'rgba(194,147,58,0.06)' : 'transparent' }}>
-                  <td style={{ padding: '0 0 0 12px' }}><input type="checkbox" checked={on} onChange={() => togglePlanSel(k)} style={{ cursor: 'pointer' }} /></td>
+                <tr key={k} className="backlog-row" style={{ borderBottom: '1px solid rgba(15,35,64,0.06)', background: on ? 'rgba(194,147,58,0.06)' : 'transparent', cursor: edit ? 'default' : 'pointer' }}
+                  onClick={edit ? undefined : ev => { if ((ev.target as HTMLElement).closest('input,button,select,a')) return; openView() }}>
+                  <td style={{ padding: '0 0 0 12px' }}><input type="checkbox" checked={on} onClick={ev => ev.stopPropagation()} onChange={() => togglePlanSel(k)} style={{ cursor: 'pointer' }} /></td>
+                  {!edit && (
+                    <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
+                      <div style={{ display: 'flex', gap: 3 }} onClick={ev => ev.stopPropagation()}>
+                        <button onClick={() => move(idx, 'up')} disabled={!manual || idx === 0} aria-label="Subir" title={manual ? 'Subir' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!manual || idx === 0) ? 0.35 : 1 }}>↑</button>
+                        <button onClick={() => move(idx, 'down')} disabled={!manual || idx === sorted.length - 1} aria-label="Bajar" title={manual ? 'Bajar' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!manual || idx === sorted.length - 1) ? 0.35 : 1 }}>↓</button>
+                      </div>
+                    </td>
+                  )}
+                  {/* Tarea */}
                   <td style={{ padding: '4px 6px', minWidth: 220 }}>
-                    <input defaultValue={t.t} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== t.t) setTaskTitle(e, i, v) }} style={{ ...cellInp, textDecoration: done ? 'line-through' : 'none', color: done ? 'rgba(20,35,61,0.5)' : '#14233D' }} />
+                    {edit
+                      ? <input defaultValue={t.t} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== t.t) setTaskTitle(e, i, v) }} style={cellInp} />
+                      : <span style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</span>}
                   </td>
+                  {/* Épica */}
                   <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.6)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</span></td>
+                  {/* Estado */}
                   <td style={{ padding: '4px 6px' }}>
-                    <select value={t.status} onChange={ev => setTaskStatus(e, i, ev.target.value)} style={{ ...sel, color: taskStyle(t.status).c }}>{PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                    {edit
+                      ? <select value={t.status} onChange={ev => setTaskStatus(e, i, ev.target.value)} style={{ ...sel, color: taskStyle(t.status).c }}>{PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                      : <span style={{ font: '700 10.5px var(--font-ui)', color: taskStyle(t.status).c, background: taskStyle(t.status).bg, borderRadius: 99, padding: '3px 9px' }}>{taskStyle(t.status).label}</span>}
                   </td>
+                  {/* Prioridad */}
                   <td style={{ padding: '4px 6px' }}>
-                    <select value={t.priority || ''} onChange={ev => setPriorityVal(e, i, ev.target.value)} style={sel}><option value="">—</option>{(['alta', 'media', 'baja'] as Prio[]).map(p => <option key={p} value={p}>{prioStyle(p).label}</option>)}</select>
+                    {edit
+                      ? <select value={t.priority || ''} onChange={ev => setPriorityVal(e, i, ev.target.value)} style={sel}><option value="">—</option>{(['alta', 'media', 'baja'] as Prio[]).map(p => <option key={p} value={p}>{prioStyle(p).label}</option>)}</select>
+                      : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'rgba(20,35,61,0.6)' }}><PrioBars p={t.priority} size={12} />{prioStyle(t.priority).label}</span>}
                   </td>
+                  {/* Dificultad */}
                   <td style={{ padding: '4px 6px' }}>
-                    <select value={t.difficulty || ''} onChange={ev => setDifficultyVal(e, i, ev.target.value)} style={sel}><option value="">—</option>{(['facil', 'media', 'dificil'] as Dif[]).map(d => <option key={d} value={d}>{difStyle(d).label}</option>)}</select>
+                    {edit
+                      ? <select value={t.difficulty || ''} onChange={ev => setDifficultyVal(e, i, ev.target.value)} style={sel}><option value="">—</option>{(['facil', 'media', 'dificil'] as Dif[]).map(d => <option key={d} value={d}>{difStyle(d).label}</option>)}</select>
+                      : (t.difficulty ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: difStyle(t.difficulty).c }}><DifDots d={t.difficulty} size={10} />{difStyle(t.difficulty).label}</span> : <span style={{ color: 'rgba(20,35,61,0.35)' }}>—</span>)}
                   </td>
+                  {/* Avance */}
                   <td style={{ padding: '4px 6px' }}>
-                    <input type="number" min={0} max={100} step={5} defaultValue={t.progress ?? 0} onBlur={ev => { const v = Math.max(0, Math.min(100, Number(ev.target.value) || 0)); if (v !== (t.progress ?? 0)) setTaskProgress(e, i, v) }} style={{ ...dInp, width: 62 }} />
+                    {edit
+                      ? <input type="number" min={0} max={100} step={5} defaultValue={t.progress ?? 0} onBlur={ev => { const v = Math.max(0, Math.min(100, Number(ev.target.value) || 0)); if (v !== (t.progress ?? 0)) setTaskProgress(e, i, v) }} style={{ ...dInp, width: 62 }} />
+                      : <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>{typeof t.progress === 'number' ? `${t.progress}%` : '—'}</span>}
                   </td>
-                  <td style={{ padding: '4px 6px' }}><input type="date" value={t.plan || ''} onChange={ev => setTaskPlan(e, i, ev.target.value)} style={{ ...dInp, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }} /></td>
-                  <td style={{ padding: '4px 6px' }}><input type="date" value={t.due || ''} onChange={ev => setTaskDue(e, i, ev.target.value)} style={dInp} /></td>
+                  {/* Hacer */}
+                  <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
+                    {edit
+                      ? <input type="date" value={t.plan || ''} onChange={ev => setTaskPlan(e, i, ev.target.value)} style={{ ...dInp, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }} />
+                      : <span style={{ fontSize: 12, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)' }}>{t.plan ? fmtDue(t.plan) : '—'}</span>}
+                  </td>
+                  {/* Vence */}
+                  <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
+                    {edit
+                      ? <input type="date" value={t.due || ''} onChange={ev => setTaskDue(e, i, ev.target.value)} style={dInp} />
+                      : <span style={{ fontSize: 12, fontWeight: 600, color: dueTone(t.due, done).c }}>{t.due ? fmtDue(t.due) : '—'}</span>}
+                  </td>
                 </tr>
               )
             })}
-            {sorted.length === 0 && <tr><td colSpan={9} style={{ padding: '18px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>Nada planeado para este día.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={10} style={{ padding: '18px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>Nada planeado para este día.</td></tr>}
           </tbody>
         </table>
       </div>
     )
   }
 
+  /* ─── Fila de filtros compartida (épica/dificultad/completadas) ─── */
+  const renderBoardFilters = (epicsForFilter: Epica[], effEpica: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
+      {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+        const on = planFilter === k
+        return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+      })}
+      <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
+      <select value={effEpica} onChange={e => setWeekEpica(e.target.value)} disabled={epicsForFilter.length === 0} title="Filtrar por épica" style={{ cursor: epicsForFilter.length === 0 ? 'default' : 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: effEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', opacity: epicsForFilter.length === 0 ? 0.55 : 1 }}>
+        <option value="todas">{epicsForFilter.length === 0 ? 'Sin épicas' : 'Todas las épicas'}</option>
+        {epicsForFilter.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
+      </select>
+      <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+        <option value="todas">Toda dificultad</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+      </select>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Ocultar tareas completadas">
+        <input type="checkbox" checked={boardHideDone} onChange={e => setBoardHideDone(e.target.checked)} /> Ocultar completadas
+      </label>
+      {(planFilter !== 'todas' || effEpica !== 'todas' || weekDif !== 'todas') && (
+        <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>
+      )}
+    </div>
+  )
+  const passPlanFilter = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+    : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
+    : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan) : true
+
+  /** Vista Calendario: retícula mensual con tarjetas por su día planeado; arrastra
+   *  para reprogramar, clic para abrir. Marca las completadas (tachadas). */
+  const renderPlanCalendar = () => {
+    const monthStr = viewDate.slice(0, 7)
+    const cells = monthGrid(monthStr)   // 42 celdas, lunes primero
+    const hStart = cells[0], hEnd = cells[cells.length - 1]
+    const calEpics = activeEpics.filter(e => (e.tasks || []).some(t => t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd))
+    const effEpica = calEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+    const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
+    cells.forEach(c => byDay.set(c, []))
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
+      if (!t.plan || t.status === ARCHIVED || !byDay.has(t.plan)) return
+      if (effEpica !== 'todas' && e.id !== effEpica) return
+      if (weekDif !== 'todas' && (t.difficulty || '') !== weekDif) return
+      if (boardHideDone && t.status === 'Terminada') return
+      if (!passPlanFilter(t)) return
+      byDay.get(t.plan)!.push({ e, t, i })
+    }))
+    const CAP = 4
+    const cell: CSSProperties = { minHeight: 108, boxSizing: 'border-box', padding: 5, borderRight: '1px solid rgba(15,35,64,0.06)', borderBottom: '1px solid rgba(15,35,64,0.06)', display: 'flex', flexDirection: 'column', gap: 3 }
+    return (
+      <>
+        {renderBoardFilters(calEpics, effEpica)}
+        <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
+          <div style={{ minWidth: 720 }}>
+            {/* cabecera de días */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)' }}>
+              {DAYNAMES.map((d, k) => <div key={d} style={{ padding: '7px 8px', font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: k >= 5 ? 'rgba(20,35,61,0.4)' : 'rgba(15,35,64,0.5)', textAlign: 'center' }}>{d.slice(0, 3)}</div>)}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)' }}>
+              {cells.map(cd => {
+                const inMonth = cd.slice(0, 7) === monthStr
+                const isTd = cd === today
+                const items = byDay.get(cd)!
+                const over = calOverDay === cd && !!calDrag
+                return (
+                  <div key={cd} data-calday={cd} style={{ ...cell, background: over ? 'rgba(194,147,58,0.10)' : isTd ? 'rgba(194,147,58,0.05)' : inMonth ? '#fff' : 'rgba(15,35,64,0.02)', outline: over ? '1.5px dashed #C2933A' : 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span className="serif" style={{ fontSize: 13, fontWeight: 600, color: isTd ? '#A87A2C' : inMonth ? '#10233F' : 'rgba(20,35,61,0.35)' }}>{dayNum(cd)}</span>
+                      {isTd && <span style={{ font: '700 8px var(--font-ui)', color: '#A87A2C' }}>HOY</span>}
+                      <span style={{ flex: 1 }} />
+                      {inMonth && <button onClick={() => newTaskForDay(cd)} aria-label={`Nueva tarea ${fmtDue(cd)}`} title="Nueva tarea" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.5)', fontSize: 11, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>}
+                    </div>
+                    {items.slice(0, CAP).map(x => {
+                      const { e, t, i } = x; const k = planKey(e.id, i); const dragging = calDrag === k; const done = t.status === 'Terminada'
+                      return (
+                        <div key={k} onPointerDown={ev => onCalDown(ev, k)} onPointerMove={onCalMove} onPointerUp={() => onCalUp(x)} onPointerCancel={onCalCancel}
+                          title={`${t.t} — arrastra a otro día`}
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: `3px solid ${done ? '#2E6E6E' : e.color}`, background: done ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.03)', borderRadius: 5, padding: '2px 5px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: calDrag && !dragging ? 0.5 : 1 }}>
+                          <span style={{ fontSize: 10.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+                        </div>
+                      )
+                    })}
+                    {items.length > CAP && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>+ {items.length - CAP} más</span>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </>
+    )
+  }
+
+  /** Vista Timeline (Gantt ligero): eje horizontal de los días del mes; cada tarea
+   *  con fecha (plan/entrega) es una barra. Agrupadas por épica. Clic abre la tarea. */
+  const renderPlanTimeline = () => {
+    const monthStr = viewDate.slice(0, 7)
+    const [y, m] = viewDate.split('-').map(Number)
+    const lastDay = new Date(y, m, 0).getDate()
+    const days = Array.from({ length: lastDay }, (_, k) => `${monthStr}-${String(k + 1).padStart(2, '0')}`)
+    const dayW = 30
+    const idxOf = (iso: string) => Math.max(0, Math.min(lastDay - 1, Number(iso.slice(8, 10)) - 1))
+    const inMonth = (iso?: string) => !!iso && iso.slice(0, 7) === monthStr
+    const groups = activeEpics.map(e => {
+      const items = (e.tasks || []).map((t, i) => ({ t, i })).filter(({ t }) => {
+        if (t.status === ARCHIVED) return false
+        if (weekDif !== 'todas' && (t.difficulty || '') !== weekDif) return false
+        if (boardHideDone && t.status === 'Terminada') return false
+        if (!passPlanFilter(t)) return false
+        return inMonth(t.plan) || inMonth(t.due)
+      })
+      return { e, items }
+    }).filter(g => g.items.length > 0)
+    const tlEpics = groups.map(g => g.e)
+    const effEpica = tlEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+    const shown = effEpica !== 'todas' ? groups.filter(g => g.e.id === effEpica) : groups
+    const railW = 180, trackW = days.length * dayW
+    return (
+      <>
+        {renderBoardFilters(tlEpics, effEpica)}
+        <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
+          <div style={{ minWidth: railW + trackW }}>
+            {/* cabecera de días */}
+            <div style={{ display: 'flex', borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)', position: 'sticky', top: 0 }}>
+              <div style={{ flex: `0 0 ${railW}px`, width: railW }} />
+              <div style={{ display: 'flex' }}>
+                {days.map(d => { const isTd = d === today; const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7
+                  return <div key={d} style={{ width: dayW, textAlign: 'center', padding: '5px 0', borderLeft: '1px solid rgba(15,35,64,0.05)', background: isTd ? 'rgba(194,147,58,0.10)' : wd >= 5 ? 'rgba(15,35,64,0.02)' : 'transparent' }}>
+                    <div style={{ font: '700 8px/1 var(--font-ui)', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{DAYS[wd]}</div>
+                    <div className="serif" style={{ fontSize: 12, fontWeight: 600, color: isTd ? '#A87A2C' : '#10233F' }}>{dayNum(d)}</div>
+                  </div> })}
+              </div>
+            </div>
+            {shown.map(({ e, items }) => (
+              <div key={e.id}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 12px', background: 'rgba(15,35,64,0.015)', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 99, background: e.color }} /><span style={{ fontSize: 12, fontWeight: 700, color: '#16365F' }}>{e.name}</span>
+                </div>
+                {items.map(({ t, i }) => {
+                  const done = t.status === 'Terminada'
+                  const a = inMonth(t.plan) ? t.plan! : t.due!
+                  const b = inMonth(t.due) ? t.due! : t.plan!
+                  const s = Math.min(idxOf(a), idxOf(b)), en = Math.max(idxOf(a), idxOf(b))
+                  const dt = dueTone(t.due, done)
+                  return (
+                    <div key={planKey(e.id, i)} style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid rgba(15,35,64,0.05)', minHeight: 30 }}>
+                      <div style={{ flex: `0 0 ${railW}px`, width: railW, padding: '4px 12px', overflow: 'hidden' }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.t}</span>
+                      </div>
+                      <div style={{ position: 'relative', width: trackW, height: 30 }}>
+                        <button onClick={() => setTaskView({ eId: e.id, i })} title={`${t.t}${t.plan ? ' · plan ' + fmtDue(t.plan) : ''}${t.due ? ' · vence ' + fmtDue(t.due) : ''}`}
+                          style={{ position: 'absolute', top: 6, left: s * dayW + 2, width: (en - s + 1) * dayW - 4, height: 18, borderRadius: 5, cursor: 'pointer', border: 'none', background: done ? 'rgba(62,142,142,0.25)' : e.color, opacity: done ? 0.7 : 1, display: 'flex', alignItems: 'center', padding: '0 6px', overflow: 'hidden' }}>
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.t}</span>
+                        </button>
+                        {t.due && inMonth(t.due) && <span title={`Vence ${fmtDue(t.due)}`} style={{ position: 'absolute', top: 4, left: idxOf(t.due) * dayW + dayW / 2 - 1, width: 2, height: 22, background: dt.c, opacity: 0.5 }} />}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+            {shown.length === 0 && <div style={{ padding: '24px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>No hay tareas con fecha en {monthLabel(viewDate)}.</div>}
+          </div>
+        </div>
+      </>
+    )
+  }
+
   const renderPlanToday = () => {
     const week = planMode === 'semana'
     const multi = planMode === '2sem' || planMode === '3sem' || planMode === 'mes'
-    const board = week || multi
+    const cal = planMode === 'calendario'
+    const timeline = planMode === 'timeline'
+    const monthy = planMode === 'mes' || cal || timeline   // navegación/etiqueta por mes
+    const board = week || multi || cal || timeline
     const weekMonday = mondayISO(viewDate)
     const todayMonday = mondayISO(today)
     // Semanas del horizonte según el modo
-    const weekMondays = planMode === 'mes' ? monthWeekMondays(viewDate)
+    const weekMondays = monthy ? monthWeekMondays(viewDate)
       : Array.from({ length: planMode === '3sem' ? 3 : planMode === '2sem' ? 2 : 1 }, (_, k) => addDays(weekMonday, k * 7))
     const hStart = weekMondays[0]
     const hEnd = addDays(weekMondays[weekMondays.length - 1], 6)
@@ -2370,21 +2611,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : weekMonday === addDays(todayMonday, 7) ? 'Próxima semana'
       : weekMonday === addDays(todayMonday, -7) ? 'Semana pasada'
       : weekRangeLabel(weekMonday)
+    const monthName = cap(new Date(viewDate + 'T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
     // Etiquetas del masthead
-    const bigLabel = planMode === 'mes'
-      ? cap(new Date(viewDate + 'T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
-      : week ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
-    const eyebrow = week ? 'Enfoque de la semana' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
+    const bigLabel = monthy ? monthName : week ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
+    const eyebrow = week ? 'Enfoque de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
     const topLabel = week ? weekRel
-      : planMode === 'mes' ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
+      : monthy ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
       : (horizonHasToday ? `Próximas ${weekMondays.length} semanas` : spanLabel(hStart, hEnd))
-    // Progreso del horizonte (semana o multi)
+    // Progreso del horizonte
     let wTot = 0, wDone = 0
     if (board) activeEpics.forEach(e => (e.tasks || []).forEach(t => {
       if (t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd) { wTot++; if (t.status === 'Terminada') wDone++ }
     }))
-    const goPrev = () => setViewDate(planMode === 'mes' ? addMonths(viewDate, -1) : addDays(viewDate, -weekMondays.length * 7))
-    const goNext = () => setViewDate(planMode === 'mes' ? addMonths(viewDate, 1) : addDays(viewDate, weekMondays.length * 7))
+    const goPrev = () => setViewDate(monthy ? addMonths(viewDate, -1) : addDays(viewDate, -weekMondays.length * 7))
+    const goNext = () => setViewDate(monthy ? addMonths(viewDate, 1) : addDays(viewDate, weekMondays.length * 7))
     const empty = planTotal === 0
     const suggestions: { e: Epica; i: number; t: EpicaTask }[] = []
     if (empty) {
@@ -2413,7 +2653,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
-                {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes']] as const).map(([m, label]) => {
+                {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
@@ -2422,7 +2662,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {board ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <button onClick={goPrev} aria-label="Período anterior" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
-                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{planMode === 'mes' ? 'Este mes' : week ? 'Esta semana' : 'Ahora'}</button>}
+                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{monthy ? 'Este mes' : week ? 'Esta semana' : 'Ahora'}</button>}
                   <button onClick={goNext} aria-label="Período siguiente" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
                 </div>
               ) : !isToday && (
@@ -2440,7 +2680,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {week ? renderPlanWeek() : multi ? renderPlanSprint(weekMondays) : (<>
+          {week ? renderPlanWeek() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
 
@@ -2582,7 +2822,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                         })}
                         <span style={{ flex: 1 }} />
-                        {table && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>Clic en encabezado = ordenar · celdas editables</span>}
+                        {table && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{dayTableEdit ? 'Edita las celdas · las fechas abren calendario' : 'Clic en fila = ver/editar · flechas = mover · encabezado = ordenar'}</span>}
+                        {table && <button onClick={() => setDayTableEdit(v => !v)} title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: dayTableEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(dayTableEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{dayTableEdit ? '✓ Listo' : '✎ Editar tabla'}</button>}
                         {!table && !manual && planFilter === 'todas' && list.length > 1 && <button onClick={() => commitPlanOrder(list)} aria-label="Guardar este orden como el orden manual" title="Guardar este orden como el orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', font: '700 11px var(--font-ui)' }}>Fijar este orden</button>}
                       </div>
                     )}
