@@ -469,6 +469,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [calDrag, setCalDrag] = useState<string | null>(null)      // tarjeta arrastrada en el calendario
   const [calOverDay, setCalOverDay] = useState<string | null>(null)
   const calDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
+  const [calExpanded, setCalExpanded] = useState<Set<string>>(new Set()) // días del calendario con "+N más" desplegado
+  const [tlDragKey, setTlDragKey] = useState<string | null>(null)  // barra arrastrada en el timeline
+  const [tlOffset, setTlOffset] = useState(0)                      // desplazamiento en px de la barra arrastrada
+  const tlDragRef = useRef<{ key: string; e: Epica; i: number; x: number; moved: boolean } | null>(null)
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
@@ -1172,6 +1176,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (day && day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
   }
   const onCalCancel = () => { calDragRef.current = null; setCalDrag(null); setCalOverDay(null) }
+
+  /* ─── Timeline: arrastrar una barra horizontalmente desplaza sus fechas ───
+     Corre plan y entrega el mismo número de días (arrastrar toda la barra). */
+  const TL_DAY_W = 30
+  const shiftTaskDates = (e: Epica, i: number, delta: number) => {
+    if (!delta) return
+    const tasks = clone(e.tasks); const t = tasks[i]
+    if (t.plan) { t.plan = addDays(t.plan, delta); t.planOrder = maxPlanOrderFor(t.plan) + 1000 }
+    if (t.due) t.due = addDays(t.due, delta)
+    patchEpic(e.id, { tasks })
+  }
+  const onTlDown = (ev: React.PointerEvent, key: string, e: Epica, i: number) => {
+    tlDragRef.current = { key, e, i, x: ev.clientX, moved: false }
+    try { (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId) } catch { /* noop */ }
+  }
+  const onTlMove = (ev: React.PointerEvent) => {
+    const d = tlDragRef.current; if (!d) return
+    if (!d.moved) { if (Math.abs(ev.clientX - d.x) < 6) return; d.moved = true; setTlDragKey(d.key) }
+    setTlOffset(ev.clientX - d.x)
+  }
+  const onTlUp = () => {
+    const d = tlDragRef.current; const off = tlOffset
+    tlDragRef.current = null; setTlDragKey(null); setTlOffset(0)
+    if (!d) return
+    if (!d.moved) { setTaskView({ eId: d.e.id, i: d.i }); return }
+    shiftTaskDates(d.e, d.i, Math.round(off / TL_DAY_W))
+  }
+  const onTlCancel = () => { tlDragRef.current = null; setTlDragKey(null); setTlOffset(0) }
 
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
   const computeDropIndex = (clientY: number) => {
@@ -2488,6 +2520,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const isTd = cd === today
                 const items = byDay.get(cd)!
                 const over = calOverDay === cd && !!calDrag
+                const expanded = calExpanded.has(cd)
+                const shown = expanded ? items : items.slice(0, CAP)
                 return (
                   <div key={cd} data-calday={cd} style={{ ...cell, background: over ? 'rgba(194,147,58,0.10)' : isTd ? 'rgba(194,147,58,0.05)' : inMonth ? '#fff' : 'rgba(15,35,64,0.02)', outline: over ? '1.5px dashed #C2933A' : 'none' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -2496,7 +2530,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       <span style={{ flex: 1 }} />
                       {inMonth && <button onClick={() => newTaskForDay(cd)} aria-label={`Nueva tarea ${fmtDue(cd)}`} title="Nueva tarea" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.5)', fontSize: 11, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>}
                     </div>
-                    {items.slice(0, CAP).map(x => {
+                    {shown.map(x => {
                       const { e, t, i } = x; const k = planKey(e.id, i); const dragging = calDrag === k; const done = t.status === 'Terminada'
                       return (
                         <div key={k} onPointerDown={ev => onCalDown(ev, k)} onPointerMove={onCalMove} onPointerUp={() => onCalUp(x)} onPointerCancel={onCalCancel}
@@ -2506,7 +2540,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                       )
                     })}
-                    {items.length > CAP && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>+ {items.length - CAP} más</span>}
+                    {items.length > CAP && (
+                      <button onClick={() => setCalExpanded(s => { const n = new Set(s); if (n.has(cd)) n.delete(cd); else n.add(cd); return n })}
+                        title={expanded ? 'Ver menos' : `Ver las ${items.length - CAP} restantes`}
+                        style={{ alignSelf: 'flex-start', cursor: 'pointer', border: 'none', background: 'transparent', padding: '1px 2px', fontSize: 10, fontWeight: 700, color: '#A87A2C' }}>
+                        {expanded ? '− menos' : `+ ${items.length - CAP} más`}
+                      </button>
+                    )}
                   </div>
                 )
               })}
@@ -2524,7 +2564,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const [y, m] = viewDate.split('-').map(Number)
     const lastDay = new Date(y, m, 0).getDate()
     const days = Array.from({ length: lastDay }, (_, k) => `${monthStr}-${String(k + 1).padStart(2, '0')}`)
-    const dayW = 30
+    const dayW = TL_DAY_W   // debe coincidir con el paso usado al soltar la barra
     const idxOf = (iso: string) => Math.max(0, Math.min(lastDay - 1, Number(iso.slice(8, 10)) - 1))
     const inMonth = (iso?: string) => !!iso && iso.slice(0, 7) === monthStr
     const groups = activeEpics.map(e => {
@@ -2574,10 +2614,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <span style={{ fontSize: 11.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{t.t}</span>
                       </div>
                       <div style={{ position: 'relative', width: trackW, height: 30 }}>
-                        <button onClick={() => setTaskView({ eId: e.id, i })} title={`${t.t}${t.plan ? ' · plan ' + fmtDue(t.plan) : ''}${t.due ? ' · vence ' + fmtDue(t.due) : ''}`}
-                          style={{ position: 'absolute', top: 6, left: s * dayW + 2, width: (en - s + 1) * dayW - 4, height: 18, borderRadius: 5, cursor: 'pointer', border: 'none', background: done ? 'rgba(62,142,142,0.25)' : e.color, opacity: done ? 0.7 : 1, display: 'flex', alignItems: 'center', padding: '0 6px', overflow: 'hidden' }}>
-                          <span style={{ fontSize: 9.5, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.t}</span>
-                        </button>
+                        {(() => {
+                          const bk = planKey(e.id, i); const bdrag = tlDragKey === bk
+                          const off = bdrag ? tlOffset : 0
+                          const snapped = bdrag ? Math.round(off / dayW) * dayW : 0
+                          return (
+                            <button onPointerDown={ev => onTlDown(ev, bk, e, i)} onPointerMove={onTlMove} onPointerUp={onTlUp} onPointerCancel={onTlCancel}
+                              title={`${t.t}${t.plan ? ' · plan ' + fmtDue(t.plan) : ''}${t.due ? ' · vence ' + fmtDue(t.due) : ''} — arrastra para correr las fechas`}
+                              style={{ position: 'absolute', top: 6, left: s * dayW + 2 + snapped, width: (en - s + 1) * dayW - 4, height: 18, borderRadius: 5, cursor: bdrag ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', border: 'none', background: done ? 'rgba(62,142,142,0.25)' : e.color, opacity: tlDragKey && !bdrag ? 0.45 : done ? 0.7 : 1, display: 'flex', alignItems: 'center', padding: '0 6px', overflow: 'hidden', boxShadow: bdrag ? '0 10px 18px -10px rgba(15,35,64,0.6)' : 'none', zIndex: bdrag ? 3 : 1, transition: bdrag ? 'none' : 'left .12s' }}>
+                              <span style={{ fontSize: 9.5, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.t}</span>
+                            </button>
+                          )
+                        })()}
                         {t.due && inMonth(t.due) && <span title={`Vence ${fmtDue(t.due)}`} style={{ position: 'absolute', top: 4, left: idxOf(t.due) * dayW + dayW / 2 - 1, width: 2, height: 22, background: dt.c, opacity: 0.5 }} />}
                       </div>
                     </div>
