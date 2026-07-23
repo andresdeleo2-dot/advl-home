@@ -383,7 +383,7 @@ type Prefs = {
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
   planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes'
-  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'
+  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; epicView: 'lista' | 'tabla'
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
@@ -394,7 +394,7 @@ type Prefs = {
 const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
-  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, dayView: 'lista', epicSort: 'grupo', epicFilter: 'todas',
+  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, dayView: 'lista', epicView: 'lista', epicSort: 'grupo', epicFilter: 'todas',
   backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
@@ -471,6 +471,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
   const [dayView, setDayView] = useState<'lista' | 'tabla'>('lista') // vista de la lista del enfoque de día
   const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'plan', dir: 'asc' })
+  const [epicView, setEpicView] = useState<'lista' | 'tabla'>('lista') // vista de "Todas las épicas"
+  const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
@@ -543,7 +545,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
-    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView)
+    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setEpicView(p.epicView)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
@@ -557,13 +559,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone, dayView,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone, dayView,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
 
@@ -1334,6 +1336,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const toggleArchive = (e: Epica) => {
     patchEpic(e.id, { archived: !e.archived })
     showToast(e.archived ? 'Épica reactivada' : 'Épica archivada')
+  }
+  // Edición inline de campos simples de una épica (tabla de épicas)
+  const patchEpicField = (id: string, changes: Partial<Epica>) => patchEpic(id, changes)
+  // Mueve una épica arriba/abajo en la tabla, reasignando epic_order 10,20,30…
+  const reorderEpicList = (ordered: Epica[], from: number, dir: 'up' | 'down') => {
+    const to = dir === 'up' ? from - 1 : from + 1
+    if (to < 0 || to >= ordered.length) return
+    const arr = [...ordered]
+    const [m] = arr.splice(from, 1)
+    arr.splice(to, 0, m)
+    arr.forEach((e, pos) => { const o = pos * 10; if (e.epic_order !== o) patchEpic(e.id, { epic_order: o }) })
   }
 
   /* ─── Popup de edición por tarea ─────────────────────────── */
@@ -3088,6 +3101,85 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  /** Tabla editable de "Todas las épicas": celdas inline, encabezados ordenables
+   *  y flechas para mover una épica arriba/abajo (orden manual = epic_order). */
+  const renderEpicTable = (epicsIn: Epica[]) => {
+    const manual = epicTableSort.key === 'manual'
+    const dir = epicTableSort.dir === 'asc' ? 1 : -1
+    const cmp = (a: Epica, b: Epica) => {
+      const k = epicTableSort.key; let r = 0
+      if (k === 't') r = a.name.localeCompare(b.name, 'es')
+      else if (k === 'status') r = EPIC_STATUSES.indexOf(a.status) - EPIC_STATUSES.indexOf(b.status)
+      else if (k === 'cat') r = (a.categoria || '~').localeCompare(b.categoria || '~', 'es')
+      else if (k === 'tasks') r = pendCount(a) - pendCount(b)
+      else if (k === 'progress') r = pctOf(a) - pctOf(b)
+      else r = (a.epic_order ?? 1e9) - (b.epic_order ?? 1e9) || a.name.localeCompare(b.name, 'es')
+      return manual ? r : (r * dir || a.name.localeCompare(b.name, 'es'))
+    }
+    const rows = [...epicsIn].sort(cmp)
+    const setSort = (key: string) => setEpicTableSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
+    const th = (key: string, label: string) => (
+      <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: epicTableSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{epicTableSort.key === key ? (epicTableSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+    )
+    const cellInp: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 6, padding: '5px 7px', fontSize: 13, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }
+    const selSt: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, background: '#fff', outline: 'none' }
+    const arrow: CSSProperties = { height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 12, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+    return (
+      <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)' }}>
+              <th style={{ width: 62, padding: '8px 6px 8px 12px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: manual ? '#A87A2C' : 'rgba(15,35,64,0.4)' }}>{manual ? 'Orden' : <button onClick={() => setSort('manual')} title="Volver al orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(15,35,64,0.5)', font: 'inherit', textTransform: 'uppercase' }}>Manual</button>}</th>
+              {th('t', 'Épica')}{th('status', 'Estado')}{th('cat', 'Categoría')}{th('tasks', 'Tareas')}{th('progress', 'Progreso')}
+              <th style={{ width: 54 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e, idx) => {
+              const pct = pctOf(e); const pend = pendCount(e); const st = statusStyle(e.status)
+              return (
+                <tr key={e.id} className="backlog-row" style={{ borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+                  <td style={{ padding: '4px 6px 4px 12px', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      <button onClick={() => reorderEpicList(rows, idx, 'up')} disabled={!manual || idx === 0} aria-label="Subir" title={manual ? 'Subir' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!manual || idx === 0) ? 0.35 : 1 }}>↑</button>
+                      <button onClick={() => reorderEpicList(rows, idx, 'down')} disabled={!manual || idx === rows.length - 1} aria-label="Bajar" title={manual ? 'Bajar' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!manual || idx === rows.length - 1) ? 0.35 : 1 }}>↓</button>
+                    </div>
+                  </td>
+                  <td style={{ padding: '4px 6px', minWidth: 200 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                      <input defaultValue={e.name} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== e.name) patchEpicField(e.id, { name: v }) }} style={cellInp} />
+                    </span>
+                  </td>
+                  <td style={{ padding: '4px 6px' }}>
+                    <select value={e.status} onChange={ev => patchEpicField(e.id, { status: ev.target.value })} style={{ ...selSt, color: st.color }}>{EPIC_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                  </td>
+                  <td style={{ padding: '4px 6px' }}>
+                    <input defaultValue={e.categoria || ''} placeholder="—" onBlur={ev => { const v = ev.target.value.trim(); if (v !== (e.categoria || '')) patchEpicField(e.id, { categoria: v || null }) }} style={{ ...cellInp, width: 130 }} />
+                  </td>
+                  <td style={{ padding: '4px 6px', whiteSpace: 'nowrap', fontSize: 12, color: 'rgba(20,35,61,0.6)' }}>{pend > 0 ? `${pend} activas` : 'Al corriente'}</td>
+                  <td style={{ padding: '4px 10px', minWidth: 130 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flex: 1, height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${pct}%`, height: '100%', background: e.color }} /></span>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#10233F', minWidth: 30, textAlign: 'right' }}>{pct}%</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: '4px 10px 4px 6px', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => openEdit(e.id)} aria-label="Editar" title="Editar" style={arrow}><PencilIcon /></button>
+                      <button onClick={() => setFeaturedId(e.id)} aria-label="Ver épica" title="Ver épica" style={{ ...arrow, background: 'rgba(194,147,58,0.12)', color: '#A87A2C', border: 'none' }}><ArrowIcon /></button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+            {rows.length === 0 && <tr><td colSpan={7} style={{ padding: '18px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>No hay épicas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
   function renderEditor() {
     if (!editing) return null
     const d = editing
@@ -3583,15 +3675,31 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <h2 style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', margin: 0 }}>Todas las épicas</h2>
           <span style={{ height: 1, flex: 1, minWidth: 40, background: 'rgba(15,35,64,0.09)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {(['Pendientes', 'Progreso', 'Nombre'] as const).map(s => (
-              <button key={s} onClick={() => setSortBy(s)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, color: sortBy === s ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{s}</button>
-            ))}
-            <span style={{ width: 1, height: 14, background: 'rgba(15,35,64,0.12)' }} />
-            <button onClick={() => setCompact(v => !v)} aria-label="Compacto" title="Compacto" style={{ cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, color: compact ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>Compacto</button>
-            <button onClick={() => setShowRowKpi(v => !v)} aria-label="Mostrar KPI" title="Mostrar KPI" style={{ cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, color: showRowKpi ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>KPI</button>
+            {/* Vista Lista | Tabla de las épicas */}
+            <div role="group" aria-label="Vista de épicas" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+              {([['lista', 'Lista'], ['tabla', 'Tabla']] as const).map(([v, label]) => {
+                const onv = epicView === v
+                return <button key={v} aria-pressed={onv} onClick={() => setEpicView(v)} style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '5px 11px', font: '700 11px var(--font-ui)', background: onv ? '#10233F' : 'transparent', color: onv ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+              })}
+            </div>
+            {epicView === 'lista' && <>
+              <span style={{ width: 1, height: 14, background: 'rgba(15,35,64,0.12)' }} />
+              {(['Pendientes', 'Progreso', 'Nombre'] as const).map(s => (
+                <button key={s} onClick={() => setSortBy(s)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, color: sortBy === s ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{s}</button>
+              ))}
+              <span style={{ width: 1, height: 14, background: 'rgba(15,35,64,0.12)' }} />
+              <button onClick={() => setCompact(v => !v)} aria-label="Compacto" title="Compacto" style={{ cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, color: compact ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>Compacto</button>
+              <button onClick={() => setShowRowKpi(v => !v)} aria-label="Mostrar KPI" title="Mostrar KPI" style={{ cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, color: showRowKpi ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>KPI</button>
+            </>}
           </div>
         </div>
 
+        {epicView === 'tabla' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {renderEpicTable(visibleEpics)}
+            <button onClick={openNew} style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: '1.5px dashed rgba(15,35,64,0.18)', background: 'transparent', borderRadius: 12, padding: '10px 16px', fontSize: 12.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}><span style={{ fontSize: 16, lineHeight: 1 }}>+</span> Nueva épica</button>
+          </div>
+        ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 8 : 10 }}>
           {rest.map(e => {
             const st = statusStyle(e.status); const pct = pctOf(e); const pend = pendCount(e)
@@ -3640,6 +3748,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <span style={{ fontSize: 18, lineHeight: 1 }}>+</span> Nueva épica
           </button>
         </div>
+        )}
       </div>
 
       {editing && renderEditor()}
