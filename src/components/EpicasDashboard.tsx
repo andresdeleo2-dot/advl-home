@@ -315,6 +315,11 @@ function difStyle(d: Dif | undefined) {
   }
   return m[d || 'media']
 }
+/** Peso de una tarea para el "presupuesto del día": fácil 1, media 2, difícil 3.
+ *  Sin dificultad se asume media, que es lo más común. */
+const DIF_WEIGHT: Record<string, number> = { facil: 1, media: 2, dificil: 3 }
+const taskWeight = (t: EpicaTask) => DIF_WEIGHT[t.difficulty || 'media'] ?? 2
+
 /** Tres puntos ascendentes (distintos de las barras de prioridad) para codificar dificultad. */
 function DifDots({ d, size = 12 }: { d: Dif | undefined; size?: number }) {
   const ds = difStyle(d)
@@ -390,7 +395,7 @@ type Prefs = {
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
   planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline'
-  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; epicView: 'lista' | 'tabla'
+  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; epicView: 'lista' | 'tabla'; dayCapacity: number
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
@@ -401,7 +406,7 @@ type Prefs = {
 const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
-  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, dayView: 'lista', epicView: 'lista', epicSort: 'grupo', epicFilter: 'todas',
+  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, dayView: 'lista', epicView: 'lista', dayCapacity: 8, epicSort: 'grupo', epicFilter: 'todas',
   backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
@@ -473,6 +478,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
   const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline'>('dia') // horizonte del enfoque
   const [dayTableEdit, setDayTableEdit] = useState(false)          // edición inline de la tabla del día
+  const [dayCapacity, setDayCapacity] = useState(8)                // presupuesto de carga del día (puntos)
   const [calDrag, setCalDrag] = useState<string | null>(null)      // tarjeta arrastrada en el calendario
   const [calOverDay, setCalOverDay] = useState<string | null>(null)
   const calDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -562,7 +568,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
-    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setEpicView(p.epicView)
+    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setEpicView(p.epicView); setDayCapacity(p.dayCapacity || 8)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
@@ -576,15 +582,49 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
+
+  /* ─── Estado en la URL ───────────────────────────────────────
+     Vista, día, épica y filtros viajan en el query string: el enlace es
+     compartible y recargar te deja donde estabas. Se aplica DESPUÉS de las
+     preferencias (la URL manda sobre lo guardado). */
+  const urlReady = useRef(false)
+  useEffect(() => {
+    const MODES = ['dia', 'semana', '2sem', '3sem', 'mes', 'calendario', 'timeline']
+    const applyFromUrl = () => {
+      const q = new URLSearchParams(window.location.search)
+      const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode(v as typeof planMode)
+      const d = q.get('d'); if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setViewDate(d)
+      const e = q.get('e'); if (e) setFeaturedId(e)
+      const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance'].includes(f)) setPlanFilter(f as typeof planFilter)
+      const ep = q.get('ep'); if (ep) setWeekEpica(ep)
+      const df = q.get('df'); if (df && ['todas', 'facil', 'media', 'dificil'].includes(df)) setWeekDif(df as typeof weekDif)
+    }
+    applyFromUrl()
+    urlReady.current = true
+    window.addEventListener('popstate', applyFromUrl)
+    return () => window.removeEventListener('popstate', applyFromUrl)
+  }, [])
+  useEffect(() => {
+    if (!urlReady.current) return
+    const q = new URLSearchParams()
+    q.set('v', planMode)
+    q.set('d', viewDate)
+    if (featuredId) q.set('e', featuredId)
+    if (planFilter !== 'todas') q.set('f', planFilter)
+    if (weekEpica !== 'todas') q.set('ep', weekEpica)
+    if (weekDif !== 'todas') q.set('df', weekDif)
+    const next = `${window.location.pathname}?${q.toString()}`
+    if (next !== window.location.pathname + window.location.search) window.history.replaceState(null, '', next)
+  }, [planMode, viewDate, featuredId, planFilter, weekEpica, weekDif])
 
   // El día se recalcula solo: una pestaña abierta pasada la medianoche seguía
   // mostrando "Hoy" del día anterior y no recalculaba las arrastradas.
@@ -710,6 +750,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       return false
     }
   }
+
+  /* ─── Deshacer genérico ──────────────────────────────────────
+     Toma una foto de las tareas de las épicas afectadas ANTES de mutar y la
+     ofrece en el toast. Sirve igual para una tarea o para una acción en lote. */
+  type Snap = { id: string; tasks: EpicaTask[] }
+  const snapshot = (epicIds: string[]): Snap[] => {
+    const seen = new Set<string>()
+    return epicIds.filter(id => !seen.has(id) && seen.add(id)).map(id => {
+      const e = epicsRef.current.find(x => x.id === id)
+      return e ? { id, tasks: clone(e.tasks) } : null
+    }).filter(Boolean) as Snap[]
+  }
+  const restore = (snaps: Snap[]) => snaps.forEach(s => patchEpic(s.id, { tasks: s.tasks }))
+  const undoToast = (msg: string, snaps: Snap[]) =>
+    showToast(msg, false, snaps.length ? { label: 'Deshacer', fn: () => restore(snaps) } : undefined)
 
   /* ─── Derivados de filtros (activas / archivadas / categoría) ─ */
   const activeEpics = useMemo(() => epics.filter(e => !e.archived), [epics])
@@ -887,10 +942,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!tasks[i].priority) tasks[i].priority = prioFromDue(tasks[i].due)
     if (prev !== dayISO || tasks[i].planOrder == null) tasks[i].planOrder = maxPlanOrderFor(dayISO) + 1000
     applyPlanStatus(tasks[i], dayISO)
+    const snaps = opts?.toast ? snapshot([e.id]) : []
     patchEpic(e.id, { tasks })
-    if (opts?.toast && dayISO !== viewDate) {
-      showToast(`Movida a ${relLong(dayISO).toLowerCase()}`, false, { label: 'Ver', fn: () => setViewDate(dayISO) })
-    }
+    if (opts?.toast && dayISO !== viewDate) undoToast(`Movida a ${relLong(dayISO).toLowerCase()}`, snaps)
   }
   const addToPlan = (e: Epica, i: number) => planTaskToDay(e, i, viewDate)
   const removeFromPlan = (e: Epica, i: number, withToast = true) => {
@@ -1054,19 +1108,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /** Aplica una mutación a toda la selección: un patch por épica tocada. */
   const planBulk = (mutate: (t: EpicaTask) => void, msg: string) => {
     const count = planSel.size
-    planSelGroup().forEach((idxs, eId) => {
+    const group = planSelGroup()
+    const snaps = snapshot([...group.keys()])
+    group.forEach((idxs, eId) => {
       const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
       const tasks = clone(ep.tasks)
       idxs.forEach(i => { if (tasks[i]) mutate(tasks[i]) })
       patchEpic(eId, { tasks })
     })
-    showToast(`${count} ${msg}`); setPlanSel(new Set())
+    undoToast(`${count} ${msg}`, snaps); setPlanSel(new Set())
   }
   const planBulkMove = (day: string) => {
     if (!day) return
     const count = planSel.size
     let base = maxPlanOrderFor(day)
-    planSelGroup().forEach((idxs, eId) => {
+    const group = planSelGroup()
+    const snaps = snapshot([...group.keys()])
+    group.forEach((idxs, eId) => {
       const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
       const tasks = clone(ep.tasks)
       idxs.forEach(i => {
@@ -1080,8 +1138,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       patchEpic(eId, { tasks })
     })
     setPlanSel(new Set())
-    showToast(`${count} ${count === 1 ? 'movida' : 'movidas'} a ${relLong(day).toLowerCase()}`, false,
-      day !== viewDate ? { label: 'Ver', fn: () => setViewDate(day) } : undefined)
+    undoToast(`${count} ${count === 1 ? 'movida' : 'movidas'} a ${relLong(day).toLowerCase()}`, snaps)
   }
   const planBulkDone = () => planBulk(t => {
     if (t.status === 'Terminada') return
@@ -1209,10 +1266,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const TL_DAY_W = 30
   const shiftTaskDates = (e: Epica, i: number, delta: number) => {
     if (!delta) return
+    const snaps = snapshot([e.id])
     const tasks = clone(e.tasks); const t = tasks[i]
     if (t.plan) { t.plan = addDays(t.plan, delta); t.planOrder = maxPlanOrderFor(t.plan) + 1000 }
     if (t.due) t.due = addDays(t.due, delta)
     patchEpic(e.id, { tasks })
+    undoToast(`${t.t} · ${delta > 0 ? '+' : ''}${delta} ${Math.abs(delta) === 1 ? 'día' : 'días'}`, snaps)
   }
   const onTlDown = (ev: React.PointerEvent, key: string, e: Epica, i: number) => {
     tlDragRef.current = { key, e, i, x: ev.clientX, moved: false }
@@ -2715,6 +2774,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               ) : !isToday && (
                 <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 14px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>‹ Hoy</button>
               )}
+              {/* Presupuesto del día: suma de pesos por dificultad de lo pendiente */}
+              {!board && planPend.length > 0 && (() => {
+                const load = planPend.reduce((n, x) => n + taskWeight(x.t), 0)
+                const pctLoad = dayCapacity > 0 ? load / dayCapacity : 0
+                const c = pctLoad > 1 ? '#B0522E' : pctLoad > 0.85 ? '#A87A2C' : '#2E6E6E'
+                const bg = pctLoad > 1 ? 'rgba(176,82,46,0.10)' : pctLoad > 0.85 ? 'rgba(194,147,58,0.12)' : 'rgba(62,142,142,0.10)'
+                return (
+                  <div title={`Carga del día: fácil 1 · media 2 · difícil 3. ${load} de ${dayCapacity} puntos.${pctLoad > 1 ? ' Vas sobrecargado.' : ''}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 99, padding: '5px 10px', background: bg, border: `1px solid ${c}44` }}>
+                    <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: c }}>Carga</span>
+                    <span style={{ width: 46, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden' }}>
+                      <span style={{ display: 'block', width: `${Math.min(100, pctLoad * 100)}%`, height: '100%', background: c }} />
+                    </span>
+                    <span style={{ font: '800 11px var(--font-ui)', color: c, whiteSpace: 'nowrap' }}>{load}/{dayCapacity}</span>
+                    <span style={{ display: 'inline-flex', gap: 2 }}>
+                      <button onClick={() => setDayCapacity(v => Math.max(1, v - 1))} aria-label="Bajar presupuesto" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', color: c, fontSize: 11, lineHeight: 1 }}>−</button>
+                      <button onClick={() => setDayCapacity(v => Math.min(40, v + 1))} aria-label="Subir presupuesto" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', color: c, fontSize: 11, lineHeight: 1 }}>+</button>
+                    </span>
+                  </div>
+                )
+              })()}
               {(board ? wTot > 0 : planTotal > 0) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                   <ProgressRing pct={board ? (wTot ? Math.round((wDone / wTot) * 100) : 0) : planPct} done={board ? wTot > 0 && wDone === wTot : planAllDone} />
@@ -3216,13 +3296,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     const bulkField = (mutate: (t: EpicaTask) => void, msg: string) => {
       const count = backlogSel.size
-      bulkGroup().forEach((idxs, eId) => {
+      const g = bulkGroup(); const snaps = snapshot([...g.keys()])
+      g.forEach((idxs, eId) => {
         const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
         const tasks = clone(ep.tasks)
         idxs.forEach(i => { if (tasks[i]) mutate(tasks[i]) })
         patchEpic(eId, { tasks })
       })
-      showToast(`${count} ${msg}`); setBacklogSel(new Set())
+      undoToast(`${count} ${msg}`, snaps); setBacklogSel(new Set())
     }
     const bulkStatus = (v: string) => bulkField(t => { if (v === 'Terminada' && t.status !== 'Terminada') t.planPrev = t.status; t.status = v; if (v === 'Terminada') { if (!t.doneAt) t.doneAt = todayISO() } else { delete t.doneAt; delete t.planPrev } }, `→ ${v}`)
     const bulkPrio = (v: Prio) => bulkField(t => { t.priority = v }, `· prioridad ${v}`)
@@ -3230,24 +3311,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const bulkPlan = (v: string) => {
       const count = backlogSel.size
       let base = v ? maxPlanOrderFor(v) : 0
-      bulkGroup().forEach((idxs, eId) => {
+      const g = bulkGroup(); const snaps = snapshot([...g.keys()])
+      g.forEach((idxs, eId) => {
         const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
         const tasks = clone(ep.tasks)
         idxs.forEach(i => { const t = tasks[i]; if (!t) return; if (v) { base += 1000; t.plan = v; if (!t.priority) t.priority = prioFromDue(t.due); t.planOrder = base } else { delete t.plan; delete t.planOrder }; applyPlanStatus(t, v) })
         patchEpic(eId, { tasks })
       })
-      showToast(`${count} · ${v ? 'planeadas' : 'sin planear'}`); setBacklogSel(new Set())
+      undoToast(`${count} · ${v ? 'planeadas' : 'sin planear'}`, snaps); setBacklogSel(new Set())
     }
     const bulkDelete = () => {
       const count = backlogSel.size
-      if (!window.confirm(`¿Eliminar ${count} ${count === 1 ? 'tarea' : 'tareas'}? No se puede deshacer.`)) return
-      bulkGroup().forEach((idxs, eId) => {
+      if (!window.confirm(`¿Eliminar ${count} ${count === 1 ? 'tarea' : 'tareas'}?`)) return
+      const g = bulkGroup(); const snaps = snapshot([...g.keys()])
+      g.forEach((idxs, eId) => {
         const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
         const tasks = clone(ep.tasks)
         idxs.sort((a, b) => b - a).forEach(i => { if (tasks[i]) tasks.splice(i, 1) })
         patchEpic(eId, { tasks })
       })
-      showToast(`${count} tareas eliminadas`); setBacklogSel(new Set())
+      undoToast(`${count} tareas eliminadas`, snaps); setBacklogSel(new Set())
     }
     const bulkSelStyle: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(255,255,255,0.22)', background: 'rgba(255,255,255,0.10)', color: '#fff', borderRadius: 8, padding: '6px 9px', fontSize: 11.5, fontWeight: 600, outline: 'none' }
     const filterSel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.65)', background: '#fff', outline: 'none' }
