@@ -383,7 +383,7 @@ type Prefs = {
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
   planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes'
-  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean
+  weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
@@ -394,7 +394,7 @@ type Prefs = {
 const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
-  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, epicSort: 'grupo', epicFilter: 'todas',
+  planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, epicSort: 'grupo', epicFilter: 'todas',
   backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
@@ -468,12 +468,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
+  const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [sprintDrag, setSprintDrag] = useState<string | null>(null) // tarjeta arrastrada en la vista multi-semana
   const [sprintOverCol, setSprintOverCol] = useState<string | null>(null) // lunes de la semana bajo el drag
+  const [sprintOverDay, setSprintOverDay] = useState<string | null>(null) // día concreto bajo el drag (mover a ese día)
   const sprintDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [hideYesterday, setHideYesterday] = useState(false)
   const [viewDate, setViewDate] = useState<string>(todayISO())               // día del plan en vista
@@ -539,7 +541,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
-    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen)
+    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
@@ -553,13 +555,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen,
+      weekEpica, weekDif, routinesOpen, boardHideDone,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen,
+      weekEpica, weekDif, routinesOpen, boardHideDone,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
 
@@ -1120,21 +1122,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       d.moved = true; setSprintDrag(d.key)
     }
     const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+    // Un día concreto tiene prioridad (mover a ESE día); si no, la semana (mismo día de la semana)
+    setSprintOverDay((el?.closest('[data-sprintday]') as HTMLElement | null)?.dataset.sprintday ?? null)
     setSprintOverCol((el?.closest('[data-weekcol]') as HTMLElement | null)?.dataset.weekcol ?? null)
   }
   const onSprintUp = (x: { e: Epica; t: EpicaTask; i: number }) => {
     const d = sprintDragRef.current
     sprintDragRef.current = null
-    const mon = sprintOverCol
-    setSprintDrag(null); setSprintOverCol(null)
+    const day = sprintOverDay, mon = sprintOverCol
+    setSprintDrag(null); setSprintOverCol(null); setSprintOverDay(null)
     if (!d) return
     if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }   // fue un clic
-    if (!mon || !x.t.plan) return
-    const wd = (new Date(x.t.plan + 'T00:00:00').getDay() + 6) % 7   // conserva el día de la semana
-    const target = addDays(mon, wd)
-    if (target !== x.t.plan) planTaskToDay(x.e, x.i, target, { toast: true })
+    if (!x.t.plan) return
+    // Soltaste sobre un día → ese día exacto; sobre la columna → mismo día de esa semana
+    let target = day
+    if (!target && mon) { const wd = (new Date(x.t.plan + 'T00:00:00').getDay() + 6) % 7; target = addDays(mon, wd) }
+    if (target && target !== x.t.plan) planTaskToDay(x.e, x.i, target, { toast: true })
   }
-  const onSprintCancel = () => { sprintDragRef.current = null; setSprintDrag(null); setSprintOverCol(null) }
+  const onSprintCancel = () => { sprintDragRef.current = null; setSprintDrag(null); setSprintOverCol(null); setSprintOverDay(null) }
 
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
   const computeDropIndex = (clientY: number) => {
@@ -1954,6 +1959,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <option value="media">Media</option>
           <option value="dificil">Difícil</option>
         </select>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Ocultar tareas completadas">
+          <input type="checkbox" checked={boardHideDone} onChange={e => setBoardHideDone(e.target.checked)} /> Ocultar completadas
+        </label>
         {(planFilter !== 'todas' || effWeekEpica !== 'todas' || weekDif !== 'todas') && (
           <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>
         )}
@@ -1994,15 +2002,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </div>
         )}
         {days.map(d => {
-          const list = byDay.get(d)!.filter(x => passF(x.t)).sort(cmp)
+          const full = byDay.get(d)!.filter(x => passF(x.t))
+          const list = full.filter(x => !(boardHideDone && x.t.status === 'Terminada')).sort(cmp)
           const isTd = d === today
           const past = d < today
           const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7   // 0 = lunes
           const isWeekend = wd >= 5
           const over = weekOverDay === d && !!weekDrag
-          const pend = list.filter(x => x.t.status !== 'Terminada').length
-          const done = list.length - pend
-          const allDone = list.length > 0 && pend === 0
+          const pend = full.filter(x => x.t.status !== 'Terminada').length
+          const done = full.length - pend
+          const allDone = full.length > 0 && pend === 0
           return (
             <div key={d} data-weekday={d}
               style={{ flex: '1 1 150px', minWidth: 150, maxWidth: 320, boxSizing: 'border-box', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.05)' : isWeekend ? 'rgba(15,35,64,0.02)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', opacity: past && !over ? 0.85 : 1, transition: 'background .15s, border-color .15s' }}>
@@ -2148,6 +2157,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <option value="todas">Toda dificultad</option>
           <option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
         </select>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Ocultar tareas completadas">
+          <input type="checkbox" checked={boardHideDone} onChange={e => setBoardHideDone(e.target.checked)} /> Ocultar completadas
+        </label>
         {(planFilter !== 'todas' || effEpica !== 'todas' || weekDif !== 'todas') && (
           <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>
         )}
@@ -2159,11 +2171,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const pend = items.filter(x => x.t.status !== 'Terminada').length
           const done = items.length - pend
           const allDone = items.length > 0 && pend === 0
-          const over = sprintOverCol === mon && !!sprintDrag
-          // agrupadas por día (solo los días con tareas), y ordenadas dentro del día
+          const over = sprintOverCol === mon && !sprintOverDay && !!sprintDrag
+          // Tarjetas visibles (respetan "ocultar completadas"), agrupadas por día.
           const dayMap = new Map<string, Row[]>()
-          items.forEach(x => { const k = x.t.plan!; if (!dayMap.has(k)) dayMap.set(k, []); dayMap.get(k)!.push(x) })
-          const dayKeys = [...dayMap.keys()].sort()
+          items.filter(x => !(boardHideDone && x.t.status === 'Terminada'))
+            .forEach(x => { const k = x.t.plan!; if (!dayMap.has(k)) dayMap.set(k, []); dayMap.get(k)!.push(x) })
+          // Los 7 días de la semana como zonas de destino: los vacíos sólo aparecen al arrastrar.
+          const weekDays = Array.from({ length: 7 }, (_, k) => addDays(mon, k))
+          const shownDays = weekDays.filter(dk => (dayMap.get(dk)?.length || 0) > 0 || !!sprintDrag)
+          const visibleCount = [...dayMap.values()].reduce((n, a) => n + a.length, 0)
           return (
             <div key={mon} data-weekcol={mon}
               style={{ flex: '1 1 240px', minWidth: 240, maxWidth: 380, boxSizing: 'border-box', borderRadius: 15, background: over ? 'rgba(194,147,58,0.07)' : hasToday ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : hasToday ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', transition: 'background .15s, border-color .15s' }}>
@@ -2180,21 +2196,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px', minHeight: 70 }}>
-                {items.length === 0 && (
-                  <div style={{ borderRadius: 10, border: '1px dashed rgba(15,35,64,0.14)', padding: '16px 8px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: over ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{over ? 'Soltar aquí' : 'Sin tareas'}</div>
+                {visibleCount === 0 && !sprintDrag && (
+                  <div style={{ borderRadius: 10, border: '1px dashed rgba(15,35,64,0.14)', padding: '16px 8px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: over ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{items.length > 0 ? 'Todo completado ✦' : 'Sin tareas'}</div>
                 )}
-                {dayKeys.map(dk => {
+                {shownDays.map(dk => {
                   const wd = (new Date(dk + 'T00:00:00').getDay() + 6) % 7
                   const isTd = dk === today
+                  const dayItems = (dayMap.get(dk) || []).sort(cmp)
+                  const dayOver = sprintOverDay === dk && !!sprintDrag
                   return (
-                    <div key={dk}>
+                    <div key={dk} data-sprintday={dk}
+                      style={{ borderRadius: 8, padding: dayOver ? 3 : 0, background: dayOver ? 'rgba(194,147,58,0.10)' : 'transparent', outline: dayOver ? '1.5px dashed #C2933A' : 'none', transition: 'background .1s' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 2px 3px' }}>
-                        <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{DAYNAMES[wd].slice(0, 3)} {dayNum(dk)}</span>
+                        <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : dayItems.length ? 'rgba(20,35,61,0.5)' : 'rgba(20,35,61,0.32)' }}>{DAYNAMES[wd].slice(0, 3)} {dayNum(dk)}</span>
                         {isTd && <span style={{ font: '700 8.5px var(--font-ui)', color: '#A87A2C' }}>HOY</span>}
                         <span style={{ height: 1, flex: 1, background: 'rgba(15,35,64,0.07)' }} />
                       </div>
+                      {dayItems.length === 0 && sprintDrag && (
+                        <div style={{ borderRadius: 8, border: '1px dashed rgba(15,35,64,0.16)', padding: '7px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: dayOver ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{dayOver ? 'Soltar aquí' : '—'}</div>
+                      )}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {dayMap.get(dk)!.sort(cmp).map(x => {
+                        {dayItems.map(x => {
                           const { e, t, i } = x
                           const k = planKey(e.id, i)
                           const dragging = sprintDrag === k
@@ -2205,7 +2227,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <div key={k}
                               onPointerDown={ev => onSprintDown(ev, k)} onPointerMove={onSprintMove}
                               onPointerUp={() => onSprintUp(x)} onPointerCancel={onSprintCancel}
-                              title={`${t.t} — arrastra a otra semana para reprogramar`}
+                              title={`${t.t} — arrastra a otro día o semana para reprogramar`}
                               style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${tdone ? '#2E6E6E' : ps.accent}`, borderRadius: 9, padding: '7px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: sprintDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
                               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
                                 <button onClick={ev => { ev.stopPropagation(); if (!tdone) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()}
