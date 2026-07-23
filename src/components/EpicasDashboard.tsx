@@ -216,6 +216,22 @@ function weekRangeLabel(monday: string): string {       // "14–20 jul" (o "28 
   const sM = cap(new Date(sunday + 'T00:00:00').toLocaleDateString('es-MX', { month: 'short' }).replace('.', ''))
   return mM === sM ? `${dayNum(monday)}–${dayNum(sunday)} ${mM}` : `${dayNum(monday)} ${mM} – ${dayNum(sunday)} ${sM}`
 }
+/** Etiqueta de un rango arbitrario ISO→ISO ("14 – 27 jul", "28 jul – 10 ago"). */
+function spanLabel(a: string, b: string): string {
+  const aM = cap(new Date(a + 'T00:00:00').toLocaleDateString('es-MX', { month: 'short' }).replace('.', ''))
+  const bM = cap(new Date(b + 'T00:00:00').toLocaleDateString('es-MX', { month: 'short' }).replace('.', ''))
+  return aM === bM ? `${dayNum(a)} – ${dayNum(b)} ${aM}` : `${dayNum(a)} ${aM} – ${dayNum(b)} ${bM}`
+}
+/** Lunes de cada semana que toca el mes de `iso` (para la vista "Mes"). */
+function monthWeekMondays(iso: string): string[] {
+  const [y, m] = iso.split('-').map(Number)
+  const first = `${iso.slice(0, 7)}-01`
+  const lastDay = new Date(y, m, 0).getDate()
+  const last = `${iso.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`
+  const out: string[] = []
+  for (let d = mondayISO(first); d <= mondayISO(last); d = addDays(d, 7)) out.push(d)
+  return out
+}
 function getRoutineWeek(r: EpicaRoutine, monday: string): boolean[] {
   const w = r.weeks?.[monday]
   return (w && w.length === 7) ? w : [false, false, false, false, false, false, false]
@@ -366,7 +382,7 @@ type Prefs = {
   estadoFilter: 'activas' | 'archivadas' | 'todas'; catFilter: string
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
-  planMode: 'dia' | 'semana'
+  planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes'
   weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean
   epicSort: 'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
@@ -448,7 +464,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
-  const [planMode, setPlanMode] = useState<'dia' | 'semana'>('dia') // enfoque diario vs semanal
+  const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes'>('dia') // enfoque diario vs semanal
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
@@ -456,6 +472,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
+  const [sprintDrag, setSprintDrag] = useState<string | null>(null) // tarjeta arrastrada en la vista multi-semana
+  const [sprintOverCol, setSprintOverCol] = useState<string | null>(null) // lunes de la semana bajo el drag
+  const sprintDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [hideYesterday, setHideYesterday] = useState(false)
   const [viewDate, setViewDate] = useState<string>(todayISO())               // día del plan en vista
   const [calOpen, setCalOpen] = useState(false)                              // popover de mes (masthead)
@@ -1086,6 +1105,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (day && day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
   }
   const onWeekCancel = () => { weekDragRef.current = null; setWeekDrag(null); setWeekOverDay(null) }
+
+  /* ─── Vista multi-semana (sprint): arrastrar tarjetas entre semanas ───
+     Soltar en otra semana reprograma la tarea al MISMO día de la semana destino
+     (lun→lun, mié→mié…), como mover una historia al siguiente sprint. */
+  const onSprintDown = (ev: React.PointerEvent, key: string) => {
+    sprintDragRef.current = { key, x: ev.clientX, y: ev.clientY, moved: false }
+    try { (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId) } catch { /* noop */ }
+  }
+  const onSprintMove = (ev: React.PointerEvent) => {
+    const d = sprintDragRef.current; if (!d) return
+    if (!d.moved) {
+      if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 6) return
+      d.moved = true; setSprintDrag(d.key)
+    }
+    const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+    setSprintOverCol((el?.closest('[data-weekcol]') as HTMLElement | null)?.dataset.weekcol ?? null)
+  }
+  const onSprintUp = (x: { e: Epica; t: EpicaTask; i: number }) => {
+    const d = sprintDragRef.current
+    sprintDragRef.current = null
+    const mon = sprintOverCol
+    setSprintDrag(null); setSprintOverCol(null)
+    if (!d) return
+    if (!d.moved) { setTaskView({ eId: x.e.id, i: x.i }); return }   // fue un clic
+    if (!mon || !x.t.plan) return
+    const wd = (new Date(x.t.plan + 'T00:00:00').getDay() + 6) % 7   // conserva el día de la semana
+    const target = addDays(mon, wd)
+    if (target !== x.t.plan) planTaskToDay(x.e, x.i, target, { toast: true })
+  }
+  const onSprintCancel = () => { sprintDragRef.current = null; setSprintDrag(null); setSprintOverCol(null) }
 
   /* Drag por manija (pointer events; mouse + touch con setPointerCapture) */
   const computeDropIndex = (clientY: number) => {
@@ -2039,19 +2088,191 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  /** Vista multi-semana (2 sem / 3 sem / mes) tipo sprint: una columna por semana,
+   *  con las tareas agrupadas por día. Arrastra una tarjeta a otra semana para
+   *  reprogramarla (mismo día de la semana). Comparte filtros con la vista semana. */
+  const renderPlanSprint = (weekMondays: string[]) => {
+    const hStart = weekMondays[0]
+    const hEnd = addDays(weekMondays[weekMondays.length - 1], 6)
+    const inHorizon = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd
+    const horizonEpics = activeEpics.filter(e => (e.tasks || []).some(inHorizon))
+    const effEpica = horizonEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+      : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
+      : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : true
+    type Row = { e: Epica; t: EpicaTask; i: number }
+    const cmp = (a: Row, b: Row) => {
+      const df = (a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)
+      if (df) return df
+      if (planSort === 'prioridad') return (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) || ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9))
+      if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
+      if (planSort === 'avance') return (b.t.progress || 0) - (a.t.progress || 0)
+      if (planSort === 'epica') return a.e.name.localeCompare(b.e.name, 'es')
+      return (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
+    }
+    const cols = weekMondays.map(mon => {
+      const sun = addDays(mon, 6)
+      const items: Row[] = []
+      activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
+        if (!t.plan || t.status === ARCHIVED || t.plan < mon || t.plan > sun) return
+        if (effEpica !== 'todas' && e.id !== effEpica) return
+        if (weekDif !== 'todas' && (t.difficulty || '') !== weekDif) return
+        if (!passF(t)) return
+        items.push({ e, t, i })
+      }))
+      return { mon, sun, items }
+    })
+
+    return (
+      <>
+      {/* Filtros — iguales que en la vista semana */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
+        <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar dentro de cada día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="plan">Orden manual</option>
+          <option value="prioridad">Prioridad</option>
+          <option value="entrega">Entrega</option>
+          <option value="avance">Avance</option>
+          <option value="epica">Épica</option>
+        </select>
+        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+          const on = planFilter === k
+          return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+        })}
+        <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
+        <select value={effEpica} onChange={e => setWeekEpica(e.target.value)} disabled={horizonEpics.length === 0} title="Filtrar por épica" style={{ cursor: horizonEpics.length === 0 ? 'default' : 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: effEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', opacity: horizonEpics.length === 0 ? 0.55 : 1 }}>
+          <option value="todas">{horizonEpics.length === 0 ? 'Sin épicas' : 'Todas las épicas'}</option>
+          {horizonEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
+        </select>
+        <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="todas">Toda dificultad</option>
+          <option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+        </select>
+        {(planFilter !== 'todas' || effEpica !== 'todas' || weekDif !== 'todas') && (
+          <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
+        {cols.map(({ mon, sun, items }) => {
+          const hasToday = today >= mon && today <= sun
+          const pend = items.filter(x => x.t.status !== 'Terminada').length
+          const done = items.length - pend
+          const allDone = items.length > 0 && pend === 0
+          const over = sprintOverCol === mon && !!sprintDrag
+          // agrupadas por día (solo los días con tareas), y ordenadas dentro del día
+          const dayMap = new Map<string, Row[]>()
+          items.forEach(x => { const k = x.t.plan!; if (!dayMap.has(k)) dayMap.set(k, []); dayMap.get(k)!.push(x) })
+          const dayKeys = [...dayMap.keys()].sort()
+          return (
+            <div key={mon} data-weekcol={mon}
+              style={{ flex: '1 1 240px', minWidth: 240, maxWidth: 380, boxSizing: 'border-box', borderRadius: 15, background: over ? 'rgba(194,147,58,0.07)' : hasToday ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : hasToday ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', transition: 'background .15s, border-color .15s' }}>
+              {/* Cabecera de la semana (sprint) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px 9px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+                {hasToday && <span title="Semana en curso" style={{ width: 7, height: 7, borderRadius: 99, background: '#A87A2C', flexShrink: 0 }} />}
+                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: hasToday ? '#A87A2C' : '#10233F' }}>{weekRangeLabel(mon)}</span>
+                {items.length > 0 && (
+                  <span style={{ height: 16, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: allDone ? 'rgba(62,142,142,0.14)' : 'rgba(194,147,58,0.14)', color: allDone ? '#2E6E6E' : '#A87A2C' }}>{allDone ? '✓' : `${done}/${items.length}`}</span>
+                )}
+                <span style={{ flex: 1 }} />
+                <button onClick={() => newTaskForDay(hasToday ? today : mon)} aria-label={`Nueva tarea la semana de ${weekRangeLabel(mon)}`} title="Nueva tarea esta semana"
+                  style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 14, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px', minHeight: 70 }}>
+                {items.length === 0 && (
+                  <div style={{ borderRadius: 10, border: '1px dashed rgba(15,35,64,0.14)', padding: '16px 8px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: over ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{over ? 'Soltar aquí' : 'Sin tareas'}</div>
+                )}
+                {dayKeys.map(dk => {
+                  const wd = (new Date(dk + 'T00:00:00').getDay() + 6) % 7
+                  const isTd = dk === today
+                  return (
+                    <div key={dk}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 2px 3px' }}>
+                        <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{DAYNAMES[wd].slice(0, 3)} {dayNum(dk)}</span>
+                        {isTd && <span style={{ font: '700 8.5px var(--font-ui)', color: '#A87A2C' }}>HOY</span>}
+                        <span style={{ height: 1, flex: 1, background: 'rgba(15,35,64,0.07)' }} />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {dayMap.get(dk)!.sort(cmp).map(x => {
+                          const { e, t, i } = x
+                          const k = planKey(e.id, i)
+                          const dragging = sprintDrag === k
+                          const tdone = t.status === 'Terminada'
+                          const ps = prioStyle(t.priority)
+                          const dt = dueTone(t.due, tdone)
+                          return (
+                            <div key={k}
+                              onPointerDown={ev => onSprintDown(ev, k)} onPointerMove={onSprintMove}
+                              onPointerUp={() => onSprintUp(x)} onPointerCancel={onSprintCancel}
+                              title={`${t.t} — arrastra a otra semana para reprogramar`}
+                              style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${tdone ? '#2E6E6E' : ps.accent}`, borderRadius: 9, padding: '7px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: sprintDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
+                                <button onClick={ev => { ev.stopPropagation(); if (!tdone) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()}
+                                  aria-label={tdone ? 'Marcar sin terminar' : 'Marcar terminada'} title={tdone ? 'Marcar sin terminar' : 'Marcar terminada'}
+                                  style={{ flexShrink: 0, marginTop: 1, height: 18, width: 18, borderRadius: 99, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: tdone ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: tdone ? '#2E6E6E' : '#fff', color: '#fff' }}>
+                                  {tdone && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                                </button>
+                                <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, color: tdone ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: tdone ? 'line-through' : 'none' }}>{t.t}</div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 6, paddingLeft: 25 }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                                {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 6px' }}>{fmtDue(t.due)}</span>}
+                                {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 9.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻</span>}
+                                <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} onPointerDown={ev => ev.stopPropagation()}
+                                  title={t.difficulty ? `Dificultad: ${difStyle(t.difficulty).label} · clic para cambiar` : 'Poner dificultad'}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer', border: 'none', borderRadius: 99, padding: t.difficulty ? '1px 6px' : '1px 3px', background: t.difficulty ? difStyle(t.difficulty).bg : 'transparent', color: t.difficulty ? difStyle(t.difficulty).c : 'rgba(20,35,61,0.4)' }}>
+                                  <DifDots d={t.difficulty} size={9} />{t.difficulty && <span style={{ font: '700 9.5px var(--font-ui)' }}>{difStyle(t.difficulty).label}</span>}
+                                </button>
+                                {typeof t.progress === 'number' && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      </>
+    )
+  }
+
   const renderPlanToday = () => {
     const week = planMode === 'semana'
+    const multi = planMode === '2sem' || planMode === '3sem' || planMode === 'mes'
+    const board = week || multi
     const weekMonday = mondayISO(viewDate)
     const todayMonday = mondayISO(today)
+    // Semanas del horizonte según el modo
+    const weekMondays = planMode === 'mes' ? monthWeekMondays(viewDate)
+      : Array.from({ length: planMode === '3sem' ? 3 : planMode === '2sem' ? 2 : 1 }, (_, k) => addDays(weekMonday, k * 7))
+    const hStart = weekMondays[0]
+    const hEnd = addDays(weekMondays[weekMondays.length - 1], 6)
+    const horizonHasToday = today >= hStart && today <= hEnd
     const weekRel = weekMonday === todayMonday ? 'Esta semana'
       : weekMonday === addDays(todayMonday, 7) ? 'Próxima semana'
       : weekMonday === addDays(todayMonday, -7) ? 'Semana pasada'
       : weekRangeLabel(weekMonday)
-    // Progreso de la semana (para el anillo del masthead en modo semana)
+    // Etiquetas del masthead
+    const bigLabel = planMode === 'mes'
+      ? cap(new Date(viewDate + 'T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
+      : week ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
+    const eyebrow = week ? 'Enfoque de la semana' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
+    const topLabel = week ? weekRel
+      : planMode === 'mes' ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
+      : (horizonHasToday ? `Próximas ${weekMondays.length} semanas` : spanLabel(hStart, hEnd))
+    // Progreso del horizonte (semana o multi)
     let wTot = 0, wDone = 0
-    if (week) activeEpics.forEach(e => (e.tasks || []).forEach(t => {
-      if (t.plan && t.status !== ARCHIVED && t.plan >= weekMonday && t.plan <= addDays(weekMonday, 6)) { wTot++; if (t.status === 'Terminada') wDone++ }
+    if (board) activeEpics.forEach(e => (e.tasks || []).forEach(t => {
+      if (t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd) { wTot++; if (t.status === 'Terminada') wDone++ }
     }))
+    const goPrev = () => setViewDate(planMode === 'mes' ? addMonths(viewDate, -1) : addDays(viewDate, -weekMondays.length * 7))
+    const goNext = () => setViewDate(planMode === 'mes' ? addMonths(viewDate, 1) : addDays(viewDate, weekMondays.length * 7))
     const empty = planTotal === 0
     const suggestions: { e: Epica; i: number; t: EpicaTask }[] = []
     if (empty) {
@@ -2069,45 +2290,45 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <div className="plan-body" style={{ padding: '26px 28px' }}>
           <div className="plan-mast" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <span className="serif" style={{ fontStyle: 'italic', fontSize: 14, color: '#A87A2C' }}>{week ? weekRel : isToday ? greeting() : relLong(viewDate)}</span>
-              <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.22em', textTransform: 'uppercase', color: '#A87A2C' }}>{week ? 'Enfoque de la semana' : isToday ? 'Enfoque de hoy' : 'Plan del día'}</span>
-              {week
-                ? <span className="serif plan-date" style={{ fontWeight: 600, fontSize: 30, lineHeight: 1, color: '#10233F' }}>{weekRangeLabel(weekMonday)}</span>
+              <span className="serif" style={{ fontStyle: 'italic', fontSize: 14, color: '#A87A2C' }}>{board ? topLabel : isToday ? greeting() : relLong(viewDate)}</span>
+              <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.22em', textTransform: 'uppercase', color: '#A87A2C' }}>{board ? eyebrow : isToday ? 'Enfoque de hoy' : 'Plan del día'}</span>
+              {board
+                ? <span className="serif plan-date" style={{ fontWeight: 600, fontSize: 30, lineHeight: 1, color: '#10233F' }}>{bigLabel}</span>
                 : isToday && planAllDone
                   ? <span className="serif plan-date" style={{ fontStyle: 'italic', fontSize: 26, lineHeight: 1, color: '#A87A2C' }}>Enfoque cumplido ✦</span>
                   : <span className="serif plan-date" style={{ fontWeight: 600, fontSize: 30, lineHeight: 1, color: '#10233F' }}>{dateLabel(viewDate)}</span>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              {/* Interruptor Día | Semana */}
-              <div role="group" aria-label="Vista del enfoque" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
-                {([['dia', 'Día'], ['semana', 'Semana']] as const).map(([m, label]) => {
+              {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
+              <div role="group" aria-label="Vista del enfoque" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
+                {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes']] as const).map(([m, label]) => {
                   const on = planMode === m
-                  return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 13px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s' }}>{label}</button>
+                  return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
               </div>
-              {/* Navegación: por semana o "‹ Hoy" según el modo */}
-              {week ? (
+              {/* Navegación por horizonte, o "‹ Hoy" en modo día */}
+              {board ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <button onClick={() => setViewDate(addDays(viewDate, -7))} aria-label="Semana anterior" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
-                  {weekMonday !== todayMonday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Esta semana</button>}
-                  <button onClick={() => setViewDate(addDays(viewDate, 7))} aria-label="Semana siguiente" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
+                  <button onClick={goPrev} aria-label="Período anterior" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
+                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{planMode === 'mes' ? 'Este mes' : week ? 'Esta semana' : 'Ahora'}</button>}
+                  <button onClick={goNext} aria-label="Período siguiente" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
                 </div>
               ) : !isToday && (
                 <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 14px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>‹ Hoy</button>
               )}
-              {(week ? wTot > 0 : planTotal > 0) && (
+              {(board ? wTot > 0 : planTotal > 0) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                  <ProgressRing pct={week ? (wTot ? Math.round((wDone / wTot) * 100) : 0) : planPct} done={week ? wTot > 0 && wDone === wTot : planAllDone} />
-                  <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)', whiteSpace: 'nowrap' }}><span className="serif" style={{ fontSize: 18, color: '#10233F' }}>{week ? wDone : planDone.length}</span> de {week ? wTot : planTotal} hechas</span>
+                  <ProgressRing pct={board ? (wTot ? Math.round((wDone / wTot) * 100) : 0) : planPct} done={board ? wTot > 0 && wDone === wTot : planAllDone} />
+                  <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)', whiteSpace: 'nowrap' }}><span className="serif" style={{ fontSize: 18, color: '#10233F' }}>{board ? wDone : planDone.length}</span> de {board ? wTot : planTotal} hechas</span>
                 </div>
               )}
               {/* Dos caminos distintos: traer algo que ya existe, o crear algo nuevo. */}
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
-              <button onClick={() => newTaskForDay(week ? (weekMonday <= today && today <= addDays(weekMonday, 6) ? today : weekMonday) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
+              <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
           </div>
 
-          {week ? renderPlanWeek() : (<>
+          {week ? renderPlanWeek() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
 
