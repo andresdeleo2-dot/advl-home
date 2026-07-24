@@ -178,6 +178,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
+  const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
+  const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
@@ -2706,16 +2708,57 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const orden = [...faltan].sort((a, b) => { const A = rank(a), B = rank(b); return (A[0] - B[0]) || String(A[1]).localeCompare(String(B[1])) || (A[2] - B[2]) })
           return (
             <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20, ...(faltan.length ? { border: '1px solid rgba(176,82,46,0.28)' } : {}) }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
-                <span style={{ height: 7, width: 7, borderRadius: 99, background: faltan.length ? '#B0522E' : '#2E6E6E' }} />
-                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Faltan por cerrar</span>
-                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: faltan.length ? '#B0522E' : '#2E6E6E' }}>{faltan.length}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: faltanOpen ? 9 : 0, flexWrap: 'wrap' }}>
+                <button onClick={() => setFaltanOpen(v => !v)} aria-expanded={faltanOpen} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }}>
+                  <span style={{ height: 7, width: 7, borderRadius: 99, background: faltan.length ? '#B0522E' : '#2E6E6E' }} />
+                  <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Faltan por cerrar</span>
+                  <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: faltan.length ? '#B0522E' : '#2E6E6E' }}>{faltan.length}</span>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: faltanOpen ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                </button>
                 <span style={{ flex: 1 }} />
-                {faltan.length > 0 && (() => { const pts = faltan.reduce((n, x) => n + taskWeight(x.t), 0); return <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{pts} puntos de esfuerzo restantes</span> })()}
+                {faltanOpen && faltan.length > 0 && (
+                  <div role="group" aria-label="Vista de faltantes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 8, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+                    {([['lista', 'Lista'], ['tabla', 'Tabla']] as const).map(([v, label]) => {
+                      const on = faltanView === v
+                      return <button key={v} aria-pressed={on} onClick={() => setFaltanView(v)} style={{ cursor: 'pointer', border: 'none', borderRadius: 6, padding: '4px 10px', font: '700 10.5px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+                    })}
+                  </div>
+                )}
+                {faltanOpen && faltan.length > 0 && (() => { const pts = faltan.reduce((n, x) => n + taskWeight(x.t), 0); return <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{pts} pts restantes</span> })()}
               </div>
-              {faltan.length === 0
+              {!faltanOpen ? null : faltan.length === 0
                 ? <div style={{ fontSize: 13, color: '#2E6E6E', fontWeight: 600, padding: '4px 0' }}>Cerraste todo lo que planeaste esta semana ✦</div>
-                : (
+                : faltanView === 'tabla' ? (
+                  <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 10 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)' }}>
+                          {['Día', 'Tarea', 'Épica', 'Estado', 'Prioridad', 'Dificultad', 'Avance', 'Vence'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orden.map(x => {
+                          const { e, t } = x
+                          const vencida = t.plan && t.plan < today && t.status !== 'Terminada'
+                          return (
+                            <tr key={planKey(e.id, t)} className="backlog-row" onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ borderBottom: '1px solid rgba(15,35,64,0.06)', cursor: 'pointer' }}>
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', font: '700 11px var(--font-ui)', color: vencida ? '#B0522E' : 'rgba(20,35,61,0.6)' }}>{t.plan ? fmtDue(t.plan) : '—'}{vencida ? ' ⏳' : ''}</td>
+                              <td style={{ padding: '7px 10px', fontSize: 13, fontWeight: 600, color: '#16365F', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</td>
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.6)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</span></td>
+                              <td style={{ padding: '7px 10px' }}><span style={{ font: '700 10px var(--font-ui)', color: taskStyle(t.status).c, background: taskStyle(t.status).bg, borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap' }}>{taskStyle(t.status).label}</span></td>
+                              <td style={{ padding: '7px 10px' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'rgba(20,35,61,0.6)' }}><PrioBars p={t.priority} size={12} />{prioStyle(t.priority).label}</span></td>
+                              <td style={{ padding: '7px 10px' }}>{t.difficulty ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: difStyle(t.difficulty).c }}><DifDots d={t.difficulty} size={10} />{difStyle(t.difficulty).label}</span> : <span style={{ color: 'rgba(20,35,61,0.35)' }}>—</span>}</td>
+                              <td style={{ padding: '7px 10px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>{typeof t.progress === 'number' ? `${t.progress}%` : '—'}</td>
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600, color: dueTone(t.due, false).c }}>{t.due ? fmtDue(t.due) : '—'}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     {orden.map(x => {
                       const { e, t } = x
