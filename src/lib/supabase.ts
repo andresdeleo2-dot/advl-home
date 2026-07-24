@@ -46,7 +46,14 @@ export type EpicaRoutine = {
   weeks?: Record<string, boolean[]>      // progreso por semana: lunesISO -> 7 booleanos (L…D)
 }
 export type EpicaTaskLink = { label: string; url: string }
-export type EpicaSubtask = { t: string; done: boolean }
+export type EpicaSubtask = {
+  id?: string            // identidad estable (para reordenar sin que se recorran los índices)
+  t: string
+  done: boolean
+  progress?: number      // % de avance manual (0-100)
+  note?: string          // nota (HTML de contentEditable, se sanitiza)
+  links?: EpicaTaskLink[]
+}
 /** Recurrencia de una tarea: "cada N días / semanas / meses".
  *  La tarea NO se duplica: al completarla se reprograma sola a la siguiente fecha. */
 export type EpicaRepeat = { every: number; unit: 'dia' | 'semana' | 'mes' }

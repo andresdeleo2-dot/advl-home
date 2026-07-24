@@ -178,6 +178,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [editInline, setEditInline] = useState(false)              // editar la épica dentro del panel, no en modal
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
+  const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
+  const subNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
@@ -368,6 +370,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // De más superficial a más profundo: un solo Escape no debe cerrar el modal
         // completo si sólo había un popover encima.
         if (rowMenu || prioMenu || calOpen) { setRowMenu(null); setPrioMenu(null); setCalOpen(false); return }
+        if (subPop) { setSubPop(null); return }
         if (milestonePick) { setMilestonePick(null); return }
         if (resumenDay) { setResumenDay(null); return }
         if (epicPeek) { setEpicPeek(null); return }
@@ -383,7 +386,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick])
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -1141,7 +1144,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const addSubtask = (e: Epica, ti: number, text: string) => {
     const v = text.trim(); if (!v) return
     const tasks = clone(e.tasks)
-    tasks[ti].subtasks = [...(tasks[ti].subtasks || []), { t: v, done: false }]
+    tasks[ti].subtasks = [...(tasks[ti].subtasks || []), { id: uid(), t: v, done: false }]
     patchEpic(e.id, { tasks })
   }
   const setSubtaskText = (e: Epica, ti: number, si: number, text: string) => {
@@ -1164,6 +1167,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!st || to < 0 || to >= st.length || from === to) return
     const [m] = st.splice(from, 1); st.splice(to, 0, m)
     patchEpic(e.id, { tasks })
+  }
+  /** Edita campos de una subtarea por su id (título, %, nota, links, done). */
+  const patchSubtask = (e: Epica, ti: number, sid: string, patch: Partial<EpicaSubtask>) => {
+    const fresh = epicsRef.current.find(x => x.id === e.id) || e   // evita pisar cambios concurrentes (debounce)
+    const tasks = clone(fresh.tasks); const st = tasks[ti]?.subtasks; if (!st) return
+    const si = st.findIndex(x => x.id === sid); if (si < 0) return
+    st[si] = { ...st[si], ...patch }
+    patchEpic(fresh.id, { tasks })
   }
   // ── Bitácora de avance (días en que se avanzó en la tarea) ──
   const addProgressDay = (e: Epica, ti: number, d: string) => {
@@ -4785,6 +4796,76 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
+      {/* Popup de una subtarea: título, avance, nota y links */}
+      {subPop && (() => {
+        const found = findTask(subPop.eId, subPop.tid)
+        const si = found ? (found.t.subtasks || []).findIndex(x => x.id === subPop.sid) : -1
+        if (!found || si < 0) return null
+        const { e: ep, i: ti } = found
+        const s = found.t.subtasks![si]
+        const patch = (p: Partial<EpicaSubtask>) => patchSubtask(ep, ti, subPop.sid, p)
+        const eb2: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }
+        const links = s.links || []
+        const setLink = (li: number, k: 'label' | 'url', v: string) => patch({ links: links.map((l, j) => j === li ? { ...l, [k]: v } : l) })
+        return (
+          <div onClick={() => setSubPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 79, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Subtarea" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: s.done ? '#2E6E6E' : ep.color }} />
+              <div style={{ padding: '18px 22px 22px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                  <button onClick={() => { toggleSubtask(ep, ti, si) }} aria-label={s.done ? 'Desmarcar' : 'Marcar hecha'} title={s.done ? 'Desmarcar' : 'Marcar hecha'}
+                    style={{ flexShrink: 0, height: 24, width: 24, borderRadius: 6, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {s.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 3 }}>Subtarea de {found.t.t}</div>
+                    <input defaultValue={s.t} key={s.id + s.t} onBlur={ev => patch({ t: ev.target.value.trim() || s.t })} onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                      style={{ width: '100%', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 9, padding: '8px 10px', fontSize: 16, fontWeight: 600, color: '#10233F', outline: 'none' }} />
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setSubPop(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+
+                {/* Avance */}
+                <div style={{ ...eb2, marginBottom: 7 }}>Avance <span style={{ fontWeight: 800, color: '#10233F' }}>{s.progress ?? 0}%</span></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                  <input type="range" min={0} max={100} step={5} value={s.progress ?? 0} aria-label="Avance de la subtarea"
+                    onChange={ev => patch({ progress: Number(ev.target.value) || undefined })} style={{ flex: 1, height: 6, cursor: 'pointer', accentColor: ep.color }} />
+                  <button onClick={() => patch({ progress: 100, done: true })} style={{ cursor: 'pointer', border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 9, padding: '6px 11px', fontSize: 11.5, fontWeight: 700 }}>100%</button>
+                </div>
+
+                {/* Nota */}
+                <div style={{ ...eb2, marginBottom: 6 }}>Nota</div>
+                <div style={{ marginBottom: 16 }}>
+                  <RichText value={s.note || ''} onChange={v => { if (subNoteTimer.current) clearTimeout(subNoteTimer.current); subNoteTimer.current = setTimeout(() => patch({ note: sanitizeHtml(v) || undefined }), 450) }} placeholder="Nota de la subtarea (negritas, viñetas)…" />
+                </div>
+
+                {/* Links */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={eb2}>Links</span>
+                  <button onClick={() => patch({ links: [...links, { label: '', url: '' }] })} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11.5, fontWeight: 700 }}>+ Link</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {links.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Sin links.</div>}
+                  {links.map((l, li) => (
+                    <div key={li} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+                      <input defaultValue={l.label} onBlur={ev => setLink(li, 'label', ev.target.value)} placeholder="Etiqueta" style={{ flex: '0 0 110px', width: 110, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
+                      <input defaultValue={l.url} onBlur={ev => setLink(li, 'url', ev.target.value)} placeholder="https://…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
+                      {l.url && <a href={l.url} target="_blank" rel="noreferrer" title="Abrir" style={{ flexShrink: 0, textDecoration: 'none', color: '#A87A2C', fontSize: 14 }}>↗</a>}
+                      <button aria-label="Quitar link" onClick={() => patch({ links: links.filter((_, j) => j !== li) })} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)' }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 18, paddingTop: 14, borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                  <button onClick={() => { removeSubtask(ep, ti, si); setSubPop(null) }} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '9px 14px', fontSize: 12.5, fontWeight: 700 }}>Eliminar</button>
+                  <button onClick={() => setSubPop(null)} style={{ ...goldBtn, padding: '9px 20px', fontSize: 12.5 }}>Listo</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {taskView && (() => {
         const found = findTask(taskView.eId, taskView.tid)   // se resuelve en cada render: nunca apunta a otra tarea
         if (!found) return null
@@ -4973,15 +5054,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   const hechas = subs.filter(s => s.done).length
                   const pend = subs.map((s, si) => ({ s, si })).filter(x => !x.s.done)
                   const done = subs.map((s, si) => ({ s, si })).filter(x => x.s.done)
-                  const row = (s: { t: string; done: boolean }, si: number, arrows?: { up?: number; down?: number }) => (
-                    <div key={si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+                  const row = (s: EpicaSubtask, si: number, arrows?: { up?: number; down?: number }) => (
+                    <div key={s.id || si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
                       <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
                         style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
                       </button>
-                      <input defaultValue={s.t} onBlur={ev => setSubtaskText(ep, i, si, ev.target.value)}
-                        onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
-                        style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 6, padding: '4px 6px', fontSize: 13, background: 'transparent', outline: 'none', color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }} />
+                      {/* El título abre el popup de la subtarea (nota, links, %) */}
+                      <button onClick={() => s.id && setSubPop({ eId: ep.id, tid: t.id!, sid: s.id })} title="Abrir subtarea"
+                        style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '4px 6px', fontSize: 13, color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.t || <span style={{ color: 'rgba(20,35,61,0.4)' }}>(sin título)</span>}
+                      </button>
+                      {/* Indicadores: %, nota, links */}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {typeof s.progress === 'number' && s.progress > 0 && <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}
+                        {s.note && <span title="Tiene nota" style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>✎</span>}
+                        {(s.links?.length ?? 0) > 0 && <span title={`${s.links!.length} links`} style={{ font: '700 10px var(--font-ui)', color: '#A87A2C' }}>🔗{s.links!.length}</span>}
+                      </span>
                       {arrows && (
                         <span className="ep-sub-del" style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
                           <button onClick={() => arrows.up != null && moveSubtask(ep, i, si, arrows.up)} disabled={arrows.up == null} aria-label="Subir" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.up == null ? 0.3 : 1 }}>↑</button>

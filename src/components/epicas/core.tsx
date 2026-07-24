@@ -138,7 +138,12 @@ export function normalize(e: Epica): Epica {
       const weeks = (r.weeks && typeof r.weeks === 'object') ? r.weeks : (days.some(Boolean) ? { [mondayISO(todayISO())]: days } : {})
       return { t: r.t, days, weeks }
     }),
-    tasks: (e.tasks || []).map(t => (t.id ? t : { ...t, id: uid() })),
+    tasks: (e.tasks || []).map(t => {
+      const nt = t.id ? { ...t } : { ...t, id: uid() }
+      // Las subtareas también llevan id estable (se persisten al primer guardado)
+      if (nt.subtasks?.some(s => !s.id)) nt.subtasks = nt.subtasks.map(s => (s.id ? s : { ...s, id: uid() }))
+      return nt
+    }),
     links: e.links || [],
   }
 }
