@@ -165,6 +165,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [epicView, setEpicView] = useState<'lista' | 'tabla'>('lista') // vista de "Todas las épicas"
   const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
+  const [resumenDay, setResumenDay] = useState<string | null>(null) // popup del día en el burndown
+  const [epicPeek, setEpicPeek] = useState<string | null>(null)     // popup rápido de una épica
+  const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
+  const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
@@ -353,6 +357,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // De más superficial a más profundo: un solo Escape no debe cerrar el modal
         // completo si sólo había un popover encima.
         if (rowMenu || prioMenu || calOpen) { setRowMenu(null); setPrioMenu(null); setCalOpen(false); return }
+        if (resumenDay) { setResumenDay(null); return }
+        if (epicPeek) { setEpicPeek(null); return }
         if (movePick) { setMovePick(null); return }
         if (pickerOpen) { setPickerOpen(false); return }
         if (routineStat) { setRoutineStat(null); return }
@@ -365,7 +371,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing])
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -1301,7 +1307,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const e = epics.find(x => x.id === id); if (!e) return
     setEditMode('edit'); setEditing(clone(normalize(e)) as EpicDraft)
   }
-  const closeEdit = () => { setEditing(null); setEditMode(null) }
+  const closeEdit = () => { setEditing(null); setEditMode(null); setEdTasksOpen(false); setEdTaskRow(null) }
   const patchDraft = (fn: (d: EpicDraft) => EpicDraft) => setEditing(d => (d ? fn(clone(d)) : d))
 
   async function save() {
@@ -2494,12 +2500,62 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <path d={line(remaining)} fill="none" stroke="#C2933A" strokeWidth="2.5" strokeLinejoin="round" />
                   {remaining.map((v, k) => <circle key={k} cx={px(k)} cy={py(v)} r={3.5} fill={days[k] === today ? '#10233F' : '#C2933A'} />)}
                   {days.map((d, k) => <text key={d} x={px(k)} y={H - 8} textAnchor="middle" style={{ font: '700 9px var(--font-ui)', fill: d === today ? '#A87A2C' : 'rgba(20,35,61,0.45)' }}>{DAYS[k]} {dayNum(d)}</text>)}
+                  {/* Zona clicable por día: abre el detalle de lo que pasó ese día */}
+                  {days.map((d, k) => (
+                    <rect key={'hit' + d} x={px(k) - (W - PAD * 2) / 12} y={0} width={(W - PAD * 2) / 6} height={H}
+                      fill="transparent" style={{ cursor: 'pointer' }} onClick={() => setResumenDay(d)}>
+                      <title>{`Ver qué pasó el ${dateLabel(d)}`}</title>
+                    </rect>
+                  ))}
                   <text x={PAD - 6} y={py(maxY) + 4} textAnchor="end" style={{ font: '700 9px var(--font-ui)', fill: 'rgba(20,35,61,0.4)' }}>{maxY}</text>
                   <text x={PAD - 6} y={py(0) + 4} textAnchor="end" style={{ font: '700 9px var(--font-ui)', fill: 'rgba(20,35,61,0.4)' }}>0</text>
                 </svg>
               </div>
             )}
         </div>
+
+        {/* Tareas diarias (rutinas) de la semana */}
+        {rut.length > 0 && (
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20 }}>
+            {secTitle('Tareas diarias', `${rutTotal} de ${rutMax} marcas`)}
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ minWidth: 380 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px,1.4fr) repeat(7,1fr) 46px', gap: 4, alignItems: 'center', paddingBottom: 5 }}>
+                  <span />
+                  {days.map((d, k) => (
+                    <div key={d} style={{ textAlign: 'center' }}>
+                      <div style={{ font: '700 9px/1 var(--font-ui)', color: d === today ? '#A87A2C' : 'rgba(20,35,61,0.42)' }}>{DAYS[k]}</div>
+                      <div className="serif" style={{ fontSize: 12, fontWeight: 600, color: d === today ? '#A87A2C' : '#10233F' }}>{dayNum(d)}</div>
+                    </div>
+                  ))}
+                  <span />
+                </div>
+                {activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri }))).map(({ e, r, ri }) => {
+                  const wk = getRoutineWeek(r, mon); const n = wk.filter(Boolean).length
+                  const nc = n >= 5 ? '#2E6E6E' : n >= 3 ? '#A87A2C' : 'rgba(20,35,61,0.42)'
+                  return (
+                    <div key={e.id + ':' + ri} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px,1.4fr) repeat(7,1fr) 46px', gap: 4, alignItems: 'center', padding: '3px 0', borderTop: '1px solid rgba(15,35,64,0.05)' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 11.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t}</span>
+                      </span>
+                      {days.map((d, di) => {
+                        const on = wk[di]
+                        return (
+                          <button key={d} onClick={() => toggleRoutineWeekDay(e, ri, mon, di)} title={`${r.t} · ${DAYNAMES[di]} ${dayNum(d)}`}
+                            style={{ height: 22, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: on ? 'none' : d === today ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.12)', background: on ? e.color : '#fff', color: '#fff' }}>
+                            {on && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                          </button>
+                        )
+                      })}
+                      <span style={{ textAlign: 'right', font: '800 10px var(--font-ui)', color: nc }}>{n}/7</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
           {/* Logros */}
@@ -2566,7 +2622,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               if (!byEpic.length) return <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Sin actividad por épica esta semana.</div>
               const max = Math.max(...byEpic.map(g => g.plan || g.done), 1)
               return byEpic.map(g => (
-                <div key={g.e.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 0' }}>
+                <div key={g.e.id} {...clickable(() => setEpicPeek(g.e.id), `Ver ${g.e.name}`)} className="ep-venc-row" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 0', cursor: 'pointer' }}>
                   <span style={{ width: 8, height: 8, borderRadius: 99, background: g.e.color, flexShrink: 0 }} />
                   <span style={{ flex: '0 0 120px', fontSize: 12, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.e.name}</span>
                   <span style={{ flex: 1, height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden', minWidth: 40 }}>
@@ -3560,30 +3616,58 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             </div>
 
-            {/* Tareas */}
+            {/* Tareas — plegadas por defecto; cada fila se expande sola */}
             <div style={cardEd}>
-              <div style={secHead}><label style={{ ...lbl, marginTop: 0 }}>Tareas</label><button onClick={() => patchDraft(x => ({ ...x, tasks: [...x.tasks, { t: '', status: 'Por hacer', due: '', note: '', createdAt: todayISO() }] }))} style={addBtn}>+ Tarea</button></div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-                {d.tasks.map((t, i) => (
-                  <div key={i} style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 9 }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input value={t.t} onChange={e => patchDraft(x => { x.tasks[i].t = e.target.value; return x })} placeholder="Nombre de la tarea" style={inpSmall} />
-                      <button aria-label="Eliminar tarea" onClick={() => patchDraft(x => ({ ...x, tasks: x.tasks.filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {PICK_STATUSES.map(s => {
-                        const on = t.status === s; const ts = taskStyle(s)
-                        return <button key={s} onClick={() => patchDraft(x => { x.tasks[i].status = s; return x })} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button>
-                      })}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>Entrega</span>
-                      <input type="date" value={t.due} onChange={e => patchDraft(x => { x.tasks[i].due = e.target.value; return x })} style={dateInp} />
-                    </div>
-                    <RichText value={t.note || ''} onChange={v => patchDraft(x => { x.tasks[i].note = v; return x })} placeholder="Nota (negritas, cursiva, viñetas)…" />
-                  </div>
-                ))}
+              <div style={secHead}>
+                <button onClick={() => setEdTasksOpen(v => !v)} aria-expanded={edTasksOpen}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }}>
+                  <label style={{ ...lbl, marginTop: 0, marginBottom: 0, cursor: 'pointer' }}>Tareas</label>
+                  <span style={{ font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>{d.tasks.length}</span>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: edTasksOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                </button>
+                <button onClick={() => { setEdTasksOpen(true); setEdTaskRow(d.tasks.length); patchDraft(x => ({ ...x, tasks: [...x.tasks, { id: uid(), t: '', status: 'Por hacer', due: '', note: '', createdAt: todayISO() }] })) }} style={addBtn}>+ Tarea</button>
               </div>
+              {edTasksOpen && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+                  {d.tasks.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>Sin tareas todavía.</div>}
+                  {d.tasks.map((t, i) => {
+                    const abierta = edTaskRow === i
+                    const ts = taskStyle(t.status)
+                    return (
+                      <div key={t.id || i} style={{ background: '#fff', border: `1px solid ${abierta ? 'rgba(194,147,58,0.45)' : 'rgba(15,35,64,0.10)'}`, borderRadius: 11, overflow: 'hidden' }}>
+                        {/* Renglón compacto: siempre visible */}
+                        <div style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '8px 9px' }}>
+                          <button onClick={() => setEdTaskRow(abierta ? null : i)} aria-label={abierta ? 'Plegar' : 'Expandir'}
+                            style={{ flexShrink: 0, height: 24, width: 24, borderRadius: 6, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.05)', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" style={{ transform: abierta ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                          </button>
+                          <input value={t.t} onChange={e => patchDraft(x => { x.tasks[i].t = e.target.value; return x })} placeholder="Nombre de la tarea"
+                            style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '5px 7px', fontSize: 13, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }} />
+                          <span style={{ flexShrink: 0, font: '700 10px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '3px 8px', whiteSpace: 'nowrap' }}>{ts.label}</span>
+                          {t.due && <span style={{ flexShrink: 0, font: '700 10px var(--font-ui)', color: dueTone(t.due, t.status === 'Terminada').c }}>{fmtDue(t.due)}</span>}
+                          <button aria-label="Eliminar tarea" onClick={() => { setEdTaskRow(null); patchDraft(x => ({ ...x, tasks: x.tasks.filter((_, j) => j !== i) })) }} style={{ ...delBtn, height: 26, width: 26 }}>✕</button>
+                        </div>
+                        {/* Detalle: sólo de la fila abierta */}
+                        {abierta && (
+                          <div style={{ borderTop: '1px solid rgba(15,35,64,0.07)', padding: '10px 11px', display: 'flex', flexDirection: 'column', gap: 9, background: '#FBFAF6' }}>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {PICK_STATUSES.map(sx => {
+                                const on = t.status === sx; const t2 = taskStyle(sx)
+                                return <button key={sx} onClick={() => patchDraft(x => { x.tasks[i].status = sx; return x })} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, border: on ? `1px solid ${t2.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? t2.bg : '#fff', color: on ? t2.c : 'rgba(20,35,61,0.55)' }}>{t2.label}</button>
+                              })}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>Entrega</span>
+                              <input type="date" value={t.due} onChange={e => patchDraft(x => { x.tasks[i].due = e.target.value; return x })} style={dateInp} />
+                            </div>
+                            <RichText value={t.note || ''} onChange={v => patchDraft(x => { x.tasks[i].note = v; return x })} placeholder="Nota (negritas, cursiva, viñetas)…" />
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Conexiones */}
@@ -4090,6 +4174,147 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <div onClick={() => setMovePick(null)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 20px' }}>
             <div data-pop onClick={e => e.stopPropagation()}>
               {renderMonthPopover(cur, iso => { if (found) planTaskToDay(found.e, found.i, iso, { toast: true }); setMovePick(null) })}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Detalle de un día del burndown: qué se cerró y en qué se avanzó */}
+      {resumenDay && (() => {
+        const d = resumenDay
+        type R = { e: Epica; t: EpicaTask; i: number }
+        const cerradas: R[] = [], avances: R[] = []
+        activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
+          if (t.status === ARCHIVED) return
+          if (t.doneAt === d) cerradas.push({ e, t, i })
+          else if ((t.progressLog || []).some(l => l.d === d)) avances.push({ e, t, i })
+        }))
+        const rutinasHechas = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
+          .filter(({ r }) => getRoutineWeek(r, mondayISO(d))[(new Date(d + 'T00:00:00').getDay() + 6) % 7])
+        const fila = (x: R, done: boolean) => {
+          const nota = (x.t.progressLog || []).find(l => l.d === d)?.note
+          return (
+            <div key={planKey(x.e.id, x.t)} {...clickable(() => { setResumenDay(null); setTaskView({ eId: x.e.id, tid: x.t.id! }) }, `Ver ${x.t.t}`)}
+              style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+              <span style={{ flexShrink: 0, marginTop: 2, height: 16, width: 16, borderRadius: 99, background: done ? '#2E6E6E' : 'rgba(194,147,58,0.16)', color: done ? '#fff' : '#A87A2C', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
+                {done ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : '✎'}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.55)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{x.t.t}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color }} />
+                  <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>{x.e.name}</span>
+                  {typeof x.t.progress === 'number' && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{x.t.progress}%</span>}
+                </div>
+                {nota && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.6)', marginTop: 4, fontStyle: 'italic' }}>{nota}</div>}
+              </div>
+            </div>
+          )
+        }
+        return (
+          <div onClick={() => setResumenDay(null)} style={{ position: 'fixed', inset: 0, zIndex: 74, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Detalle del día" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 520, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: 'linear-gradient(90deg,#10233F,#C2933A)' }} />
+              <div style={{ padding: '18px 24px 22px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+                  <div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 5 }}>{d === today ? 'Hoy' : relLong(d)}</div>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1.05, color: '#10233F' }}>{dateLabel(d)}</div>
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setResumenDay(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+                {cerradas.length === 0 && avances.length === 0 && rutinasHechas.length === 0 && (
+                  <div style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', padding: '8px 0' }}>No hay actividad registrada este día.</div>
+                )}
+                {cerradas.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: '#2E6E6E', marginBottom: 6 }}>Cerradas · {cerradas.length}</div>
+                    {cerradas.map(x => fila(x, true))}
+                  </div>
+                )}
+                {avances.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 6 }}>Con avance · {avances.length}</div>
+                    {avances.map(x => fila(x, false))}
+                  </div>
+                )}
+                {rutinasHechas.length > 0 && (
+                  <div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 6 }}>Rutinas cumplidas · {rutinasHechas.length}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {rutinasHechas.map(({ e, r, ri }) => (
+                        <span key={e.id + ':' + ri} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 99, padding: '4px 10px', background: 'rgba(62,142,142,0.10)', border: '1px solid rgba(62,142,142,0.28)' }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />
+                          <span style={{ fontSize: 11.5, fontWeight: 600, color: '#16365F' }}>{r.t}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Vistazo rápido a una épica, con acceso directo a editarla */}
+      {epicPeek && (() => {
+        const e = epics.find(x => x.id === epicPeek)
+        if (!e) return null
+        const pct = pctOf(e), pend = pendCount(e)
+        return (
+          <div onClick={() => setEpicPeek(null)} style={{ position: 'fixed', inset: 0, zIndex: 76, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label={`Épica ${e.name}`} onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: e.color }} />
+              <div style={{ padding: '18px 24px 22px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 25, lineHeight: 1.05, color: '#10233F' }}>{e.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 99, background: statusStyle(e.status).bg, color: statusStyle(e.status).color }}>{e.status}</span>
+                      {e.categoria && <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 99, background: 'rgba(15,35,64,0.06)', color: 'rgba(20,35,61,0.55)' }}>{e.categoria}</span>}
+                      <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>{pend > 0 ? `${pend} activas` : 'Al corriente'}</span>
+                    </div>
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setEpicPeek(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+
+                <div style={{ margin: '16px 0 6px', display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+                  <span style={{ color: 'rgba(20,35,61,0.55)' }}>{doneCount(e)} de {taskCount(e)} tareas</span>
+                  <span style={{ fontWeight: 800, color: '#10233F' }}>{pct}%</span>
+                </div>
+                <div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: e.color }} />
+                </div>
+
+                {e.kpis.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Objetivos</div>
+                    {e.kpis.map((k, i) => {
+                      const mp = milestoneProgress(k, e); const hecho = milestoneDone(k, e)
+                      return (
+                        <div key={k.id || i} style={{ marginBottom: 9 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: hecho ? '#2E6E6E' : '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
+                            {hecho && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E6E6E' }}>✦ Cumplido</span>}
+                            {mp.hasMeta && <span style={{ font: '700 10.5px var(--font-ui)', color: 'rgba(20,35,61,0.55)' }}>{mp.cur}/{mp.target}{k.unit ? ' ' + k.unit : ''}</span>}
+                          </div>
+                          {mp.hasMeta && (
+                            <div style={{ height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+                              <div style={{ width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : e.color }} />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
+                  <button onClick={() => { setEpicPeek(null); setFeaturedId(e.id); setPlanMode('dia') }} style={{ border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer' }}>Ver épica</button>
+                  <button onClick={() => { setEpicPeek(null); openEdit(e.id) }} style={{ ...goldBtn, padding: '9px 16px', font: '700 12.5px var(--font-ui)' }}>Editar épica</button>
+                </div>
+              </div>
             </div>
           </div>
         )
