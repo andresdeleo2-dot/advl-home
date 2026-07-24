@@ -144,7 +144,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
-  const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline'>('dia') // horizonte del enfoque
+  const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen'>('dia') // horizonte del enfoque
   const [dayTableEdit, setDayTableEdit] = useState(false)          // edición inline de la tabla del día
   const [dayCapacity, setDayCapacity] = useState(8)                // presupuesto de carga del día (puntos)
   const [calDrag, setCalDrag] = useState<string | null>(null)      // tarjeta arrastrada en el calendario
@@ -265,7 +265,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
      preferencias (la URL manda sobre lo guardado). */
   const urlReady = useRef(false)
   useEffect(() => {
-    const MODES = ['dia', 'semana', '2sem', '3sem', 'mes', 'calendario', 'timeline']
+    const MODES = ['dia', 'semana', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen']
     const applyFromUrl = () => {
       const q = new URLSearchParams(window.location.search)
       const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode(v as typeof planMode)
@@ -2413,13 +2413,178 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  /** Vista Resumen: dashboard de la semana. KPIs, burndown, logros y en qué se
+   *  trabajó. Pensado como retro de sprint: qué se comprometió, qué se cerró y
+   *  qué se está arrastrando. */
+  const renderPlanResumen = () => {
+    const mon = mondayISO(viewDate), sun = addDays(mon, 6)
+    const days = Array.from({ length: 7 }, (_, k) => addDays(mon, k))
+    const inWeek = (d?: string) => !!d && d >= mon && d <= sun
+
+    type R = { e: Epica; t: EpicaTask; i: number }
+    const all: R[] = []
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED) all.push({ e, t, i }) }))
+
+    const committed = all.filter(x => inWeek(x.t.plan))                                   // lo planeado para la semana
+    const completed = all.filter(x => inWeek(x.t.doneAt))                                 // lo cerrado en la semana
+    const worked = all.filter(x => (x.t.progressLog || []).some(l => inWeek(l.d)))         // donde hubo avance
+    const points = completed.reduce((n, x) => n + taskWeight(x.t), 0)
+    const activeDays = days.filter(d => all.some(x => x.t.doneAt === d || (x.t.progressLog || []).some(l => l.d === d)))
+    const arrastran = worked.filter(x => diasTrabajados(x.t) >= 2 && x.t.status !== 'Terminada')
+    const pendientes = committed.filter(x => x.t.status !== 'Terminada').length
+    const cumplimiento = committed.length ? Math.round(((committed.length - pendientes) / committed.length) * 100) : 0
+
+    // Burndown: cuánto quedaba pendiente al cerrar cada día, contra la línea ideal
+    const remaining = days.map(d => committed.filter(x => !(x.t.doneAt && x.t.doneAt <= d)).length)
+    const ideal = days.map((_, k) => committed.length * (1 - k / 6))
+    const maxY = Math.max(committed.length, 1)
+    const W = 620, H = 150, PAD = 26
+    const px = (k: number) => PAD + (k * (W - PAD * 2)) / 6
+    const py = (v: number) => H - PAD - (v / maxY) * (H - PAD * 2)
+    const line = (arr: number[]) => arr.map((v, k) => `${k ? 'L' : 'M'}${px(k)},${py(v)}`).join(' ')
+    const hoyIdx = days.indexOf(today)
+
+    // Rutinas de la semana
+    const rut = activeEpics.flatMap(e => (e.routines || []).map(r => ({ e, r, n: getRoutineWeek(r, mon).filter(Boolean).length })))
+    const rutTotal = rut.reduce((n, x) => n + x.n, 0), rutMax = rut.length * 7
+
+    const tile = (label: string, value: string, hint: string, color: string) => (
+      <div key={label} className="glass" style={{ borderRadius: 15, padding: '14px 16px' }}>
+        <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{label}</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginTop: 8 }}>
+          <span className="serif" style={{ fontWeight: 600, fontSize: 30, lineHeight: .9, color: '#10233F' }}>{value}</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color }}>{hint}</span>
+        </div>
+      </div>
+    )
+    const secTitle = (txt: string, extra?: string) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
+        <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>{txt}</span>
+        {extra && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{extra}</span>}
+      </div>
+    )
+
+    return (
+      <div style={{ marginTop: 10 }}>
+        {/* KPIs */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 11, marginBottom: 20 }}>
+          {tile('Completadas', String(completed.length), `de ${committed.length} planeadas`, cumplimiento >= 70 ? '#2E6E6E' : '#A87A2C')}
+          {tile('Puntos', String(points), 'esfuerzo cerrado', '#2E5A9E')}
+          {tile('Cumplimiento', `${cumplimiento}%`, pendientes ? `${pendientes} sin cerrar` : 'todo cerrado', cumplimiento >= 70 ? '#2E6E6E' : '#B0522E')}
+          {tile('Días activos', `${activeDays.length}/7`, 'con avance', activeDays.length >= 5 ? '#2E6E6E' : 'rgba(20,35,61,0.5)')}
+          {tile('Rutinas', rutMax ? `${rutTotal}/${rutMax}` : '—', 'marcas de la semana', rutTotal >= rutMax * 0.7 ? '#2E6E6E' : '#A87A2C')}
+        </div>
+
+        {/* Burndown */}
+        <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20 }}>
+          {secTitle('Burndown de la semana', `${committed.length} tareas comprometidas · línea punteada = ritmo ideal`)}
+          {committed.length === 0
+            ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '10px 0' }}>No planeaste tareas para esta semana.</div>
+            : (
+              <div style={{ overflowX: 'auto' }}>
+                <svg width={W} height={H} style={{ display: 'block', minWidth: W }}>
+                  {[0, 0.5, 1].map(f => <line key={f} x1={PAD} x2={W - PAD} y1={py(maxY * f)} y2={py(maxY * f)} stroke="rgba(15,35,64,0.08)" strokeWidth="1" />)}
+                  {hoyIdx >= 0 && <line x1={px(hoyIdx)} x2={px(hoyIdx)} y1={PAD - 8} y2={H - PAD} stroke="rgba(194,147,58,0.5)" strokeWidth="1.5" strokeDasharray="3 3" />}
+                  <path d={line(ideal)} fill="none" stroke="rgba(20,35,61,0.28)" strokeWidth="1.5" strokeDasharray="5 4" />
+                  <path d={line(remaining)} fill="none" stroke="#C2933A" strokeWidth="2.5" strokeLinejoin="round" />
+                  {remaining.map((v, k) => <circle key={k} cx={px(k)} cy={py(v)} r={3.5} fill={days[k] === today ? '#10233F' : '#C2933A'} />)}
+                  {days.map((d, k) => <text key={d} x={px(k)} y={H - 8} textAnchor="middle" style={{ font: '700 9px var(--font-ui)', fill: d === today ? '#A87A2C' : 'rgba(20,35,61,0.45)' }}>{DAYS[k]} {dayNum(d)}</text>)}
+                  <text x={PAD - 6} y={py(maxY) + 4} textAnchor="end" style={{ font: '700 9px var(--font-ui)', fill: 'rgba(20,35,61,0.4)' }}>{maxY}</text>
+                  <text x={PAD - 6} y={py(0) + 4} textAnchor="end" style={{ font: '700 9px var(--font-ui)', fill: 'rgba(20,35,61,0.4)' }}>0</text>
+                </svg>
+              </div>
+            )}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
+          {/* Logros */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('Logros de la semana', completed.length ? 'lo más difícil primero' : undefined)}
+            {completed.length === 0
+              ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Aún no cierras nada esta semana.</div>
+              : [...completed].sort((a, b) => taskWeight(b.t) - taskWeight(a.t)).slice(0, 8).map(x => (
+                <div key={planKey(x.e.id, x.t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: x.t.id! }), `Ver ${x.t.t}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                  <span style={{ flexShrink: 0, height: 17, width: 17, borderRadius: 99, background: '#2E6E6E', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
+                  {x.t.difficulty && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 9.5px var(--font-ui)', color: difStyle(x.t.difficulty).c }}><DifDots d={x.t.difficulty} size={9} />{difStyle(x.t.difficulty).label}</span>}
+                  <span style={{ flexShrink: 0, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>{fmtDue(x.t.doneAt!)}</span>
+                </div>
+              ))}
+          </div>
+
+          {/* En qué trabajaste */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('En qué trabajaste', worked.length ? `${worked.length} tareas con avance` : undefined)}
+            {worked.length === 0
+              ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Sin avances registrados esta semana.</div>
+              : [...worked].sort((a, b) => diasTrabajados(b.t) - diasTrabajados(a.t)).slice(0, 8).map(x => {
+                const dw = (x.t.progressLog || []).filter(l => inWeek(l.d)).length
+                return (
+                  <div key={planKey(x.e.id, x.t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: x.t.id! }), `Ver ${x.t.t}`)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: x.t.status === 'Terminada' ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: x.t.status === 'Terminada' ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
+                    {typeof x.t.progress === 'number' && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{x.t.progress}%</span>}
+                    <span title={`${dw} día(s) de trabajo esta semana`} style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: MULTIDIA_TONE.c, background: MULTIDIA_TONE.bg, border: `1px solid ${MULTIDIA_TONE.border}`, borderRadius: 99, padding: '1px 7px' }}>⧗ {dw}d</span>
+                  </div>
+                )
+              })}
+          </div>
+
+          {/* Se están arrastrando */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('Se están arrastrando', arrastran.length ? 'trabajadas varios días y aún abiertas' : undefined)}
+            {arrastran.length === 0
+              ? <div style={{ fontSize: 12.5, color: '#2E6E6E', fontWeight: 600 }}>Nada se está atorando ✦</div>
+              : [...arrastran].sort((a, b) => diasTrabajados(b.t) - diasTrabajados(a.t)).slice(0, 8).map(x => (
+                <div key={planKey(x.e.id, x.t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: x.t.id! }), `Ver ${x.t.t}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
+                  <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: MULTIDIA_TONE.c }}>⧗ {diasTrabajados(x.t)} días</span>
+                </div>
+              ))}
+          </div>
+
+          {/* Por épica */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('Por épica', 'cerradas esta semana')}
+            {(() => {
+              const byEpic = activeEpics.map(e => ({
+                e,
+                done: completed.filter(x => x.e.id === e.id).length,
+                plan: committed.filter(x => x.e.id === e.id).length,
+              })).filter(g => g.plan > 0 || g.done > 0).sort((a, b) => b.done - a.done)
+              if (!byEpic.length) return <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Sin actividad por épica esta semana.</div>
+              const max = Math.max(...byEpic.map(g => g.plan || g.done), 1)
+              return byEpic.map(g => (
+                <div key={g.e.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 0' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: g.e.color, flexShrink: 0 }} />
+                  <span style={{ flex: '0 0 120px', fontSize: 12, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.e.name}</span>
+                  <span style={{ flex: 1, height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden', minWidth: 40 }}>
+                    <span style={{ display: 'block', width: `${(g.done / max) * 100}%`, height: '100%', background: g.e.color }} />
+                  </span>
+                  <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>{g.done}/{g.plan}</span>
+                </div>
+              ))
+            })()}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const renderPlanToday = () => {
     const week = planMode === 'semana'
     const multi = planMode === '2sem' || planMode === '3sem' || planMode === 'mes'
     const cal = planMode === 'calendario'
     const timeline = planMode === 'timeline'
+    const resumen = planMode === 'resumen'
     const monthy = planMode === 'mes' || cal || timeline   // navegación/etiqueta por mes
-    const board = week || multi || cal || timeline
+    const board = week || multi || cal || timeline || resumen
     const weekMonday = mondayISO(viewDate)
     const todayMonday = mondayISO(today)
     // Semanas del horizonte según el modo
@@ -2434,9 +2599,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : weekRangeLabel(weekMonday)
     const monthName = cap(new Date(viewDate + 'T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
     // Etiquetas del masthead
-    const bigLabel = monthy ? monthName : week ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
-    const eyebrow = week ? 'Enfoque de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
-    const topLabel = week ? weekRel
+    const bigLabel = monthy ? monthName : (week || resumen) ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
+    const eyebrow = week ? 'Enfoque de la semana' : resumen ? 'Resumen de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
+    const topLabel = (week || resumen) ? weekRel
       : monthy ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
       : (horizonHasToday ? `Próximas ${weekMondays.length} semanas` : spanLabel(hStart, hEnd))
     // Progreso del horizonte
@@ -2474,7 +2639,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
-                {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline']] as const).map(([m, label]) => {
+                {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
@@ -2483,7 +2648,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {board ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <button onClick={goPrev} aria-label="Período anterior" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
-                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{monthy ? 'Este mes' : week ? 'Esta semana' : 'Ahora'}</button>}
+                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{monthy ? 'Este mes' : (week || resumen) ? 'Esta semana' : 'Ahora'}</button>}
                   <button onClick={goNext} aria-label="Período siguiente" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
                 </div>
               ) : !isToday && (
@@ -2522,7 +2687,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {week ? renderPlanWeek() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
+          {week ? renderPlanWeek() : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
 
