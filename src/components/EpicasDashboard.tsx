@@ -168,6 +168,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [resumenDay, setResumenDay] = useState<string | null>(null) // popup del día en el burndown
   const [epicPeek, setEpicPeek] = useState<string | null>(null)     // popup rápido de una épica
+  const [milestonePick, setMilestonePick] = useState<{ eId: string; mId: string } | null>(null) // elegir tareas de un objetivo
+  const [editInline, setEditInline] = useState(false)              // editar la épica dentro del panel, no en modal
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
@@ -358,6 +360,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // De más superficial a más profundo: un solo Escape no debe cerrar el modal
         // completo si sólo había un popover encima.
         if (rowMenu || prioMenu || calOpen) { setRowMenu(null); setPrioMenu(null); setCalOpen(false); return }
+        if (milestonePick) { setMilestonePick(null); return }
         if (resumenDay) { setResumenDay(null); return }
         if (epicPeek) { setEpicPeek(null); return }
         if (movePick) { setMovePick(null); return }
@@ -372,7 +375,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek])
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -1355,11 +1358,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       links: [{ l: 'Dashboard', url: '', primary: true, type: 'Dashboard' }],
     })
   }
-  const openEdit = (id: string) => {
+  const openEdit = (id: string, inline = false) => {
     const e = epics.find(x => x.id === id); if (!e) return
-    setEditMode('edit'); setEditing(clone(normalize(e)) as EpicDraft)
+    setEditMode('edit'); setEditing(clone(normalize(e)) as EpicDraft); setEditInline(inline)
   }
-  const closeEdit = () => { setEditing(null); setEditMode(null); setEdTasksOpen(false); setEdTaskRow(null) }
+  const closeEdit = () => { setEditing(null); setEditMode(null); setEditInline(false); setEdTasksOpen(false); setEdTaskRow(null) }
   const patchDraft = (fn: (d: EpicDraft) => EpicDraft) => setEditing(d => (d ? fn(clone(d)) : d))
 
   async function save() {
@@ -1452,7 +1455,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <p style={{ fontSize: 15, marginBottom: 18 }}>Aún no hay épicas. Crea tu primer gran frente.</p>
           <button onClick={openNew} style={goldBtn}>+ Nueva épica</button>
         </div>
-        {editing && renderEditor()}
+        {editing && !editInline && renderEditor()}
       </div>
     )
   }
@@ -3590,13 +3593,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
-  function renderEditor() {
+  /** El editor de épica se usa en dos lugares con el MISMO contenido:
+   *  como modal (alta, tabla de épicas) o embebido en el panel de la destacada. */
+  function renderEditor(inline = false) {
     if (!editing) return null
     const d = editing
     const isEdit = editMode === 'edit'
-    return (
+    const Shell = ({ children }: { children: React.ReactNode }) => inline ? (
+      <div style={{ background: '#fff', borderRadius: 16, border: '1px solid rgba(194,147,58,0.45)', overflow: 'hidden' }}>{children}</div>
+    ) : (
       <div onClick={closeEdit} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '28px 20px', overflow: 'auto' }}>
-        <div role="dialog" aria-modal="true" aria-label="Editar épica" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 660, background: '#fff', borderRadius: 22, boxShadow: '0 50px 90px -30px rgba(8,18,36,.75)', overflow: 'hidden' }}>
+        <div role="dialog" aria-modal="true" aria-label="Editar épica" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 660, background: '#fff', borderRadius: 22, boxShadow: '0 50px 90px -30px rgba(8,18,36,.75)', overflow: 'hidden' }}>{children}</div>
+      </div>
+    )
+    return (
+      <Shell>
+        <>
           <div style={{ height: 5, background: d.color }} />
           <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 16px', borderBottom: '1px solid rgba(15,35,64,0.08)' }}>
             <div>
@@ -3807,8 +3819,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <button onClick={save} style={{ ...goldBtn, padding: '12px 24px' }}>Guardar</button>
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      </Shell>
     )
   }
 
@@ -3915,15 +3927,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <div className="ep-pop" style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderRadius: 20, boxShadow: '0 24px 50px -34px rgba(15,35,64,0.5)', overflow: 'hidden', marginBottom: 34 }}>
           <div style={{ height: 4, background: featured.color }} />
           <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-            {/* LEFT */}
+            {/* LEFT — se convierte en el editor cuando estás editando esta épica */}
             <div className="ep-featured-panel" style={{ flex: '1 1 360px', minWidth: 300, padding: '26px 28px' }}>
+              {editing && editInline && editing.id === featured.id ? renderEditor(true) : (<>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
                 <span style={{ height: 11, width: 11, borderRadius: 99, background: featured.color }} />
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Épica</span>
                 <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: fSt.bg, color: fSt.color }}>{featured.status}</span>
                 {featured.categoria && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: 'rgba(15,35,64,0.06)', color: 'rgba(20,35,61,0.6)' }}>{featured.categoria}</span>}
                 {featured.archived && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: 'rgba(20,35,61,0.08)', color: 'rgba(20,35,61,0.5)' }}>Archivada</span>}
-                <button onClick={() => openEdit(featured.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}><PencilIcon /> Editar</button>
+                <button onClick={() => openEdit(featured.id, true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}><PencilIcon /> Editar</button>
                 <button onClick={() => toggleArchive(featured)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}>{featured.archived ? 'Desarchivar' : 'Archivar'}</button>
               </div>
               <h1 className="serif ep-featured-title" style={{ fontWeight: 600, fontSize: 46, lineHeight: 1, margin: '0 0 8px', color: '#10233F' }}>{featured.name}</h1>
@@ -3976,7 +3989,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                           {k.due && <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</span>}
-                          {(k.taskIds?.length ?? 0) > 0 && <span title="Tareas ligadas a este objetivo" style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>🔗 {k.taskIds!.length} tareas</span>}
+                          <button onClick={() => setMilestonePick({ eId: featured.id, mId: k.id })}
+                            title="Elegir qué tareas cuentan para este objetivo"
+                            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, fontSize: 10.5, fontWeight: 700, color: (k.taskIds?.length ?? 0) > 0 ? 'rgba(20,35,61,0.55)' : '#A87A2C', textDecoration: 'underline' }}>
+                            🔗 {(k.taskIds?.length ?? 0) > 0 ? `${k.taskIds!.length} tareas` : 'Ligar tareas'}
+                          </button>
                         </div>
                       </div>
                     )
@@ -4032,6 +4049,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   })}
                 </div>
               )}
+              </>)}
             </div>
 
             {/* RIGHT */}
@@ -4289,7 +4307,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
-      {editing && renderEditor()}
+      {editing && !editInline && renderEditor()}
 
       {pickerOpen && renderPicker()}
 
@@ -4300,6 +4318,52 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <div onClick={() => setMovePick(null)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 20px' }}>
             <div data-pop onClick={e => e.stopPropagation()}>
               {renderMonthPopover(cur, iso => { if (found) planTaskToDay(found.e, found.i, iso, { toast: true }); setMovePick(null) })}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Elegir qué tareas cuentan para un objetivo */}
+      {milestonePick && (() => {
+        const e = epics.find(x => x.id === milestonePick.eId)
+        const m = e?.kpis.find(x => x.id === milestonePick.mId)
+        if (!e || !m) return null
+        const ligadas = new Set(m.taskIds || [])
+        const otros = (id: string) => e.kpis.some(o => o.id !== m.id && (o.taskIds || []).includes(id))
+        return (
+          <div onClick={() => setMilestonePick(null)} style={{ position: 'fixed', inset: 0, zIndex: 77, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '36px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Ligar tareas al objetivo" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 520, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: e.color }} />
+              <div style={{ padding: '18px 24px 22px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                  <div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 5 }}>Tareas del objetivo</div>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1.05, color: '#10233F' }}>{m.t}</div>
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setMilestonePick(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+                <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 12 }}>
+                  Marca las tareas que cuentan para este objetivo. Si además lo pones en “medir con tareas cerradas”, el avance saldrá de estas.
+                </div>
+                <div style={{ maxHeight: '46vh', overflowY: 'auto' }}>
+                  {(e.tasks || []).filter(t => t.status !== ARCHIVED).map(t => {
+                    const on = ligadas.has(t.id!)
+                    const enOtro = !on && otros(t.id!)
+                    return (
+                      <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer', opacity: enOtro ? 0.55 : 1 }}>
+                        <input type="checkbox" checked={on} onChange={() => setTaskMilestone(e, t.id!, on ? null : m.id)} style={{ cursor: 'pointer' }} />
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: t.status === 'Terminada' ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+                        <span style={{ flexShrink: 0, font: '700 10px var(--font-ui)', color: taskStyle(t.status).c, background: taskStyle(t.status).bg, borderRadius: 99, padding: '2px 8px' }}>{taskStyle(t.status).label}</span>
+                        {enOtro && <span title="Ya cuenta para otro objetivo" style={{ flexShrink: 0, fontSize: 10, color: '#A87A2C' }}>en otro</span>}
+                      </label>
+                    )
+                  })}
+                  {(e.tasks || []).filter(t => t.status !== ARCHIVED).length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '10px 0' }}>Esta épica no tiene tareas.</div>}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                  <button onClick={() => setMilestonePick(null)} style={{ ...goldBtn, padding: '10px 20px' }}>Listo</button>
+                </div>
+              </div>
             </div>
           </div>
         )
