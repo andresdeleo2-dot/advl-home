@@ -166,7 +166,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
   const [dayView, setDayView] = useState<'lista' | 'tabla'>('lista') // vista de la lista del enfoque de día
   const [boardView, setBoardView] = useState<'tablero' | 'tabla'>('tablero') // columnas o tabla en semana/2sem/3sem/mes
-  const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
+  // Orden de la tabla como CADENA de criterios (primero por…, luego por…). El
+  // primer elemento manda; los siguientes desempatan. 'manual' vive solo.
+  const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }[]>([{ key: 'manual', dir: 'asc' }])
   const [epicView, setEpicView] = useState<'lista' | 'tabla'>('lista') // vista de "Todas las épicas"
   const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [resumenDay, setResumenDay] = useState<string | null>(null) // popup del día en el burndown
@@ -2302,20 +2304,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  inline, encabezados ordenables y selección para acciones en lote. */
   const renderDayTable = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
     const edit = dayTableEdit
-    const manual = dayTableSort.key === 'manual'
-    const dir = dayTableSort.dir === 'asc' ? 1 : -1
+    const sort = dayTableSort
+    const manual = sort.length === 1 && sort[0].key === 'manual'
+    // Compara UN criterio; el signo lo pone la dirección de cada nivel.
+    const cmpKey = (a: typeof rows[number], b: typeof rows[number], k: string) => {
+      if (k === 't') return a.t.t.localeCompare(b.t.t, 'es')
+      if (k === 'epica') return a.e.name.localeCompare(b.e.name, 'es')
+      if (k === 'status') return TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)
+      if (k === 'priority') return PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']
+      if (k === 'difficulty') return (a.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[a.t.difficulty] : 0) - (b.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[b.t.difficulty] : 0)
+      if (k === 'progress') return (a.t.progress || 0) - (b.t.progress || 0)
+      if (k === 'plan') return (a.t.plan || '9999-99').localeCompare(b.t.plan || '9999-99')
+      if (k === 'due') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
+      return (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)   // manual
+    }
     const cmp = (a: typeof rows[number], b: typeof rows[number]) => {
-      const k = dayTableSort.key; let r = 0
-      if (k === 't') r = a.t.t.localeCompare(b.t.t, 'es')
-      else if (k === 'epica') r = a.e.name.localeCompare(b.e.name, 'es')
-      else if (k === 'status') r = TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)
-      else if (k === 'priority') r = PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']
-      else if (k === 'difficulty') r = (a.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[a.t.difficulty] : 0) - (b.t.difficulty ? ({ facil: 1, media: 2, dificil: 3 })[b.t.difficulty] : 0)
-      else if (k === 'progress') r = (a.t.progress || 0) - (b.t.progress || 0)
-      else if (k === 'plan') r = (a.t.plan || '9999-99').localeCompare(b.t.plan || '9999-99')
-      else if (k === 'due') r = (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
-      else r = (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)   // manual
-      return manual ? r : (r * dir || a.t.t.localeCompare(b.t.t, 'es'))
+      if (manual) return cmpKey(a, b, 'manual')
+      // Recorre los niveles: el primero que rompe el empate decide.
+      for (const s of sort) { const r = cmpKey(a, b, s.key) * (s.dir === 'asc' ? 1 : -1); if (r) return r }
+      return a.t.t.localeCompare(b.t.t, 'es')
     }
     const sorted = [...rows].sort(cmp)
     const move = (from: number, d: 'up' | 'down') => {
@@ -2325,17 +2332,61 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const [m] = arr.splice(from, 1); arr.splice(to, 0, m)
       applyPlanOrder(arr)
     }
-    const setSort = (key: string) => setDayTableSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
-    const th = (key: string, label: string) => (
-      <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: dayTableSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{dayTableSort.key === key ? (dayTableSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
-    )
+    // Clic normal = ordena sólo por esa columna (alterna dirección si ya era la única).
+    // Mayús+clic = agrega/quita esa columna como criterio adicional (segundo, tercero…).
+    const setSort = (key: string, additive = false) => setDayTableSort(prev => {
+      if (key === 'manual') return [{ key: 'manual', dir: 'asc' }]
+      const base = prev.filter(s => s.key !== 'manual')   // 'manual' no combina con nada
+      const at = base.findIndex(s => s.key === key)
+      if (additive) {
+        if (at >= 0) { const n = [...base]; n[at] = { key, dir: n[at].dir === 'asc' ? 'desc' : 'asc' }; return n }
+        return [...base, { key, dir: 'asc' as const }]
+      }
+      if (base.length === 1 && base[0].key === key) return [{ key, dir: base[0].dir === 'asc' ? 'desc' : 'asc' }]
+      return [{ key, dir: 'asc' }]
+    })
+    const multiSort = sort.filter(s => s.key !== 'manual').length > 1
+    const th = (key: string, label: string) => {
+      const pos = sort.findIndex(s => s.key === key)
+      const on = pos >= 0 && !manual
+      const s = on ? sort[pos] : null
+      return (
+        <th onClick={ev => setSort(key, ev.shiftKey)} title="Clic para ordenar · Mayús+clic para agregar como criterio adicional"
+          style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: on ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>
+          {on && multiSort && <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 13, height: 13, borderRadius: 99, background: '#A87A2C', color: '#fff', font: '800 8.5px/1 var(--font-ui)', marginRight: 4, verticalAlign: 'middle' }}>{pos + 1}</span>}
+          {label}{on ? (s!.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+        </th>
+      )
+    }
     const allKeys = sorted.map(x => planKey(x.e.id, x.t))
     const allSel = allKeys.length > 0 && allKeys.every(k => planSel.has(k))
     const cellInp: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 6, padding: '5px 7px', fontSize: 12.5, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }
     const sel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, background: '#fff', outline: 'none' }
     const dInp: CSSProperties = { border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 600, color: '#14233D', background: '#fff', outline: 'none' }
     const arrow: CSSProperties = { height: 20, width: 20, borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 11, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+    const KLABEL: Record<string, string> = { t: 'Tarea', epica: 'Épica', status: 'Estado', priority: 'Prioridad', difficulty: 'Dificultad', progress: 'Avance', plan: 'Hacer', due: 'Vence' }
     return (
+      <>
+      {/* Pista/estado del orden: en manual invita a Mayús+clic; con orden activo lo
+          resume en palabras ("Vence → Épica") y deja quitarlo de un clic. */}
+      {manual
+        ? (rows.length > 1 && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', margin: '0 2px 7px' }}>Clic en un encabezado ordena · <strong style={{ fontWeight: 700 }}>Mayús+clic</strong> agrega un segundo criterio (p. ej. Vence, luego Épica).</div>)
+        : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 2px 7px' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.45)' }}>Orden</span>
+            {sort.map((s, i) => (
+              <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {i > 0 && <span style={{ color: 'rgba(20,35,61,0.35)', fontSize: 12 }}>→</span>}
+                <button onClick={ev => setSort(s.key, ev.shiftKey)} title="Clic alterna dirección · Mayús+clic ajusta el nivel" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 12, height: 12, borderRadius: 99, background: '#A87A2C', color: '#fff', font: '800 8px/1 var(--font-ui)' }}>{i + 1}</span>
+                  {KLABEL[s.key] || s.key} {s.dir === 'asc' ? '▲' : '▼'}
+                </button>
+              </span>
+            ))}
+            <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>· Mayús+clic en un encabezado para sumar otro</span>
+            <button onClick={() => setSort('manual')} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', font: '700 11px var(--font-ui)', marginLeft: 'auto' }}>Quitar orden</button>
+          </div>
+        )}
       <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
           <thead>
@@ -2414,6 +2465,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </tbody>
         </table>
       </div>
+      </>
     )
   }
 
