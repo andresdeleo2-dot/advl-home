@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { rowToTask, taskToRow, type TareaRow } from '@/lib/tareas'
+import type { EpicaTask } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,7 +13,24 @@ export async function GET() {
     .order('created_at', { ascending: true })
 
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true, data })
+
+  // Las tareas viven en su propia tabla; se adjuntan a cada épica para que la UI
+  // siga viendo `epica.tasks[]` exactamente como antes.
+  const { data: tareas, error: e2 } = await supabase
+    .from('tareas')
+    .select('*')
+    .order('created_at', { ascending: true })
+
+  if (e2) return NextResponse.json({ ok: false, error: e2.message }, { status: 500 })
+
+  const byEpic = new Map<string, EpicaTask[]>()
+  for (const r of (tareas || []) as TareaRow[]) {
+    if (!byEpic.has(r.epica_id)) byEpic.set(r.epica_id, [])
+    byEpic.get(r.epica_id)!.push(rowToTask(r))
+  }
+  const withTasks = (data || []).map(e => ({ ...e, tasks: byEpic.get(e.id) || [] }))
+
+  return NextResponse.json({ ok: true, data: withTasks })
 }
 
 export async function POST(req: Request) {
@@ -32,12 +51,19 @@ export async function POST(req: Request) {
       epic_order: Number(body.epic_order) || 0,
       kpis: body.kpis ?? [],
       routines: body.routines ?? [],
-      tasks: body.tasks ?? [],
+      tasks: [],                     // legado: la columna queda vacía (respaldo histórico)
       links: body.links ?? [],
     }
     const { data, error } = await supabase.from('epicas').insert(payload).select().single()
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-    return NextResponse.json({ ok: true, data })
+
+    // Las tareas que vengan en el alta se insertan en su propia tabla
+    const tasks: EpicaTask[] = body.tasks ?? []
+    if (tasks.length) {
+      const { error: e2 } = await supabase.from('tareas').insert(tasks.map(t => taskToRow(t, data.id)))
+      if (e2) return NextResponse.json({ ok: false, error: e2.message }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true, data: { ...data, tasks } })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e) }, { status: 400 })
   }

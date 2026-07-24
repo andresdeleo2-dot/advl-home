@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
+import { sameTask } from '@/lib/tareas'
 import Link from 'next/link'
 import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
 import HeaderStats from './HeaderStats'
@@ -186,9 +187,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   useEffect(() => () => {
     if (progressTimer.current) clearTimeout(progressTimer.current)
     const p = progressPending.current
-    if (p) fetch(`/api/epicas/${p.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tasks: p.tasks }), keepalive: true,
+    if (p) fetch('/api/tareas/sync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ epicaId: p.id, update: p.tasks }), keepalive: true,
     }).catch(() => {})
   }, [])
 
@@ -209,8 +210,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           if (!ep) return
           const body: Partial<Epica> = {}
           if ((e.routines || []).some(r => (!r.weeks || typeof r.weeks !== 'object') && Array.isArray(r.days) && r.days.some(Boolean))) body.routines = ep.routines
-          // Persiste los ids de tarea recién generados, para que sean estables entre cargas
-          if ((e.tasks || []).some(t => !t.id)) body.tasks = ep.tasks
           if (Object.keys(body).length) fetch(`/api/epicas/${e.id}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
           }).catch(() => {})
@@ -401,13 +400,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Revierte SOLO esta épica en caso de fallo (update funcional), para no pisar
     // los updates optimistas concurrentes de otras épicas del mismo tick (reorden multi-épica).
     const prevEpic = epicsRef.current.find(e => e.id === id)
+    const { tasks: nextTasks, ...epicFields } = changes
     setEpics(list => list.map(e => (e.id === id ? { ...e, ...changes } : e)))
     try {
-      const r = await fetch(`/api/epicas/${id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
-      })
-      const j = await r.json()
-      if (!j.ok) throw new Error(j.error)
+      // Campos de la épica (nombre, color, rutinas, links…)
+      if (Object.keys(epicFields).length) {
+        const r = await fetch(`/api/epicas/${id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(epicFields),
+        })
+        const j = await r.json()
+        if (!j.ok) throw new Error(j.error)
+      }
+      // Tareas: en vez de reescribir el array completo, se manda SÓLO el diff
+      // (altas, cambios y bajas) contra el estado previo. Así dos pestañas no se
+      // pisan y editar una tarea no toca a las demás.
+      if (nextTasks) {
+        const before = prevEpic?.tasks || []
+        const beforeById = new Map(before.map(t => [t.id, t]))
+        const afterById = new Map(nextTasks.map(t => [t.id, t]))
+        const create = nextTasks.filter(t => t.id && !beforeById.has(t.id))
+        const update = nextTasks.filter(t => { const b = t.id ? beforeById.get(t.id) : null; return b && !sameTask(b, t) })
+        const remove = before.filter(t => t.id && !afterById.has(t.id)).map(t => t.id!)
+        if (create.length || update.length || remove.length) {
+          const r = await fetch('/api/tareas/sync', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ epicaId: id, create, update, remove }),
+          })
+          const j = await r.json()
+          if (!j.ok) throw new Error(j.error)
+        }
+      }
       return true
     } catch {
       if (prevEpic) setEpics(list => list.map(e => (e.id === id ? prevEpic : e)))
