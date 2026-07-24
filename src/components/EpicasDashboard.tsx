@@ -76,6 +76,7 @@ import {
   diasTrabajados,
   normalizeMilestone,
   milestoneOfTask,
+  Donut,
   milestoneProgress,
   milestoneDone,
   MULTIDIA_TONE,
@@ -2561,6 +2562,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const pendientes = committed.filter(x => x.t.status !== 'Terminada').length
     const cumplimiento = committed.length ? Math.round(((committed.length - pendientes) / committed.length) * 100) : 0
 
+    // Semana pasada (mismo cálculo, corrido 7 días) para comparar tendencia
+    const lastMon = addDays(mon, -7), lastSun = addDays(mon, -1)
+    const inLast = (d?: string) => !!d && d >= lastMon && d <= lastSun
+    const lastCompleted = all.filter(x => inLast(x.t.doneAt))
+    const lastPoints = lastCompleted.reduce((n, x) => n + taskWeight(x.t), 0)
+    const delta = (cur: number, prev: number) => {
+      if (prev === 0) return { txt: cur > 0 ? `+${cur}` : '=', c: cur > 0 ? '#2E6E6E' : 'rgba(20,35,61,0.45)' }
+      const d = cur - prev
+      return { txt: d === 0 ? '=' : `${d > 0 ? '+' : ''}${d}`, c: d > 0 ? '#2E6E6E' : d < 0 ? '#B0522E' : 'rgba(20,35,61,0.45)' }
+    }
+
+    // Composición del pipeline (estado de lo comprometido esta semana)
+    const estCount = (st: string) => committed.filter(x => x.t.status === st).length
+    const estSegs = [
+      { label: 'Terminada', value: estCount('Terminada'), color: '#2E6E6E' },
+      { label: 'En curso', value: estCount('En curso'), color: '#2E5A9E' },
+      { label: 'Esperando', value: estCount('Esperando'), color: '#A87A2C' },
+      { label: 'Por hacer', value: estCount('Por hacer'), color: '#5B6B86' },
+    ]
+    // Tipo de trabajo cerrado (dificultad de lo completado) — leyenda con DifDots
+    const difCount = (dd: Dif | 'sin') => completed.filter(x => (x.t.difficulty || 'sin') === dd).length
+    const difSegs = [
+      { label: 'Difícil', value: difCount('dificil'), color: difStyle('dificil').c, icon: <DifDots d="dificil" size={10} /> },
+      { label: 'Media', value: difCount('media'), color: difStyle('media').c, icon: <DifDots d="media" size={10} /> },
+      { label: 'Fácil', value: difCount('facil'), color: difStyle('facil').c, icon: <DifDots d="facil" size={10} /> },
+      { label: 'Sin dif.', value: difCount('sin'), color: 'rgba(20,35,61,0.28)' },
+    ]
+
     // Burndown: cuánto quedaba pendiente al cerrar cada día, contra la línea ideal
     const remaining = days.map(d => committed.filter(x => !(x.t.doneAt && x.t.doneAt <= d)).length)
     const ideal = days.map((_, k) => committed.length * (1 - k / 6))
@@ -2665,6 +2694,56 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </svg>
               </div>
             )}
+        </div>
+
+        {/* PASTELES + COMPARACIÓN — composición del trabajo y tendencia semanal */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14, marginBottom: 20 }}>
+          {/* Composición del pipeline */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('Composición del plan', `${committed.length} tareas de la semana`)}
+            {committed.length === 0
+              ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '10px 0' }}>No planeaste tareas esta semana.</div>
+              : <Donut segments={estSegs} centerTop={String(committed.length)} centerBottom="tareas" />}
+          </div>
+
+          {/* Tipo de trabajo cerrado (dificultad) */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('Trabajo cerrado', `${completed.length} completadas · por dificultad`)}
+            {completed.length === 0
+              ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '10px 0' }}>Aún no cierras nada esta semana.</div>
+              : <Donut segments={difSegs} centerTop={String(points)} centerBottom="puntos" />}
+          </div>
+
+          {/* Vs. semana pasada */}
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
+            {secTitle('Vs. semana pasada', weekRangeLabel(lastMon))}
+            {[
+              { l: 'Completadas', cur: completed.length, prev: lastCompleted.length },
+              { l: 'Puntos de esfuerzo', cur: points, prev: lastPoints },
+            ].map(row => {
+              const d = delta(row.cur, row.prev)
+              const max = Math.max(row.cur, row.prev, 1)
+              return (
+                <div key={row.l} style={{ marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                    <span className="serif" style={{ fontSize: 26, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{row.cur}</span>
+                    <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>{row.l}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ font: '800 12px var(--font-ui)', color: d.c }}>{d.txt === '=' ? '=' : (d.txt.startsWith('+') ? '▲ ' : '▼ ') + d.txt.replace('+', '').replace('-', '')}</span>
+                  </div>
+                  {/* dos barras: esta semana (color) vs pasada (gris) */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.06)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${(row.cur / max) * 100}%`, height: '100%', background: '#C2933A' }} /></span>
+                    <span style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.06)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${(row.prev / max) * 100}%`, height: '100%', background: 'rgba(20,35,61,0.3)' }} /></span>
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ display: 'flex', gap: 14, fontSize: 10.5, color: 'rgba(20,35,61,0.5)', marginTop: 2 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 5, borderRadius: 99, background: '#C2933A' }} /> esta semana</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 10, height: 5, borderRadius: 99, background: 'rgba(20,35,61,0.3)' }} /> pasada</span>
+            </div>
+          </div>
         </div>
 
         {/* Tareas diarias (rutinas) de la semana */}

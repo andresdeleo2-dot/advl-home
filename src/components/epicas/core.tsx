@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type { Epica, EpicaTask, EpicaRoutine, EpicaProgressEntry, EpicaRepeat, EpicaMilestone } from '@/lib/supabase'
 
 /* Núcleo de /epicas: constantes de marca, utilidades de fecha, estilos por estado
@@ -463,4 +463,57 @@ export function milestoneDone(m: EpicaMilestone, e: Epica): boolean {
 export function milestoneOfTask(e: Epica, taskId?: string): EpicaMilestone | undefined {
   if (!taskId) return undefined
   return (e.kpis || []).find(m => (m.taskIds || []).includes(taskId))
+}
+
+/* ─── Donut reutilizable (part-to-whole) ─────────────────────────
+   SVG sin dependencias. Cada rebanada SIEMPRE lleva etiqueta en la leyenda
+   (y opcionalmente un ícono de forma), para que la identidad nunca dependa
+   sólo del color — validado con la skill de dataviz. Hueco de 2px entre arcos. */
+export type DonutSeg = { label: string; value: number; color: string; icon?: ReactNode }
+export function Donut({ segments, size = 116, thickness = 16, centerTop, centerBottom }: {
+  segments: DonutSeg[]; size?: number; thickness?: number; centerTop?: string; centerBottom?: string
+}) {
+  const total = segments.reduce((n, s) => n + s.value, 0)
+  const r = (size - thickness) / 2
+  const c = 2 * Math.PI * r
+  const gap = total > 0 ? 2 : 0   // px de separación entre arcos
+  let offset = 0
+  const arcs = segments.filter(s => s.value > 0).map((s, i) => {
+    const frac = total > 0 ? s.value / total : 0
+    const len = Math.max(0, frac * c - gap)
+    const el = (
+      <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={s.color} strokeWidth={thickness}
+        strokeDasharray={`${len} ${c - len}`} strokeDashoffset={-offset} strokeLinecap="butt"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+    )
+    offset += frac * c
+    return el
+  })
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+      <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+        <svg width={size} height={size} style={{ display: 'block' }}>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(15,35,64,0.06)" strokeWidth={thickness} />
+          {arcs}
+        </svg>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <span className="serif" style={{ fontSize: 26, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{centerTop}</span>
+          {centerBottom && <span style={{ font: '700 8.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.45)', marginTop: 4 }}>{centerBottom}</span>}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 130 }}>
+        {segments.map((s, i) => {
+          const pct = total > 0 ? Math.round((s.value / total) * 100) : 0
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, opacity: s.value > 0 ? 1 : 0.4 }}>
+              {s.icon ?? <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color, flexShrink: 0 }} />}
+              <span style={{ flex: 1, fontSize: 12, color: '#16365F' }}>{s.label}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#10233F' }}>{s.value}</span>
+              <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.45)', width: 30, textAlign: 'right' }}>{pct}%</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
