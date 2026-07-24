@@ -165,6 +165,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
   const [dayView, setDayView] = useState<'lista' | 'tabla'>('lista') // vista de la lista del enfoque de día
+  const [boardView, setBoardView] = useState<'tablero' | 'tabla'>('tablero') // columnas o tabla en semana/2sem/3sem/mes
   const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [epicView, setEpicView] = useState<'lista' | 'tabla'>('lista') // vista de "Todas las épicas"
   const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
@@ -257,7 +258,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
-    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setEpicView(p.epicView); setDayCapacity(p.dayCapacity || 8)
+    setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setBoardView(p.boardView || 'tablero'); setEpicView(p.epicView); setDayCapacity(p.dayCapacity || 8)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
@@ -271,13 +272,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!prefsReady.current) return
     const prefs: Prefs = {
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView, dayCapacity,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, boardView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
-      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, epicView, dayCapacity,
+      weekEpica, weekDif, routinesOpen, boardHideDone, dayView, boardView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
       backlogFEpica, backlogFStatus, backlogFPrio, featuredId])
 
@@ -1903,6 +1904,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /** Vista semanal tipo tablero: 7 columnas (Lun–Dom de la semana que contiene viewDate).
    *  Cada columna es un día; las tarjetas se arrastran entre días para reprogramar. */
+  /** Interruptor Tablero | Tabla (+ botón editar en modo tabla) para las vistas
+   *  semana / 2 sem / 3 sem / mes. Comparte la tabla con el enfoque de día. */
+  const boardViewControls = (
+    <>
+      <div role="group" aria-label="Tablero o tabla" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+        {([['tablero', 'Tablero'], ['tabla', 'Tabla']] as const).map(([v, label]) => {
+          const onv = boardView === v
+          return <button key={v} aria-pressed={onv} onClick={() => setBoardView(v)} style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '5px 11px', font: '700 11px var(--font-ui)', background: onv ? '#10233F' : 'transparent', color: onv ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+        })}
+      </div>
+      {boardView === 'tabla' && <button onClick={() => setDayTableEdit(v => !v)} title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: dayTableEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(dayTableEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{dayTableEdit ? '✓ Listo' : '✎ Editar tabla'}</button>}
+      <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
+    </>
+  )
+
   const renderPlanWeek = () => {
     const monday = mondayISO(viewDate)
     const sunday = addDays(monday, 6)
@@ -1944,13 +1960,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <>
       {/* Filtros y orden — mismos controles que en la vista de día */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
-        <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar dentro de cada día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
-          <option value="plan">Orden manual</option>
-          <option value="prioridad">Prioridad</option>
-          <option value="entrega">Entrega</option>
-          <option value="avance">Avance</option>
-          <option value="epica">Épica</option>
-        </select>
+        {boardViewControls}
+        {boardView === 'tablero' && (
+          <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar dentro de cada día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+            <option value="plan">Orden manual</option>
+            <option value="prioridad">Prioridad</option>
+            <option value="entrega">Entrega</option>
+            <option value="avance">Avance</option>
+            <option value="epica">Épica</option>
+          </select>
+        )}
         {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
           const on = planFilter === k
           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
@@ -1977,7 +1996,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
-      {(() => {
+      {boardView === 'tabla' ? renderDayTable([...byDay.values()].flat().filter(x => passF(x.t))) : (() => {
       // Rutinas ("las diarias") + tablero en UN solo contenedor, para que las celdas
       // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
       // nombra las rutinas; cada columna trae sus celdas de ese día arriba.
@@ -2147,13 +2166,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <>
       {/* Filtros — iguales que en la vista semana */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
-        <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar dentro de cada día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
-          <option value="plan">Orden manual</option>
-          <option value="prioridad">Prioridad</option>
-          <option value="entrega">Entrega</option>
-          <option value="avance">Avance</option>
-          <option value="epica">Épica</option>
-        </select>
+        {boardViewControls}
+        {boardView === 'tablero' && (
+          <select value={planSort} onChange={e => setPlanSort(e.target.value as typeof planSort)} title="Ordenar dentro de cada día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+            <option value="plan">Orden manual</option>
+            <option value="prioridad">Prioridad</option>
+            <option value="entrega">Entrega</option>
+            <option value="avance">Avance</option>
+            <option value="epica">Épica</option>
+          </select>
+        )}
         {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
           const on = planFilter === k
           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
@@ -2175,6 +2197,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
+      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items)) : (
       <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {cols.map(({ mon, sun, items }) => {
           const hasToday = today >= mon && today <= sun
@@ -2270,6 +2293,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })}
       </div>
+      )}
       </>
     )
   }
