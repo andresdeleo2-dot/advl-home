@@ -169,6 +169,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [resumenDay, setResumenDay] = useState<string | null>(null) // popup del día en el burndown
   const [epicPeek, setEpicPeek] = useState<string | null>(null)     // popup rápido de una épica
   const [milestonePick, setMilestonePick] = useState<{ eId: string; mId: string } | null>(null) // elegir tareas de un objetivo
+  const [epicDrag, setEpicDrag] = useState<string | null>(null)     // tarea arrastrada en el panel de la épica
+  const [epicDropTo, setEpicDropTo] = useState<number | null>(null) // índice destino durante el arrastre
+  const epicDragRef = useRef<{ id: string; y: number; moved: boolean } | null>(null)
+  const epicListRef = useRef<HTMLDivElement>(null)
   const [editInline, setEditInline] = useState(false)              // editar la épica dentro del panel, no en modal
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
@@ -461,6 +465,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           })
           const j = await r.json()
           if (!j.ok) throw new Error(j.error)
+          // Sella los updated_at frescos en memoria (evita chocar consigo mismo)
+          if (j.stamps && Object.keys(j.stamps).length) {
+            setEpics(list => list.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(t => (t.id && j.stamps[t.id]) ? { ...t, updatedAt: j.stamps[t.id] } : t) }))
+          }
+          // Choque con otra pestaña: avisa y recarga con lo más fresco de la BD
+          if (j.conflicts && j.conflicts.length) {
+            showToast('Esa tarea cambió en otra pestaña · recargando', true)
+            loadEpics()
+          }
         }
       }
       return true
@@ -1199,6 +1212,44 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   /** Mueve una tarea dentro de su épica y reasigna el orden (10,20,30…).
    *  Requiere sql/epicas-04-orden-tareas.sql. */
+  /** Reordena la tarea `id` a la posición `to` dentro del orden manual actual
+   *  de la épica (la lista visible en el panel). Reasigna orden 10,20,30… */
+  const dropTaskInEpic = (e: Epica, ordered: { _i: number }[], id: string, to: number) => {
+    const from = ordered.findIndex(x => e.tasks[x._i]?.id === id)
+    if (from < 0) return
+    let ins = to > from ? to - 1 : to
+    ins = Math.max(0, Math.min(ins, ordered.length - 1))
+    if (ins === from) return
+    const seq = ordered.map(x => e.tasks[x._i]) // orden visible actual
+    const [m] = seq.splice(from, 1); seq.splice(ins, 0, m)
+    // Reasigna `orden` a TODA la épica respetando el nuevo orden visible + el resto
+    const rest = e.tasks.filter(t => !seq.some(s => s.id === t.id))
+    const full = [...seq, ...rest]
+    const tasks = clone(e.tasks)
+    full.forEach((t, k) => { const idx = tasks.findIndex(x => x.id === t.id); if (idx >= 0) tasks[idx].orden = k * 10 })
+    patchEpic(e.id, { tasks })
+  }
+  // Drag por manija (pointer events) en el panel de la épica
+  const onEpicGripDown = (ev: React.PointerEvent, id: string) => {
+    ev.preventDefault(); ev.stopPropagation()
+    epicDragRef.current = { id, y: ev.clientY, moved: false }
+    setEpicDrag(id)
+    try { (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId) } catch { /* noop */ }
+  }
+  const epicDropIndex = (clientY: number) => {
+    const rows = Array.from(epicListRef.current?.querySelectorAll('[data-epic-row]') || []) as HTMLElement[]
+    for (let k = 0; k < rows.length; k++) { const r = rows[k].getBoundingClientRect(); if (clientY < r.top + r.height / 2) return k }
+    return rows.length
+  }
+  const onEpicGripMove = (ev: React.PointerEvent) => { if (!epicDragRef.current) return; epicDragRef.current.moved = true; setEpicDropTo(epicDropIndex(ev.clientY)) }
+  const onEpicGripUp = (ev: React.PointerEvent, ordered: { _i: number }[]) => {
+    const d = epicDragRef.current; epicDragRef.current = null
+    const to = epicDropIndex(ev.clientY)
+    setEpicDrag(null); setEpicDropTo(null)
+    if (d?.moved) dropTaskInEpic(featured, ordered, d.id, to)
+  }
+  const onEpicGripCancel = () => { epicDragRef.current = null; setEpicDrag(null); setEpicDropTo(null) }
+
   const moveTaskInEpic = (e: Epica, from: number, dir: 'up' | 'down') => {
     const to = dir === 'up' ? from - 1 : from + 1
     if (to < 0 || to >= e.tasks.length) return
@@ -1520,7 +1571,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     applyPlanStatus(tasks[ti], '')   // revierte el "En curso" forzado por el plan de hoy
     patchEpic(e.id, { tasks })
   }
-  const renderTaskRow = (t: (typeof indexed)[number]) => {
+  const renderTaskRow = (t: (typeof indexed)[number], dragCtx?: { ordered: { _i: number }[] }) => {
+    const dragging = epicDrag === t.id
     const ts = taskStyle(t.status)
     const done = t.status === 'Terminada'
     const dt = dueTone(t.due, done)
@@ -1528,14 +1580,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const subsDone = subs.filter(s => s.done).length
     const dateLbl: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.55)', width: 30, flexShrink: 0 }
     return (
-      <div key={t._i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
-        {/* Reordenar sólo tiene sentido en orden manual */}
-        {epicSort === 'manual' && (
-          <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0, marginTop: 1 }}>
-            <button onClick={() => moveTaskInEpic(featured, t._i, 'up')} disabled={t._i === 0} aria-label="Subir" title="Subir"
-              style={{ height: 16, width: 20, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 9, lineHeight: 1, opacity: t._i === 0 ? 0.35 : 1 }}>↑</button>
-            <button onClick={() => moveTaskInEpic(featured, t._i, 'down')} disabled={t._i === featured.tasks.length - 1} aria-label="Bajar" title="Bajar"
-              style={{ height: 16, width: 20, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 9, lineHeight: 1, opacity: t._i === featured.tasks.length - 1 ? 0.35 : 1 }}>↓</button>
+      <div key={t._i} data-epic-row style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.06)', background: dragging ? '#FFFDF8' : 'transparent', borderRadius: dragging ? 10 : 0, boxShadow: dragging ? '0 14px 26px -16px rgba(15,35,64,0.45)' : 'none', opacity: epicDrag && !dragging ? 0.6 : 1, transition: 'opacity .12s' }}>
+        {/* Manija de arrastre — sólo en orden manual */}
+        {epicSort === 'manual' && dragCtx && (
+          <span onPointerDown={ev => onEpicGripDown(ev, t.id!)} onPointerMove={onEpicGripMove} onPointerUp={ev => onEpicGripUp(ev, dragCtx.ordered)} onPointerCancel={onEpicGripCancel}
+            title="Arrastra para reordenar" aria-label="Arrastra para reordenar"
+            style={{ flexShrink: 0, marginTop: 2, color: 'rgba(20,35,61,0.5)', cursor: 'grab', touchAction: 'none', display: 'flex', alignItems: 'center' }}>
+            <GripIcon />
           </span>
         )}
         <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, marginTop: 1, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
@@ -4153,7 +4204,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.04em', color: g.color, textTransform: 'uppercase' }}>{g.label}</span>
                               <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{g.items.length}</span>
                             </div>
-                            <div style={{ display: 'flex', flexDirection: 'column' }}>{show.map(renderTaskRow)}</div>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>{show.map(t => renderTaskRow(t))}</div>
                           </div>
                         )
                       })}
@@ -4162,9 +4213,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 }
                 const show = collapsed ? flatActive.slice(0, CAP) : flatActive
+                const dragEnabled = epicSort === 'manual' && flatActive.length > 1 && !collapsed
+                const insLine2 = <div style={{ height: 2, background: '#C2933A', borderRadius: 99, margin: '2px 0' }} />
                 return (
                   <>
-                    <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 8 }}>{show.map(renderTaskRow)}</div>
+                    {dragEnabled && flatActive.length > 1 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 6 }}>Arrastra la manija para reordenar.</div>}
+                    <div ref={epicListRef} style={{ display: 'flex', flexDirection: 'column', marginBottom: 8 }}>
+                      {show.map((t, pos) => (
+                        <div key={t._i}>
+                          {dragEnabled && epicDrag && epicDropTo === pos && insLine2}
+                          {renderTaskRow(t, dragEnabled ? { ordered: show } : undefined)}
+                        </div>
+                      ))}
+                      {dragEnabled && epicDrag && epicDropTo === show.length && insLine2}
+                    </div>
                     {emptyMsg}{toggleBtn}
                   </>
                 )
@@ -4185,7 +4247,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <div key={mg.label} style={{ marginBottom: 10 }}>
                           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.55)', margin: '4px 0 2px' }}>{mg.label} · {mg.items.length}</div>
                           <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            {mg.items.map(renderTaskRow)}
+                            {mg.items.map(t => renderTaskRow(t))}
                           </div>
                         </div>
                       ))}

@@ -59,6 +59,7 @@ export type EpicaTask = {
   difficulty?: 'facil' | 'media' | 'dificil' // dificultad estimada de la tarea
   planOrder?: number                   // orden dentro del plan (se reasigna 1000,2000,3000… al reordenar)
   orden?: number                       // orden manual dentro de su épica (cuál va primero)
+  updatedAt?: string                   // última modificación (server); base para detectar choques entre pestañas
   planPrev?: string                    // estado previo al completar desde el plan (para deshacer)
   subtasks?: EpicaSubtask[]            // checklist dentro de la tarea
   progress?: number                    // % de avance manual (0-100)

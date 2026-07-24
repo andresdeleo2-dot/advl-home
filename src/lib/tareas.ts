@@ -28,6 +28,7 @@ export type TareaRow = {
   subtasks: unknown[] | null
   links: unknown[] | null
   progress_log: unknown[] | null
+  updated_at?: string | null
 }
 
 /** Fila → tarea de la UI. Los nulos vuelven a ser `undefined` (o '' donde el
@@ -56,6 +57,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.repeat_done?.length) t.repeatDone = r.repeat_done
   if (r.subtasks?.length) t.subtasks = r.subtasks as EpicaTask['subtasks']
   if (r.progress_log?.length) t.progressLog = r.progress_log as EpicaTask['progressLog']
+  if (r.updated_at) t.updatedAt = r.updated_at
   return t
 }
 
