@@ -2696,6 +2696,63 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )}
         </div>
 
+        {/* PENDIENTES DE LA SEMANA — lo que falta por cerrar (lo más accionable) */}
+        {(() => {
+          const faltan = committed.filter(x => x.t.status !== 'Terminada')
+          const rank = (x: typeof faltan[number]) => {
+            const vencida = x.t.plan && x.t.plan < today ? 0 : 1        // arrastradas primero
+            return [vencida, x.t.plan || '9999', PRIO_RANK[x.t.priority || 'media']] as const
+          }
+          const orden = [...faltan].sort((a, b) => { const A = rank(a), B = rank(b); return (A[0] - B[0]) || String(A[1]).localeCompare(String(B[1])) || (A[2] - B[2]) })
+          return (
+            <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20, ...(faltan.length ? { border: '1px solid rgba(176,82,46,0.28)' } : {}) }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
+                <span style={{ height: 7, width: 7, borderRadius: 99, background: faltan.length ? '#B0522E' : '#2E6E6E' }} />
+                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Faltan por cerrar</span>
+                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: faltan.length ? '#B0522E' : '#2E6E6E' }}>{faltan.length}</span>
+                <span style={{ flex: 1 }} />
+                {faltan.length > 0 && (() => { const pts = faltan.reduce((n, x) => n + taskWeight(x.t), 0); return <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>{pts} puntos de esfuerzo restantes</span> })()}
+              </div>
+              {faltan.length === 0
+                ? <div style={{ fontSize: 13, color: '#2E6E6E', fontWeight: 600, padding: '4px 0' }}>Cerraste todo lo que planeaste esta semana ✦</div>
+                : (
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {orden.map(x => {
+                      const { e, t } = x
+                      const vencida = t.plan && t.plan < today && t.status !== 'Terminada'
+                      const dt = dueTone(t.due, false)
+                      return (
+                        <div key={planKey(e.id, t)} {...clickable(() => setTaskView({ eId: e.id, tid: t.id! }), `Ver ${t.t}`)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                          <span title={t.plan ? `Planeada para ${fmtDue(t.plan)}` : 'Sin día'} style={{ flexShrink: 0, width: 52, textAlign: 'center', font: '700 10px var(--font-ui)', color: vencida ? '#B0522E' : 'rgba(20,35,61,0.55)', background: vencida ? 'rgba(176,82,46,0.10)' : 'rgba(15,35,64,0.04)', border: vencida ? '1px solid rgba(176,82,46,0.3)' : '1px solid transparent', borderRadius: 7, padding: '3px 0' }}>
+                            {t.plan ? (relShort(t.plan) === 'Hoy' ? 'HOY' : `${DAYS[(new Date(t.plan + 'T00:00:00').getDay() + 6) % 7]} ${dayNum(t.plan)}`) : '—'}
+                          </span>
+                          <span style={{ width: prioStyle(t.priority).accentW, height: 22, borderRadius: 99, background: prioStyle(t.priority).accent, flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 2, flexWrap: 'wrap' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}</span>
+                              <span style={{ font: '700 10px var(--font-ui)', color: taskStyle(t.status).c, background: taskStyle(t.status).bg, borderRadius: 99, padding: '1px 7px' }}>{taskStyle(t.status).label}</span>
+                              {vencida && <span style={{ font: '700 10px var(--font-ui)', color: '#B0522E' }}>⏳ atrasada</span>}
+                              {t.difficulty && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 10px var(--font-ui)', color: difStyle(t.difficulty).c }}><DifDots d={t.difficulty} size={9} />{difStyle(t.difficulty).label}</span>}
+                              {t.due && <span style={{ font: '700 10px var(--font-ui)', color: dt.c }}>vence {fmtDue(t.due)}</span>}
+                            </div>
+                          </div>
+                          {typeof t.progress === 'number' && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, width: 70 }}>
+                              <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${t.progress}%`, height: '100%', background: e.color }} /></span>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+            </div>
+          )
+        })()}
+
         {/* PASTELES + COMPARACIÓN — composición del trabajo y tendencia semanal */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14, marginBottom: 20 }}>
           {/* Composición del pipeline */}
