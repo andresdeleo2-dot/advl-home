@@ -130,6 +130,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [tasksExpanded, setTasksExpanded] = useState(false)   // ver todas las tareas activas de la épica destacada
   const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'>('todas')
+  const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
   const [backlogOpen, setBacklogOpen] = useState(false)
   const [backlogSort, setBacklogSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'due', dir: 'asc' })
   const [backlogDone, setBacklogDone] = useState(false)
@@ -404,6 +405,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // La selección son índices de tareas planeadas para el día en vista: al cambiar de día
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
+  // El filtro por objetivo pertenece a una épica: al cambiar de destacada, se limpia
+  useEffect(() => { setEpicObjFilter('todas') }, [featuredId])
 
   // Objetivos que se cumplen solos (los medidos con tareas) quedan sellados con
   // su fecha, para poder celebrarlos en el resumen de la semana.
@@ -1155,6 +1158,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     st.splice(si, 1); if (!st.length) delete tasks[ti].subtasks
     patchEpic(e.id, { tasks })
   }
+  /** Mueve una subtarea arriba/abajo (índices absolutos dentro del array). */
+  const moveSubtask = (e: Epica, ti: number, from: number, to: number) => {
+    const tasks = clone(e.tasks); const st = tasks[ti].subtasks
+    if (!st || to < 0 || to >= st.length || from === to) return
+    const [m] = st.splice(from, 1); st.splice(to, 0, m)
+    patchEpic(e.id, { tasks })
+  }
   // ── Bitácora de avance (días en que se avanzó en la tarea) ──
   const addProgressDay = (e: Epica, ti: number, d: string) => {
     if (!d) return
@@ -1531,13 +1541,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }).filter(g => g.items.length > 0)
 
   // Filtro + orden de tareas de la épica destacada
-  const passEpicFilter = (t: (typeof indexed)[number]) => {
+  // Filtro por "chip" (plan/vencidas/alta) y por objetivo — se combinan (AND)
+  const passEpicChip = (t: (typeof indexed)[number]) => {
     if (epicFilter === 'planeadas') return !!t.plan
     if (epicFilter === 'sinplan') return !t.plan
     if (epicFilter === 'vencidas') { const dl = daysUntil(t.due); return dl != null && dl < 0 }
     if (epicFilter === 'alta') return t.priority === 'alta'
     return true
   }
+  const objOfTask = (tid?: string) => featured.kpis.find(m => (m.taskIds || []).includes(tid || ''))
+  const passEpicObj = (t: (typeof indexed)[number]) => {
+    if (epicObjFilter === 'todas') return true
+    if (epicObjFilter === 'sin') return !objOfTask(t.id)
+    return (featured.kpis.find(m => m.id === epicObjFilter)?.taskIds || []).includes(t.id || '')
+  }
+  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t)
+  // Objetivos que aún tienen tareas bajo el filtro de chip activo (cascada)
+  const objOptions = featured.kpis.filter(m => indexed.some(t => t.status !== ARCHIVED && (m.taskIds || []).includes(t.id || '') && passEpicChip(t)))
+  const hasSinObj = indexed.some(t => t.status !== ARCHIVED && !objOfTask(t.id) && passEpicChip(t))
   const filteredGroups = taskGroups.map(g => ({ ...g, items: g.items.filter(passEpicFilter) })).filter(g => g.items.length > 0)
   const filteredActive = indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && passEpicFilter(t))
   const epicSortCmp = (a: (typeof indexed)[number], b: (typeof indexed)[number]) => {
@@ -4356,6 +4377,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const on = epicFilter === k
                     return <button key={k} onClick={() => setEpicFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                   })}
+                  {/* Filtro por objetivo — sólo lista objetivos con tareas bajo el chip activo (cascada) */}
+                  {(objOptions.length > 0 || (epicObjFilter !== 'todas')) && (
+                    <select value={objOptions.some(m => m.id === epicObjFilter) || epicObjFilter === 'sin' ? epicObjFilter : 'todas'} onChange={e => setEpicObjFilter(e.target.value)}
+                      title="Filtrar por objetivo" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: epicObjFilter !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 180 }}>
+                      <option value="todas">Todo objetivo</option>
+                      {objOptions.map(m => <option key={m.id} value={m.id}>🎯 {m.t}</option>)}
+                      {hasSinObj && <option value="sin">Sin objetivo</option>}
+                    </select>
+                  )}
                 </div>
               )}
 
@@ -4941,23 +4971,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {(() => {
                   const subs = t.subtasks || []
                   const hechas = subs.filter(s => s.done).length
+                  const pend = subs.map((s, si) => ({ s, si })).filter(x => !x.s.done)
+                  const done = subs.map((s, si) => ({ s, si })).filter(x => x.s.done)
+                  const row = (s: { t: string; done: boolean }, si: number, arrows?: { up?: number; down?: number }) => (
+                    <div key={si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+                      <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
+                        style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                      </button>
+                      <input defaultValue={s.t} onBlur={ev => setSubtaskText(ep, i, si, ev.target.value)}
+                        onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                        style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 6, padding: '4px 6px', fontSize: 13, background: 'transparent', outline: 'none', color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }} />
+                      {arrows && (
+                        <span className="ep-sub-del" style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                          <button onClick={() => arrows.up != null && moveSubtask(ep, i, si, arrows.up)} disabled={arrows.up == null} aria-label="Subir" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.up == null ? 0.3 : 1 }}>↑</button>
+                          <button onClick={() => arrows.down != null && moveSubtask(ep, i, si, arrows.down)} disabled={arrows.down == null} aria-label="Bajar" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.down == null ? 0.3 : 1 }}>↓</button>
+                        </span>
+                      )}
+                      <button className="ep-sub-del" onClick={() => removeSubtask(ep, i, si)} aria-label="Eliminar subtarea" title="Eliminar"
+                        style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13 }}>✕</button>
+                    </div>
+                  )
                   return (
                     <div style={{ marginBottom: 16 }}>
                       <div style={eb}>Subtareas {subs.length > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{hechas}/{subs.length} · {Math.round((hechas / subs.length) * 100)}%</span>}</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {subs.map((s, si) => (
-                          <div key={si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 0' }}>
-                            <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
-                              style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              {s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
-                            </button>
-                            <input defaultValue={s.t} onBlur={ev => setSubtaskText(ep, i, si, ev.target.value)}
-                              onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
-                              style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 6, padding: '4px 6px', fontSize: 13, background: 'transparent', outline: 'none', color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }} />
-                            <button className="ep-sub-del" onClick={() => removeSubtask(ep, i, si)} aria-label="Eliminar subtarea" title="Eliminar"
-                              style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13 }}>✕</button>
-                          </div>
-                        ))}
+                        {pend.map((x, k) => row(x.s, x.si, { up: k > 0 ? pend[k - 1].si : undefined, down: k < pend.length - 1 ? pend[k + 1].si : undefined }))}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 2 }}>
                           <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, border: '1.5px dashed rgba(15,35,64,0.22)' }} />
                           <input value={newSubtask} onChange={ev => setNewSubtask(ev.target.value)}
@@ -4967,6 +5006,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             style={{ flex: 1, minWidth: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '5px 8px', fontSize: 12.5, background: '#fff', outline: 'none', color: '#16365F' }} />
                         </div>
                       </div>
+                      {done.length > 0 && (
+                        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
+                          <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: '#2E6E6E', marginBottom: 4 }}>Completadas · {done.length}</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {done.map(x => row(x.s, x.si))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })()}
