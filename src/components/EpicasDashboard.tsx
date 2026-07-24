@@ -75,6 +75,7 @@ import {
   taskWeight,
   diasTrabajados,
   normalizeMilestone,
+  milestoneOfTask,
   milestoneProgress,
   milestoneDone,
   MULTIDIA_TONE,
@@ -393,6 +394,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // La selección son índices de tareas planeadas para el día en vista: al cambiar de día
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
+
+  // Objetivos que se cumplen solos (los medidos con tareas) quedan sellados con
+  // su fecha, para poder celebrarlos en el resumen de la semana.
+  useEffect(() => {
+    for (const e of epics) {
+      const idx = (e.kpis || []).findIndex(m => !m.doneAt && milestoneDone(m, e))
+      if (idx < 0) continue
+      const kpis = clone(e.kpis)
+      kpis[idx].done = true; kpis[idx].doneAt = todayISO()
+      patchEpic(e.id, { kpis })
+      showToast(`✦ Objetivo cumplido: ${kpis[idx].t}`)
+      break   // uno por pasada; el siguiente render agarra el que siga
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [epics])
 
   // El dropdown de enlaces de la épica arranca cerrado cada vez que abres una tarea
   useEffect(() => { setTaskLinksOpen(false); setNewSubtask('') }, [taskView])
@@ -1178,6 +1194,31 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     r.days = wk
     patchEpic(e.id, { routines })
   }
+  /* ─── Objetivos: avance rápido y vínculo con tareas ──────── */
+  /** Mueve el valor actual de un objetivo sin abrir el editor. Si al hacerlo
+   *  alcanza la meta, lo marca cumplido con la fecha de hoy y lo celebra. */
+  const setMilestoneCurrent = (e: Epica, mIdx: number, value: number) => {
+    const kpis = clone(e.kpis)
+    const m = kpis[mIdx]; if (!m) return
+    m.current = Number.isFinite(value) ? value : undefined
+    const antes = milestoneDone(e.kpis[mIdx], e)
+    const ahora = milestoneDone(m, { ...e, kpis })
+    if (ahora && !antes) { m.done = true; m.doneAt = todayISO() }
+    if (!ahora && antes && m.done && m.doneAt) { delete m.done; delete m.doneAt }
+    patchEpic(e.id, { kpis })
+    if (ahora && !antes) showToast(`✦ Objetivo cumplido: ${m.t}`)
+  }
+  /** Liga (o desliga) una tarea a un objetivo. El vínculo vive en el objetivo,
+   *  así que una tarea pertenece a lo más a uno. */
+  const setTaskMilestone = (e: Epica, taskId: string, milestoneId: string | null) => {
+    const kpis = clone(e.kpis).map(m => ({ ...m, taskIds: (m.taskIds || []).filter(id => id !== taskId) }))
+    if (milestoneId) {
+      const m = kpis.find(x => x.id === milestoneId)
+      if (m) m.taskIds = [...(m.taskIds || []), taskId]
+    }
+    patchEpic(e.id, { kpis: kpis.map(m => (m.taskIds?.length ? m : { ...m, taskIds: undefined })) })
+  }
+
   const toggleArchive = (e: Epica) => {
     patchEpic(e.id, { archived: !e.archived })
     showToast(e.archived ? 'Épica reactivada' : 'Épica archivada')
@@ -2477,6 +2518,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
     return (
       <div style={{ marginTop: 10 }}>
+        {/* OBJETIVOS CUMPLIDOS ESTA SEMANA — lo más celebrable de la semana */}
+        {(() => {
+          const logrados = activeEpics.flatMap(e => (e.kpis || []).filter(m => inWeek(m.doneAt)).map(m => ({ e, m })))
+          if (!logrados.length) return null
+          return (
+            <div style={{ marginBottom: 20, borderRadius: 18, overflow: 'hidden', border: '1px solid rgba(194,147,58,0.45)', boxShadow: '0 18px 40px -28px rgba(194,147,58,0.9)' }}>
+              <div style={{ background: 'linear-gradient(135deg,#10233F 0%,#1B3A63 45%,#A87A2C 100%)', padding: '16px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 22, lineHeight: 1 }}>✦</span>
+                  <span className="serif" style={{ fontStyle: 'italic', fontSize: 21, color: '#F3EFE6' }}>
+                    {logrados.length === 1 ? 'Cumpliste un objetivo esta semana' : `Cumpliste ${logrados.length} objetivos esta semana`}
+                  </span>
+                </div>
+              </div>
+              <div style={{ background: 'rgba(194,147,58,0.07)', padding: '12px 20px 14px' }}>
+                {logrados.map(({ e, m }) => (
+                  <div key={m.id} {...clickable(() => setEpicPeek(e.id), `Ver ${e.name}`)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', cursor: 'pointer' }}>
+                    <span style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 99, background: '#C2933A', color: '#1B1305', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 12px var(--font-ui)' }}>✦</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: '#10233F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.t}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />
+                      <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.6)' }}>{e.name}</span>
+                    </span>
+                    <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>{fmtDue(m.doneAt!)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
+
         {/* KPIs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 11, marginBottom: 20 }}>
           {tile('Completadas', String(completed.length), `de ${committed.length} planeadas`, cumplimiento >= 70 ? '#2E6E6E' : '#A87A2C')}
@@ -2484,6 +2557,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {tile('Cumplimiento', `${cumplimiento}%`, pendientes ? `${pendientes} sin cerrar` : 'todo cerrado', cumplimiento >= 70 ? '#2E6E6E' : '#B0522E')}
           {tile('Días activos', `${activeDays.length}/7`, 'con avance', activeDays.length >= 5 ? '#2E6E6E' : 'rgba(20,35,61,0.5)')}
           {tile('Rutinas', rutMax ? `${rutTotal}/${rutMax}` : '—', 'marcas de la semana', rutTotal >= rutMax * 0.7 ? '#2E6E6E' : '#A87A2C')}
+          {(() => {
+            const logr = activeEpics.flatMap(e => (e.kpis || []).filter(m => inWeek(m.doneAt))).length
+            const abiertos = activeEpics.flatMap(e => (e.kpis || []).filter(m => !milestoneDone(m, e))).length
+            return tile('Objetivos', String(logr), logr ? 'cumplidos ✦' : `${abiertos} abiertos`, logr ? '#C2933A' : 'rgba(20,35,61,0.5)')
+          })()}
         </div>
 
         {/* Burndown */}
@@ -3839,8 +3917,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                         {hasMeta ? (
                           <>
-                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
-                              <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+                              {/* Avance editable al vuelo (los medidos con tareas se calculan solos) */}
+                              {k.auto ? (
+                                <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
+                              ) : (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                  <button onClick={() => setMilestoneCurrent(featured, i, (k.current ?? 0) - 1)} aria-label="Bajar avance" title="−1"
+                                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>−</button>
+                                  <input type="number" defaultValue={cur} key={`${k.id}-${cur}`}
+                                    onBlur={ev => { const v = Number(ev.target.value); if (v !== cur) setMilestoneCurrent(featured, i, v) }}
+                                    onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                                    aria-label={`Avance de ${k.t}`}
+                                    className="serif" style={{ width: 62, textAlign: 'center', fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F', border: '1px solid transparent', borderRadius: 7, padding: '2px 4px', background: 'transparent', outline: 'none' }} />
+                                  <button onClick={() => setMilestoneCurrent(featured, i, (k.current ?? 0) + 1)} aria-label="Subir avance" title="+1"
+                                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>+</button>
+                                </span>
+                              )}
                               <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>/ {target}{k.unit ? ' ' + k.unit : ''}</span>
                               <span style={{ flex: 1 }} />
                               <span style={{ font: '800 11px var(--font-ui)', color: c }}>{Math.round(pct * 100)}%</span>
@@ -3852,7 +3945,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         ) : (
                           <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur || '—'}{k.unit ? <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}> {k.unit}</span> : null}</div>
                         )}
-                        {k.due && <div style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)', marginTop: 6 }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</div>}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                          {k.due && <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</span>}
+                          {(k.taskIds?.length ?? 0) > 0 && <span title="Tareas ligadas a este objetivo" style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>🔗 {k.taskIds!.length} tareas</span>}
+                        </div>
                       </div>
                     )
                   })}
@@ -4392,6 +4488,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => setTaskStatus(ep, i, s)} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
                   </div>
                 </div>
+
+                {/* Objetivo al que contribuye */}
+                {(ep.kpis || []).length > 0 && (() => {
+                  const actual = milestoneOfTask(ep, t.id)
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={eb}>Contribuye a</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <select value={actual?.id || ''} onChange={ev => setTaskMilestone(ep, t.id!, ev.target.value || null)}
+                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: actual ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                          <option value="">— Ningún objetivo —</option>
+                          {ep.kpis.map(m => <option key={m.id} value={m.id}>{m.t}</option>)}
+                        </select>
+                        {actual && (() => {
+                          const mp = milestoneProgress(actual, ep); const hecho = milestoneDone(actual, ep)
+                          return mp.hasMeta ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: hecho ? '#2E6E6E' : '#A87A2C' }}>
+                              <span style={{ width: 54, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden', display: 'inline-block' }}>
+                                <span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : ep.color }} />
+                              </span>
+                              {mp.cur}/{mp.target}{hecho ? ' ✦' : ''}
+                            </span>
+                          ) : null
+                        })()}
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Prioridad (editable) */}
                 <div style={{ marginBottom: 16 }}>

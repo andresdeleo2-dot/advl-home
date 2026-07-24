@@ -433,17 +433,22 @@ export function normalizeMilestone(k: EpicaMilestone | { v?: string; l?: string 
 
 /** Avance 0..1 de un objetivo. Si `auto`, se alimenta de las tareas cerradas.
  *  `lowerIsBetter` invierte la lectura (bajar de 85 a 80 kg es progreso). */
-export function milestoneProgress(m: EpicaMilestone, e: Epica): { cur: number; target: number; pct: number; hasMeta: boolean } {
+export function milestoneProgress(m: EpicaMilestone, e: Epica): { cur: number; target: number; pct: number; hasMeta: boolean; linked: number } {
   const auto = m.auto === 'tareas'
-  const cur = auto ? doneCount(e) : (m.current ?? 0)
-  const target = m.target ?? (auto ? taskCount(e) : 0)
-  if (!target) return { cur, target: 0, pct: 0, hasMeta: false }
+  const ids = m.taskIds || []
+  // Si hay tareas ligadas, el avance las cuenta a ellas; si no, a toda la épica.
+  const linkedTasks = ids.length ? (e.tasks || []).filter(t => t.id && ids.includes(t.id)) : []
+  const cur = auto
+    ? (ids.length ? linkedTasks.filter(t => t.status === 'Terminada').length : doneCount(e))
+    : (m.current ?? 0)
+  const target = m.target ?? (auto ? (ids.length ? linkedTasks.length : taskCount(e)) : 0)
+  if (!target) return { cur, target: 0, pct: 0, hasMeta: false, linked: ids.length }
   let pct: number
   if (m.lowerIsBetter) {
     const start = Math.max(m.current ?? target, target)
     pct = start === target ? 1 : (start - cur) / (start - target)
   } else pct = cur / target
-  return { cur, target, pct: Math.max(0, Math.min(1, pct)), hasMeta: true }
+  return { cur, target, pct: Math.max(0, Math.min(1, pct)), hasMeta: true, linked: ids.length }
 }
 
 /** ¿Está cumplido? Marcado a mano, o alcanzó la meta. */
@@ -452,4 +457,10 @@ export function milestoneDone(m: EpicaMilestone, e: Epica): boolean {
   const { hasMeta, cur, target } = milestoneProgress(m, e)
   if (!hasMeta) return false
   return m.lowerIsBetter ? cur <= target : cur >= target
+}
+
+/** Objetivo al que está ligada una tarea (o undefined). */
+export function milestoneOfTask(e: Epica, taskId?: string): EpicaMilestone | undefined {
+  if (!taskId) return undefined
+  return (e.kpis || []).find(m => (m.taskIds || []).includes(taskId))
 }

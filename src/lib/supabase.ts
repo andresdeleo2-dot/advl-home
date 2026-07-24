@@ -38,6 +38,7 @@ export type EpicaMilestone = {
   doneAt?: string
   auto?: 'tareas'           // el avance se calcula con las tareas cerradas de la épica
   lowerIsBetter?: boolean   // para metas que bajan (peso, deuda…)
+  taskIds?: string[]        // tareas que cuentan para este objetivo (los "key results")
 }
 export type EpicaRoutine = {
   t: string
