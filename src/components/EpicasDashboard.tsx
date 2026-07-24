@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
 import Link from 'next/link'
-import type { Epica, EpicaKpi, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
+import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
@@ -74,6 +74,9 @@ import {
   taskStyle,
   taskWeight,
   diasTrabajados,
+  normalizeMilestone,
+  milestoneProgress,
+  milestoneDone,
   MULTIDIA_TONE,
   todayISO,
   todayLabel,
@@ -213,6 +216,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           if (!ep) return
           const body: Partial<Epica> = {}
           if ((e.routines || []).some(r => (!r.weeks || typeof r.weeks !== 'object') && Array.isArray(r.days) && r.days.some(Boolean))) body.routines = ep.routines
+          // Migra una vez los KPIs viejos {v,l} al formato de objetivos medibles
+          if ((e.kpis || []).some(k => (k as { t?: string }).t === undefined)) body.kpis = ep.kpis
           if (Object.keys(body).length) fetch(`/api/epicas/${e.id}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
           }).catch(() => {})
@@ -1288,7 +1293,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       id: null, name: '', color: '#2E5A9E', description: '', status: 'En curso',
       categoria: '', archived: false,
       source_table: '', source_sync: null, epic_order: epics.length,
-      kpis: [{ v: '', l: '' }], routines: [], tasks: [{ t: '', status: 'Por hacer', due: '', note: '', createdAt: todayISO() }],
+      kpis: [], routines: [], tasks: [{ t: '', status: 'Por hacer', due: '', note: '', createdAt: todayISO() }],
       links: [{ l: 'Dashboard', url: '', primary: true, type: 'Dashboard' }],
     })
   }
@@ -1303,7 +1308,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!editing) return
     const d = clone(editing)
     d.name = (d.name || '').trim() || 'Nueva épica'
-    d.kpis = (d.kpis || []).filter(k => (k.v || '').trim() || (k.l || '').trim())
+    d.kpis = (d.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim())
     d.routines = (d.routines || []).filter(r => (r.t || '').trim()).map(r => ({ t: r.t, days: r.days || [false, false, false, false, false, false, false], weeks: (r.weeks && typeof r.weeks === 'object') ? r.weeks : {} }))
     d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => {
       const st = t.status || 'Por hacer'
@@ -3487,17 +3492,53 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             </div>
 
-            {/* KPIs */}
+            {/* OBJETIVOS (milestones medibles) */}
             <div style={cardEd}>
-              <div style={secHead}><label style={{ ...lbl, marginTop: 0 }}>KPIs</label><button onClick={() => patchDraft(x => ({ ...x, kpis: [...x.kpis, { v: '', l: '' }] }))} style={addBtn}>+ KPI</button></div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-                {d.kpis.map((k, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input value={k.v} onChange={e => patchDraft(x => { x.kpis[i].v = e.target.value; return x })} placeholder="8" style={inpNarrow} />
-                    <input value={k.l} onChange={e => patchDraft(x => { x.kpis[i].l = e.target.value; return x })} placeholder="Etiqueta" style={inpSmall} />
-                    <button aria-label="Eliminar KPI" onClick={() => patchDraft(x => ({ ...x, kpis: x.kpis.filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
-                  </div>
-                ))}
+              <div style={secHead}>
+                <label style={{ ...lbl, marginTop: 0 }}>Objetivos</label>
+                <button onClick={() => patchDraft(x => ({ ...x, kpis: [...x.kpis, { id: uid(), t: '' }] }))} style={addBtn}>+ Objetivo</button>
+              </div>
+              <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 6 }}>Qué quieres lograr y cómo se mide. Se resalta solo al alcanzar la meta.</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+                {d.kpis.map((k, i) => {
+                  const set = (patch: Partial<EpicaMilestone>) => patchDraft(x => { x.kpis[i] = { ...x.kpis[i], ...patch }; return x })
+                  const num = (v: string) => (v.trim() === '' ? undefined : Number(v))
+                  return (
+                    <div key={k.id || i} style={{ border: '1px solid rgba(15,35,64,0.10)', borderRadius: 11, padding: '10px 11px', background: '#fff' }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input value={k.t} onChange={e => set({ t: e.target.value })} placeholder="Llegar a 80 kg" style={inpSmall} />
+                        <button aria-label="Eliminar objetivo" onClick={() => patchDraft(x => ({ ...x, kpis: x.kpis.filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
+                          Actual
+                          <input type="number" value={k.auto ? '' : (k.current ?? '')} disabled={!!k.auto} onChange={e => set({ current: num(e.target.value) })}
+                            placeholder={k.auto ? 'auto' : '85'} style={{ ...inpNarrow, flex: '0 0 70px', width: 70, opacity: k.auto ? .5 : 1 }} />
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
+                          Meta
+                          <input type="number" value={k.target ?? ''} onChange={e => set({ target: num(e.target.value) })} placeholder="80" style={{ ...inpNarrow, flex: '0 0 70px', width: 70 }} />
+                        </label>
+                        <input value={k.unit || ''} onChange={e => set({ unit: e.target.value || undefined })} placeholder="kg" style={{ ...inpNarrow, flex: '0 0 62px', width: 62 }} />
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
+                          Para
+                          <input type="date" value={k.due || ''} onChange={e => set({ due: e.target.value || undefined })} style={dateInp} />
+                        </label>
+                      </div>
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="El avance se calcula con las tareas cerradas de esta épica">
+                          <input type="checkbox" checked={k.auto === 'tareas'} onChange={e => set({ auto: e.target.checked ? 'tareas' : undefined })} /> Medir con tareas cerradas
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Para metas que bajan: peso, deuda, gastos…">
+                          <input type="checkbox" checked={!!k.lowerIsBetter} onChange={e => set({ lowerIsBetter: e.target.checked || undefined })} /> Menos es mejor
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: '#2E6E6E', cursor: 'pointer', fontWeight: 600 }}>
+                          <input type="checkbox" checked={!!k.done} onChange={e => set({ done: e.target.checked || undefined, doneAt: e.target.checked ? todayISO() : undefined })} /> Cumplido
+                        </label>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -3698,13 +3739,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {featured.description && <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(featured.description) }} />}
 
               {featured.kpis.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(90px,1fr))', gap: 14, marginBottom: 22 }}>
-                  {featured.kpis.map((k, i) => (
-                    <div key={i} style={{ borderLeft: '2px solid rgba(15,35,64,0.10)', paddingLeft: 12 }}>
-                      <div className="serif" style={{ fontWeight: 600, fontSize: 30, lineHeight: 1, color: '#10233F' }}>{k.v}</div>
-                      <div style={{ font: '600 10px/1.2 var(--font-ui)', letterSpacing: '.04em', textTransform: 'uppercase', color: 'rgba(15,35,61,0.46)', marginTop: 6 }}>{k.l}</div>
-                    </div>
-                  ))}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 11, marginBottom: 22 }}>
+                  {featured.kpis.map((k, i) => {
+                    const { cur, target, pct, hasMeta } = milestoneProgress(k, featured)
+                    const hecho = milestoneDone(k, featured)
+                    const vencido = !hecho && k.due && k.due < today
+                    const c = hecho ? '#2E6E6E' : vencido ? '#B0522E' : '#A87A2C'
+                    return (
+                      <div key={k.id || i} title={k.auto ? 'Se mide con las tareas cerradas de la épica' : undefined}
+                        style={{ borderRadius: 12, padding: '11px 13px', background: hecho ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.02)', border: hecho ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.08)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+                          <span style={{ font: '700 11.5px var(--font-ui)', color: hecho ? '#2E6E6E' : '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
+                          {hecho && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.16)', borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap' }}>✦ Cumplido</span>}
+                          {!hecho && k.auto && <span style={{ font: '700 9px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>auto</span>}
+                        </div>
+                        {hasMeta ? (
+                          <>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
+                              <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
+                              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>/ {target}{k.unit ? ' ' + k.unit : ''}</span>
+                              <span style={{ flex: 1 }} />
+                              <span style={{ font: '800 11px var(--font-ui)', color: c }}>{Math.round(pct * 100)}%</span>
+                            </div>
+                            <div style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+                              <div style={{ width: `${pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : featured.color, transition: 'width .4s' }} />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur || '—'}{k.unit ? <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}> {k.unit}</span> : null}</div>
+                        )}
+                        {k.due && <div style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)', marginTop: 6 }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</div>}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 
@@ -3971,12 +4038,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 </div>
 
-                {showRowKpi && k0 && (
-                  <div className="ep-row-kpi" style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 70 }}>
-                    <span className="serif" style={{ fontWeight: 600, fontSize: 22, color: '#10233F', lineHeight: 1 }}>{k0.v}</span>
-                    <span style={{ font: '600 10px/1.2 var(--font-ui)', letterSpacing: '.04em', textTransform: 'uppercase', color: 'rgba(15,35,61,0.44)' }}>{k0.l}</span>
-                  </div>
-                )}
+                {showRowKpi && k0 && (() => {
+                  const mp = milestoneProgress(k0, e); const hecho = milestoneDone(k0, e)
+                  return (
+                    <div className="ep-row-kpi" style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 96, maxWidth: 150 }}>
+                      <span style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                        <span className="serif" style={{ fontWeight: 600, fontSize: 20, color: hecho ? '#2E6E6E' : '#10233F', lineHeight: 1 }}>{mp.hasMeta ? `${mp.cur}/${mp.target}` : (mp.cur || '—')}</span>
+                        {hecho && <span style={{ font: '700 9px var(--font-ui)', color: '#2E6E6E' }}>✦</span>}
+                      </span>
+                      <span style={{ font: '600 10px/1.2 var(--font-ui)', letterSpacing: '.04em', color: 'rgba(15,35,61,0.5)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k0.t}</span>
+                      {mp.hasMeta && (
+                        <span style={{ height: 4, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+                          <span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : e.color }} />
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 <div className="ep-row-progress" style={{ flex: 1, minWidth: 120 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>

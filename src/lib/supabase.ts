@@ -24,7 +24,21 @@ export type Item = {
 }
 
 // ─── Épicas (grandes frentes) ────────────────────────────────
-export type EpicaKpi = { v: string; l: string }
+/** Objetivo medible de una épica (reemplaza a los KPIs de texto libre).
+ *  Se guarda en la columna `kpis` (jsonb) por compatibilidad; el nombre de la
+ *  columna es lo único que quedó del modelo anterior. */
+export type EpicaMilestone = {
+  id: string
+  t: string                 // qué se quiere lograr
+  target?: number           // meta
+  current?: number          // valor actual (manual, o calculado si auto = 'tareas')
+  unit?: string             // kg, %, MXN, tareas…
+  due?: string              // 'YYYY-MM-DD' fecha objetivo
+  done?: boolean            // marcado a mano
+  doneAt?: string
+  auto?: 'tareas'           // el avance se calcula con las tareas cerradas de la épica
+  lowerIsBetter?: boolean   // para metas que bajan (peso, deuda…)
+}
 export type EpicaRoutine = {
   t: string
   days: boolean[]                        // legado / semana actual (compat)
@@ -67,7 +81,7 @@ export type Epica = {
   source_table: string | null
   source_sync: string | null
   epic_order: number
-  kpis: EpicaKpi[]
+  kpis: EpicaMilestone[]   // objetivos de la épica (la columna conserva el nombre viejo)
   routines: EpicaRoutine[]
   tasks: EpicaTask[]
   links: EpicaLink[]

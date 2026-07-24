@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import type { Epica, EpicaTask, EpicaRoutine, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
+import type { Epica, EpicaTask, EpicaRoutine, EpicaProgressEntry, EpicaRepeat, EpicaMilestone } from '@/lib/supabase'
 
 /* Núcleo de /epicas: constantes de marca, utilidades de fecha, estilos por estado
    y piezas de presentación sin estado. Se extrajo de EpicasDashboard para que ese
@@ -131,7 +131,7 @@ export function normalize(e: Epica): Epica {
     ...e,
     categoria: e.categoria ?? null,
     archived: !!e.archived,
-    kpis: e.kpis || [],
+    kpis: (e.kpis || []).map(normalizeMilestone),
     routines: (e.routines || []).map(r => {
       const days = (r.days && r.days.length === 7) ? r.days : [false, false, false, false, false, false, false]
       // Migra el progreso legado (days) a la semana actual si aún no hay historial por semana
@@ -414,4 +414,42 @@ export function loadPrefs(): Prefs {
   if (typeof window === 'undefined') return DEFAULT_PREFS
   try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') } }
   catch { return DEFAULT_PREFS }
+}
+
+/* ─── Objetivos de la épica (milestones) ─────────────────────── */
+
+/** Convierte un KPI viejo `{v, l}` en objetivo, y rellena el id si falta. */
+export function normalizeMilestone(k: EpicaMilestone | { v?: string; l?: string }): EpicaMilestone {
+  const legacy = k as { v?: string; l?: string }
+  const m = k as EpicaMilestone
+  if (m.t !== undefined || m.id !== undefined) return { ...m, id: m.id || uid(), t: m.t || '' }
+  const num = Number(String(legacy.v ?? '').replace(/[^0-9.-]/g, ''))
+  return {
+    id: uid(),
+    t: (legacy.l || '').trim() || 'Objetivo',
+    current: Number.isFinite(num) && String(legacy.v ?? '').trim() ? num : undefined,
+  }
+}
+
+/** Avance 0..1 de un objetivo. Si `auto`, se alimenta de las tareas cerradas.
+ *  `lowerIsBetter` invierte la lectura (bajar de 85 a 80 kg es progreso). */
+export function milestoneProgress(m: EpicaMilestone, e: Epica): { cur: number; target: number; pct: number; hasMeta: boolean } {
+  const auto = m.auto === 'tareas'
+  const cur = auto ? doneCount(e) : (m.current ?? 0)
+  const target = m.target ?? (auto ? taskCount(e) : 0)
+  if (!target) return { cur, target: 0, pct: 0, hasMeta: false }
+  let pct: number
+  if (m.lowerIsBetter) {
+    const start = Math.max(m.current ?? target, target)
+    pct = start === target ? 1 : (start - cur) / (start - target)
+  } else pct = cur / target
+  return { cur, target, pct: Math.max(0, Math.min(1, pct)), hasMeta: true }
+}
+
+/** ¿Está cumplido? Marcado a mano, o alcanzó la meta. */
+export function milestoneDone(m: EpicaMilestone, e: Epica): boolean {
+  if (m.done) return true
+  const { hasMeta, cur, target } = milestoneProgress(m, e)
+  if (!hasMeta) return false
+  return m.lowerIsBetter ? cur <= target : cur >= target
 }
