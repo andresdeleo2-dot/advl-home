@@ -127,7 +127,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'>('plan')  // orden del enfoque
   const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance'>('todas')          // filtro del enfoque
   const [tasksExpanded, setTasksExpanded] = useState(false)   // ver todas las tareas activas de la épica destacada
-  const [epicSort, setEpicSort] = useState<'grupo' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
+  const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'>('todas')
   const [backlogOpen, setBacklogOpen] = useState(false)
   const [backlogSort, setBacklogSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'due', dir: 'asc' })
@@ -1194,6 +1194,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     r.days = wk
     patchEpic(e.id, { routines })
   }
+  /** Mueve una tarea dentro de su épica y reasigna el orden (10,20,30…).
+   *  Requiere sql/epicas-04-orden-tareas.sql. */
+  const moveTaskInEpic = (e: Epica, from: number, dir: 'up' | 'down') => {
+    const to = dir === 'up' ? from - 1 : from + 1
+    if (to < 0 || to >= e.tasks.length) return
+    const tasks = clone(e.tasks)
+    const [m] = tasks.splice(from, 1); tasks.splice(to, 0, m)
+    tasks.forEach((t, k) => { t.orden = k * 10 })
+    patchEpic(e.id, { tasks })
+  }
+
   /* ─── Objetivos: avance rápido y vínculo con tareas ──────── */
   /** Mueve el valor actual de un objetivo sin abrir el editor. Si al hacerlo
    *  alcanza la meta, lo marca cumplido con la fecha de hoy y lo celebra. */
@@ -1357,10 +1368,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     d.name = (d.name || '').trim() || 'Nueva épica'
     d.kpis = (d.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim())
     d.routines = (d.routines || []).filter(r => (r.t || '').trim()).map(r => ({ t: r.t, days: r.days || [false, false, false, false, false, false, false], weeks: (r.weeks && typeof r.weeks === 'object') ? r.weeks : {} }))
-    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => {
+    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map((t, idx) => {
       const st = t.status || 'Por hacer'
       // Conserva campos del plan (plan/priority/planOrder/planPrev) que no toca el editor
-      const out: EpicaTask = { ...t, id: t.id || uid(), t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
+      const out: EpicaTask = { ...t, id: t.id || uid(), orden: idx * 10, t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
       if (st === 'Terminada') out.doneAt = t.doneAt || todayISO()
       else delete out.doneAt   // evita arrastrar una fecha de terminación obsoleta
       return out
@@ -1477,6 +1488,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicSort === 'entrega') return (a.due || '9999-99').localeCompare(b.due || '9999-99')
     if (epicSort === 'hacer') return (a.plan || '9999-99').localeCompare(b.plan || '9999-99')
     if (epicSort === 'progreso') return (b.progress || 0) - (a.progress || 0)
+    if (epicSort === 'manual') return (a.orden ?? 1e9) - (b.orden ?? 1e9) || a._i - b._i
     return a.t.localeCompare(b.t, 'es')
   }
   const flatActive = epicSort === 'grupo' ? [] : [...filteredActive].sort(epicSortCmp)
@@ -1514,6 +1526,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const dateLbl: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.55)', width: 30, flexShrink: 0 }
     return (
       <div key={t._i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+        {/* Reordenar sólo tiene sentido en orden manual */}
+        {epicSort === 'manual' && (
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0, marginTop: 1 }}>
+            <button onClick={() => moveTaskInEpic(featured, t._i, 'up')} disabled={t._i === 0} aria-label="Subir" title="Subir"
+              style={{ height: 16, width: 20, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 9, lineHeight: 1, opacity: t._i === 0 ? 0.35 : 1 }}>↑</button>
+            <button onClick={() => moveTaskInEpic(featured, t._i, 'down')} disabled={t._i === featured.tasks.length - 1} aria-label="Bajar" title="Bajar"
+              style={{ height: 16, width: 20, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 9, lineHeight: 1, opacity: t._i === featured.tasks.length - 1 ? 0.35 : 1 }}>↓</button>
+          </span>
+        )}
         <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, marginTop: 1, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
           {PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -3723,6 +3744,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '5px 7px', fontSize: 13, fontWeight: 600, color: '#14233D', background: 'transparent', outline: 'none' }} />
                           <span style={{ flexShrink: 0, font: '700 10px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '3px 8px', whiteSpace: 'nowrap' }}>{ts.label}</span>
                           {t.due && <span style={{ flexShrink: 0, font: '700 10px var(--font-ui)', color: dueTone(t.due, t.status === 'Terminada').c }}>{fmtDue(t.due)}</span>}
+                          <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                            <button aria-label="Subir" title="Subir" disabled={i === 0}
+                              onClick={() => patchDraft(x => { const a2 = [...x.tasks]; const [mv] = a2.splice(i, 1); a2.splice(i - 1, 0, mv); setEdTaskRow(abierta ? i - 1 : null); return { ...x, tasks: a2 } })}
+                              style={{ height: 22, width: 20, borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 10, opacity: i === 0 ? 0.35 : 1 }}>↑</button>
+                            <button aria-label="Bajar" title="Bajar" disabled={i === d.tasks.length - 1}
+                              onClick={() => patchDraft(x => { const a2 = [...x.tasks]; const [mv] = a2.splice(i, 1); a2.splice(i + 1, 0, mv); setEdTaskRow(abierta ? i + 1 : null); return { ...x, tasks: a2 } })}
+                              style={{ height: 22, width: 20, borderRadius: 5, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 10, opacity: i === d.tasks.length - 1 ? 0.35 : 1 }}>↓</button>
+                          </span>
                           <button aria-label="Eliminar tarea" onClick={() => { setEdTaskRow(null); patchDraft(x => ({ ...x, tasks: x.tasks.filter((_, j) => j !== i) })) }} style={{ ...delBtn, height: 26, width: 26 }}>✕</button>
                         </div>
                         {/* Detalle: sólo de la fila abierta */}
@@ -4065,6 +4094,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 11, flexWrap: 'wrap' }}>
                   <select value={epicSort} onChange={e => setEpicSort(e.target.value as typeof epicSort)} title="Ordenar tareas" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
                     <option value="grupo">Por estado</option>
+                    <option value="manual">Orden manual</option>
                     <option value="prioridad">Prioridad</option>
                     <option value="entrega">Entrega</option>
                     <option value="hacer">Cuándo hacer</option>

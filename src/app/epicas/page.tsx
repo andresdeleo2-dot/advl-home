@@ -21,6 +21,8 @@ async function getEpicas(): Promise<Epica[]> {
     if (!byEpic.has(r.epica_id)) byEpic.set(r.epica_id, [])
     byEpic.get(r.epica_id)!.push(rowToTask(r))
   }
+  // Orden propio de la épica: `orden` manual y, en su defecto, fecha de creación
+  for (const arr of byEpic.values()) arr.sort((a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9))
   return (data ?? []).map(e => ({ ...e, tasks: byEpic.get(e.id) || [] }))
 }
 

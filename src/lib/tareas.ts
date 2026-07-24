@@ -15,6 +15,7 @@ export type TareaRow = {
   avance: number | null
   plan: string | null
   plan_order: number | null
+  orden?: number | null
   vence: string | null
   done_at: string | null
   creada: string | null
@@ -45,6 +46,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (typeof r.avance === 'number') t.progress = r.avance
   if (r.plan) t.plan = r.plan
   if (typeof r.plan_order === 'number') t.planOrder = r.plan_order
+  if (typeof r.orden === 'number') t.orden = r.orden
   if (r.done_at) t.doneAt = r.done_at
   if (r.creada) t.createdAt = r.creada
   if (r.plan_prev) t.planPrev = r.plan_prev
@@ -62,6 +64,9 @@ const dateOrNull = (v?: string) => (v && v.trim() ? v.trim() : null)
 /** Tarea de la UI → fila para insertar/actualizar. */
 export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown> {
   return {
+    // `orden` sólo viaja si la tarea lo tiene: así, mientras no se corra
+    // sql/epicas-04-orden-tareas.sql, las escrituras normales siguen pasando.
+    ...(typeof t.orden === 'number' ? { orden: t.orden } : {}),
     id: t.id,
     epica_id: epicaId,
     titulo: t.t || '',
