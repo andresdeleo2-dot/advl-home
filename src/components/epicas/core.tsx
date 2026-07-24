@@ -314,6 +314,11 @@ export function difStyle(d: Dif | undefined) {
 export const DIF_WEIGHT: Record<string, number> = { facil: 1, media: 2, dificil: 3 }
 export const taskWeight = (t: EpicaTask) => DIF_WEIGHT[t.difficulty || 'media'] ?? 2
 
+/** Días distintos en que se trabajó la tarea (según la bitácora de avance).
+ *  Sirve para distinguir lo que se resuelve en un día de lo que se arrastra. */
+export const diasTrabajados = (t: EpicaTask) => (t.progressLog || []).length
+export const MULTIDIA_TONE = { c: '#7A6FB0', bg: 'rgba(122,111,176,0.10)', border: 'rgba(122,111,176,0.30)' }
+
 /** Tres puntos ascendentes (distintos de las barras de prioridad) para codificar dificultad. */
 export function DifDots({ d, size = 12 }: { d: Dif | undefined; size?: number }) {
   const ds = difStyle(d)

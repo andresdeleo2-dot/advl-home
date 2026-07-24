@@ -73,6 +73,8 @@ import {
   taskCount,
   taskStyle,
   taskWeight,
+  diasTrabajados,
+  MULTIDIA_TONE,
   todayISO,
   todayLabel,
   typeColor,
@@ -160,6 +162,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dayTableSort, setDayTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
   const [epicView, setEpicView] = useState<'lista' | 'tabla'>('lista') // vista de "Todas las épicas"
   const [epicTableSort, setEpicTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'manual', dir: 'asc' })
+  const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
@@ -381,7 +384,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
 
   // El dropdown de enlaces de la épica arranca cerrado cada vez que abres una tarea
-  useEffect(() => { setTaskLinksOpen(false) }, [taskView])
+  useEffect(() => { setTaskLinksOpen(false); setNewSubtask('') }, [taskView])
 
   // centra el chip del día seleccionado en la tira
   useEffect(() => {
@@ -1085,6 +1088,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     st[si].done = !st[si].done
     patchEpic(e.id, { tasks })
   }
+  /* ─── Subtareas editables sin abrir el editor ─────────────── */
+  const addSubtask = (e: Epica, ti: number, text: string) => {
+    const v = text.trim(); if (!v) return
+    const tasks = clone(e.tasks)
+    tasks[ti].subtasks = [...(tasks[ti].subtasks || []), { t: v, done: false }]
+    patchEpic(e.id, { tasks })
+  }
+  const setSubtaskText = (e: Epica, ti: number, si: number, text: string) => {
+    const v = text.trim()
+    const tasks = clone(e.tasks); const st = tasks[ti].subtasks
+    if (!st || !st[si] || st[si].t === v) return
+    if (!v) { st.splice(si, 1); if (!st.length) delete tasks[ti].subtasks }
+    else st[si].t = v
+    patchEpic(e.id, { tasks })
+  }
+  const removeSubtask = (e: Epica, ti: number, si: number) => {
+    const tasks = clone(e.tasks); const st = tasks[ti].subtasks
+    if (!st || !st[si]) return
+    st.splice(si, 1); if (!st.length) delete tasks[ti].subtasks
+    patchEpic(e.id, { tasks })
+  }
   // ── Bitácora de avance (días en que se avanzó en la tarea) ──
   const addProgressDay = (e: Epica, ti: number, d: string) => {
     if (!d) return
@@ -1662,6 +1686,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {t.repeat && (
               <span title={`Se repite ${repeatLabel(t.repeat)}${t.repeatUntil ? ` hasta el ${fmtDue(t.repeatUntil)}` : ''}`}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 8px' }}>↻ {repeatLabel(t.repeat)}</span>
+            )}
+            {diasTrabajados(t) >= 2 && (
+              <span title={`La has trabajado en ${diasTrabajados(t)} días distintos — no se resuelve de una sentada`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: MULTIDIA_TONE.c, background: MULTIDIA_TONE.bg, border: `1px solid ${MULTIDIA_TONE.border}`, borderRadius: 99, padding: '1px 8px' }}>⧗ {diasTrabajados(t)} días de trabajo</span>
             )}
             {(t.progressLog || []).some(x => x.d === viewDate) && <span title="Avanzaste en esta tarea este día" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '1px 7px' }}>✎ avancé</span>}
             {t.subtasks && t.subtasks.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: t.subtasks.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {t.subtasks.filter(s => s.done).length}/{t.subtasks.length} · {Math.round((t.subtasks.filter(s => s.done).length / t.subtasks.length) * 100)}%</span>}
@@ -3844,6 +3872,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
                       {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
                       {t.plan && t.plan < today && t.status !== 'Terminada' && <span style={{ fontSize: 11, fontWeight: 700, color: '#B0522E' }}>⏳ pendiente de días anteriores</span>}
+                      {diasTrabajados(t) >= 2 && <span title="Días distintos en que le has metido mano" style={{ fontSize: 11, fontWeight: 700, color: MULTIDIA_TONE.c }}>⧗ trabajada en {diasTrabajados(t)} días</span>}
                     </div>
                     {t.repeat && (
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 9, padding: '6px 11px', borderRadius: 99, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}` }}>
@@ -3977,20 +4006,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div><div style={eb}>Vence</div><input type="date" value={t.due} onChange={e => setTaskDue(ep, i, e.target.value)} style={{ border: `1px solid ${dt.border}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} /></div>
                 </div>
 
-                {/* Subtareas (marcables) */}
-                {t.subtasks && t.subtasks.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Subtareas <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{t.subtasks.filter(s => s.done).length}/{t.subtasks.length} · {Math.round((t.subtasks.filter(s => s.done).length / t.subtasks.length) * 100)}%</span></div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {t.subtasks.map((s, si) => (
-                        <button key={si} onClick={() => toggleSubtask(ep, i, si)} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '3px 0' }}>
-                          <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
-                          <span style={{ fontSize: 13, color: s.done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }}>{s.t}</span>
-                        </button>
-                      ))}
+                {/* Subtareas — editables aquí mismo, sin abrir "Editar" */}
+                {(() => {
+                  const subs = t.subtasks || []
+                  const hechas = subs.filter(s => s.done).length
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={eb}>Subtareas {subs.length > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{hechas}/{subs.length} · {Math.round((hechas / subs.length) * 100)}%</span>}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {subs.map((s, si) => (
+                          <div key={si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 0' }}>
+                            <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
+                              style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                            </button>
+                            <input defaultValue={s.t} onBlur={ev => setSubtaskText(ep, i, si, ev.target.value)}
+                              onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                              style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 6, padding: '4px 6px', fontSize: 13, background: 'transparent', outline: 'none', color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }} />
+                            <button className="ep-sub-del" onClick={() => removeSubtask(ep, i, si)} aria-label="Eliminar subtarea" title="Eliminar"
+                              style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13 }}>✕</button>
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 2 }}>
+                          <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, border: '1.5px dashed rgba(15,35,64,0.22)' }} />
+                          <input value={newSubtask} onChange={ev => setNewSubtask(ev.target.value)}
+                            onKeyDown={ev => { if (ev.key === 'Enter' && newSubtask.trim()) { addSubtask(ep, i, newSubtask); setNewSubtask('') } }}
+                            onBlur={() => { if (newSubtask.trim()) { addSubtask(ep, i, newSubtask); setNewSubtask('') } }}
+                            placeholder="Agregar subtarea y Enter…"
+                            style={{ flex: 1, minWidth: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '5px 8px', fontSize: 12.5, background: '#fff', outline: 'none', color: '#16365F' }} />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
 
                 {t.note && (
                   <div style={{ marginBottom: 16 }}>
