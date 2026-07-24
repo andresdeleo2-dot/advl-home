@@ -3829,16 +3829,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!editing) return null
     const d = editing
     const isEdit = editMode === 'edit'
-    const Shell = ({ children }: { children: React.ReactNode }) => inline ? (
-      <div style={{ background: '#fff', borderRadius: 16, border: '1px solid rgba(194,147,58,0.45)', overflow: 'hidden' }}>{children}</div>
-    ) : (
-      <div onClick={closeEdit} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '28px 20px', overflow: 'auto' }}>
-        <div role="dialog" aria-modal="true" aria-label="Editar épica" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 660, background: '#fff', borderRadius: 22, boxShadow: '0 50px 90px -30px rgba(8,18,36,.75)', overflow: 'hidden' }}>{children}</div>
-      </div>
-    )
-    return (
-      <Shell>
-        <>
+    // OJO: nada de definir un componente aquí adentro. Antes envolvíamos en un
+    // <Shell> declarado en el render y su identidad cambiaba en cada tecla, así
+    // que React remontaba TODO el editor y el input perdía el foco (se "trababa").
+    // Ahora el contenido se arma una vez y se envuelve con condicionales planos.
+    const content = (
+      <>
           <div style={{ height: 5, background: d.color }} />
           <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 28px 16px', borderBottom: '1px solid rgba(15,35,64,0.08)' }}>
             <div>
@@ -3848,7 +3844,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <button aria-label="Cerrar editor de épica" onClick={closeEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 10, height: 36, width: 36, color: 'rgba(20,35,61,0.55)', fontSize: 17 }}>✕</button>
           </div>
 
-          <div className="ep-modal-body" style={{ padding: '10px 28px 22px', maxHeight: '72vh', overflow: 'auto' }}>
+          <div className="ep-modal-body ep-editor-body" style={{ padding: '10px 28px 22px', maxHeight: inline ? 'none' : '72vh', overflow: inline ? 'visible' : 'auto' }}>
             <label style={lbl}>Nombre de la épica</label>
             <input value={d.name} onChange={e => patchDraft(x => ({ ...x, name: e.target.value }))} placeholder="Ej. Inmuebles" style={inpBig} />
 
@@ -3889,6 +3885,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             </div>
 
+            <div className={inline ? 'ep-editor-cards' : undefined}>
             {/* OBJETIVOS (milestones medibles) */}
             <div style={cardEd}>
               <div style={secHead}>
@@ -4041,6 +4038,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 ))}
               </div>
             </div>
+            </div>
 
             <div style={{ display: 'flex', gap: 10, marginTop: 18, paddingTop: 18, borderTop: '1px solid rgba(15,35,64,0.08)' }}>
               {isEdit && <button onClick={deleteEpic} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 11, padding: '12px 16px', fontSize: 13, fontWeight: 700 }}>Eliminar</button>}
@@ -4049,8 +4047,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <button onClick={save} style={{ ...goldBtn, padding: '12px 24px' }}>Guardar</button>
             </div>
           </div>
-        </>
-      </Shell>
+      </>
+    )
+    // Embebido en el panel (usa todo el ancho) o como modal centrado
+    if (inline) return <div style={{ background: '#fff', borderRadius: 20, overflow: 'hidden' }}>{content}</div>
+    return (
+      <div onClick={closeEdit} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '28px 20px', overflow: 'auto' }}>
+        <div role="dialog" aria-modal="true" aria-label="Editar épica" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 660, background: '#fff', borderRadius: 22, boxShadow: '0 50px 90px -30px rgba(8,18,36,.75)', overflow: 'hidden' }}>{content}</div>
+      </div>
     )
   }
 
@@ -4156,10 +4160,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.20em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 10 }}>Épica destacada</div>
         <div className="ep-pop" style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderRadius: 20, boxShadow: '0 24px 50px -34px rgba(15,35,64,0.5)', overflow: 'hidden', marginBottom: 34 }}>
           <div style={{ height: 4, background: featured.color }} />
+          {editing && editInline && editing.id === featured.id ? renderEditor(true) : (
           <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-            {/* LEFT — se convierte en el editor cuando estás editando esta épica */}
+            {/* LEFT */}
             <div className="ep-featured-panel" style={{ flex: '1 1 360px', minWidth: 300, padding: '26px 28px' }}>
-              {editing && editInline && editing.id === featured.id ? renderEditor(true) : (<>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
                 <span style={{ height: 11, width: 11, borderRadius: 99, background: featured.color }} />
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Épica</span>
@@ -4279,7 +4283,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   })}
                 </div>
               )}
-              </>)}
             </div>
 
             {/* RIGHT */}
@@ -4436,6 +4439,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )}
             </div>
           </div>
+          )}
         </div>
 
         {/* LISTA */}

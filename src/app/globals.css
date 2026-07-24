@@ -241,6 +241,15 @@ body {
 .ep-sub-row:hover .ep-sub-del, .ep-sub-del:focus-visible { opacity: 1; }
 @media (hover: none) { .ep-sub-del { opacity: 1; } }
 
+/* Editor de épica embebido a lo ancho: reparte las secciones en 2 columnas
+   (las tarjetas grises fluyen en masonry-ish con columns) en pantallas amplias */
+@media (min-width: 900px) {
+  .ep-editor-body.ep-editor-body { padding-left: 32px; padding-right: 32px; }
+  /* Objetivos, Rutinas, Tareas y Conexiones fluyen en 2 columnas */
+  .ep-editor-cards { column-count: 2; column-gap: 18px; }
+  .ep-editor-cards > * { break-inside: avoid; }
+}
+
 .plan-row:hover { background: rgba(15, 35, 64, 0.02) !important; }
 
 /* Casilla de selección múltiple del enfoque: discreta hasta que la necesitas.
