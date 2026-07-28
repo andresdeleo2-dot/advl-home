@@ -99,9 +99,38 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   )
 
   const favorites = useMemo(
-    () => items.filter(i => i.featured).slice(0, CONFIG.maxFavorites),
+    () => items.filter(i => i.featured)
+      .sort((a, b) => (a.fav_order ?? 1e9) - (b.fav_order ?? 1e9))   // orden propio de la barra
+      .slice(0, CONFIG.maxFavorites),
     [items]
   )
+  const [favDragId, setFavDragId] = useState<string | null>(null)
+
+  // Reordena la barra de favoritos: reasigna fav_order 10,20,30… y persiste sólo lo que cambió.
+  const reorderFav = async (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return
+    const list = favorites
+    const from = list.findIndex(i => i.id === sourceId)
+    const to = list.findIndex(i => i.id === targetId)
+    if (from < 0 || to < 0) return
+    const reordered = [...list]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(to, 0, moved)
+    const changes = new Map<string, number>()
+    reordered.forEach((it, i) => { const n = (i + 1) * 10; if (it.fav_order !== n) changes.set(it.id, n) })
+    if (changes.size === 0) return
+    const prev = items
+    setItems(items.map(i => changes.has(i.id) ? { ...i, fav_order: changes.get(i.id)! } : i))
+    try {
+      const results = await Promise.all(Array.from(changes.entries()).map(([id, fav_order]) =>
+        fetch(`/api/items/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fav_order }) })))
+      if (results.some(r => !r.ok)) throw new Error('fallo')
+      showToast('Favoritos reordenados')
+    } catch {
+      setItems(prev)
+      showToast('No se pudo reordenar (¿corriste items-01-fav-order.sql?)', true)
+    }
+  }
 
   const filtered = useMemo(() => {
     return items.filter(it => {
@@ -412,7 +441,11 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <h2 className="eyebrow mb-2.5">Accesos rápidos</h2>
               <div className="flex gap-2.5 overflow-x-auto pb-2">
                 {favorites.map(fav => (
-                  <FavoriteTile key={fav.id} item={fav} width={88} onOpen={trackOpen} />
+                  <FavoriteTile key={fav.id} item={fav} width={88} onOpen={trackOpen}
+                    draggable dragging={favDragId === fav.id} dragActive={favDragId !== null}
+                    onDragStart={() => setFavDragId(fav.id)}
+                    onDragEnd={() => setFavDragId(null)}
+                    onDropOn={target => { if (favDragId) { reorderFav(favDragId, target.id); setFavDragId(null) } }} />
                 ))}
               </div>
             </section>

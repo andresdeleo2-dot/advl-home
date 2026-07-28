@@ -9,7 +9,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const body = await req.json()
     const allowed = [
       'title', 'url', 'url2', 'url3', 'section', 'subcategory',
-      'item_order', 'section_order', 'featured', 'description',
+      'item_order', 'section_order', 'fav_order', 'featured', 'description',
       'image', 'badge', 'accent', 'keywords',
     ]
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }

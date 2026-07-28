@@ -15,6 +15,7 @@ export type Item = {
   subcategory?: string | null
   item_order: number
   section_order: number
+  fav_order?: number | null   // orden dentro de la barra de favoritos (independiente del catálogo)
   featured: boolean
   description?: string | null
   image?: string | null

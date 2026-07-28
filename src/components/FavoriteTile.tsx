@@ -33,16 +33,26 @@ function FavIcon({ item }: { item: Item }) {
 
 const POP_W = 244
 
-export default function FavoriteTile({ item, onOpen, width = 84 }: {
+export default function FavoriteTile({
+  item, onOpen, width = 84,
+  draggable = false, dragging = false, dragActive = false, onDragStart, onDragEnd, onDropOn,
+}: {
   item: Item
   onOpen?: (item: Item) => void
   width?: number
+  draggable?: boolean
+  dragging?: boolean
+  dragActive?: boolean          // hay un arrastre en curso: se suprime el popover
+  onDragStart?: () => void
+  onDragEnd?: () => void
+  onDropOn?: (item: Item) => void
 }) {
   const desc = parseDescription(item.description)
   const hasMore = !!(desc.text || desc.links.length || item.url2 || item.url3)
   const dot = DOT[item.accent] ?? DOT.blue
 
   const [open, setOpen] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const [style, setStyle] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0, top: 0 })
   const tileRef = useRef<HTMLDivElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
@@ -60,11 +70,11 @@ export default function FavoriteTile({ item, onOpen, width = 84 }: {
   }, [])
 
   const show = useCallback(() => {
-    if (!hasMore) return
+    if (!hasMore || dragActive) return   // no abrir el popover mientras se arrastra
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
     place()
     setOpen(true)
-  }, [hasMore, place])
+  }, [hasMore, dragActive, place])
   const scheduleHide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     hideTimer.current = setTimeout(() => setOpen(false), 140)
@@ -93,16 +103,30 @@ export default function FavoriteTile({ item, onOpen, width = 84 }: {
   }, [open])
 
   return (
-    <div ref={tileRef} className="relative flex-shrink-0" style={{ width }}
+    <div ref={tileRef} className={`group relative flex-shrink-0 transition-opacity ${dragging ? 'opacity-40' : ''}`} style={{ width }}
+      draggable={draggable}
+      onDragStart={draggable ? e => { e.dataTransfer.effectAllowed = 'move'; setOpen(false); onDragStart?.() } : undefined}
+      onDragEnd={draggable ? () => { setDragOver(false); onDragEnd?.() } : undefined}
+      onDragOver={draggable ? e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!dragOver) setDragOver(true) } : undefined}
+      onDragLeave={draggable ? () => setDragOver(false) : undefined}
+      onDrop={draggable ? e => { e.preventDefault(); setDragOver(false); onDropOn?.(item) } : undefined}
       onMouseEnter={show} onMouseLeave={scheduleHide}>
-      <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen?.(item)}
-        className="flex w-full flex-col items-center gap-2 rounded-[14px] border border-[rgba(15,35,64,0.09)] bg-white text-center no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-[rgba(194,147,58,0.5)]"
+      <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={() => onOpen?.(item)} draggable={false}
+        className={`flex w-full flex-col items-center gap-2 rounded-[14px] border bg-white text-center no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-[rgba(194,147,58,0.5)] ${dragOver ? 'border-[#C2933A] ring-2 ring-[#C2933A]/50' : 'border-[rgba(15,35,64,0.09)]'}`}
         style={{ padding: '12px 8px' }}>
         <span className="flex h-[38px] w-[38px] items-center justify-center overflow-hidden rounded-[11px] border border-[rgba(15,35,64,0.07)] bg-[#F7F5EF]">
           <FavIcon item={item} />
         </span>
         <span className="clamp-1 w-full text-[10.5px] font-semibold text-[rgba(20,35,61,0.72)]">{item.title}</span>
       </a>
+
+      {/* Handle de arrastre: aparece al pasar el cursor cuando se puede reordenar. */}
+      {draggable && (
+        <span aria-hidden title="Arrastra para reordenar"
+          className="pointer-events-none absolute left-1 top-1 flex h-[15px] w-[15px] items-center justify-center rounded-full bg-white/90 text-[rgba(20,35,61,0.45)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+        </span>
+      )}
 
       {/* Chevron: revela los links (útil en táctil). Sólo si hay algo que mostrar. */}
       {hasMore && (
