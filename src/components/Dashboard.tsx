@@ -4,8 +4,9 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import type { Item } from '@/lib/supabase'
 import { CONFIG } from '@/lib/config'
-import { matchesQuery, groupItems, getFaviconUrl, normalizeImageUrl } from '@/lib/utils'
+import { matchesQuery, groupItems, getFaviconUrl } from '@/lib/utils'
 import ItemCard from './ItemCard'
+import FavoriteTile from './FavoriteTile'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
@@ -16,26 +17,6 @@ import CalendarWidget from './CalendarWidget'
 import MomentosWidget from './MomentosWidget'
 import FlujoCalendar from './FlujoCalendar'
 import EditModal from './EditModal'
-
-function FavIcon({ item }: { item: Item }) {
-  const [fallback, setFallback] = useState(false)
-  const img = normalizeImageUrl(item.image)
-  const favicon = getFaviconUrl(item.url)
-  const initials = item.title.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
-  if (!fallback && img) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={img} alt="" className="h-9 w-9 object-cover" referrerPolicy="no-referrer" onError={() => setFallback(true)} />
-    )
-  }
-  if (favicon) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={favicon} alt="" className="h-5 w-5" />
-    )
-  }
-  return <span className="text-sm font-bold" style={{ color: 'rgba(15,35,64,0.6)' }}>{initials}</span>
-}
 
 function isFlujo(section: string) {
   return section.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim() === 'flujo'
@@ -431,14 +412,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <h2 className="eyebrow mb-2.5">Accesos rápidos</h2>
               <div className="flex gap-2.5 overflow-x-auto pb-2">
                 {favorites.map(fav => (
-                  <a key={fav.id} href={fav.url} target="_blank" rel="noopener noreferrer" onClick={() => trackOpen(fav)}
-                    className="flex w-[88px] flex-shrink-0 flex-col items-center gap-2 rounded-[14px] border border-[rgba(15,35,64,0.09)] bg-white p-3 text-center no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-[rgba(194,147,58,0.5)]"
-                    style={{ paddingTop: 13, paddingBottom: 13 }}>
-                    <span className="flex h-[38px] w-[38px] items-center justify-center overflow-hidden rounded-[11px] border border-[rgba(15,35,64,0.07)] bg-[#F7F5EF]">
-                      <FavIcon item={fav} />
-                    </span>
-                    <span className="clamp-1 w-full text-[10.5px] font-semibold text-[rgba(20,35,61,0.72)]">{fav.title}</span>
-                  </a>
+                  <FavoriteTile key={fav.id} item={fav} width={88} onOpen={trackOpen} />
                 ))}
               </div>
             </section>
