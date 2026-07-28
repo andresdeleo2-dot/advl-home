@@ -3126,14 +3126,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const eyebrow = week ? 'Enfoque de la semana' : resumen ? 'Resumen de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
     const topLabel = (week || resumen) ? weekRel
       : monthy ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
-      : (horizonHasToday ? `Próximas ${weekMondays.length} semanas` : spanLabel(hStart, hEnd))
+      // "Próximas N semanas" sólo si la ventana arranca en la semana actual; si la
+      // deslizaste hacia atrás (para ver semanas pasadas) muestra el rango real.
+      : (hStart === todayMonday ? `Próximas ${weekMondays.length} semanas` : spanLabel(hStart, hEnd))
     // Progreso del horizonte
     let wTot = 0, wDone = 0
     if (board) activeEpics.forEach(e => (e.tasks || []).forEach(t => {
       if (t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd) { wTot++; if (t.status === 'Terminada') wDone++ }
     }))
-    const goPrev = () => setViewDate(monthy ? addMonths(viewDate, -1) : addDays(viewDate, -weekMondays.length * 7))
-    const goNext = () => setViewDate(monthy ? addMonths(viewDate, 1) : addDays(viewDate, weekMondays.length * 7))
+    // Semana/2 sem/3 sem: las flechas deslizan UNA semana (así puedes traer las
+    // semanas pasadas al lado de la actual). Mes: navega mes a mes.
+    const stepDays = multi ? 7 : weekMondays.length * 7
+    const goPrev = () => setViewDate(monthy ? addMonths(viewDate, -1) : addDays(viewDate, -stepDays))
+    const goNext = () => setViewDate(monthy ? addMonths(viewDate, 1) : addDays(viewDate, stepDays))
     const empty = planTotal === 0
     const suggestions: { e: Epica; i: number; t: EpicaTask }[] = []
     if (empty) {
@@ -3170,9 +3175,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {/* Navegación por horizonte, o "‹ Hoy" en modo día */}
               {board ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <button onClick={goPrev} aria-label="Período anterior" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
+                  <button onClick={goPrev} aria-label={multi ? 'Una semana atrás' : 'Período anterior'} title={multi ? 'Una semana atrás (para ver semanas pasadas)' : undefined} style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
                   {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{monthy ? 'Este mes' : (week || resumen) ? 'Esta semana' : 'Ahora'}</button>}
-                  <button onClick={goNext} aria-label="Período siguiente" style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
+                  <button onClick={goNext} aria-label={multi ? 'Una semana adelante' : 'Período siguiente'} title={multi ? 'Una semana adelante' : undefined} style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
                 </div>
               ) : !isToday && (
                 <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 14px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>‹ Hoy</button>
