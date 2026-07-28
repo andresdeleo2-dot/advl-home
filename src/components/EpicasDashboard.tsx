@@ -1202,6 +1202,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (note.trim()) entry.note = note; else delete entry.note
     patchEpic(e.id, { tasks })
   }
+  // Cambia la fecha de un día de la bitácora (si el nuevo día no existe ya) y reordena.
+  const setProgressDate = (e: Epica, ti: number, oldD: string, newD: string) => {
+    if (!newD || newD === oldD) return
+    const tasks = clone(e.tasks)
+    const log = tasks[ti].progressLog || []
+    if (log.some(x => x.d === newD)) { showToast('Ya hay un avance ese día', true); return }
+    const entry = log.find(x => x.d === oldD)
+    if (!entry) return
+    entry.d = newD
+    log.sort((a, b) => b.d.localeCompare(a.d))
+    tasks[ti].progressLog = log
+    patchEpic(e.id, { tasks })
+  }
+  // Fija el % TOTAL al final de ese día (0-100) o lo borra; el delta "+x%" se recalcula solo.
+  const setProgressPct = (e: Epica, ti: number, d: string, pct: number | null) => {
+    const tasks = clone(e.tasks)
+    const entry = (tasks[ti].progressLog || []).find(x => x.d === d)
+    if (!entry) return
+    if (pct == null || Number.isNaN(pct)) delete entry.pct
+    else entry.pct = Math.max(0, Math.min(100, Math.round(pct)))
+    patchEpic(e.id, { tasks })
+  }
   const toggleRoutineDay = (e: Epica, ri: number, di: number) => {
     const routines = clone(e.routines)
     const r = routines[ri]
@@ -5093,15 +5115,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: logExpanded ? 260 : undefined, overflowY: logExpanded ? 'auto' : 'visible' }}>
                                 {shown.map(entry => {
                                   const isTd = entry.d === todayISO()
+                                  const dlt = deltas[entry.d]
                                   return (
-                                    <div key={entry.d} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)' }}>
-                                      <span style={{ flexShrink: 0, width: 54, fontSize: 11.5, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F' }}>{isTd ? 'Hoy' : cap(new Date(entry.d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }).replace('.', ''))}</span>
-                                      {typeof deltas[entry.d] === 'number'
-                                        ? <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'baseline', gap: 4, minWidth: 62 }}>
-                                            <span style={{ fontSize: 12, fontWeight: 800, color: deltas[entry.d] > 0 ? '#2E6E6E' : deltas[entry.d] < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{deltas[entry.d] > 0 ? '+' : ''}{deltas[entry.d]}%</span>
-                                            <span style={{ fontSize: 10, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>→{entry.pct}%</span>
-                                          </span>
-                                        : <span style={{ flexShrink: 0, minWidth: 62, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}>·</span>}
+                                    <div key={entry.d} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)' }}>
+                                      {/* Fecha editable del avance */}
+                                      <input type="date" defaultValue={entry.d} onChange={e => setProgressDate(ep, i, entry.d, e.target.value)} title="Cambiar la fecha de este avance" aria-label="Fecha del avance"
+                                        style={{ flexShrink: 0, width: 132, border: `1px solid ${isTd ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.12)'}`, borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F', background: '#fff', outline: 'none' }} />
+                                      {/* % total al final de ese día (editable) + delta derivado */}
+                                      <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                        <input type="number" min={0} max={100} defaultValue={typeof entry.pct === 'number' ? entry.pct : ''} placeholder="—"
+                                          onBlur={e => { const v = e.target.value.trim(); setProgressPct(ep, i, entry.d, v === '' ? null : Number(v)) }}
+                                          title="% total al final de ese día" aria-label="Porcentaje ese día"
+                                          style={{ width: 46, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 4px', fontSize: 12, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none', textAlign: 'right' }} />
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>%</span>
+                                        {typeof dlt === 'number' && (
+                                          <span title="Avanzaste esto ese día (vs. el día anterior con %)" style={{ marginLeft: 2, fontSize: 11, fontWeight: 800, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{dlt > 0 ? '+' : ''}{dlt}%</span>
+                                        )}
+                                      </span>
                                       <input defaultValue={entry.note || ''} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} placeholder="Nota del día…" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
                                       <button onClick={() => removeProgressDay(ep, i, entry.d)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.55)', fontSize: 13, lineHeight: 1 }}>✕</button>
                                     </div>
