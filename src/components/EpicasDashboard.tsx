@@ -2999,47 +2999,54 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })()}
 
-        {/* SE MOVIERON / NO SE CUMPLIERON — tareas que estaban planeadas ESTA semana,
-            no se cerraron aquí y su plan terminó en otra semana (o se quitó). Usa el
-            historial de plan (planHist), que se llena hacia adelante tras la migración. */}
+        {/* NO SE TERMINARON ESTA SEMANA — tareas que se tenían que terminar esta semana
+            (con entrega en la semana, o que estuvieron planeadas aquí según el historial)
+            y no se cerraron dentro de la semana. Excluye las que siguen en el plan de la
+            semana (esas están en "Faltan por cerrar") y las que sí se cerraron aquí. */}
         {(() => {
-          const movidas = all.filter(x =>
-            (x.t.planHist || []).some(d => d >= mon && d <= sun)   // estuvo planeada esta semana
-            && !inWeek(x.t.plan)                                    // ya no está en esta semana
-            && !inWeek(x.t.doneAt))                                 // y no se cerró aquí
-            .sort((a, b) => (a.t.plan || '9999').localeCompare(b.t.plan || '9999'))
-          if (movidas.length === 0) return null   // no ocupa espacio si no hay nada
+          const noTermino = all.filter(x => {
+            const t = x.t
+            if (t.doneAt && t.doneAt < mon) return false                 // se terminó antes de la semana
+            if (inWeek(t.doneAt)) return false                           // se terminó DENTRO de la semana → cumplida
+            const pendingHere = inWeek(t.plan) && t.status !== 'Terminada'  // sigue en el plan de la semana → ya está en "Faltan por cerrar"
+            if (pendingHere) return false
+            // Se tenía que terminar esta semana: entrega (Vence) en la semana, o estuvo planeada aquí
+            return inWeek(t.due) || (t.planHist || []).some(d => d >= mon && d <= sun)
+          }).sort((a, b) => (a.t.due || a.t.plan || '9999').localeCompare(b.t.due || b.t.plan || '9999'))
+          if (noTermino.length === 0) return null   // no ocupa espacio si no hay nada
           return (
             <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20, border: '1px solid rgba(176,82,46,0.28)' }}>
               <button onClick={() => setMovidasOpen(v => !v)} aria-expanded={movidasOpen} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, marginBottom: movidasOpen ? 9 : 0 }}>
                 <span style={{ height: 7, width: 7, borderRadius: 99, background: '#B0522E' }} />
-                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Se movieron a otra semana</span>
-                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: '#B0522E' }}>{movidas.length}</span>
+                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>No se terminaron esta semana</span>
+                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: '#B0522E' }}>{noTermino.length}</span>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: movidasOpen ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {movidasOpen && (
                 <>
-                  <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 8 }}>Estaban planeadas esta semana y no se cumplieron: su fecha se movió a otra semana (o se quitó del plan).</div>
+                  <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 8 }}>Se tenían que terminar esta semana (por su entrega o porque estaban planeadas aquí) y quedaron sin cerrar: se movieron a otra semana, se quitaron del plan o siguen abiertas.</div>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    {movidas.map(x => {
+                    {noTermino.map(x => {
                       const { e, t } = x
-                      const done = t.status === 'Terminada'
-                      // ¿A qué semana se movió? (según su plan actual)
+                      const done = t.status === 'Terminada'                       // terminada, pero DESPUÉS de la semana
                       const destWeek = t.plan ? mondayISO(t.plan) : ''
                       const destSame = destWeek && destWeek === mondayISO(today)
                       return (
                         <div key={planKey(e.id, t)} {...clickable(() => setTaskView({ eId: e.id, tid: t.id! }), `Ver ${t.t}`)}
                           style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
-                          <span style={{ flexShrink: 0, width: 22, textAlign: 'center', color: '#B0522E', fontSize: 14 }}>↪</span>
+                          <span style={{ flexShrink: 0, width: 22, textAlign: 'center', color: done ? '#2E6E6E' : '#B0522E', fontSize: 14 }}>{done ? '✓' : '↪'}</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 2, flexWrap: 'wrap' }}>
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}</span>
-                              {/* A dónde se movió */}
-                              {t.plan
-                                ? <span style={{ font: '700 10px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.12)', border: '1px solid rgba(194,147,58,0.3)', borderRadius: 99, padding: '1px 8px' }}>→ {destSame ? 'esta semana' : weekRangeLabel(destWeek)}</span>
-                                : <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)', background: 'rgba(15,35,64,0.05)', borderRadius: 99, padding: '1px 8px' }}>quitada del plan</span>}
-                              {done && <span style={{ font: '700 10px var(--font-ui)', color: '#2E6E6E' }}>ya terminada</span>}
+                              {/* Por qué se esperaba esta semana */}
+                              {inWeek(t.due) && <span style={{ font: '700 10px var(--font-ui)', color: '#B0522E' }}>vencía {fmtDue(t.due)}</span>}
+                              {/* Qué pasó */}
+                              {done
+                                ? <span style={{ font: '700 10px var(--font-ui)', color: '#2E6E6E' }}>terminada {t.doneAt ? fmtDue(t.doneAt) : 'después'}</span>
+                                : t.plan
+                                  ? <span style={{ font: '700 10px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.12)', border: '1px solid rgba(194,147,58,0.3)', borderRadius: 99, padding: '1px 8px' }}>→ {destSame ? 'esta semana' : weekRangeLabel(destWeek)}</span>
+                                  : <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)', background: 'rgba(15,35,64,0.05)', borderRadius: 99, padding: '1px 8px' }}>sin plan</span>}
                               {t.difficulty && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 10px var(--font-ui)', color: difStyle(t.difficulty).c }}><DifDots d={t.difficulty} size={9} />{difStyle(t.difficulty).label}</span>}
                             </div>
                           </div>
