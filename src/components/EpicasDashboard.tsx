@@ -5380,9 +5380,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 )}
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
                   <span style={{ flex: 1 }} />
+                  {/* Marcar terminada (o reabrir) — acción principal, siempre a la vista */}
+                  {(() => {
+                    const done = t.status === 'Terminada'
+                    return (
+                      <button onClick={() => setTaskStatus(ep, i, done ? (t.planPrev || 'En curso') : 'Terminada')}
+                        title={done ? 'Reabrir la actividad' : 'Marcar la actividad como terminada'}
+                        style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 20px', fontSize: 13, fontWeight: 800,
+                          border: done ? '1px solid rgba(46,90,158,0.4)' : 'none',
+                          background: done ? 'rgba(46,90,158,0.10)' : 'linear-gradient(135deg,#3E8E8E,#2E6E6E)',
+                          color: done ? '#2E5A9E' : '#fff' }}>
+                        {done
+                          ? <>↩ Reabrir</>
+                          : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> Terminar</>}
+                      </button>
+                    )
+                  })()}
                   <button onClick={() => setTaskView(null)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cerrar</button>
                   <button onClick={openEditFromView} style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
                 </div>
