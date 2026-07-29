@@ -178,6 +178,15 @@ export type Prio = 'alta' | 'media' | 'baja'
 export const PRIO_RANK: Record<Prio, number> = { alta: 0, media: 1, baja: 2 }
 
 export function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1) }
+/** Color hex (#rgb o #rrggbb) → rgba con la alpha dada. Para tintar con el color de la épica. */
+export function hexA(hex: string, a: number): string {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((hex || '').trim())
+  if (!m) return hex
+  let h = m[1]
+  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  const n = parseInt(h, 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
 export function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n)
   const p = (x: number) => String(x).padStart(2, '0')

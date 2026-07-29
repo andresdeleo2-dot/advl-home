@@ -83,6 +83,7 @@ import {
   todayISO,
   todayLabel,
   typeColor,
+  hexA,
   uid,
   upsertProgressPct,
   weekRangeLabel,
@@ -2221,7 +2222,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
-      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items), { groupByWeek: true }) : (
+      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items), { groupByWeek: true }) : (() => {
+      // Pocas semanas (2/3 sem): las columnas llenan el ancho. Muchas (mes): ancho
+      // fijo y scroll horizontal, para que no se aplasten.
+      const wide = cols.length <= 3
+      return (
       <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {cols.map(({ mon, sun, items }) => {
           const hasToday = today >= mon && today <= sun
@@ -2239,7 +2244,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const visibleCount = [...dayMap.values()].reduce((n, a) => n + a.length, 0)
           return (
             <div key={mon} data-weekcol={mon}
-              style={{ flex: '1 1 240px', minWidth: 240, maxWidth: 380, boxSizing: 'border-box', borderRadius: 15, background: over ? 'rgba(194,147,58,0.07)' : hasToday ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : hasToday ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', transition: 'background .15s, border-color .15s' }}>
+              style={{ flex: wide ? '1 1 0' : '0 0 320px', minWidth: wide ? 240 : 300, maxWidth: wide ? 640 : 380, boxSizing: 'border-box', borderRadius: 15, background: over ? 'rgba(194,147,58,0.07)' : hasToday ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : hasToday ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', transition: 'background .15s, border-color .15s' }}>
               {/* Cabecera de la semana (sprint) */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px 9px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
                 {hasToday && <span title="Semana en curso" style={{ width: 7, height: 7, borderRadius: 99, background: '#A87A2C', flexShrink: 0 }} />}
@@ -2264,10 +2269,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   return (
                     <div key={dk} data-sprintday={dk}
                       style={{ borderRadius: 8, padding: dayOver ? 3 : 0, background: dayOver ? 'rgba(194,147,58,0.10)' : 'transparent', outline: dayOver ? '1.5px dashed #C2933A' : 'none', transition: 'background .1s' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 2px 3px' }}>
-                        <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : dayItems.length ? 'rgba(20,35,61,0.5)' : 'rgba(20,35,61,0.32)' }}>{DAYNAMES[wd].slice(0, 3)} {dayNum(dk)}</span>
-                        {isTd && <span style={{ font: '700 8.5px var(--font-ui)', color: '#A87A2C' }}>HOY</span>}
-                        <span style={{ height: 1, flex: 1, background: 'rgba(15,35,64,0.07)' }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 2px 4px' }}>
+                        <span style={{ font: '800 9.5px/1 var(--font-ui)', letterSpacing: '.07em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : dayItems.length ? 'rgba(20,35,61,0.55)' : 'rgba(20,35,61,0.3)' }}>{DAYNAMES[wd].slice(0, 3)} {dayNum(dk)}</span>
+                        {isTd && <span style={{ font: '800 8px/1 var(--font-ui)', letterSpacing: '.06em', color: '#fff', background: '#A87A2C', borderRadius: 99, padding: '2px 6px' }}>HOY</span>}
+                        {dayItems.length > 0 && <span style={{ font: '700 9px/1 var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>{dayItems.length}</span>}
+                        <span style={{ height: 1, flex: 1, background: 'rgba(15,35,64,0.08)' }} />
                       </div>
                       {dayItems.length === 0 && sprintDrag && (
                         <div style={{ borderRadius: 8, border: '1px dashed rgba(15,35,64,0.16)', padding: '7px', textAlign: 'center', fontSize: 10, fontWeight: 600, color: dayOver ? '#A87A2C' : 'rgba(20,35,61,0.4)' }}>{dayOver ? 'Soltar aquí' : '—'}</div>
@@ -2317,7 +2323,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })}
       </div>
-      )}
+      )
+      })()}
       </>
     )
   }
@@ -5298,15 +5305,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         todas, y al editar porque una tarea puede haber caído en la equivocada. */}
                     {activeEpics.length > 1
                       ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                          <span style={{ width: 9, height: 9, borderRadius: 99, background: target?.color || ep?.color, flexShrink: 0 }} />
-                          <select value={taskEditTarget} aria-label="Épica de la tarea"
-                            onChange={ev => setTaskEditTarget(ev.target.value)}
-                            style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontWeight: 600, color: '#16365F', background: '#fff', outline: 'none', maxWidth: 240 }}>
-                            {activeEpics.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-                          </select>
+                        <div>
+                          {/* Elegir épica con chips de un clic (color de cada épica), en vez del dropdown */}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 118, overflowY: 'auto', padding: 1 }}>
+                            {activeEpics.map(x => {
+                              const on = x.id === taskEditTarget
+                              return (
+                                <button key={x.id} type="button" onClick={() => setTaskEditTarget(x.id)} aria-pressed={on} title={x.name}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderRadius: 99, padding: '6px 11px', font: '700 12px var(--font-ui)', transition: 'background .12s, border-color .12s',
+                                    border: on ? `1.5px solid ${x.color}` : '1px solid rgba(15,35,64,0.14)',
+                                    background: on ? hexA(x.color, 0.12) : '#fff',
+                                    color: on ? x.color : 'rgba(20,35,61,0.62)' }}>
+                                  <span style={{ width: 9, height: 9, borderRadius: 99, background: x.color, flexShrink: 0, boxShadow: on ? `0 0 0 2px ${hexA(x.color, 0.25)}` : 'none' }} />
+                                  <span style={{ maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.name}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
                           {willMove && (
-                            <span style={{ font: '700 10.5px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.32)', borderRadius: 99, padding: '2px 9px' }}>
+                            <span style={{ display: 'inline-block', marginTop: 7, font: '700 10.5px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.32)', borderRadius: 99, padding: '2px 9px' }}>
                               se moverá desde {ep?.name}
                             </span>
                           )}
