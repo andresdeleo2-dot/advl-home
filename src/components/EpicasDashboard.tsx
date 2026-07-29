@@ -187,6 +187,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
+  const [movidasOpen, setMovidasOpen] = useState(true)              // seccion "Se movieron / no se cumplieron"
   const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
@@ -206,6 +207,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const dragKeyRef = useRef<string | null>(null)
   const planListRef = useRef<HTMLDivElement>(null)
   const epicsRef = useRef<Epica[]>(epics)
+  const planHistReady = useRef(false)   // true cuando la columna plan_hist existe (tras la migración)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -225,6 +227,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setLoading(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok || !Array.isArray(j.data)) throw new Error(j.error || 'respuesta inválida')
+      planHistReady.current = !!j.planHistReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -450,7 +453,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Revierte SOLO esta épica en caso de fallo (update funcional), para no pisar
     // los updates optimistas concurrentes de otras épicas del mismo tick (reorden multi-épica).
     const prevEpic = epicsRef.current.find(e => e.id === id)
-    const { tasks: nextTasks, ...epicFields } = changes
+    let { tasks: nextTasks } = changes
+    const { tasks: _omit, ...epicFields } = changes; void _omit
+    // Historial de días de plan: si el plan de una tarea cambió a otro día, guarda el
+    // día viejo en planHist. Se hace aquí (punto único de escritura) para cubrir TODAS
+    // las rutas de reprogramación: drag, posponer, editor, lote, etc. Sólo si la
+    // columna plan_hist ya existe (gate), para no romper el guardado antes de migrar.
+    if (nextTasks && planHistReady.current) {
+      const beforePlan = new Map((prevEpic?.tasks || []).map(t => [t.id, t.plan || '']))
+      nextTasks = nextTasks.map(t => {
+        const prev = t.id ? beforePlan.get(t.id) : undefined
+        if (prev && prev !== (t.plan || '')) {
+          const hist = (t.planHist || []).filter(d => d !== prev)
+          hist.push(prev)
+          return { ...t, planHist: hist.slice(-40) }
+        }
+        return t
+      })
+      changes = { ...changes, tasks: nextTasks }
+    }
     setEpics(list => list.map(e => (e.id === id ? { ...e, ...changes } : e)))
     try {
       // Campos de la épica (nombre, color, rutinas, links…)
@@ -2961,6 +2982,61 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     })}
                   </div>
                 )}
+            </div>
+          )
+        })()}
+
+        {/* SE MOVIERON / NO SE CUMPLIERON — tareas que estaban planeadas ESTA semana,
+            no se cerraron aquí y su plan terminó en otra semana (o se quitó). Usa el
+            historial de plan (planHist), que se llena hacia adelante tras la migración. */}
+        {(() => {
+          const movidas = all.filter(x =>
+            (x.t.planHist || []).some(d => d >= mon && d <= sun)   // estuvo planeada esta semana
+            && !inWeek(x.t.plan)                                    // ya no está en esta semana
+            && !inWeek(x.t.doneAt))                                 // y no se cerró aquí
+            .sort((a, b) => (a.t.plan || '9999').localeCompare(b.t.plan || '9999'))
+          if (movidas.length === 0) return null   // no ocupa espacio si no hay nada
+          return (
+            <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20, border: '1px solid rgba(176,82,46,0.28)' }}>
+              <button onClick={() => setMovidasOpen(v => !v)} aria-expanded={movidasOpen} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, marginBottom: movidasOpen ? 9 : 0 }}>
+                <span style={{ height: 7, width: 7, borderRadius: 99, background: '#B0522E' }} />
+                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.18em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Se movieron a otra semana</span>
+                <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: '#B0522E' }}>{movidas.length}</span>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: movidasOpen ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+              {movidasOpen && (
+                <>
+                  <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 8 }}>Estaban planeadas esta semana y no se cumplieron: su fecha se movió a otra semana (o se quitó del plan).</div>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {movidas.map(x => {
+                      const { e, t } = x
+                      const done = t.status === 'Terminada'
+                      // ¿A qué semana se movió? (según su plan actual)
+                      const destWeek = t.plan ? mondayISO(t.plan) : ''
+                      const destSame = destWeek && destWeek === mondayISO(today)
+                      return (
+                        <div key={planKey(e.id, t)} {...clickable(() => setTaskView({ eId: e.id, tid: t.id! }), `Ver ${t.t}`)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                          <span style={{ flexShrink: 0, width: 22, textAlign: 'center', color: '#B0522E', fontSize: 14 }}>↪</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 2, flexWrap: 'wrap' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}</span>
+                              {/* A dónde se movió */}
+                              {t.plan
+                                ? <span style={{ font: '700 10px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.12)', border: '1px solid rgba(194,147,58,0.3)', borderRadius: 99, padding: '1px 8px' }}>→ {destSame ? 'esta semana' : weekRangeLabel(destWeek)}</span>
+                                : <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)', background: 'rgba(15,35,64,0.05)', borderRadius: 99, padding: '1px 8px' }}>quitada del plan</span>}
+                              {done && <span style={{ font: '700 10px var(--font-ui)', color: '#2E6E6E' }}>ya terminada</span>}
+                              {t.difficulty && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 10px var(--font-ui)', color: difStyle(t.difficulty).c }}><DifDots d={t.difficulty} size={9} />{difStyle(t.difficulty).label}</span>}
+                            </div>
+                          </div>
+                          {typeof t.progress === 'number' && <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )
         })()}

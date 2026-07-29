@@ -32,7 +32,12 @@ export async function GET() {
   for (const arr of byEpic.values()) arr.sort((a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9))
   const withTasks = (data || []).map(e => ({ ...e, tasks: byEpic.get(e.id) || [] }))
 
-  return NextResponse.json({ ok: true, data: withTasks })
+  // ¿Existe ya la columna plan_hist? (select * la incluye como key si existe).
+  // El cliente sólo registra el historial de plan cuando es true, para no escribir
+  // plan_hist antes de correr la migración y romper el guardado.
+  const planHistReady = (tareas && tareas.length) ? ('plan_hist' in (tareas[0] as object)) : false
+
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady })
 }
 
 export async function POST(req: Request) {
