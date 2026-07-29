@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
@@ -2221,7 +2221,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
-      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items)) : (
+      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items), { groupByWeek: true }) : (
       <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {cols.map(({ mon, sun, items }) => {
           const hasToday = today >= mon && today <= sun
@@ -2324,10 +2324,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /** Tabla editable del enfoque de día (tipo hoja de cálculo): celdas modificables
    *  inline, encabezados ordenables y selección para acciones en lote. */
-  const renderDayTable = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+  const renderDayTable = (rows: { e: Epica; t: EpicaTask; i: number }[], opts?: { groupByWeek?: boolean }) => {
     const edit = dayTableEdit
     const sort = dayTableSort
     const manual = sort.length === 1 && sort[0].key === 'manual'
+    const groupByWeek = !!opts?.groupByWeek   // divide la tabla por semana (vistas 2/3 sem, mes)
+    const canMove = manual && !groupByWeek     // reordenar manual sólo tiene sentido sin agrupar
+    // Día de la semana abreviado: "Lun", "Mar", … (0 = lunes)
+    const dow = (iso: string) => DAYNAMES[(new Date(iso + 'T00:00:00').getDay() + 6) % 7].slice(0, 3)
     // Compara UN criterio; el signo lo pone la dirección de cada nivel.
     const cmpKey = (a: typeof rows[number], b: typeof rows[number], k: string) => {
       if (k === 't') return a.t.t.localeCompare(b.t.t, 'es')
@@ -2419,7 +2423,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </tr>
           </thead>
           <tbody>
-            {sorted.map(({ e, t, i }, idx) => {
+            {(() => {
+              const colCount = edit ? 9 : 10
+              const renderRow = ({ e, t, i }: typeof sorted[number], idx: number) => {
               const k = planKey(e.id, t)
               const on = planSel.has(k)
               const done = t.status === 'Terminada'
@@ -2431,8 +2437,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {!edit && (
                     <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'flex', gap: 3 }} onClick={ev => ev.stopPropagation()}>
-                        <button onClick={() => move(idx, 'up')} disabled={!manual || idx === 0} aria-label="Subir" title={manual ? 'Subir' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!manual || idx === 0) ? 0.35 : 1 }}>↑</button>
-                        <button onClick={() => move(idx, 'down')} disabled={!manual || idx === sorted.length - 1} aria-label="Bajar" title={manual ? 'Bajar' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!manual || idx === sorted.length - 1) ? 0.35 : 1 }}>↓</button>
+                        <button onClick={() => move(idx, 'up')} disabled={!canMove || idx === 0} aria-label="Subir" title={canMove ? 'Subir' : groupByWeek ? 'Reordena en el Tablero' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!canMove || idx === 0) ? 0.35 : 1 }}>↑</button>
+                        <button onClick={() => move(idx, 'down')} disabled={!canMove || idx === sorted.length - 1} aria-label="Bajar" title={canMove ? 'Bajar' : groupByWeek ? 'Reordena en el Tablero' : 'Ordena en "Manual" para mover'} style={{ ...arrow, opacity: (!canMove || idx === sorted.length - 1) ? 0.35 : 1 }}>↓</button>
                       </div>
                     </td>
                   )}
@@ -2468,11 +2474,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       ? <input type="number" min={0} max={100} step={5} defaultValue={t.progress ?? 0} onBlur={ev => { const v = Math.max(0, Math.min(100, Number(ev.target.value) || 0)); if (v !== (t.progress ?? 0)) setTaskProgress(e, i, v) }} style={{ ...dInp, width: 62 }} />
                       : <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>{typeof t.progress === 'number' ? `${t.progress}%` : '—'}</span>}
                   </td>
-                  {/* Hacer */}
+                  {/* Hacer — con día de la semana (Lun/Mar…), también visible al editar */}
                   <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
                     {edit
-                      ? <input type="date" value={t.plan || ''} onChange={ev => setTaskPlan(e, i, ev.target.value)} style={{ ...dInp, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }} />
-                      : <span style={{ fontSize: 12, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)' }}>{t.plan ? fmtDue(t.plan) : '—'}</span>}
+                      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <input type="date" value={t.plan || ''} onChange={ev => setTaskPlan(e, i, ev.target.value)} style={{ ...dInp, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }} />
+                          {t.plan && <span style={{ fontSize: 11, fontWeight: 800, color: '#2E5A9E' }}>{dow(t.plan)}</span>}
+                        </span>
+                      : <span style={{ fontSize: 12, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)' }}>{t.plan ? `${dow(t.plan)} ${fmtDue(t.plan)}` : '—'}</span>}
                   </td>
                   {/* Vence */}
                   <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>
@@ -2482,8 +2491,31 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </td>
                 </tr>
               )
-            })}
-            {sorted.length === 0 && <tr><td colSpan={10} style={{ padding: '18px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>Nada planeado para este día.</td></tr>}
+              }
+              // Índice real en `sorted` (para que las flechas de mover sigan bien).
+              const keyIdx = new Map(sorted.map((r, i) => [planKey(r.e.id, r.t), i]))
+              if (!groupByWeek) return sorted.map((r, idx) => renderRow(r, idx))
+              // Divide por semana del día "Hacer"; las sin fecha van al final.
+              const groups = new Map<string, typeof sorted>()
+              for (const r of sorted) { const wk = r.t.plan ? mondayISO(r.t.plan) : ''; if (!groups.has(wk)) groups.set(wk, []); groups.get(wk)!.push(r) }
+              const keys = [...groups.keys()].sort((a, b) => (a === '' ? 1 : 0) - (b === '' ? 1 : 0) || a.localeCompare(b))
+              return keys.map(wk => {
+                const items = groups.get(wk)!
+                const pend = items.filter(x => x.t.status !== 'Terminada').length
+                return (
+                  <Fragment key={wk || 'sinfecha'}>
+                    <tr>
+                      <td colSpan={colCount} style={{ padding: '10px 12px 6px', background: 'rgba(194,147,58,0.07)', borderBottom: '1px solid rgba(194,147,58,0.22)' }}>
+                        <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: '#A87A2C' }}>{wk ? weekRangeLabel(wk) : 'Sin fecha'}</span>
+                        <span style={{ marginLeft: 9, fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{pend > 0 ? `${pend} por hacer · ${items.length}` : `${items.length} ${items.length === 1 ? 'tarea' : 'tareas'}`}</span>
+                      </td>
+                    </tr>
+                    {items.map(r => renderRow(r, keyIdx.get(planKey(r.e.id, r.t))!))}
+                  </Fragment>
+                )
+              })
+            })()}
+            {sorted.length === 0 && <tr><td colSpan={edit ? 9 : 10} style={{ padding: '18px', textAlign: 'center', fontSize: 12.5, color: 'rgba(20,35,61,0.55)' }}>Nada planeado para este día.</td></tr>}
           </tbody>
         </table>
       </div>
