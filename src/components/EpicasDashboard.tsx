@@ -2750,7 +2750,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const worked = all.filter(x => (x.t.progressLog || []).some(l => inWeek(l.d)))         // donde hubo avance
     const points = completed.reduce((n, x) => n + taskWeight(x.t), 0)
     const activeDays = days.filter(d => all.some(x => x.t.doneAt === d || (x.t.progressLog || []).some(l => l.d === d)))
-    const arrastran = worked.filter(x => diasTrabajados(x.t) >= 2 && x.t.status !== 'Terminada')
+    // "Se están arrastrando": tareas NO terminadas que llevan varios días sin cerrarse
+    // y están (o estuvieron) ligadas a esta semana, o venían arrastrándose de antes.
+    // Señales de arrastre: trabajada en >1 día, su plan se movió (planHist), o ya venció.
+    const dragSpan = (t: EpicaTask) => new Set<string>([...(t.progressLog || []).map(l => l.d), ...(t.planHist || []), ...(t.plan ? [t.plan] : [])])
+    const arrastran = all.filter(x => {
+      const t = x.t
+      if (t.status === 'Terminada') return false
+      const span = dragSpan(t)
+      const touchedWeek = [...span].some(d => d >= mon && d <= sun)
+      const cameFromBefore = !!t.plan && t.plan < mon          // sigue abierta y su plan quedó antes de esta semana
+      if (!touchedWeek && !cameFromBefore) return false
+      return span.size >= 2 || (t.planHist || []).length > 0 || (!!t.plan && t.plan < today)   // que de verdad se arrastre
+    })
+    const arrastraDias = (t: EpicaTask) => dragSpan(t).size   // días distintos en que ha estado en juego
     const pendientes = committed.filter(x => x.t.status !== 'Terminada').length
     const cumplimiento = committed.length ? Math.round(((committed.length - pendientes) / committed.length) * 100) : 0
 
@@ -3174,17 +3187,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
           {/* Se están arrastrando */}
           <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
-            {secTitle('Se están arrastrando', arrastran.length ? 'trabajadas varios días y aún abiertas' : undefined)}
+            {secTitle('Se están arrastrando', arrastran.length ? 'sin terminar, de esta semana y anteriores' : undefined)}
             {arrastran.length === 0
               ? <div style={{ fontSize: 12.5, color: '#2E6E6E', fontWeight: 600 }}>Nada se está atorando ✦</div>
-              : [...arrastran].sort((a, b) => diasTrabajados(b.t) - diasTrabajados(a.t)).slice(0, 8).map(x => (
-                <div key={planKey(x.e.id, x.t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: x.t.id! }), `Ver ${x.t.t}`)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
-                  <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: MULTIDIA_TONE.c }}>⧗ {diasTrabajados(x.t)} días</span>
-                </div>
-              ))}
+              : [...arrastran].sort((a, b) => arrastraDias(b.t) - arrastraDias(a.t)).slice(0, 12).map(x => {
+                const t = x.t
+                const worked = new Set((t.progressLog || []).map(l => l.d)).size
+                // Etiqueta: días trabajados, o "movida" (su plan cambió), o "atrasada" (ya venció)
+                const tag = worked >= 2 ? { txt: `⧗ ${worked} días`, c: MULTIDIA_TONE.c }
+                  : (t.planHist || []).length > 0 ? { txt: '↪ movida', c: '#A87A2C' }
+                  : (t.plan && t.plan < today) ? { txt: '⏳ atrasada', c: '#B0522E' }
+                  : { txt: `⧗ ${arrastraDias(t)} días`, c: MULTIDIA_TONE.c }
+                return (
+                  <div key={planKey(x.e.id, t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: t.id! }), `Ver ${t.t}`)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+                    <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: tag.c }}>{tag.txt}</span>
+                  </div>
+                )
+              })}
           </div>
 
           {/* Por épica */}
