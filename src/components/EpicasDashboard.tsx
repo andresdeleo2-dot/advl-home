@@ -1413,7 +1413,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const defaultEpicId = () => (backlogFEpica !== 'todas' ? backlogFEpica : (featured?.id || activeEpics[0]?.id))
   /** Crea una tarea ya planeada para el día que estás viendo en el enfoque. */
   const newTaskForDay = (day: string) => {
-    const target = defaultEpicId()
+    // Si hay un filtro de épica activo en la vista actual, la nueva tarea nace en esa
+    // épica (día → dayEpica; semana/sprint/mes → weekEpica). Si no, la épica por defecto.
+    const filterEpic = planMode === 'dia' ? dayEpica : weekEpica
+    const preferred = (filterEpic && filterEpic !== 'todas' && activeEpics.some(e => e.id === filterEpic)) ? filterEpic : null
+    const target = preferred || defaultEpicId()
     if (!target) { showToast('Crea una épica primero', true); return }
     openTaskEdit(target, null, { plan: day })
   }
