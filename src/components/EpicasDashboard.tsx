@@ -128,6 +128,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [doneOpen, setDoneOpen] = useState(true)
   const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'>('plan')  // orden del enfoque
   const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance'>('todas')          // filtro del enfoque
+  const [dayEpica, setDayEpica] = useState<string>('todas')                                                // filtro por épica en el enfoque de día
   const [tasksExpanded, setTasksExpanded] = useState(false)   // ver todas las tareas activas de la épica destacada
   const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'>('todas')
@@ -1744,7 +1745,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <button disabled={disabled} onClick={fn} style={{ width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 8, cursor: disabled ? 'default' : 'pointer', background: 'transparent', color: disabled ? 'rgba(20,35,61,0.3)' : danger ? '#B0522E' : '#16365F', fontSize: 12.5, fontWeight: 600 }}>{label}</button>
     )
     return createPortal(
-      <div data-pop className="animate-fade" style={{ ...popoverStyle(menuRect, 200, 340), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
+      <div data-pop className="animate-fade" style={{ ...popoverStyle(menuRect, 208, 470), background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 12, boxShadow: '0 20px 40px -20px rgba(8,18,36,.5)', padding: 6 }}>
         {planSort === 'plan' && <>
           {mi('↑  Subir', () => movePlan(key, 'up'), pos === 0)}
           {mi('↓  Bajar', () => movePlan(key, 'down'), pos === total - 1)}
@@ -1759,6 +1760,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {(['alta', 'media', 'baja'] as Prio[]).map(p => {
             const ps = prioStyle(p); const on = (x.t.priority || 'media') === p
             return <button key={p} onClick={() => setPriority(e, i, p)} title={ps.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '7px 0', border: on ? `1px solid ${ps.c}` : '1px solid rgba(15,35,64,0.12)', borderRadius: 8, background: on ? 'rgba(194,147,58,0.08)' : '#fff', cursor: 'pointer' }}><PrioBars p={p} /><span style={{ fontSize: 10, fontWeight: 700, color: on ? ps.c : 'rgba(20,35,61,0.5)' }}>{ps.label}</span></button>
+          })}
+        </div>
+        <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
+        {/* Dificultad rápida */}
+        <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', padding: '4px 10px 6px' }}>Dificultad</div>
+        <div style={{ display: 'flex', gap: 5, padding: '0 8px 4px' }}>
+          {(['facil', 'media', 'dificil'] as Dif[]).map(d => {
+            const ds = difStyle(d); const on = t.difficulty === d
+            return <button key={d} onClick={() => setDifficultyVal(e, i, on ? '' : d)} title={ds.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '7px 0', border: on ? `1px solid ${ds.c}` : '1px solid rgba(15,35,64,0.12)', borderRadius: 8, background: on ? ds.bg : '#fff', cursor: 'pointer' }}><DifDots d={d} size={10} /><span style={{ fontSize: 10, fontWeight: 700, color: on ? ds.c : 'rgba(20,35,61,0.5)' }}>{ds.label}</span></button>
+          })}
+        </div>
+        <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
+        {/* Avance rápido */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 10px 6px' }}>
+          <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Avance</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: '#A87A2C' }}>{t.progress ?? 0}%</span>
+        </div>
+        <div style={{ display: 'flex', gap: 4, padding: '0 8px 6px' }}>
+          {[0, 25, 50, 75, 100].map(p => {
+            const on = (t.progress ?? 0) === p
+            return <button key={p} onClick={() => setTaskProgress(e, i, p)} style={{ flex: 1, padding: '6px 0', border: on ? '1px solid #A87A2C' : '1px solid rgba(15,35,64,0.12)', borderRadius: 7, background: on ? 'rgba(194,147,58,0.12)' : '#fff', color: on ? '#A87A2C' : 'rgba(20,35,61,0.55)', fontSize: 10.5, fontWeight: 700, cursor: 'pointer' }}>{p}</button>
           })}
         </div>
         <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
@@ -1884,7 +1906,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </button>
             <span style={{ padding: '2px 8px', borderRadius: 99, font: '700 10.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}` }}>{t.due ? fmtDue(t.due) : 'sin fecha'}</span>
             {t.difficulty && (() => { const ds = difStyle(t.difficulty); return (
-              <span title={`Dificultad: ${ds.label}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}` }}><DifDots d={t.difficulty} size={10} />{ds.label}</span>
+              <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
             )})()}
             {t.plan && t.plan < today && (
               <span title={`Se planeó para el ${fmtDue(t.plan)} y sigue pendiente`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, color: '#B0522E', background: 'rgba(176,82,46,0.10)', border: '1px solid rgba(176,82,46,0.4)', borderRadius: 99, padding: '1px 8px' }}>⏳ de días anteriores</span>
@@ -3463,7 +3485,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '18px 0 8px' }} />
               {(() => {
                 const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta' : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })() : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === viewDate) : true
-                const filtered = planPend.filter(x => passF(x.t))
+                // Épicas presentes en el plan de hoy (para los chips de filtro por épica)
+                const dayEpics = Array.from(new Map(planItems.map(x => [x.e.id, x.e])).values())
+                const effDayEpica = dayEpics.some(e => e.id === dayEpica) ? dayEpica : 'todas'
+                const passE = (ep: Epica) => effDayEpica === 'todas' || ep.id === effDayEpica
+                const filtered = planPend.filter(x => passF(x.t) && passE(x.e))
                 const cmp = (a: typeof planPend[number], b: typeof planPend[number]) => {
                   if (planSort === 'prioridad') return (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) || ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9))
                   if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
@@ -3474,7 +3500,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const manual = planSort === 'plan'
                 const list = manual ? filtered : [...filtered].sort(cmp)
                 const table = dayView === 'tabla'
-                const tableRows = planItems.filter(x => passF(x.t))   // pend + hechas, para la tabla
+                const tableRows = planItems.filter(x => passF(x.t) && passE(x.e))   // pend + hechas, para la tabla
                 const visibleKeys = (table ? tableRows : list).map(x => planKey(x.e.id, x.t))
                 return (
                   <>
@@ -3500,6 +3526,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           const on = planFilter === k
                           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                         })}
+                        {/* Chips de épica: filtran el enfoque del día por épica (una a la vez) */}
+                        {dayEpics.length > 1 && <span style={{ width: 1, height: 16, background: 'rgba(15,35,64,0.12)' }} />}
+                        {dayEpics.length > 1 && dayEpics.map(ep => {
+                          const on = effDayEpica === ep.id
+                          return (
+                            <button key={ep.id} onClick={() => setDayEpica(on ? 'todas' : ep.id)} title={`Sólo ${ep.name}`}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
+                                border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
+                                background: on ? hexA(ep.color, 0.12) : '#fff',
+                                color: on ? ep.color : 'rgba(20,35,61,0.6)' }}>
+                              <span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color, flexShrink: 0 }} />{ep.name}
+                            </button>
+                          )
+                        })}
+                        {effDayEpica !== 'todas' && <button onClick={() => setDayEpica('todas')} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>}
                         <span style={{ flex: 1 }} />
                         {table && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{dayTableEdit ? 'Edita las celdas · las fechas abren calendario' : 'Clic en fila = ver/editar · flechas = mover · encabezado = ordenar'}</span>}
                         {table && <button onClick={() => setDayTableEdit(v => !v)} title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: dayTableEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(dayTableEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{dayTableEdit ? '✓ Listo' : '✎ Editar tabla'}</button>}
