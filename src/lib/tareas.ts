@@ -29,6 +29,7 @@ export type TareaRow = {
   links: unknown[] | null
   progress_log: unknown[] | null
   plan_hist?: string[] | null
+  remind_at?: string | null
   updated_at?: string | null
 }
 
@@ -59,6 +60,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.subtasks?.length) t.subtasks = r.subtasks as EpicaTask['subtasks']
   if (r.progress_log?.length) t.progressLog = r.progress_log as EpicaTask['progressLog']
   if (r.plan_hist?.length) t.planHist = r.plan_hist as string[]
+  if (r.remind_at) t.remindAt = r.remind_at
   if (r.updated_at) t.updatedAt = r.updated_at
   return t
 }
@@ -74,6 +76,9 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     // plan_hist sólo viaja si la tarea lo tiene: así, antes de correr la migración
     // (o si nunca se movió), las escrituras normales siguen pasando sin la columna.
     ...(Array.isArray(t.planHist) && t.planHist.length ? { plan_hist: t.planHist } : {}),
+    // remind_at viaja sólo si la tarea tiene la propiedad (así se puede LIMPIAR con null);
+    // el cliente sólo la fija cuando la columna existe (gate remindReady) → seguro sin migrar.
+    ...('remindAt' in t ? { remind_at: (t.remindAt || null) } : {}),
     id: t.id,
     epica_id: epicaId,
     titulo: t.t || '',

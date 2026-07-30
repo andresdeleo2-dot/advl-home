@@ -75,6 +75,7 @@ export type EpicaTask = {
   createdAt?: string                   // 'YYYY-MM-DD' de creación de la tarea
   planStatusPrev?: string              // estado previo a que el plan de HOY lo forzara a "En curso"
   planHist?: string[]                  // días en que estuvo planeada antes de moverla (para el resumen: "se movió a otra semana")
+  remindAt?: string                    // ISO datetime: recordatorio (con la app abierta dispara notificación y se limpia)
   repeat?: EpicaRepeat                 // si existe, al completarla se reprograma en vez de terminarse
   repeatUntil?: string                 // 'YYYY-MM-DD' opcional: fin de la serie
   repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)

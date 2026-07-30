@@ -178,6 +178,13 @@ export type Prio = 'alta' | 'media' | 'baja'
 export const PRIO_RANK: Record<Prio, number> = { alta: 0, media: 1, baja: 2 }
 
 export function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1) }
+/** ISO (UTC) → valor para <input type="datetime-local"> en hora LOCAL (YYYY-MM-DDTHH:mm). */
+export function isoToLocalInput(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso); if (isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
 /** URL segura para un href de link de tarea: bloquea javascript:/data:/vbscript: (XSS),
  *  deja pasar http(s)/mailto/tel y antepone https:// a un dominio escrito sin protocolo. */
 export function safeUrl(u?: string | null): string {

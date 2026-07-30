@@ -83,6 +83,7 @@ import {
   todayISO,
   typeColor,
   hexA,
+  isoToLocalInput,
   safeUrl,
   uid,
   upsertProgressPct,
@@ -210,6 +211,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const epicsRef = useRef<Epica[]>(epics)
   const planHistReady = useRef(false)   // true cuando la columna plan_hist existe (tras la migración)
   const ordenReady = useRef(false)       // true si la columna `orden` existe (lo dice el API); mismo patrón que plan_hist
+  const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -231,6 +233,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (!j.ok || !Array.isArray(j.data)) throw new Error(j.error || 'respuesta inválida')
       planHistReady.current = !!j.planHistReady
       ordenReady.current = !!j.ordenReady
+      remindReady.current = !!j.remindReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -258,6 +261,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }).finally(() => setLoading(false))
   }, [])
   useEffect(() => { loadEpics() }, [loadEpics])
+
+  // Recordatorios: cada minuto (y al abrir la app) revisa las tareas con remindAt
+  // vencido; dispara notificación del navegador (si hay permiso) + aviso in-app y
+  // limpia el recordatorio (una sola vez). remindedRef evita repetirlo en la sesión.
+  const remindedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const check = () => {
+      const now = Date.now()
+      epicsRef.current.forEach(e => (e.tasks || []).forEach(t => {
+        if (!t.remindAt || t.status === 'Terminada' || t.status === ARCHIVED) return
+        const due = new Date(t.remindAt).getTime()
+        if (isNaN(due) || due > now) return
+        const key = (t.id || '') + ':' + t.remindAt
+        if (remindedRef.current.has(key)) return
+        remindedRef.current.add(key)
+        try { if ('Notification' in window && Notification.permission === 'granted') new Notification(`⏰ ${e.name}`, { body: t.t }) } catch { /* noop */ }
+        showToast(`⏰ Recordatorio · ${t.t}`)
+        const fresh = epicsRef.current.find(x => x.id === e.id)
+        const ii = fresh ? fresh.tasks.findIndex(x => x.id === t.id) : -1
+        if (fresh && ii >= 0) { const tasks = clone(fresh.tasks); tasks[ii].remindAt = ''; patchEpic(fresh.id, { tasks }) }
+      }))
+    }
+    const id = setInterval(check, 60000)
+    const t0 = setTimeout(check, 4000)   // primera pasada tras cargar
+    return () => { clearInterval(id); clearTimeout(t0) }
+  }, [])
 
   // Preferencias de vista: se aplican DESPUÉS de montar (leer localStorage en el
   // initializer de useState provocaría un desajuste de hidratación con el SSR).
@@ -1166,6 +1195,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[ti].due = v
     patchEpic(e.id, { tasks })
   }
+  // Recordatorio de la tarea (ISO datetime, o '' para limpiar). Al fijarlo pide permiso
+  // de notificación. Necesita la columna remind_at (gate).
+  const setTaskRemind = (e: Epica, ti: number, iso: string) => {
+    if (!remindReady.current) { showToast('Corre sql/epicas-06-remind.sql para usar recordatorios', true); return }
+    const tasks = clone(e.tasks)
+    if (iso) {
+      const d = new Date(iso)
+      if (isNaN(d.getTime())) return
+      tasks[ti].remindAt = d.toISOString()
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
+    } else {
+      tasks[ti].remindAt = ''   // '' = limpiar (se manda como null)
+    }
+    patchEpic(e.id, { tasks })
+  }
   const setTaskTitle = (e: Epica, ti: number, v: string) => {
     const t = (v || '').trim(); if (!t) return
     const tasks = clone(e.tasks); tasks[ti].t = t
@@ -1836,6 +1880,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           })}
         </div>
         <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
+        {mi(t.status === ARCHIVED ? '↩  Desarchivar' : '🗄  Archivar', () => { setTaskStatus(e, i, t.status === ARCHIVED ? 'Por hacer' : ARCHIVED); setRowMenu(null) })}
         {mi('Quitar del plan', () => removeFromPlan(e, i), false, true)}
       </div>,
       document.body
@@ -1969,6 +2014,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {t.repeat && (
               <span title={`Se repite ${repeatLabel(t.repeat)}${t.repeatUntil ? ` hasta el ${fmtDue(t.repeatUntil)}` : ''}`}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 8px' }}>↻ {repeatLabel(t.repeat)}</span>
+            )}
+            {t.remindAt && (
+              <span title={`Recordatorio: ${new Date(t.remindAt).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: '#7A6FB0', background: 'rgba(122,111,176,0.10)', border: '1px solid rgba(122,111,176,0.3)', borderRadius: 99, padding: '1px 7px' }}>🔔 {new Date(t.remindAt).toLocaleString('es-MX', { hour: '2-digit', minute: '2-digit' })}</span>
             )}
             {diasTrabajados(t) >= 2 && (
               <span title={`La has trabajado en ${diasTrabajados(t)} días distintos — no se resuelve de una sentada`}
@@ -3669,6 +3718,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
 
                           <button onClick={planBulkDone} style={{ ...btn, border: '1px solid rgba(62,142,142,0.5)', background: 'rgba(62,142,142,0.25)' }}>✓ Terminar</button>
+                          <button onClick={() => planBulkStatus(ARCHIVED)} style={btn}>🗄 Archivar</button>
                           <button onClick={planBulkRemove} style={{ ...btn, border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.22)' }}>Quitar del plan</button>
                           <span style={{ flex: 1 }} />
                           <button onClick={() => setPlanSel(new Set())} aria-label="Limpiar selección" style={{ ...btn, padding: '6px 9px' }}>✕</button>
@@ -4053,10 +4103,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => setBacklogQ('')} aria-label="Limpiar búsqueda"
                   style={{ ...filterSel, cursor: 'pointer', padding: '5px 9px' }}>✕</button>
               )}
-              <select value={backlogFEpica} onChange={e => setBacklogFEpica(e.target.value)} title="Filtrar por épica" style={filterSel}>
-                <option value="todas">Todas las épicas</option>
-                {activeEpics.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-              </select>
+              {/* El filtro por épica ahora son chips (fila de abajo) */}
               {/* En el tablero las columnas son los estados: el filtro sobraría */}
               {!isBoard && (
                 <select value={backlogFStatus} onChange={e => setBacklogFStatus(e.target.value)} title="Filtrar por estado" style={filterSel}>
@@ -4085,6 +4132,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 title={backlogFEpica !== 'todas' ? `Nueva tarea en ${activeEpics.find(e => e.id === backlogFEpica)?.name || 'esta épica'}` : 'Nueva tarea'}
                 style={{ ...goldBtn, padding: '7px 13px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
+
+            {/* Chips de épica: filtran el backlog por épica (una a la vez) */}
+            {activeEpics.length > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+                <button onClick={() => setBacklogFEpica('todas')} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: backlogFEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: backlogFEpica === 'todas' ? '#10233F' : '#fff', color: backlogFEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
+                {activeEpics.map(ep => {
+                  const on = backlogFEpica === ep.id
+                  return (
+                    <button key={ep.id} onClick={() => setBacklogFEpica(on ? 'todas' : ep.id)} title={`Sólo ${ep.name}`}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
+                        border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
+                        background: on ? hexA(ep.color, 0.12) : '#fff',
+                        color: on ? ep.color : 'rgba(20,35,61,0.6)' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color, flexShrink: 0 }} />{ep.name}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
 
             {someSel && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 12px 10px', padding: '9px 12px', borderRadius: 12, background: '#16365F', color: '#fff' }}>
@@ -5422,6 +5488,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
                   <div><div style={eb}>Hacer</div><input type="date" value={t.plan || ''} onChange={e => setTaskPlan(ep, i, e.target.value)} style={{ border: '1px solid rgba(46,90,158,0.35)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} /></div>
                   <div><div style={eb}>Vence</div><input type="date" value={t.due} onChange={e => setTaskDue(ep, i, e.target.value)} style={{ border: `1px solid ${dt.border}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} /></div>
+                  {/* Recordatorio: dispara una notificación a esa hora (con la app abierta) */}
+                  <div>
+                    <div style={eb}>Recordarme 🔔</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setTaskRemind(ep, i, e.target.value)}
+                        style={{ border: '1px solid rgba(122,111,176,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.remindAt ? '#7A6FB0' : 'rgba(20,35,61,0.4)', background: t.remindAt ? 'rgba(122,111,176,0.08)' : '#fff', outline: 'none' }} />
+                      {t.remindAt && <button onClick={() => setTaskRemind(ep, i, '')} title="Quitar recordatorio" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 14 }}>✕</button>}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Subtareas — editables aquí mismo, sin abrir "Editar" */}
