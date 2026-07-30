@@ -30,6 +30,7 @@ export type TareaRow = {
   progress_log: unknown[] | null
   plan_hist?: string[] | null
   remind_at?: string | null
+  comentarios?: unknown[] | null
   updated_at?: string | null
 }
 
@@ -61,6 +62,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.progress_log?.length) t.progressLog = r.progress_log as EpicaTask['progressLog']
   if (r.plan_hist?.length) t.planHist = r.plan_hist as string[]
   if (r.remind_at) t.remindAt = r.remind_at
+  if (r.comentarios?.length) t.comentarios = r.comentarios as EpicaTask['comentarios']
   if (r.updated_at) t.updatedAt = r.updated_at
   return t
 }
@@ -79,6 +81,9 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     // remind_at viaja sólo si la tarea tiene la propiedad (así se puede LIMPIAR con null);
     // el cliente sólo la fija cuando la columna existe (gate remindReady) → seguro sin migrar.
     ...('remindAt' in t ? { remind_at: (t.remindAt || null) } : {}),
+    // comentarios: viaja si la tarea tiene la propiedad (permite vaciar con []); el
+    // cliente sólo la fija cuando la columna existe (gate) → seguro sin migrar.
+    ...('comentarios' in t ? { comentarios: (t.comentarios || []) } : {}),
     id: t.id,
     epica_id: epicaId,
     titulo: t.t || '',

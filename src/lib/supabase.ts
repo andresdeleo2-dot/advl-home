@@ -76,11 +76,13 @@ export type EpicaTask = {
   planStatusPrev?: string              // estado previo a que el plan de HOY lo forzara a "En curso"
   planHist?: string[]                  // días en que estuvo planeada antes de moverla (para el resumen: "se movió a otra semana")
   remindAt?: string                    // ISO datetime: recordatorio (con la app abierta dispara notificación y se limpia)
+  comentarios?: EpicaTaskComment[]     // comentarios rápidos (sin abrir el editor)
   repeat?: EpicaRepeat                 // si existe, al completarla se reprograma en vez de terminarse
   repeatUntil?: string                 // 'YYYY-MM-DD' opcional: fin de la serie
   repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)
 }
 export type EpicaProgressEntry = { d: string; note?: string; pct?: number } // d = 'YYYY-MM-DD', pct = % al final de ese día
+export type EpicaTaskComment = { at: string; text: string }                 // at = ISO datetime
 export type EpicaLink = { l: string; url: string; type: string; primary?: boolean }
 
 export type Epica = {

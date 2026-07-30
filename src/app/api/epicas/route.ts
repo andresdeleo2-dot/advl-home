@@ -47,8 +47,9 @@ export async function GET() {
   // Igual para `orden`: el cliente sólo estampa/manda `orden` cuando la columna existe.
   const ordenReady = tareas.length ? ('orden' in (tareas[0] as object)) : false
   const remindReady = tareas.length ? ('remind_at' in (tareas[0] as object)) : false
+  const comentariosReady = tareas.length ? ('comentarios' in (tareas[0] as object)) : false
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady })
 }
 
 export async function POST(req: Request) {

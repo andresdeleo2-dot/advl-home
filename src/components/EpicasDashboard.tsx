@@ -106,6 +106,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [compact, setCompact] = useState(false)
   const [showRowKpi, setShowRowKpi] = useState(true)
   const [showDone, setShowDone] = useState(false)
+  const [showArchivedEpic, setShowArchivedEpic] = useState(false)   // ver archivadas dentro de la épica
   const [estadoFilter, setEstadoFilter] = useState<'activas' | 'archivadas' | 'todas'>('activas')
   const [catFilter, setCatFilter] = useState<string>('todas')
   const [taskEdit, setTaskEdit] = useState<{ epicId: string; tid: string | null } | null>(null)
@@ -187,6 +188,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
   const subNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
+  const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
   const [movidasOpen, setMovidasOpen] = useState(true)              // seccion "Se movieron / no se cumplieron"
@@ -212,6 +214,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planHistReady = useRef(false)   // true cuando la columna plan_hist existe (tras la migración)
   const ordenReady = useRef(false)       // true si la columna `orden` existe (lo dice el API); mismo patrón que plan_hist
   const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
+  const comentariosReady = useRef(false) // true si la columna comentarios existe
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -234,6 +237,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       planHistReady.current = !!j.planHistReady
       ordenReady.current = !!j.ordenReady
       remindReady.current = !!j.remindReady
+      comentariosReady.current = !!j.comentariosReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -1210,6 +1214,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     patchEpic(e.id, { tasks })
   }
+  // Comentarios rápidos de la tarea (sin abrir el editor). Necesita la columna comentarios.
+  const addComment = (e: Epica, ti: number, text: string) => {
+    const txt = (text || '').trim(); if (!txt) return
+    if (!comentariosReady.current) { showToast('Corre sql/epicas-07-comentarios.sql para usar comentarios', true); return }
+    const tasks = clone(e.tasks)
+    const list = tasks[ti].comentarios || []
+    list.push({ at: new Date().toISOString(), text: txt })
+    tasks[ti].comentarios = list
+    patchEpic(e.id, { tasks })
+  }
+  const removeComment = (e: Epica, ti: number, at: string) => {
+    const tasks = clone(e.tasks)
+    const list = (tasks[ti].comentarios || []).filter(c => c.at !== at)
+    tasks[ti].comentarios = list   // se manda aunque quede vacío (la columna ya existe)
+    patchEpic(e.id, { tasks })
+  }
   const setTaskTitle = (e: Epica, ti: number, v: string) => {
     const t = (v || '').trim(); if (!t) return
     const tasks = clone(e.tasks); tasks[ti].t = t
@@ -1729,6 +1749,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   // Terminadas: por fecha (doneAt o due) desc, agrupadas por mes
   const doneItems = indexed.filter(t => t.status === 'Terminada')
+  const archivedItems = indexed.filter(t => t.status === ARCHIVED)   // tareas archivadas de esta épica
   const doneKey = (t: (typeof indexed)[number]) => {
     const s = t.doneAt || t.due
     if (!s) return -Infinity
@@ -4922,6 +4943,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )}
                 </div>
               )}
+
+              {/* ARCHIVADAS — colapsable: las tareas archivadas de esta épica siguen visibles aquí */}
+              {archivedItems.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <button onClick={() => setShowArchivedEpic(v => !v)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.08)', background: '#fff', borderRadius: 10, padding: '9px 12px', fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: 'rgba(20,35,61,0.55)', textTransform: 'uppercase' }}>
+                    <span style={{ height: 7, width: 7, borderRadius: 99, background: 'rgba(20,35,61,0.4)' }} />
+                    🗄 Archivadas <span style={{ color: 'rgba(20,35,61,0.5)' }}>{archivedItems.length}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: showArchivedEpic ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+                  </button>
+                  {showArchivedEpic && (
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column' }}>
+                      {archivedItems.map(t => renderTaskRow(t))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           )}
@@ -5575,6 +5613,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   </div>
                 )}
+
+                {/* COMENTARIOS — se agregan aquí mismo, sin abrir "Editar" */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Comentarios {(t.comentarios?.length ?? 0) > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}>{t.comentarios!.length}</span>}</div>
+                  {(t.comentarios?.length ?? 0) > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 9 }}>
+                      {[...t.comentarios!].sort((a, b) => b.at.localeCompare(a.at)).map(c => (
+                        <div key={c.at} className="ep-sub-row" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, color: '#14233D', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.text}</div>
+                            <div style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)', marginTop: 3 }}>{new Date(c.at).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+                          </div>
+                          <button className="ep-sub-del" onClick={() => removeComment(ep, i, c.at)} aria-label="Borrar comentario" title="Borrar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7 }}>
+                    <textarea value={newComment} onChange={ev => setNewComment(ev.target.value)}
+                      onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && newComment.trim()) { addComment(ep, i, newComment); setNewComment('') } }}
+                      placeholder="Escribe un comentario… (⌘/Ctrl+Enter para agregar)" rows={2}
+                      style={{ flex: 1, minWidth: 0, resize: 'vertical', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#16365F', background: '#fff', outline: 'none', fontFamily: 'inherit' }} />
+                    <button onClick={() => { if (newComment.trim()) { addComment(ep, i, newComment); setNewComment('') } }} disabled={!newComment.trim()}
+                      style={{ flexShrink: 0, cursor: newComment.trim() ? 'pointer' : 'default', borderRadius: 9, padding: '9px 14px', fontSize: 12.5, fontWeight: 800, border: 'none', background: newComment.trim() ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : 'rgba(15,35,64,0.08)', color: newComment.trim() ? '#1B1305' : 'rgba(20,35,61,0.4)' }}>Comentar</button>
+                  </div>
+                </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
