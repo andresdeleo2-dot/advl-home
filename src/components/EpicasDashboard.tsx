@@ -916,6 +916,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     delete t.plan; delete t.priority; delete t.planOrder; applyPlanStatus(t, '')
   }, 'quitadas del plan')
   const planBulkPrio = (p: Prio) => planBulk(t => { t.priority = p }, `· prioridad ${p}`)
+  const planBulkDif = (d: Dif) => planBulk(t => { t.difficulty = d }, `· dificultad ${difStyle(d).label.toLowerCase()}`)
+  const planBulkProgress = (v: number) => planBulk(t => {
+    if (v > 0) { t.progress = v; upsertProgressPct(t, v) }
+    else { delete t.progress; const log = (t.progressLog || []).filter(x => !(x.d === todayISO() && !x.note)); if (log.length) t.progressLog = log; else delete t.progressLog }
+  }, `· avance ${v}%`)
+  const planBulkStatus = (s: string) => planBulk(t => {
+    if (s === 'Terminada') { if (t.status !== 'Terminada') { t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = todayISO() } }
+    else { t.status = s; delete t.doneAt; delete t.planPrev }
+  }, `· ${taskStyle(s).label.toLowerCase()}`)
+  // Mueve toda la selección a otra épica (una a una, preservando sus campos de plan)
+  const planBulkEpica = (toEId: string) => {
+    const toE = epicsRef.current.find(e => e.id === toEId); if (!toE) return
+    const count = planSel.size
+    const group = planSelGroup()
+    const snaps = snapshot([...group.keys(), toEId])
+    const moving: EpicaTask[] = []
+    group.forEach((idxs, eId) => {
+      if (eId === toEId) return
+      const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
+      const keep = clone(ep.tasks).filter((_, idx) => !idxs.includes(idx))
+      idxs.forEach(i => { if (ep.tasks[i]) moving.push(clone(ep.tasks[i])) })
+      patchEpic(eId, { tasks: keep })
+    })
+    if (moving.length) patchEpic(toEId, { tasks: [...clone(toE.tasks), ...moving] })
+    undoToast(`${count} ${count === 1 ? 'movida' : 'movidas'} a ${toE.name}`, snaps); setPlanSel(new Set())
+  }
 
   /* ─── Tablero: arrastrar tarjetas entre columnas ──────────────
      Pointer events (no HTML5 drag) para que también funcione en táctil.
@@ -3550,6 +3576,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {manual && planFilter === 'todas' && filtered.length > 1 && planSel.size === 0 && (
                       <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}>En orden de arriba hacia abajo · el 01 es por dónde empiezas · arrastra para reordenar.</div>
                     )}
+                    {!table && list.length > 1 && planSel.size === 0 && (
+                      <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)', marginBottom: 6 }}>Selecciona varias con la casilla ☐ (izquierda) para editarlas en lote: mover de día, prioridad, dificultad, avance, épica…</div>
+                    )}
 
                     {/* ACCIONES EN LOTE — aparece al seleccionar filas del enfoque */}
                     {planSel.size > 0 && (() => {
@@ -3576,6 +3605,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           {(['alta', 'media', 'baja'] as Prio[]).map(p => (
                             <button key={p} onClick={() => planBulkPrio(p)} style={btn}>{prioStyle(p).label}</button>
                           ))}
+                          <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
+
+                          <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Dificultad</span>
+                          {(['facil', 'media', 'dificil'] as Dif[]).map(d => (
+                            <button key={d} onClick={() => planBulkDif(d)} style={btn}>{difStyle(d).label}</button>
+                          ))}
+                          <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
+
+                          <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Avance</span>
+                          {[0, 25, 50, 75, 100].map(p => (
+                            <button key={p} onClick={() => planBulkProgress(p)} style={btn}>{p}%</button>
+                          ))}
+                          <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
+
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Épica</span>
+                            <select value="" aria-label="Mover la selección a otra épica" onChange={ev => { if (ev.target.value) planBulkEpica(ev.target.value) }} style={{ ...btn, cursor: 'pointer', colorScheme: 'dark' }}>
+                              <option value="">Mover a…</option>
+                              {activeEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
+                            </select>
+                          </label>
                           <span style={{ width: 1, alignSelf: 'stretch', background: 'rgba(255,255,255,0.16)' }} />
 
                           <button onClick={planBulkDone} style={{ ...btn, border: '1px solid rgba(62,142,142,0.5)', background: 'rgba(62,142,142,0.25)' }}>✓ Terminar</button>
