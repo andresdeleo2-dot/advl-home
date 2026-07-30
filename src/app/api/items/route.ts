@@ -1,17 +1,28 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import type { Item } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const { data, error } = await supabase
-    .from('items')
-    .select('*')
-    .order('section_order', { ascending: true })
-    .order('item_order', { ascending: true })
-
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true, data })
+  // PAGINADO: PostgREST corta en 1000 filas; se recorre con .range() por si el
+  // catálogo crece más allá de 1000 accesos.
+  const data: Item[] = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data: page, error } = await supabase
+      .from('items')
+      .select('*')
+      .order('section_order', { ascending: true })
+      .order('item_order', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    data.push(...((page || []) as Item[]))
+    if (!page || page.length < PAGE) break
+  }
+  // ¿Existe la columna fav_order? El cliente sólo escribe fav_order si es true.
+  const favOrderReady = data.length ? ('fav_order' in (data[0] as object)) : false
+  return NextResponse.json({ ok: true, data, favOrderReady })
 }
 
 export async function POST(req: Request) {

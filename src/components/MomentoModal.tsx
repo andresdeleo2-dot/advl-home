@@ -3,8 +3,9 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   type Vida, TIPO_COLORES, edadEnFecha, añoDe, fotoSrc,
-  diffFechas, formatDiff, sanitizeNota,
+  diffFechas, formatDiff,
 } from '@/lib/vida'
+import { sanitizeHtml } from '@/lib/sanitize'
 
 export type Momento = Vida
 
@@ -79,7 +80,7 @@ export default function MomentoModal({ recuerdo, todos, allRecuerdos, contexto, 
   }, [prev, next, onClose])
 
   const notaHtml = current.nota ? (() => {
-    const clean = sanitizeNota(current.nota!)
+    const clean = sanitizeHtml(current.nota!)   // DOMPurify (quita img onerror, iframe, javascript:)
     return clean.startsWith('<') ? clean : `<p style="font-style:italic">${clean}</p>`
   })() : null
 

@@ -16,12 +16,20 @@ export async function GET() {
 
   // Las tareas viven en su propia tabla; se adjuntan a cada épica para que la UI
   // siga viendo `epica.tasks[]` exactamente como antes.
-  const { data: tareas, error: e2 } = await supabase
-    .from('tareas')
-    .select('*')
-    .order('created_at', { ascending: true })
-
-  if (e2) return NextResponse.json({ ok: false, error: e2.message }, { status: 500 })
+  // PAGINADO: PostgREST corta en 1000 filas por respuesta; se recorre con .range()
+  // para no perder tareas cuando el histórico supera las 1000 (nunca se borran al cerrar).
+  const tareas: TareaRow[] = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data: page, error: e2 } = await supabase
+      .from('tareas')
+      .select('*')
+      .order('created_at', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (e2) return NextResponse.json({ ok: false, error: e2.message }, { status: 500 })
+    tareas.push(...((page || []) as TareaRow[]))
+    if (!page || page.length < PAGE) break
+  }
 
   const byEpic = new Map<string, EpicaTask[]>()
   for (const r of (tareas || []) as TareaRow[]) {
@@ -35,9 +43,11 @@ export async function GET() {
   // ¿Existe ya la columna plan_hist? (select * la incluye como key si existe).
   // El cliente sólo registra el historial de plan cuando es true, para no escribir
   // plan_hist antes de correr la migración y romper el guardado.
-  const planHistReady = (tareas && tareas.length) ? ('plan_hist' in (tareas[0] as object)) : false
+  const planHistReady = tareas.length ? ('plan_hist' in (tareas[0] as object)) : false
+  // Igual para `orden`: el cliente sólo estampa/manda `orden` cuando la columna existe.
+  const ordenReady = tareas.length ? ('orden' in (tareas[0] as object)) : false
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady })
 }
 
 export async function POST(req: Request) {

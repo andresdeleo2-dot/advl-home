@@ -2,11 +2,20 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Protege toda la página y la API con Supabase Auth (mismo patrón que dashboard-finanzas).
-// Si falta NEXT_PUBLIC_SUPABASE_ANON_KEY, no bloquea nada (útil mientras se configura).
 export async function middleware(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !anonKey) return NextResponse.next()
+  if (!url || !anonKey) {
+    // Fail-OPEN sólo en desarrollo (para configurar sin fricción). En PRODUCCIÓN,
+    // fail-CLOSED: una env faltante NUNCA debe dejar /api/* (service key, sin RLS) ni
+    // las páginas abiertas al público. Se bloquea salvo /login.
+    if (process.env.NODE_ENV !== 'production') return NextResponse.next()
+    const { pathname } = request.nextUrl
+    if (pathname.startsWith('/login')) return NextResponse.next()
+    if (pathname.startsWith('/api/')) return NextResponse.json({ ok: false, error: 'auth no configurada' }, { status: 503 })
+    const redirect = request.nextUrl.clone(); redirect.pathname = '/login'
+    return NextResponse.redirect(redirect)
+  }
 
   let supabaseResponse = NextResponse.next({ request })
 

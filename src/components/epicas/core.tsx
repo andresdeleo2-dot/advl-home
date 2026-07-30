@@ -178,6 +178,15 @@ export type Prio = 'alta' | 'media' | 'baja'
 export const PRIO_RANK: Record<Prio, number> = { alta: 0, media: 1, baja: 2 }
 
 export function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1) }
+/** URL segura para un href de link de tarea: bloquea javascript:/data:/vbscript: (XSS),
+ *  deja pasar http(s)/mailto/tel y antepone https:// a un dominio escrito sin protocolo. */
+export function safeUrl(u?: string | null): string {
+  const s = (u || '').trim()
+  if (!s) return '#'
+  if (/^(https?:|mailto:|tel:)/i.test(s)) return s
+  if (/^[\w.-]+\.[a-z]{2,}([/?#]|$)/i.test(s)) return 'https://' + s   // dominio sin protocolo
+  return '#'   // cualquier otro esquema (javascript:, data:, …) → inerte
+}
 /** Color hex (#rgb o #rrggbb) → rgba con la alpha dada. Para tintar con el color de la épica. */
 export function hexA(hex: string, a: number): string {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((hex || '').trim())

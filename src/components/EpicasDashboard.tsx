@@ -81,9 +81,9 @@ import {
   milestoneDone,
   MULTIDIA_TONE,
   todayISO,
-  todayLabel,
   typeColor,
   hexA,
+  safeUrl,
   uid,
   upsertProgressPct,
   weekRangeLabel,
@@ -209,6 +209,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planListRef = useRef<HTMLDivElement>(null)
   const epicsRef = useRef<Epica[]>(epics)
   const planHistReady = useRef(false)   // true cuando la columna plan_hist existe (tras la migración)
+  const ordenReady = useRef(false)       // true si la columna `orden` existe (lo dice el API); mismo patrón que plan_hist
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -229,6 +230,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok || !Array.isArray(j.data)) throw new Error(j.error || 'respuesta inválida')
       planHistReady.current = !!j.planHistReady
+      ordenReady.current = !!j.ordenReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -814,28 +816,47 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     delete tasks[i].doneAt; delete tasks[i].planPrev
     patchEpic(e.id, { tasks })
   }
+  // Keys de las filas REALMENTE visibles (en orden), leídas del DOM: así el reorden
+  // respeta cualquier filtro activo (dayEpica/planFilter) en vez de usar planPend crudo.
+  const visiblePlanKeys = () =>
+    (Array.from(planListRef.current?.querySelectorAll('[data-plan-row]') || []) as HTMLElement[])
+      .map(r => r.getAttribute('data-key') || '').filter(Boolean)
+
   const movePlan = (key: string, dir: 'up' | 'down') => {
-    const list = planPend
-    const idx = list.findIndex(x => planKey(x.e.id, x.t) === key)
-    if (idx < 0) return
-    const swap = dir === 'up' ? idx - 1 : idx + 1
-    if (swap < 0 || swap >= list.length) return
-    const reordered = list.map(x => ({ e: x.e, i: x.i }))
-    ;[reordered[idx], reordered[swap]] = [reordered[swap], reordered[idx]]
-    applyPlanOrder(reordered)
+    const vis = visiblePlanKeys()
+    const vi = vis.indexOf(key)
+    if (vi < 0) return
+    const swapVi = dir === 'up' ? vi - 1 : vi + 1
+    if (swapVi < 0 || swapVi >= vis.length) return
+    const neighbor = vis[swapVi]
+    const full = planPend.map(x => ({ e: x.e, i: x.i, key: planKey(x.e.id, x.t) }))
+    const fi = full.findIndex(x => x.key === key); if (fi < 0) return
+    const without = full.filter((_, idx) => idx !== fi)
+    let insertAt = without.findIndex(x => x.key === neighbor); if (insertAt < 0) return
+    if (dir === 'down') insertAt += 1
+    const reordered = [...without.slice(0, insertAt), full[fi], ...without.slice(insertAt)]
+    applyPlanOrder(reordered.map(x => ({ e: x.e, i: x.i })))
     setRowMenu(null)
   }
   const commitReorder = (key: string, destIndex: number) => {
-    const list = planPend
-    const from = list.findIndex(x => planKey(x.e.id, x.t) === key)
-    if (from < 0) return
-    const base = list.map(x => ({ e: x.e, i: x.i }))
-    const without = base.filter((_, idx) => idx !== from)
-    let insertAt = destIndex > from ? destIndex - 1 : destIndex
-    insertAt = Math.max(0, Math.min(insertAt, without.length))
-    if (insertAt === from) return
-    const reordered = [...without.slice(0, insertAt), base[from], ...without.slice(insertAt)]
-    applyPlanOrder(reordered)
+    const vis = visiblePlanKeys()                    // orden visible (filtrado), del DOM
+    const full = planPend.map(x => ({ e: x.e, i: x.i, key: planKey(x.e.id, x.t) }))
+    const fi = full.findIndex(x => x.key === key); if (fi < 0) return
+    const without = full.filter((_, idx) => idx !== fi)
+    // destIndex está en la escala VISIBLE. Traducirlo al índice real en la lista completa:
+    // insertar la tarea justo antes de la fila visible en destIndex (o tras la última).
+    const anchor = destIndex < vis.length ? vis[destIndex] : null
+    let insertAt: number
+    if (anchor == null) {
+      const lastVis = vis[vis.length - 1]
+      const li = lastVis ? without.findIndex(x => x.key === lastVis) : -1
+      insertAt = li < 0 ? without.length : li + 1
+    } else {
+      insertAt = without.findIndex(x => x.key === anchor)
+      if (insertAt < 0) insertAt = without.length
+    }
+    const reordered = [...without.slice(0, insertAt), full[fi], ...without.slice(insertAt)]
+    applyPlanOrder(reordered.map(x => ({ e: x.e, i: x.i })))
   }
   // Fija el orden mostrado (vista ordenada) como el orden manual del plan
   const commitPlanOrder = (list: { e: Epica; i: number }[]) => {
@@ -1117,9 +1138,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     dragKeyRef.current = null
     setDraggingKey(null); setDropIndex(null); setDragOverDay(null)
     if (day && day !== viewDate) {
-      const [eId, iStr] = key.split(':')
-      const ep = epicsRef.current.find(x => x.id === eId)
-      if (ep) planTaskToDay(ep, Number(iStr), day, { toast: true })
+      // La key es `${eId}:${t.id}` (id = UUID), NO un índice. Resolver por keyToTask.
+      const f = keyToTask(key)
+      if (f) planTaskToDay(f.e, f.i, day, { toast: true })
     } else {
       commitReorder(key, di)
     }
@@ -1324,7 +1345,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const rest = e.tasks.filter(t => !seq.some(s => s.id === t.id))
     const full = [...seq, ...rest]
     const tasks = clone(e.tasks)
-    full.forEach((t, k) => { const idx = tasks.findIndex(x => x.id === t.id); if (idx >= 0) tasks[idx].orden = k * 10 })
+    if (ordenReady.current) full.forEach((t, k) => { const idx = tasks.findIndex(x => x.id === t.id); if (idx >= 0) tasks[idx].orden = k * 10 })
     patchEpic(e.id, { tasks })
   }
   // Drag por manija (pointer events) en el panel de la épica
@@ -1353,7 +1374,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (to < 0 || to >= e.tasks.length) return
     const tasks = clone(e.tasks)
     const [m] = tasks.splice(from, 1); tasks.splice(to, 0, m)
-    tasks.forEach((t, k) => { t.orden = k * 10 })
+    if (ordenReady.current) tasks.forEach((t, k) => { t.orden = k * 10 })
     patchEpic(e.id, { tasks })
   }
 
@@ -1445,8 +1466,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (!t.priority) t.priority = prioFromDue(t.due)
     } else { delete t.plan; delete t.planOrder }   // se despega del plan (conserva priority por si se re-planea)
     if (t.status !== 'Terminada') applyPlanStatus(t, newPlan)   // plan de hoy ⇒ En curso
-    // Subtareas y avance manual editados en el modal
-    const subs = (taskDraft.subtasks || []).map(s => ({ t: (s.t || '').trim(), done: !!s.done })).filter(s => s.t)
+    // Subtareas y avance manual editados en el modal. PRESERVA id/progress/note/links
+    // (antes se aplanaban a {t,done} y se perdían los datos del popup de subtarea).
+    const subs = (taskDraft.subtasks || []).map(s => ({ ...s, t: (s.t || '').trim(), done: !!s.done })).filter(s => s.t)
     if (subs.length) t.subtasks = subs; else delete t.subtasks
     if (typeof taskDraft.progress === 'number' && taskDraft.progress > 0) t.progress = Math.max(0, Math.min(100, taskDraft.progress)); else delete t.progress
     if ((orig.progress ?? 0) !== (t.progress ?? 0)) upsertProgressPct(t, t.progress ?? 0)   // registra el cambio de avance de hoy
@@ -1527,7 +1549,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map((t, idx) => {
       const st = t.status || 'Por hacer'
       // Conserva campos del plan (plan/priority/planOrder/planPrev) que no toca el editor
-      const out: EpicaTask = { ...t, id: t.id || uid(), orden: idx * 10, t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
+      const out: EpicaTask = { ...t, id: t.id || uid(), ...(ordenReady.current ? { orden: idx * 10 } : {}), t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
       if (st === 'Terminada') out.doneAt = t.doneAt || todayISO()
       else delete out.doneAt   // evita arrastrar una fecha de terminación obsoleta
       return out
@@ -1724,7 +1746,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {t.links && t.links.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
               {t.links.map((l, li) => (
-                <a key={li} href={l.url || '#'} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
+                <a key={li} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
               ))}
             </div>
           )}
@@ -1964,7 +1986,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {t.links && t.links.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
               {t.links.map((l, li) => (
-                <a key={li} href={l.url || '#'} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
+                <a key={li} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '2px 8px' }}>🔗 {l.label || l.url}</a>
               ))}
             </div>
           )}
@@ -2798,10 +2820,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED) all.push({ e, t, i }) }))
 
     const committed = all.filter(x => inWeek(x.t.plan))                                   // lo planeado para la semana
-    const completed = all.filter(x => inWeek(x.t.doneAt))                                 // lo cerrado en la semana
+    const doneWithDate = all.filter(x => inWeek(x.t.doneAt))                              // tareas cerradas (con doneAt) esta semana
+    // Ciclos de tareas RECURRENTES cumplidos en la semana: no tienen doneAt (se borra al
+    // reprogramarse), viven en repeatDone. Cada ciclo cuenta como un cierre.
+    const cycles = all.flatMap(x => (x.t.repeat && Array.isArray(x.t.repeatDone))
+      ? x.t.repeatDone.filter(d => d >= mon && d <= sun).map(() => x) : [])
+    const completed = [...doneWithDate, ...cycles]                                        // todo lo cerrado (tareas + ciclos)
     const worked = all.filter(x => (x.t.progressLog || []).some(l => inWeek(l.d)))         // donde hubo avance
     const points = completed.reduce((n, x) => n + taskWeight(x.t), 0)
-    const activeDays = days.filter(d => all.some(x => x.t.doneAt === d || (x.t.progressLog || []).some(l => l.d === d)))
+    const activeDays = days.filter(d => all.some(x => x.t.doneAt === d || (x.t.progressLog || []).some(l => l.d === d) || (x.t.repeatDone || []).includes(d)))
     // "Se están arrastrando": tareas NO terminadas que llevan varios días sin cerrarse
     // y están (o estuvieron) ligadas a esta semana, o venían arrastrándose de antes.
     // Señales de arrastre: trabajada en >1 día, su plan se movió (planHist), o ya venció.
@@ -2822,7 +2849,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Semana pasada (mismo cálculo, corrido 7 días) para comparar tendencia
     const lastMon = addDays(mon, -7), lastSun = addDays(mon, -1)
     const inLast = (d?: string) => !!d && d >= lastMon && d <= lastSun
-    const lastCompleted = all.filter(x => inLast(x.t.doneAt))
+    const lastCycles = all.flatMap(x => (x.t.repeat && Array.isArray(x.t.repeatDone))
+      ? x.t.repeatDone.filter(d => d >= lastMon && d <= lastSun).map(() => x) : [])
+    const lastCompleted = [...all.filter(x => inLast(x.t.doneAt)), ...lastCycles]
     const lastPoints = lastCompleted.reduce((n, x) => n + taskWeight(x.t), 0)
     const delta = (cur: number, prev: number) => {
       if (prev === 0) return { txt: cur > 0 ? `+${cur}` : '=', c: cur > 0 ? '#2E6E6E' : 'rgba(20,35,61,0.45)' }
@@ -3210,19 +3239,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {/* Logros */}
           <div className="glass" style={{ borderRadius: 16, padding: '15px 17px' }}>
             {secTitle('Logros de la semana', completed.length ? 'lo más difícil primero' : undefined)}
-            {completed.length === 0
-              ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Aún no cierras nada esta semana.</div>
-              : [...completed].sort((a, b) => taskWeight(b.t) - taskWeight(a.t)).slice(0, 8).map(x => (
-                <div key={planKey(x.e.id, x.t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: x.t.id! }), `Ver ${x.t.t}`)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
-                  <span style={{ flexShrink: 0, height: 17, width: 17, borderRadius: 99, background: '#2E6E6E', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
-                  </span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
-                  {x.t.difficulty && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 9.5px var(--font-ui)', color: difStyle(x.t.difficulty).c }}><DifDots d={x.t.difficulty} size={9} />{difStyle(x.t.difficulty).label}</span>}
-                  <span style={{ flexShrink: 0, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>{fmtDue(x.t.doneAt!)}</span>
-                </div>
-              ))}
+            {(() => {
+              // Deduplica por tarea (una recurrente puede cerrar varios ciclos en la semana);
+              // la fecha mostrada usa doneAt o el último ciclo cumplido en la semana.
+              const logros = Array.from(new Map(completed.map(x => [planKey(x.e.id, x.t), x])).values())
+              if (logros.length === 0) return <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Aún no cierras nada esta semana.</div>
+              return logros.sort((a, b) => taskWeight(b.t) - taskWeight(a.t)).slice(0, 8).map(x => {
+                const doneD = x.t.doneAt || (x.t.repeatDone || []).filter(d => d >= mon && d <= sun).slice(-1)[0] || ''
+                return (
+                  <div key={planKey(x.e.id, x.t)} {...clickable(() => setTaskView({ eId: x.e.id, tid: x.t.id! }), `Ver ${x.t.t}`)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                    <span style={{ flexShrink: 0, height: 17, width: 17, borderRadius: 99, background: '#2E6E6E', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}{x.t.repeat && <span title="Recurrente" style={{ marginLeft: 6, font: '700 9.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻</span>}</span>
+                    {x.t.difficulty && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 9.5px var(--font-ui)', color: difStyle(x.t.difficulty).c }}><DifDots d={x.t.difficulty} size={9} />{difStyle(x.t.difficulty).label}</span>}
+                    <span style={{ flexShrink: 0, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>{fmtDue(doneD)}</span>
+                  </div>
+                )
+              })
+            })()}
           </div>
 
           {/* En qué trabajaste */}
@@ -5167,18 +5203,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <button aria-label="Cerrar" onClick={() => setSubPop(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
 
-                {/* Avance */}
-                <div style={{ ...eb2, marginBottom: 7 }}>Avance <span style={{ fontWeight: 800, color: '#10233F' }}>{s.progress ?? 0}%</span></div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                  <input type="range" min={0} max={100} step={5} value={s.progress ?? 0} aria-label="Avance de la subtarea"
-                    onChange={ev => patch({ progress: Number(ev.target.value) || undefined })} style={{ flex: 1, height: 6, cursor: 'pointer', accentColor: ep.color }} />
-                  <button onClick={() => patch({ progress: 100, done: true })} style={{ cursor: 'pointer', border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 9, padding: '6px 11px', fontSize: 11.5, fontWeight: 700 }}>100%</button>
-                </div>
+                {/* Avance — commit al soltar (evita red por cada escalón) */}
+                <ProgressSlider value={s.progress ?? 0} color={ep.color} labelStyle={eb2}
+                  onCommit={v => patch({ progress: v || undefined })} onHundred={() => patch({ progress: 100, done: true })} />
 
                 {/* Nota */}
                 <div style={{ ...eb2, marginBottom: 6 }}>Nota</div>
                 <div style={{ marginBottom: 16 }}>
-                  <RichText value={s.note || ''} onChange={v => { if (subNoteTimer.current) clearTimeout(subNoteTimer.current); subNoteTimer.current = setTimeout(() => patch({ note: sanitizeHtml(v) || undefined }), 450) }} placeholder="Nota de la subtarea (negritas, viñetas)…" />
+                  <RichText key={s.id || subPop.sid} value={s.note || ''} onChange={v => { if (subNoteTimer.current) clearTimeout(subNoteTimer.current); subNoteTimer.current = setTimeout(() => patch({ note: sanitizeHtml(v) || undefined }), 450) }} placeholder="Nota de la subtarea (negritas, viñetas)…" />
                 </div>
 
                 {/* Links */}
@@ -5192,7 +5224,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <div key={li} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
                       <input defaultValue={l.label} onBlur={ev => setLink(li, 'label', ev.target.value)} placeholder="Etiqueta" style={{ flex: '0 0 110px', width: 110, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
                       <input defaultValue={l.url} onBlur={ev => setLink(li, 'url', ev.target.value)} placeholder="https://…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
-                      {l.url && <a href={l.url} target="_blank" rel="noreferrer" title="Abrir" style={{ flexShrink: 0, textDecoration: 'none', color: '#A87A2C', fontSize: 14 }}>↗</a>}
+                      {l.url && <a href={safeUrl(l.url)} target="_blank" rel="noreferrer" title="Abrir" style={{ flexShrink: 0, textDecoration: 'none', color: '#A87A2C', fontSize: 14 }}>↗</a>}
                       <button aria-label="Quitar link" onClick={() => patch({ links: links.filter((_, j) => j !== li) })} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)' }}>✕</button>
                     </div>
                   ))}
@@ -5260,7 +5292,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           {links.map((l, li) => {
                             const c = typeColor(l.type)
                             return (
-                              <a key={li} href={l.url} target="_blank" rel="noopener noreferrer"
+                              <a key={li} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer"
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
                                 <span style={{ width: 7, height: 7, borderRadius: 99, background: c, flexShrink: 0 }} />
                                 {l.l}
@@ -5325,15 +5357,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 </div>
 
-                {/* Avance (editable) */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span style={eb}>Avance</span><span style={{ fontSize: 12, fontWeight: 800, color: '#10233F' }}>{t.progress ?? 0}%</span></div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <input type="range" min={0} max={100} step={5} value={t.progress ?? 0} aria-label="Avance de la tarea"
-                      onChange={e => setTaskProgress(ep, i, Number(e.target.value), true)} style={{ flex: 1, height: 6, cursor: 'pointer', accentColor: ep.color }} />
-                    <button onClick={() => setTaskProgress(ep, i, 100)} style={{ cursor: 'pointer', border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 9, padding: '6px 11px', fontSize: 11.5, fontWeight: 700 }}>100%</button>
-                  </div>
-                </div>
+                {/* Avance (editable) — commit al soltar (no re-renderiza en cada escalón) */}
+                <ProgressSlider value={t.progress ?? 0} color={ep.color} labelStyle={eb}
+                  onCommit={v => setTaskProgress(ep, i, v)} onHundred={() => setTaskProgress(ep, i, 100)} />
 
                 {/* Bitácora de avance (días trabajados + nota) */}
                 {(() => {
@@ -5469,7 +5495,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <div style={eb}>Links</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                       {t.links.map((l, li) => (
-                        <a key={li} href={l.url || '#'} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 12px' }}>🔗 {l.label || l.url}</a>
+                        <a key={li} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 12px' }}>🔗 {l.label || l.url}</a>
                       ))}
                     </div>
                   </div>
@@ -5829,12 +5855,43 @@ const goldBtn: CSSProperties = {
   fontFamily: 'inherit', padding: '10px 16px', fontSize: 13,
 }
 
+/* ─── Slider de avance con estado LOCAL: pinta en vivo al arrastrar y sólo hace
+      commit (setEpics + red) al soltar/teclear-fin, para no re-renderizar el
+      dashboard entero en cada escalón. ─────────────────────────────────────── */
+function ProgressSlider({ value, color, onCommit, labelStyle, onHundred }: { value: number; color: string; onCommit: (v: number) => void; labelStyle?: CSSProperties; onHundred?: () => void }) {
+  const [v, setV] = useState(value)
+  useEffect(() => { setV(value) }, [value])
+  const commit = (nv: number) => { if (nv !== value) onCommit(nv) }
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={labelStyle}>Avance</span>
+        <span style={{ fontSize: 12, fontWeight: 800, color: '#10233F' }}>{v}%</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <input type="range" min={0} max={100} step={5} value={v} aria-label="Avance"
+          onChange={e => setV(Number(e.target.value))}
+          onPointerUp={e => commit(Number((e.currentTarget as HTMLInputElement).value))}
+          onKeyUp={e => commit(Number((e.currentTarget as HTMLInputElement).value))}
+          onBlur={e => commit(Number((e.currentTarget as HTMLInputElement).value))}
+          style={{ flex: 1, height: 6, cursor: 'pointer', accentColor: color }} />
+        <button onClick={() => { setV(100); if (onHundred) onHundred(); else commit(100) }} style={{ cursor: 'pointer', border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 9, padding: '6px 11px', fontSize: 11.5, fontWeight: 700 }}>100%</button>
+      </div>
+    </div>
+  )
+}
+
 /* ─── Editor de notas: negritas + viñetas (contenteditable) ─────── */
 function RichText({ value, onChange, placeholder, minHeight = 74 }: { value: string; onChange: (v: string) => void; placeholder?: string; minHeight?: number }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = ref.current
-    if (el && el.innerHTML !== (value || '')) el.innerHTML = value || ''
+    if (!el) return
+    // No reescribir el HTML mientras el usuario está escribiendo aquí: reinyectar
+    // innerHTML mueve el cursor al inicio (salto de caret al teclear/pegar). Sólo se
+    // sincroniza desde `value` cuando el editor NO tiene el foco.
+    if (document.activeElement === el) return
+    if (el.innerHTML !== (value || '')) el.innerHTML = value || ''
   }, [value])
   const exec = (cmd: string) => {
     const el = ref.current; if (!el) return

@@ -28,9 +28,14 @@ export async function POST(req: Request) {
       const dbStamp = new Map((cur || []).map(r => [r.id as string, r.updated_at as string]))
       update = update.filter(t => {
         const db = t.id ? dbStamp.get(t.id) : undefined
-        // Sin base (edición vieja) o sin registro en BD → no bloquea. Con base más
-        // vieja que la BD → otra pestaña ganó: se reporta y no se escribe.
-        if (db && t.updatedAt && new Date(db).getTime() > new Date(t.updatedAt).getTime()) { conflicts.push(t.id!); return false }
+        if (!db) {
+          // No existe en BD. Si el cliente la tenía cargada (updatedAt), fue BORRADA en
+          // otra pestaña → conflicto: NO la resucites con el upsert. Sin base → se permite.
+          if (t.updatedAt) { conflicts.push(t.id!); return false }
+          return true
+        }
+        // Base más vieja que la BD → otra pestaña ganó: se reporta y no se escribe.
+        if (t.updatedAt && new Date(db).getTime() > new Date(t.updatedAt).getTime()) { conflicts.push(t.id!); return false }
         return true
       })
     }
@@ -40,7 +45,10 @@ export async function POST(req: Request) {
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
     if (create.length) {
-      const { error } = await supabase.from('tareas').insert(create.map(t => taskToRow(t, epicaId)))
+      // upsert (no insert plano) para ser IDEMPOTENTE: si el id ya existe (mover tarea
+      // entre épicas con dos patch en carrera, o un reintento tras fallo parcial) no choca
+      // la PK; reasigna epica_id. El .eq('epica_id') del delete evita borrar la ya movida.
+      const { error } = await supabase.from('tareas').upsert(create.map(t => taskToRow(t, epicaId)), { onConflict: 'id' })
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
     if (update.length) {
