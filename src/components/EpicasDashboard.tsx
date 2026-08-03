@@ -2396,10 +2396,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
         })}
         <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
-        <select value={effEpica} onChange={e => setWeekEpica(e.target.value)} disabled={horizonEpics.length === 0} title="Filtrar por épica" style={{ cursor: horizonEpics.length === 0 ? 'default' : 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: effEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', opacity: horizonEpics.length === 0 ? 0.55 : 1 }}>
-          <option value="todas">{horizonEpics.length === 0 ? 'Sin épicas' : 'Todas las épicas'}</option>
-          {horizonEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
-        </select>
+        {renderEpicaChips(horizonEpics, effEpica)}
         <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
           <option value="todas">Toda dificultad</option>
           <option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
@@ -2728,10 +2725,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
       })}
       <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
-      <select value={effEpica} onChange={e => setWeekEpica(e.target.value)} disabled={epicsForFilter.length === 0} title="Filtrar por épica" style={{ cursor: epicsForFilter.length === 0 ? 'default' : 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: effEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', opacity: epicsForFilter.length === 0 ? 0.55 : 1 }}>
-        <option value="todas">{epicsForFilter.length === 0 ? 'Sin épicas' : 'Todas las épicas'}</option>
-        {epicsForFilter.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
-      </select>
+      {renderEpicaChips(epicsForFilter, effEpica)}
       <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
         <option value="todas">Toda dificultad</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
       </select>
@@ -2910,9 +2904,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const days = Array.from({ length: 7 }, (_, k) => addDays(mon, k))
     const inWeek = (d?: string) => !!d && d >= mon && d <= sun
 
+    // Filtro por épica (chips): comparte weekEpica con las demás vistas. Sólo lista las
+    // épicas con actividad en la semana; cascada a 'todas' si la activa no está.
+    const touchesWeek = (t: EpicaTask) => t.status !== ARCHIVED && (inWeek(t.plan) || inWeek(t.doneAt) || (t.progressLog || []).some(l => inWeek(l.d)) || (t.repeatDone || []).some(d => inWeek(d)) || inWeek(t.due) || (t.planHist || []).some(d => inWeek(d)))
+    const resEpics = activeEpics.filter(e => (e.tasks || []).some(touchesWeek))
+    const effResEpica = resEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+
     type R = { e: Epica; t: EpicaTask; i: number }
     const all: R[] = []
-    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED) all.push({ e, t, i }) }))
+    activeEpics.forEach(e => {
+      if (effResEpica !== 'todas' && e.id !== effResEpica) return
+      ;(e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED) all.push({ e, t, i }) })
+    })
 
     const committed = all.filter(x => inWeek(x.t.plan))                                   // lo planeado para la semana
     const doneWithDate = all.filter(x => inWeek(x.t.doneAt))                              // tareas cerradas (con doneAt) esta semana
@@ -3003,6 +3006,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
     return (
       <div style={{ marginTop: 10 }}>
+        {/* Filtro por épica (chips) — como en las demás vistas */}
+        {resEpics.length > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+            <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)', marginRight: 2 }}>Épica</span>
+            {renderEpicaChips(resEpics, effResEpica)}
+          </div>
+        )}
         {/* OBJETIVOS CUMPLIDOS ESTA SEMANA — lo más celebrable de la semana */}
         {(() => {
           const logrados = activeEpics.flatMap(e => (e.kpis || []).filter(m => inWeek(m.doneAt)).map(m => ({ e, m })))
