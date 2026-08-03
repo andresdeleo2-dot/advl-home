@@ -580,10 +580,11 @@ export default function TiempoClient() {
                   <div style={{ display: 'flex', gap: 4, height: 8 }}>
                     {V.energy.map((e, i) => <div key={i} style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>{e.worked && <span style={{ width: 5, height: 5, borderRadius: 999, background: '#6f8256', display: 'block' }} />}</div>)}
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#a49b90', letterSpacing: '.04em' }}>
-                    <span>07</span><span>11</span><span>15</span><span>19</span><span>23</span>
+                  <div style={{ display: 'flex', gap: 4, fontSize: 9.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>
+                    {V.energy.map((_, i) => <span key={i} style={{ flex: 1, textAlign: 'center' }}>{String(7 + i).padStart(2, '0')}</span>)}
                   </div>
                   <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote} <span style={{ color: '#6f8256' }}>● marca las horas en que trabajaste hoy</span></span>
+                  <span style={{ fontSize: 12, color: '#a49b90', lineHeight: 1.45 }}>Es una <b style={{ fontWeight: 600 }}>curva típica</b> del día (mañana alta, bajón post-comida, segunda ventana en la tarde), igual para todos — todavía no aprende de ti.</span>
                 </div>
                 <div style={{ borderTop: '1px solid #eee6da', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
@@ -672,7 +673,7 @@ export default function TiempoClient() {
                       </div>
                     </div>
                     {todayRoutines.length > 0 && (
-                      <Collapsible title="rutinas diarias" count={`${todayRoutines.filter(r => r.done).length}/${todayRoutines.length}`} defaultOpen={false}>
+                      <Collapsible title="rutinas diarias" count={`${todayRoutines.filter(r => r.done).length}/${todayRoutines.length}`} defaultOpen={true}>
                         {todayRoutines.map(r => (
                           <div key={r.epicaId + r.rIdx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px' }}>
                             <button onClick={() => markRoutineDone(r.epicaId, r.rIdx)} title="Marcar hecha hoy" style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (r.done ? '#6f8256' : '#c2b9ab'), background: r.done ? '#6f8256' : 'transparent', cursor: 'pointer', flexShrink: 0 }} />
@@ -686,24 +687,24 @@ export default function TiempoClient() {
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
                     <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
-                    <div onClick={() => { const e = epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea</div>
+                    <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
                   {selMeeting && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}). Al terminar queda en tu día y en el historial.</span>}
 
                   <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-                    <span style={{ fontFamily: SERIF, fontSize: 62, lineHeight: .9 }}>{V.durLabel}</span>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, textAlign: 'right' }}>
+                    <span style={{ fontFamily: SERIF, fontSize: 44, lineHeight: .9 }}>{V.durLabel}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'right' }}>
                       <span style={{ ...LBL, letterSpacing: '.1em' }}>terminarías</span>
-                      <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
+                      <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
                     </div>
                   </div>
                   <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 26, accentColor: '#b4653a' }} />
-                  <div style={{ borderRadius: 22, padding: 22, display: 'flex', flexDirection: 'column', gap: 10, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
+                  <div style={{ borderRadius: 18, padding: 16, display: 'flex', flexDirection: 'column', gap: 7, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
                     <span style={{ ...LBL, color: V.verdictFg }}>{V.verdictKicker}</span>
-                    <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1.2 }}>{V.verdictTitle}</span>
-                    <span style={{ fontSize: 15, lineHeight: 1.55, color: '#4c4741' }}>{V.verdictText}</span>
+                    <span style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.2 }}>{V.verdictTitle}</span>
+                    <span style={{ fontSize: 14, lineHeight: 1.5, color: '#4c4741' }}>{V.verdictText}</span>
                   </div>
                   {V.hitAny && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -784,9 +785,11 @@ export default function TiempoClient() {
                       <select value={b.area} onChange={e => patchBlock(b.id, { area: e.target.value as Area })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, cursor: 'pointer' }}>
                         {areaOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
                       </select>
-                      <input type="time" value={clock(b.start)} onChange={e => patchBlock(b.id, { start: parse(e.target.value) })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
+                      <input type="time" value={clock(b.start)} onChange={e => { const s = parse(e.target.value); const end = b.start + b.dur; let nd = end - s; if (nd < 5) nd += 1440; patchBlock(b.id, { start: s, dur: Math.max(5, nd) }) }} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
+                      <span style={{ color: '#a49b90', fontSize: 13 }}>→</span>
+                      <input type="time" value={clock(b.start + b.dur)} onChange={e => { let end = parse(e.target.value); if (end <= b.start) end += 1440; patchBlock(b.id, { dur: Math.max(5, end - b.start) }) }} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 76, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
+                        <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 72, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
                         <span style={{ fontSize: 14, color: '#a49b90' }}>min</span>
                       </div>
                       <div onClick={() => save({ blocks: data.blocks.filter(x => x.id !== b.id) })} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
@@ -1302,7 +1305,7 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onClose }: {
           {(Object.keys(AREAS) as Area[]).map(k => <option key={k} value={k}>{AREAS[k].label}</option>)}
         </select>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => { const s = parse(e.target.value); setR(p => ({ ...p, start: s })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => { const s = parse(e.target.value); setR(p => { const end = p.start + p.dur; let nd = end - s; if (nd < 1) nd += 1440; return { ...p, start: s, dur: Math.max(1, nd) } }) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>terminó</span><input type="time" value={clock(r.start + r.dur)} onChange={e => { let end = parse(e.target.value); if (end <= r.start) end += 1440; setR(p => ({ ...p, dur: Math.max(1, end - p.start) })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración (min)</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 92 }} /></label>
         </div>
