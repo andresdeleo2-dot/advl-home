@@ -7,8 +7,8 @@ import {
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask, EpicaProgressEntry } from '@/lib/supabase'
-import { taskStyle, fmtDue, safeUrl, uid } from '@/components/epicas/core'
+import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone } from '@/lib/supabase'
+import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
@@ -51,7 +51,7 @@ export default function TiempoClient() {
   const [loaded, setLoaded] = useState(false)
   const [allTasks, setAllTasks] = useState<TodayTask[] | null>(null)   // null = cargando; TODAS las tareas abiertas
   const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
-  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string }[]>([])
+  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
@@ -80,9 +80,9 @@ export default function TiempoClient() {
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setAllTasks([]); return }
       const out: TodayTask[] = []
-      const epList: { id: string; name: string; color: string }[] = []
+      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[] }[] = []
       for (const e of j.data as Epica[]) {
-        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a' })
+        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [] })
         for (const t of e.tasks || []) {
           if (t.status === 'Terminada' || t.status === 'Archivada') continue
           // Guardamos TODAS las abiertas; el día visible se filtra abajo (permite navegar días).
@@ -438,6 +438,17 @@ export default function TiempoClient() {
       }
     }
   }
+  // Vincular una tarea a un objetivo (KPI) de su épica ("Contribuye a"). Escribe a la épica.
+  const linkObjetivo = (epicaId: string, taskId: string, milestoneId: string | null) => {
+    const ep = epicasList.find(e => e.id === epicaId); if (!ep) return
+    const kpis = ep.kpis.map(k => {
+      const ids = (k.taskIds || []).filter(id => id !== taskId)
+      if (k.id === milestoneId) ids.push(taskId)
+      return { ...k, taskIds: ids }
+    })
+    setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, kpis } : e))
+    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kpis }) }).catch(() => {})
+  }
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
   const reorderTasks = (ids: string[]) => {
     const byId = new Map((allTasks || []).map(t => [t.task.id!, t]))
@@ -527,6 +538,19 @@ export default function TiempoClient() {
                         <span style={{ flex: 1 }}>{r.name}</span>
                         <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{r.at}</span>
                         <span style={{ fontWeight: 600, color: r.when === 'en curso' ? '#8a4b28' : '#6b645b', width: 92, textAlign: 'right' }}>{r.when}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {V.todayLog.length > 0 && (
+                  <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <span style={LBL}>lo que hiciste hoy</span>
+                    {V.todayLog.map(l => (
+                      <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                        <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                        <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 72, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                       </div>
                     ))}
                   </div>
@@ -816,7 +840,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onClose={() => setHistIdx(null)} />}
     </div>
   )
@@ -951,6 +975,13 @@ function Tag({ c, bg, children }: { c: string; bg: string; children: React.React
 function Section({ title }: { title: string }) {
   return <span style={{ ...LBL, letterSpacing: '.1em', marginTop: 6 }}>{title}</span>
 }
+function PrioIcon({ p, on }: { p: string; on: boolean }) {
+  const c = on ? PRIO_TONE[p] : '#a49b90'
+  return <span style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 2, height: 14 }}>{[6, 10, 14].map((h, i) => <span key={i} style={{ width: 3, height: h, background: c, borderRadius: 1, display: 'block' }} />)}</span>
+}
+function DiffIcon({ n }: { n: number }) {
+  return <span style={{ display: 'inline-flex', gap: 3, height: 14, alignItems: 'center' }}>{[0, 1, 2].map(i => <span key={i} style={{ width: 6, height: 6, borderRadius: 999, background: i < n ? '#B0522E' : '#d8cfc0', display: 'block' }} />)}</span>
+}
 
 /** Barra de filtros de las tareas de hoy (por épica, prioridad, dificultad, estado). */
 function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void; sortBy: string; setSortBy: (s: 'manual' | 'alfa' | 'prioridad' | 'dificultad') => void }) {
@@ -985,12 +1016,13 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart, onClose }: {
+function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
-  epicas: { id: string; name: string; color: string }[]
+  epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[] }[]
   onSave: (epicaId: string, t: EpicaTask) => void; onDone: (epicaId: string, taskId: string) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
+  onLinkObjetivo: (epicaId: string, taskId: string, milestoneId: string | null) => void
   onClose: () => void
 }) {
   const creating = !!info.creating
@@ -998,10 +1030,25 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
   const [epId, setEpId] = useState(info.epicaId)
   const [startDur, setStartDur] = useState(0)
   const [comment, setComment] = useState('')
+  const [newSub, setNewSub] = useState('')
+  const [bitDate, setBitDate] = useState(iso(new Date()))
+  const [bitNote, setBitNote] = useState('')
   const noteRef = useRef<HTMLDivElement>(null)
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
   const smallBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }
-  const chipS = (on: boolean, c: string): CSSProperties => ({ border: `1px solid ${on ? c : '#e2d9cb'}`, background: on ? c + '22' : 'transparent', color: on ? c : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer', textTransform: 'capitalize' })
+  const boxS = (on: boolean): CSSProperties => ({ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '11px 8px', borderRadius: 12, border: `1px solid ${on ? '#1c1a17' : '#e2d9cb'}`, background: on ? '#f3ece1' : '#faf7f1', cursor: 'pointer', fontSize: 12.5, fontWeight: 500 })
+  const objetivos = (epicas.find(e => e.id === epId)?.kpis) || []
+  const linkedId = objetivos.find(k => (k.taskIds || []).includes(t.id!))?.id || ''
+  const addSubQuick = () => { const v = newSub.trim(); if (!v) return; setT(p => ({ ...p, subtasks: [...(p.subtasks || []), { id: uid(), t: v, done: false }] })); setNewSub('') }
+  const logAdvance = () => {
+    setT(p => {
+      const log = [...(p.progressLog || [])]
+      const i = log.findIndex(e => e.d === bitDate && (e as { min?: number }).min == null)
+      const entry: EpicaProgressEntry = { d: bitDate, pct: p.progress ?? 0, ...(bitNote.trim() ? { note: bitNote.trim() } : {}) }
+      if (i >= 0) log[i] = { ...log[i], ...entry }; else log.push(entry)
+      return { ...p, progressLog: log }
+    }); setBitNote('')
+  }
   const withNote = (): EpicaTask => ({ ...t, note: sanitizeHtml(noteRef.current?.innerHTML ?? t.note ?? '') })
   const invested = (t.progressLog || []).reduce((s, e) => s + ((e as { min?: number }).min || 0), 0)
   const epColor = epicas.find(e => e.id === epId)?.color || info.color
@@ -1024,30 +1071,49 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
 
         <Section title="estado" />
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {TASK_STATUSES.map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => setT({ ...t, status: s })} style={chipS(t.status === s, ts.c)}>{ts.label}</button> })}
+          {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => setT({ ...t, status: s })} style={{ ...boxS(t.status === s), flex: '1 1 84px', color: t.status === s ? ts.c : '#6b645b' }}>{ts.label}</button> })}
         </div>
 
-        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {!creating && objetivos.length > 0 && (<>
+          <Section title="contribuye a" />
+          <select value={linkedId} onChange={e => onLinkObjetivo(epId, t.id!, e.target.value || null)} style={{ ...field, width: '100%' }}>
+            <option value="">— Ningún objetivo —</option>
+            {objetivos.map(o => <option key={o.id} value={o.id}>{o.t}</option>)}
+          </select>
+        </>)}
+
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
             <Section title="prioridad" />
-            <div style={{ display: 'flex', gap: 6 }}>{PRIOS.map(p => <button key={p} onClick={() => setT({ ...t, priority: t.priority === p ? undefined : p })} style={chipS(t.priority === p, PRIO_TONE[p])}>{p}</button>)}</div>
+            <div style={{ display: 'flex', gap: 6 }}>{PRIOS.map(p => <button key={p} onClick={() => setT({ ...t, priority: t.priority === p ? undefined : p })} style={{ ...boxS(t.priority === p), color: t.priority === p ? PRIO_TONE[p] : '#6b645b' }}><PrioIcon p={p} on={t.priority === p} />{cap(p)}</button>)}</div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
             <Section title="dificultad" />
-            <div style={{ display: 'flex', gap: 6 }}>{DIFFS.map(d => <button key={d} onClick={() => setT({ ...t, difficulty: t.difficulty === d ? undefined : d })} style={chipS(t.difficulty === d, '#5B6B86')}>{d}</button>)}</div>
+            <div style={{ display: 'flex', gap: 6 }}>{DIFFS.map((d, di) => <button key={d} onClick={() => setT({ ...t, difficulty: t.difficulty === d ? undefined : d })} style={boxS(t.difficulty === d)}><DiffIcon n={di + 1} />{cap(d)}</button>)}</div>
           </div>
         </div>
-
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="planeada para" /><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={field} /></label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="vence" /><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={field} /></label>
-        </div>
-
-        <Section title="nota" />
-        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 56, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
 
         <Section title={`avance · ${t.progress || 0}%`} />
         <input type="range" min={0} max={100} step={5} value={t.progress || 0} onChange={e => setT({ ...t, progress: Number(e.target.value) })} style={{ width: '100%', accentColor: '#6f8256' }} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ ...LBL, letterSpacing: '.1em' }}>bitácora de avance</span>
+          <span style={{ flex: 1 }} />
+          <input type="date" value={bitDate} onChange={e => setBitDate(e.target.value)} style={{ ...field, padding: '7px 10px' }} />
+          <button onClick={logAdvance} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 999, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Avancé este día</button>
+        </div>
+        <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...field, width: '100%', padding: '8px 10px' }} />
+        {(t.progressLog || []).filter(e => (e as { min?: number }).min == null).slice(-5).reverse().map((e, i) => (
+          <div key={i} style={{ fontSize: 13, color: '#6b645b' }}><span style={{ color: '#a49b90' }}>{e.d}{typeof e.pct === 'number' ? ` · ${e.pct}%` : ''}{e.note ? ' · ' : ''}</span>{e.note}</div>
+        ))}
+
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="hacer (plan)" /><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={field} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="vence" /><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={field} /></label>
+        </div>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="recordarme 🔔" /><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...field, width: '100%' }} /></label>
+
+        <Section title="nota" />
+        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 56, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
 
         {/* Subtareas */}
         <Section title={`subtareas · ${(t.subtasks || []).filter(s => s.done).length}/${(t.subtasks || []).length}`} />
@@ -1058,7 +1124,10 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
             <button onClick={() => setSubs(a => a.filter((_, j) => j !== i))} style={{ ...smallBtn, padding: '6px 10px' }}>×</button>
           </div>
         ))}
-        <button onClick={() => setSubs(a => [...a, { id: uid(), t: '', done: false }])} style={{ ...smallBtn, alignSelf: 'flex-start' }}>+ subtarea</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px dashed #c2b9ab', flexShrink: 0 }} />
+          <input value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addSubQuick() }} placeholder="Agregar subtarea y Enter…" style={{ ...field, flex: 1, padding: '7px 10px' }} />
+        </div>
 
         {/* Links */}
         <Section title="links" />
