@@ -4,11 +4,28 @@
 
 export type Area = 'trabajo' | 'cuerpo' | 'ocio' | 'personas' | 'cierre' | 'sueno'
 
-export type Block = { id: string; name: string; area: Area; start: number; dur: number }
+/** Bloque protegido. `days` = 7 booleanos indexados por getDay() (0=Dom…6=Sáb);
+ *  ausente = aplica TODOS los días. */
+export type Block = { id: string; name: string; area: Area; start: number; dur: number; days?: boolean[] }
 /** Sesión en curso. Si viene de una tarea de Épicas, guarda epicaId/taskId para
  *  marcarla como Terminada al cerrar el bloque. */
 export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string } | null
-export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number }
+export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string }
+
+/** Chips de día en el orden L M X J V S D con su índice getDay(). */
+export const DOW_CHIPS: { lbl: string; i: number }[] = [
+  { lbl: 'L', i: 1 }, { lbl: 'M', i: 2 }, { lbl: 'X', i: 3 }, { lbl: 'J', i: 4 }, { lbl: 'V', i: 5 }, { lbl: 'S', i: 6 }, { lbl: 'D', i: 0 },
+]
+/** ¿el bloque aplica el día `dow` (0=Dom…6=Sáb)? Sin `days` = todos los días. */
+export const blockActiveOn = (b: Block, dow: number) => !b.days || b.days.length !== 7 || b.days[dow]
+export function daysLabel(days?: boolean[]): string {
+  if (!days || days.every(Boolean)) return 'todos los días'
+  const on = DOW_CHIPS.filter(c => days[c.i])
+  if (on.length === 5 && [1, 2, 3, 4, 5].every(i => days[i])) return 'entre semana'
+  if (on.length === 2 && days[6] && days[0]) return 'fines de semana'
+  if (on.length === 0) return 'ningún día'
+  return on.map(c => c.lbl).join(' ')
+}
 
 export type AppData = {
   blocks: Block[]

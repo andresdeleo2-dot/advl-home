@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import SiteHeader from '@/components/SiteHeader'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
+  DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaProgressEntry } from '@/lib/supabase'
@@ -42,6 +43,7 @@ export default function TiempoClient() {
   const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean } | null>(null)
   const [histIdx, setHistIdx] = useState<number | null>(null)
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
+  const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = tasks || [] }, [tasks])
@@ -104,14 +106,20 @@ export default function TiempoClient() {
   }, [tasks])
   const filteredTasks = useMemo(() => {
     if (tasks === null) return null
-    return tasks.filter(t => {
+    const arr = tasks.filter(t => {
       if (filters.epica && t.epicaId !== filters.epica) return false
       if (filters.prio.size && !filters.prio.has(t.task.priority || '')) return false
       if (filters.diff.size && !filters.diff.has(t.task.difficulty || '')) return false
       if (filters.estado.size && !filters.estado.has(t.task.status || '')) return false
       return true
     })
-  }, [tasks, filters])
+    const PR: Record<string, number> = { alta: 0, media: 1, baja: 2 }
+    const DF: Record<string, number> = { facil: 0, media: 1, dificil: 2 }
+    if (sortBy === 'alfa') arr.sort((a, b) => (a.task.t || '').localeCompare(b.task.t || '', 'es'))
+    else if (sortBy === 'prioridad') arr.sort((a, b) => (PR[a.task.priority || ''] ?? 9) - (PR[b.task.priority || ''] ?? 9))
+    else if (sortBy === 'dificultad') arr.sort((a, b) => (DF[a.task.difficulty || ''] ?? 9) - (DF[b.task.difficulty || ''] ?? 9))
+    return arr
+  }, [tasks, filters, sortBy])
 
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
@@ -120,14 +128,23 @@ export default function TiempoClient() {
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
     save({ blocks: data.blocks.map(b => b.id === id ? { ...b, ...patch } : b) })
+  const toggleDay = (id: string, i: number) => {
+    const b = data.blocks.find(x => x.id === id); if (!b) return
+    const days = (b.days && b.days.length === 7) ? [...b.days] : [true, true, true, true, true, true, true]
+    days[i] = !days[i]; patchBlock(id, { days })
+  }
+  const daysPreset = (id: string, p: 'all' | 'week' | 'weekend') =>
+    patchBlock(id, { days: p === 'all' ? [true, true, true, true, true, true, true] : p === 'week' ? [false, true, true, true, true, true, false] : [true, false, false, false, false, false, true] })
 
   /* ── Cálculo (portado de renderVals, tono "cuidadora") ─────────────────── */
   const V = useMemo(() => {
     const caring = true
     const bed = data.bed, sleepGoal = data.sleep, session = data.session
-    // Bloques protegidos (editables) + reuniones del calendario (fijas, no editables).
+    // Sólo los bloques protegidos que aplican HOY (según sus días) + reuniones del calendario.
+    const dow = new Date().getDay()
+    const todayBlocks = data.blocks.filter(b => blockActiveOn(b, dow))
     const meetingBlocks = meetings.map(m => ({ id: 'cal:' + m.id, name: m.name, area: 'personas' as Area, start: m.start, dur: m.dur, cal: true }))
-    const blocks = data.blocks.concat(meetingBlocks).sort((a, b) => a.start - b.start)
+    const blocks = todayBlocks.concat(meetingBlocks).sort((a, b) => a.start - b.start)
     const sleepBlock = { id: '__sleep', name: 'Dormir', area: 'sueno' as Area, start: bed, dur: sleepGoal }
     const timeline = blocks.concat([sleepBlock])
 
@@ -262,6 +279,17 @@ export default function TiempoClient() {
       : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
       : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.'
 
+    // Cuánto falta para cada bloque de la rutina de hoy (tarjeta de tiempo útil).
+    const routineNext = todayBlocks.slice().sort((a, b) => a.start - b.start).filter(b => b.start + b.dur > now).map(b => ({
+      name: b.name, dot: AREAS[b.area]?.color || '#8b8379',
+      when: b.start > now ? 'en ' + hm(b.start - now) : 'en curso', at: clock(b.start),
+    }))
+
+    // Totales de TODO lo trabajado, agrupado por actividad (para el Historial).
+    const totalsMap: Record<string, { min: number; n: number; area: Area }> = {}
+    for (const h of data.history) totalsMap[h.name] = { min: (totalsMap[h.name]?.min || 0) + h.dur, n: (totalsMap[h.name]?.n || 0) + 1, area: h.area }
+    const allTotals = Object.entries(totalsMap).map(([name, v]) => ({ name, mins: v.min, label: hm(v.min), n: v.n, dot: AREAS[v.area]?.color || '#8b8379' })).sort((a, b) => b.mins - a.mins)
+
     return {
       nowLabel: clock(now),
       dateLabel: new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }),
@@ -285,6 +313,7 @@ export default function TiempoClient() {
       hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
       segs, upcoming, scaleEndLabel: clock(scaleEnd),
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
+      routineNext, allTotals,
       weekTotalLabel: hm(weekTotal), areaStats, days,
       streakLabel: streak > 0 ? streak + (streak === 1 ? ' día seguido con la rutina protegida' : ' días seguidos con la rutina protegida') : 'Aún sin racha esta semana',
       streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
@@ -321,6 +350,24 @@ export default function TiempoClient() {
     save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) }); setHistIdx(null)
   }
   const delHist = (idx: number) => { save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null) }
+  // "No estaba terminada": quita el registro y, si venía de una tarea, la REABRE en Épicas.
+  const reopenTask = (idx: number) => {
+    const row = data.history[idx]; if (!row) return
+    delHist(idx)
+    if (row.taskId && row.epicaId) {
+      const tt = tasksRef.current.find(x => x.task.id === row.taskId)
+      const base: EpicaTask = tt?.task || { id: row.taskId, t: row.name, status: 'Por hacer', due: '', note: '', links: [] }
+      const upd: EpicaTask = { ...base, status: 'En curso', doneAt: undefined, plan: iso(new Date()) }
+      syncTask(row.epicaId, upd)
+      const ep = epicasList.find(e => e.id === row.epicaId)
+      setTasks(prev => {
+        const list = prev || []
+        return list.some(x => x.task.id === row.taskId)
+          ? list.map(x => x.task.id === row.taskId ? { ...x, task: upd } : x)
+          : [...list, { epicaId: row.epicaId!, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task: upd }]
+      })
+    }
+  }
 
   // Crea la reunión como tarea de HOY en la épica elegida.
   const meetingToEpica = (m: Meeting, epicaId: string) => {
@@ -344,7 +391,7 @@ export default function TiempoClient() {
     const s = data.session; if (!s) return
     const elapsed = Math.max(1, Math.round(now - s.start))
     const today = iso(new Date())
-    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed }]) })
+    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
@@ -423,6 +470,19 @@ export default function TiempoClient() {
                   <Row label="Hora de dormir" value={V.bedLabel} />
                   <Row label="Trabajo registrado hoy" value={V.workedTodayLabel} />
                 </div>
+                {V.routineNext.length > 0 && (
+                  <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <span style={LBL}>cuánto falta para tu rutina</span>
+                    {V.routineNext.map((r, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: r.dot, display: 'block' }} />
+                        <span style={{ flex: 1 }}>{r.name}</span>
+                        <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{r.at}</span>
+                        <span style={{ fontWeight: 600, color: r.when === 'en curso' ? '#8a4b28' : '#6b645b', width: 92, textAlign: 'right' }}>{r.when}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Tarjeta B — sesión o simulador */}
@@ -462,7 +522,7 @@ export default function TiempoClient() {
                   </div>
 
                   {act === 'Trabajo profundo' && <>
-                    <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} />
+                    <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
                     <TaskPicker tasks={filteredTasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: iso(new Date()), links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea</div>
                   </>}
@@ -550,18 +610,29 @@ export default function TiempoClient() {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {data.blocks.slice().sort((a, b) => a.start - b.start).map(b => (
-                  <div key={b.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: '#f5efe4', border: '1px solid #ebe3d6', borderRadius: 18, padding: '14px 16px' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 999, background: AREAS[b.area]?.color || '#8b8379', display: 'block' }} />
-                    <input type="text" value={b.name} onChange={e => patchBlock(b.id, { name: e.target.value })} style={{ flex: 1, minWidth: 160, background: 'transparent', border: 'none', borderBottom: '1px solid transparent', padding: '6px 0', fontSize: 16 }} />
-                    <select value={b.area} onChange={e => patchBlock(b.id, { area: e.target.value as Area })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, cursor: 'pointer' }}>
-                      {areaOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-                    </select>
-                    <input type="time" value={clock(b.start)} onChange={e => patchBlock(b.id, { start: parse(e.target.value) })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 76, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
-                      <span style={{ fontSize: 14, color: '#a49b90' }}>min</span>
+                  <div key={b.id} style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#f5efe4', border: '1px solid #ebe3d6', borderRadius: 18, padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: AREAS[b.area]?.color || '#8b8379', display: 'block' }} />
+                      <input type="text" value={b.name} onChange={e => patchBlock(b.id, { name: e.target.value })} style={{ flex: 1, minWidth: 160, background: 'transparent', border: 'none', borderBottom: '1px solid transparent', padding: '6px 0', fontSize: 16 }} />
+                      <select value={b.area} onChange={e => patchBlock(b.id, { area: e.target.value as Area })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, cursor: 'pointer' }}>
+                        {areaOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                      </select>
+                      <input type="time" value={clock(b.start)} onChange={e => patchBlock(b.id, { start: parse(e.target.value) })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 76, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
+                        <span style={{ fontSize: 14, color: '#a49b90' }}>min</span>
+                      </div>
+                      <div onClick={() => save({ blocks: data.blocks.filter(x => x.id !== b.id) })} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
                     </div>
-                    <div onClick={() => save({ blocks: data.blocks.filter(x => x.id !== b.id) })} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {DOW_CHIPS.map(c => { const on = !b.days || b.days[c.i]; return (
+                        <button key={c.i} onClick={() => toggleDay(b.id, c.i)} title={daysLabel(b.days)} style={{ width: 30, height: 30, borderRadius: 999, border: `1px solid ${on ? '#b4653a' : '#e2d9cb'}`, background: on ? '#b4653a' : 'transparent', color: on ? '#faf7f1' : '#a49b90', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>{c.lbl}</button>
+                      ) })}
+                      <span style={{ width: 1, height: 18, background: '#e2d9cb', margin: '0 2px' }} />
+                      <button onClick={() => daysPreset(b.id, 'week')} style={{ border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 999, padding: '5px 11px', fontSize: 12, color: '#6b645b', cursor: 'pointer' }}>Entre semana</button>
+                      <button onClick={() => daysPreset(b.id, 'all')} style={{ border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 999, padding: '5px 11px', fontSize: 12, color: '#6b645b', cursor: 'pointer' }}>Todos</button>
+                      <span style={{ fontSize: 12.5, color: '#a49b90', marginLeft: 'auto' }}>{daysLabel(b.days)}</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -640,12 +711,31 @@ export default function TiempoClient() {
                 {V.logEmpty && <span style={{ fontSize: 14, color: '#a49b90', lineHeight: 1.5 }}>{V.logEmpty}</span>}
               </div>
             </div>
+
+            {V.allTotals.length > 0 && (
+              <div style={card(20)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>En qué has trabajado</span>
+                  <span style={{ fontSize: 12.5, color: '#a49b90' }}>todo lo registrado, por actividad</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {V.allTotals.map((a, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: '1px solid #eee6da' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: a.dot, display: 'block' }} />
+                      <span style={{ fontSize: 15, flex: 1 }}>{a.name}</span>
+                      <span style={{ fontSize: 12.5, color: '#a49b90' }}>{a.n}×</span>
+                      <span style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onClose={() => setEditTask(null)} />}
-      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onClose={() => setHistIdx(null)} />}
+      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onClose={() => setHistIdx(null)} />}
     </div>
   )
 }
@@ -746,7 +836,7 @@ function Section({ title }: { title: string }) {
 }
 
 /** Barra de filtros de las tareas de hoy (por épica, prioridad, dificultad, estado). */
-function FilterBar({ epicas, filters, setFilters }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void }) {
+function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void; sortBy: string; setSortBy: (s: 'manual' | 'alfa' | 'prioridad' | 'dificultad') => void }) {
   const toggle = (dim: 'prio' | 'diff' | 'estado', val: string) => setFilters(f => { const s = new Set(f[dim]); s.has(val) ? s.delete(val) : s.add(val); return { ...f, [dim]: s } })
   const chip = (on: boolean, c: string) => ({ border: `1px solid ${on ? c : '#e2d9cb'}`, background: on ? c + '20' : 'transparent', color: on ? c : '#6b645b', borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', textTransform: 'capitalize' as const })
   const any = filters.epica || filters.prio.size || filters.diff.size || filters.estado.size
@@ -763,7 +853,15 @@ function FilterBar({ epicas, filters, setFilters }: { epicas: { id: string; name
         {DIFFS.map(d => <button key={d} onClick={() => toggle('diff', d)} style={chip(filters.diff.has(d), '#5B6B86')}>{d}</button>)}
         <span style={{ width: 1, height: 16, background: '#e2d9cb' }} />
         {TASK_STATUSES.map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => toggle('estado', s)} style={chip(filters.estado.has(s), ts.c)}>{s}</button> })}
-        {any && <button onClick={() => setFilters(() => ({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() }))} style={{ border: 'none', background: 'transparent', color: '#a49b90', fontSize: 12, cursor: 'pointer', marginLeft: 'auto' }}>limpiar</button>}
+        {any && <button onClick={() => setFilters(() => ({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() }))} style={{ border: 'none', background: 'transparent', color: '#a49b90', fontSize: 12, cursor: 'pointer' }}>limpiar</button>}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', fontSize: 12, color: '#a49b90' }}>orden
+          <select value={sortBy} onChange={e => setSortBy(e.target.value as 'manual' | 'alfa' | 'prioridad' | 'dificultad')} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 10px', fontSize: 12, color: '#6b645b', cursor: 'pointer' }}>
+            <option value="manual">Manual</option>
+            <option value="alfa">A–Z</option>
+            <option value="prioridad">Prioridad</option>
+            <option value="dificultad">Dificultad</option>
+          </select>
+        </label>
       </div>
     </div>
   )
@@ -901,9 +999,9 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
 }
 
 /** Editor de una entrada del registro de hoy (localStorage). */
-function HistoryEditor({ row, idx, onSave, onDelete, onClose }: {
+function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onClose }: {
   row: AppData['history'][number]; idx: number
-  onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onClose: () => void
+  onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onReopen: (idx: number) => void; onClose: () => void
 }) {
   const [r, setR] = useState(row)
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
@@ -922,10 +1020,11 @@ function HistoryEditor({ row, idx, onSave, onDelete, onClose }: {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => setR({ ...r, start: parse(e.target.value) })} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración (min)</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 100 }} /></label>
         </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-          <button onClick={() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur })} style={{ flex: 1, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+        <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
+          <button onClick={() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur })} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
         </div>
+        {row.taskId && <button onClick={() => onReopen(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, cursor: 'pointer' }}>No estaba terminada · reabrir la tarea en Épicas</button>}
       </div>
     </div>
   )
