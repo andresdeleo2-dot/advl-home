@@ -6,8 +6,8 @@ import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   type AppData, type Area,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask } from '@/lib/supabase'
-import { taskStyle, fmtDue, safeUrl } from '@/components/epicas/core'
+import type { Epica, EpicaTask, EpicaProgressEntry } from '@/lib/supabase'
+import { taskStyle, fmtDue, safeUrl, uid } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
@@ -39,7 +39,7 @@ export default function TiempoClient() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
-  const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask } | null>(null)
+  const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean } | null>(null)
   const [histIdx, setHistIdx] = useState<number | null>(null)
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -271,13 +271,15 @@ export default function TiempoClient() {
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
       workedTodayLabel: workedToday ? hm(workedToday) : '—',
       energy: eBars, energyNote,
-      hasSession: !!session, sessionName: session ? session.name : '',
+      hasSession: !!session, sessionOpen: !!session && !planned, sessionName: session ? session.name : '',
       sessionStartLabel: session ? clock(session.start) : '',
       sessionElapsedLabel: session ? hm(elapsed) : '',
-      sessionPct: session ? Math.min(100, (elapsed / Math.max(1, planned)) * 100) : 0,
-      sessionNote: session ? (elapsed >= planned
-        ? 'Ya pasaste los ' + hm(planned) + ' que planeaste. Cada minuto extra sale de lo que viene.'
-        : 'Quedan ' + hm(planned - elapsed) + '. Terminarías a las ' + clock(sEnd) + '.') : '',
+      sessionPct: session && planned ? Math.min(100, (elapsed / planned) * 100) : 0,
+      sessionNote: session ? (!planned
+        ? 'Llevas ' + hm(elapsed) + '. Termina cuando quieras.'
+        : elapsed >= planned
+          ? 'Ya pasaste los ' + hm(planned) + ' que planeaste. Cada minuto extra sale de lo que viene.'
+          : 'Quedan ' + hm(planned - elapsed) + '. Terminarías a las ' + clock(sEnd) + '.') : '',
       durLabel: hm(dur), endLabel: clock(simEnd),
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
@@ -336,10 +338,36 @@ export default function TiempoClient() {
     setTasks(prev => (prev || []).filter(x => x.task.id !== taskId))
     setSelTaskId(id => id === taskId ? null : id)
   }
-  const finish = () => {
+  // Cierra el bloque en curso: lo registra en el día y, si es una tarea de Épicas,
+  // le SUMA el tiempo invertido (entra a la bitácora de avances). markDone la cierra.
+  const finish = (markDone = false) => {
     const s = data.session; if (!s) return
-    save({ session: null, history: data.history.concat([{ date: iso(new Date()), name: s.name, area: s.area, start: Math.round(s.start), dur: Math.max(1, Math.round(now - s.start)) }]) })
-    if (s.taskId && s.epicaId) markEpicTaskDone(s.epicaId, s.taskId)
+    const elapsed = Math.max(1, Math.round(now - s.start))
+    const today = iso(new Date())
+    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed }]) })
+    if (s.taskId && s.epicaId) {
+      const tt = tasksRef.current.find(x => x.task.id === s.taskId)
+      if (tt) {
+        const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed } as EpicaProgressEntry]
+        const upd: EpicaTask = { ...tt.task, progressLog: log, ...(markDone ? { status: 'Terminada', doneAt: today } : {}) }
+        syncTask(s.epicaId, upd)
+        setTasks(prev => markDone ? (prev || []).filter(x => x.task.id !== s.taskId) : (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
+        if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
+      }
+    }
+  }
+  // Comenzar una tarea desde su detalle. dur = 0 → contador libre (hasta que pares).
+  const startTask = (info: { epicaId: string; task: EpicaTask }, d: number) => {
+    save({ session: { name: info.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: d, epicaId: info.epicaId, taskId: info.task.id } })
+    setEditTask(null); setView('hoy')
+  }
+  // Crear una tarea nueva en la épica elegida (mismos campos que Épicas).
+  const createTask = (epicaId: string, task: EpicaTask) => {
+    if (!epicaId) return
+    const ep = epicasList.find(e => e.id === epicaId)
+    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [task] }) }).catch(() => {})
+    if (task.plan === iso(new Date())) setTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task }])
+    setEditTask(null)
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
@@ -409,13 +437,16 @@ export default function TiempoClient() {
                     <span style={{ fontFamily: SERIF, fontSize: 68, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
                     <span style={{ fontSize: 15, color: '#cdc4b8', lineHeight: 1.5 }}>{V.sessionNote}</span>
                   </div>
-                  <div style={{ height: 6, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
-                    <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
-                  </div>
+                  {!V.sessionOpen && (
+                    <div style={{ height: 6, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
+                      <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <div onClick={finish} style={{ flex: 1, minWidth: 150, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: 16, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Terminar ahora</div>
-                    <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 22px', fontSize: 15, cursor: 'pointer' }}>+15m</div>
-                    <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 22px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
+                    <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 130, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: 16, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
+                    {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 18px', fontSize: 15, cursor: 'pointer' }}>Terminar y marcar hecha</div>}
+                    {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, cursor: 'pointer' }}>+15m</div>}
+                    <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
                   </div>
                 </div>
               ) : (
@@ -433,6 +464,7 @@ export default function TiempoClient() {
                   {act === 'Trabajo profundo' && <>
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} />
                     <TaskPicker tasks={filteredTasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <div onClick={() => { const e = epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: iso(new Date()), links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
@@ -487,6 +519,15 @@ export default function TiempoClient() {
                 <Legend c="#eee6da">libre</Legend>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {V.todayLog.map(l => (
+                  <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
+                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
+                    <span style={{ fontSize: 16, flex: 1, color: '#6b645b' }}>{l.name}</span>
+                    <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 120, textAlign: 'right' }}>hecho ✓</span>
+                  </div>
+                ))}
                 {V.upcoming.map((b, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
@@ -498,23 +539,6 @@ export default function TiempoClient() {
                 ))}
               </div>
             </div>
-
-            {V.todayLog.length > 0 && (
-              <div style={card(16)}>
-                <span style={LBL}>lo que llevas hoy</span>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {V.todayLog.map((l, i) => (
-                    <div key={i} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
-                      <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
-                      <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
-                      <span style={{ fontSize: 16, flex: 1 }}>{l.name}</span>
-                      <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
-                      <span style={{ fontSize: 12, color: '#c2b9ab' }}>editar</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         ) : view === 'rutina' ? (
           /* ── MI RUTINA ────────────────────────────────────────────── */
@@ -620,7 +644,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onClose={() => setHistIdx(null)} />}
     </div>
   )
@@ -717,6 +741,9 @@ function MeetingsList({ meetings, selId, onPick, epicas, onAddEpica }: { meeting
 function Tag({ c, bg, children }: { c: string; bg: string; children: React.ReactNode }) {
   return <span style={{ fontSize: 11, fontWeight: 600, color: c, background: bg, borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>{children}</span>
 }
+function Section({ title }: { title: string }) {
+  return <span style={{ ...LBL, letterSpacing: '.1em', marginTop: 6 }}>{title}</span>
+}
 
 /** Barra de filtros de las tareas de hoy (por épica, prioridad, dificultad, estado). */
 function FilterBar({ epicas, filters, setFilters }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void }) {
@@ -743,29 +770,42 @@ function FilterBar({ epicas, filters, setFilters }: { epicas: { id: string; name
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, onSave, onDone, onUnplan, onClose }: {
-  info: { epicaId: string; epicaName: string; color: string; task: EpicaTask }
+function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart, onClose }: {
+  info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
+  epicas: { id: string; name: string; color: string }[]
   onSave: (epicaId: string, t: EpicaTask) => void; onDone: (epicaId: string, taskId: string) => void
-  onUnplan: (epicaId: string, t: EpicaTask) => void; onClose: () => void
+  onUnplan: (epicaId: string, t: EpicaTask) => void
+  onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
+  onClose: () => void
 }) {
-  const { epicaId, epicaName, color } = info
+  const creating = !!info.creating
   const [t, setT] = useState<EpicaTask>(info.task)
+  const [epId, setEpId] = useState(info.epicaId)
+  const [startDur, setStartDur] = useState(0)
+  const [comment, setComment] = useState('')
   const noteRef = useRef<HTMLDivElement>(null)
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
+  const smallBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }
   const chipS = (on: boolean, c: string): CSSProperties => ({ border: `1px solid ${on ? c : '#e2d9cb'}`, background: on ? c + '22' : 'transparent', color: on ? c : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer', textTransform: 'capitalize' })
-  const commit = () => { const note = sanitizeHtml(noteRef.current?.innerHTML || t.note || ''); onSave(epicaId, { ...t, note }) }
-  const epLink = `/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epicaId}`
-  const Section = ({ title }: { title: string }) => <span style={{ ...LBL, letterSpacing: '.1em', marginTop: 6 }}>{title}</span>
+  const withNote = (): EpicaTask => ({ ...t, note: sanitizeHtml(noteRef.current?.innerHTML ?? t.note ?? '') })
+  const invested = (t.progressLog || []).reduce((s, e) => s + ((e as { min?: number }).min || 0), 0)
+  const epColor = epicas.find(e => e.id === epId)?.color || info.color
+
+  const setSubs = (fn: (a: NonNullable<EpicaTask['subtasks']>) => NonNullable<EpicaTask['subtasks']>) => setT(p => ({ ...p, subtasks: fn(p.subtasks || []) }))
+  const setLinks = (fn: (a: NonNullable<EpicaTask['links']>) => NonNullable<EpicaTask['links']>) => setT(p => ({ ...p, links: fn(p.links || []) }))
+  const addComment = () => { if (!comment.trim()) return; setT(p => ({ ...p, comentarios: [...(p.comentarios || []), { at: new Date().toISOString(), text: comment.trim() }] })); setComment('') }
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,100%)', maxHeight: '88vh', overflowY: 'auto', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,100%)', maxHeight: '90vh', overflowY: 'auto', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: color, display: 'block' }} /><span style={{ fontSize: 13, color: '#6b645b' }}>{epicaName}</span></span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: epColor, display: 'block' }} /><span style={{ fontSize: 13, color: '#6b645b' }}>{creating ? 'Nueva tarea' : info.epicaName}</span></span>
           <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
 
-        <input autoFocus value={t.t} onChange={e => setT({ ...t, t: e.target.value })} style={{ ...field, width: '100%', fontSize: 17 }} />
+        {creating && (<><Section title="épica" /><select value={epId} onChange={e => setEpId(e.target.value)} style={{ ...field, width: '100%' }}>{epicas.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></>)}
+
+        <input autoFocus value={t.t} placeholder="¿Qué hay que hacer?" onChange={e => setT({ ...t, t: e.target.value })} style={{ ...field, width: '100%', fontSize: 17 }} />
 
         <Section title="estado" />
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -789,50 +829,72 @@ function TaskDetail({ info, onSave, onDone, onUnplan, onClose }: {
         </div>
 
         <Section title="nota" />
-        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 60, lineHeight: 1.55, width: '100%' }} />
+        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 56, lineHeight: 1.55, width: '100%' }} />
 
-        {typeof t.progress === 'number' && t.progress > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Section title={`avance · ${t.progress}%`} />
-            <div style={{ height: 8, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${t.progress}%`, height: '100%', background: '#6f8256' }} /></div>
+        <Section title={`avance · ${t.progress || 0}%`} />
+        <input type="range" min={0} max={100} step={5} value={t.progress || 0} onChange={e => setT({ ...t, progress: Number(e.target.value) })} style={{ width: '100%', accentColor: '#6f8256' }} />
+
+        {/* Subtareas */}
+        <Section title={`subtareas · ${(t.subtasks || []).filter(s => s.done).length}/${(t.subtasks || []).length}`} />
+        {(t.subtasks || []).map((s, i) => (
+          <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <button onClick={() => setSubs(a => a.map((x, j) => j === i ? { ...x, done: !x.done } : x))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#6f8256' : '#c2b9ab'), background: s.done ? '#6f8256' : 'transparent', cursor: 'pointer', flexShrink: 0 }} />
+            <input value={s.t} onChange={e => setSubs(a => a.map((x, j) => j === i ? { ...x, t: e.target.value } : x))} style={{ ...field, flex: 1, padding: '7px 10px', textDecoration: s.done ? 'line-through' : 'none' }} />
+            <button onClick={() => setSubs(a => a.filter((_, j) => j !== i))} style={{ ...smallBtn, padding: '6px 10px' }}>×</button>
           </div>
-        )}
+        ))}
+        <button onClick={() => setSubs(a => [...a, { id: uid(), t: '', done: false }])} style={{ ...smallBtn, alignSelf: 'flex-start' }}>+ subtarea</button>
 
-        {!!(t.subtasks && t.subtasks.length) && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Section title={`subtareas · ${t.subtasks.filter(s => s.done).length}/${t.subtasks.length}`} />
-            {t.subtasks.map((s, i) => (
-              <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14 }}>
-                <span style={{ width: 15, height: 15, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#6f8256' : '#c2b9ab'), background: s.done ? '#6f8256' : 'transparent', flexShrink: 0 }} />
-                <span style={{ flex: 1, textDecoration: s.done ? 'line-through' : 'none', color: s.done ? '#a49b90' : '#1c1a17' }}>{s.t}</span>
-                {typeof s.progress === 'number' && s.progress > 0 && !s.done && <span style={{ fontSize: 12, color: '#a49b90' }}>{s.progress}%</span>}
-              </div>
-            ))}
+        {/* Links */}
+        <Section title="links" />
+        {(t.links || []).map((l, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <input value={l.label} placeholder="nombre" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={{ ...field, width: 130, padding: '7px 10px' }} />
+            <input value={l.url} placeholder="https://…" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} style={{ ...field, flex: 1, minWidth: 150, padding: '7px 10px' }} />
+            <button onClick={() => setLinks(a => a.filter((_, j) => j !== i))} style={{ ...smallBtn, padding: '6px 10px' }}>×</button>
           </div>
-        )}
+        ))}
+        <button onClick={() => setLinks(a => [...a, { label: '', url: '' }])} style={{ ...smallBtn, alignSelf: 'flex-start' }}>+ link</button>
 
-        {!!(t.links && t.links.length) && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Section title="links" />
-            {t.links.map((l, i) => <a key={i} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, color: '#8a4b28' }}>{l.label || l.url}</a>)}
-          </div>
-        )}
-
-        {!!(t.comentarios && t.comentarios.length) && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Section title="comentarios" />
-            {t.comentarios.map((c, i) => (
-              <div key={i} style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.5 }}><span style={{ color: '#a49b90' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
-          <button onClick={commit} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
-          <button onClick={() => onDone(epicaId, t.id!)} style={{ border: '1px solid #dbe2cd', background: '#eef1e7', color: '#4f6238', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Marcar hecha</button>
-          <button onClick={() => onUnplan(epicaId, t)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
+        {/* Comentarios */}
+        <Section title="comentarios" />
+        {(t.comentarios || []).map((c, i) => (
+          <div key={i} style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.5 }}><span style={{ color: '#a49b90' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
+        ))}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={comment} placeholder="Añadir comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...field, flex: 1, padding: '7px 10px' }} />
+          <button onClick={addComment} style={smallBtn}>Comentar</button>
         </div>
-        <a href={epLink} style={{ fontSize: 13, color: '#8a4b28', textAlign: 'center' }}>Abrir en Épicas (subtareas, links y comentarios) →</a>
+
+        {/* Bitácora de tiempo invertido */}
+        {invested > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Section title={`tiempo invertido · ${hm(invested)}`} />
+            {(t.progressLog || []).filter(e => (e as { min?: number }).min).slice(-6).map((e, i) => (
+              <div key={i} style={{ fontSize: 13, color: '#6b645b' }}><span style={{ color: '#a49b90' }}>{e.d} · </span>{e.note || hm((e as { min?: number }).min || 0)}</div>
+            ))}
+          </div>
+        )}
+
+        {/* Comenzar (contador). dur 0 = libre */}
+        {!creating && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 14 }}>
+            <Section title={`comenzar · ${startDur ? 'estimo ' + hm(startDur) : 'contador libre'}`} />
+            <input type="range" min={0} max={240} step={15} value={startDur} onChange={e => setStartDur(Number(e.target.value))} style={{ width: '100%', accentColor: '#b4653a' }} />
+            <button onClick={() => onStart({ epicaId: epId, task: withNote() }, startDur)} style={{ background: '#b4653a', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Comenzar {startDur ? hm(startDur) : 'ahora'}</button>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap', borderTop: '1px solid #eee6da', paddingTop: 14 }}>
+          {creating
+            ? <button onClick={() => onCreate(epId, withNote())} disabled={!t.t.trim() || !epId} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer', opacity: (!t.t.trim() || !epId) ? .5 : 1 }}>Crear tarea</button>
+            : <>
+              <button onClick={() => onSave(epId, withNote())} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+              <button onClick={() => onDone(epId, t.id!)} style={{ border: '1px solid #dbe2cd', background: '#eef1e7', color: '#4f6238', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Marcar hecha</button>
+              <button onClick={() => onUnplan(epId, withNote())} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
+            </>}
+        </div>
+        {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}`} style={{ fontSize: 13, color: '#8a4b28', textAlign: 'center' }}>Abrir en Épicas →</a>}
       </div>
     </div>
   )
