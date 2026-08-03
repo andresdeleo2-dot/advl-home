@@ -27,8 +27,11 @@ export default function TiempoClient() {
   const [data, setData] = useState<AppData>(() => defaults())
   const [loaded, setLoaded] = useState(false)
   const [tasks, setTasks] = useState<TodayTask[] | null>(null)   // null = cargando
+  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
+  const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
+  const [editTask, setEditTask] = useState<{ epicaId: string; task: EpicaTask } | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = tasks || [] }, [tasks])
@@ -51,13 +54,15 @@ export default function TiempoClient() {
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasks([]); return }
       const out: TodayTask[] = []
+      const epList: { id: string; name: string; color: string }[] = []
       for (const e of j.data as Epica[]) {
+        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a' })
         for (const t of e.tasks || []) {
           if (t.plan === today && t.status !== 'Terminada' && t.status !== 'Archivada')
             out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
         }
       }
-      setTasks(out)
+      setTasks(out); setEpicasList(epList)
     }).catch(() => setTasks([]))
   }, [])
 
@@ -79,6 +84,7 @@ export default function TiempoClient() {
   }, [])
 
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
+  const selMeeting = meetings.find(m => m.id === selMeetingId) || null
 
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
@@ -259,12 +265,34 @@ export default function TiempoClient() {
 
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
-    if (selTask) {
+    if (selMeeting) {
+      save({ session: { name: selMeeting.name, area: 'personas', start: Math.round(now), dur } })
+    } else if (selTask) {
       save({ session: { name: selTask.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur, epicaId: selTask.epicaId, taskId: selTask.task.id } })
     } else {
       const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]
       save({ session: { name: a.id, area: a.area, start: Math.round(now), dur } })
     }
+  }
+  // Escribe cambios de una tarea de vuelta a Épicas (mismo canal que el resto).
+  const syncTask = (epicaId: string, task: EpicaTask) =>
+    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [task] }) }).catch(() => {})
+  const saveTaskEdit = (epicaId: string, task: EpicaTask) => {
+    syncTask(epicaId, task)
+    setTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task } : x))
+    setEditTask(null)
+  }
+  const unplanTask = (epicaId: string, task: EpicaTask) => {
+    syncTask(epicaId, { ...task, plan: '' })
+    setTasks(prev => (prev || []).filter(x => x.task.id !== task.id))
+    setSelTaskId(id => id === task.id ? null : id); setEditTask(null)
+  }
+  // Crea la reunión como tarea de HOY en la épica elegida.
+  const meetingToEpica = (m: Meeting, epicaId: string) => {
+    const t: EpicaTask = { id: (crypto?.randomUUID?.() || 'm' + Date.now()), t: m.name, status: 'Por hacer', due: '', note: '', plan: iso(new Date()), links: [] }
+    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [t] }) }).catch(() => {})
+    const ep = epicasList.find(e => e.id === epicaId)
+    setTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task: t }])
   }
   // Marca la tarea como Terminada en Épicas (mismo canal que el resto de la app).
   const markEpicTaskDone = (epicaId: string, taskId: string) => {
@@ -364,14 +392,15 @@ export default function TiempoClient() {
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {ACTIVITIES.map(a => {
                         const on = a.id === act
-                        return <div key={a.id} onClick={() => { setAct(a.id); if (a.id !== 'Trabajo profundo') setSelTaskId(null) }} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
+                        return <div key={a.id} onClick={() => { setAct(a.id); if (a.id !== 'Trabajo profundo') setSelTaskId(null); if (a.id !== 'Reuniones') setSelMeetingId(null) }} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
                       })}
                     </div>
                   </div>
 
-                  {act === 'Trabajo profundo' && <TaskPicker tasks={tasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setDur(durByDiff(t.task)) }} />}
-                  {act === 'Reuniones' && <MeetingsList meetings={meetings} />}
+                  {act === 'Trabajo profundo' && <TaskPicker tasks={tasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, task: { ...t.task } })} />}
+                  {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
+                  {selMeeting && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}). Al terminar queda en tu día y en el historial.</span>}
 
                   <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: SERIF, fontSize: 62, lineHeight: .9 }}>{V.durLabel}</span>
@@ -552,6 +581,8 @@ export default function TiempoClient() {
           </div>
         )}
       </div>
+
+      {editTask && <TaskEditor epicaId={editTask.epicaId} task={editTask.task} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onClose={() => setEditTask(null)} />}
     </div>
   )
 }
@@ -568,8 +599,8 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
 }
 
-/** Tareas de hoy (de Épicas) para elegir una y trabajarla. */
-function TaskPicker({ tasks, selId, onPick }: { tasks: TodayTask[] | null; selId: string | null; onPick: (t: TodayTask) => void }) {
+/** Tareas de hoy (de Épicas) para elegir una y trabajarla, o editarla en la app. */
+function TaskPicker({ tasks, selId, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   if (tasks === null) return <span style={{ fontSize: 13, color: '#a49b90' }}>Cargando tus tareas de hoy…</span>
   if (!tasks.length) return (
     <div style={{ fontSize: 13.5, color: '#8b8379', lineHeight: 1.5 }}>No tienes tareas planeadas para hoy en Épicas. <a href="/epicas" style={{ color: '#8a4b28' }}>Planéalas ahí</a> y aparecerán aquí para trabajarlas.</div>
@@ -580,10 +611,13 @@ function TaskPicker({ tasks, selId, onPick }: { tasks: TodayTask[] | null; selId
       {tasks.map(t => {
         const on = t.task.id === selId
         return (
-          <div key={t.task.id} onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 12px', borderRadius: 12, cursor: 'pointer', border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f7ece2' : 'transparent' }}>
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block' }} />
-            <span style={{ fontSize: 15, flex: 1 }}>{t.task.t || 'Sin título'}</span>
-            <span style={{ fontSize: 12.5, color: '#a49b90' }}>{t.epicaName}</span>
+          <div key={t.task.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f7ece2' : 'transparent' }}>
+            <span onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
+              <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
+              <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
+            </span>
+            <button onClick={() => onEdit(t)} title="Editar tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
           </div>
         )
       })}
@@ -591,20 +625,73 @@ function TaskPicker({ tasks, selId, onPick }: { tasks: TodayTask[] | null; selId
   )
 }
 
-/** Reuniones de hoy jaladas del calendario (solo lectura; ya cuentan en el día). */
-function MeetingsList({ meetings }: { meetings: Meeting[] }) {
+/** Reuniones de hoy del calendario: se pueden iniciar (con su duración) o mandar a una épica. */
+function MeetingsList({ meetings, selId, onPick, epicas, onAddEpica }: { meetings: Meeting[]; selId: string | null; onPick: (m: Meeting) => void; epicas: { id: string; name: string; color: string }[]; onAddEpica: (m: Meeting, epicaId: string) => void }) {
+  const [openFor, setOpenFor] = useState<string | null>(null)
+  const [added, setAdded] = useState<Record<string, boolean>>({})
   if (!meetings.length) return <span style={{ fontSize: 13.5, color: '#8b8379' }}>No hay reuniones en tu calendario para hoy.</span>
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>reuniones de hoy · de tu calendario</span>
-      {meetings.slice().sort((a, b) => a.start - b.start).map(m => (
-        <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: '1px solid #eee6da' }}>
-          <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
-          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#8b8379', display: 'block' }} />
-          <span style={{ fontSize: 15, flex: 1 }}>{m.name}</span>
-          <span style={{ fontSize: 13, color: '#a49b90' }}>{hm(m.dur)}</span>
+      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>reuniones de hoy · toca una para iniciarla con su duración</span>
+      {meetings.slice().sort((a, b) => a.start - b.start).map(m => {
+        const on = m.id === selId
+        return (
+          <div key={m.id} style={{ borderBottom: '1px solid #eee6da', padding: '4px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 12, background: on ? '#f7ece2' : 'transparent', border: `1px solid ${on ? '#b4653a' : 'transparent'}` }}>
+              <span onClick={() => onPick(m)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+                <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: '#8b8379', display: 'block', flexShrink: 0 }} />
+                <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{hm(m.dur)}</span>
+              </span>
+              <button onClick={() => setOpenFor(openFor === m.id ? null : m.id)} disabled={added[m.id]} title="Agregar a una épica" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: added[m.id] ? '#6f8256' : '#6b645b', cursor: added[m.id] ? 'default' : 'pointer', flexShrink: 0 }}>{added[m.id] ? '✓ en Épicas' : '→ Épica'}</button>
+            </div>
+            {openFor === m.id && !added[m.id] && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 8px 6px 116px' }}>
+                {epicas.length === 0 && <span style={{ fontSize: 12.5, color: '#a49b90' }}>No hay épicas.</span>}
+                {epicas.map(e => (
+                  <button key={e.id} onClick={() => { onAddEpica(m, e.id); setAdded(a => ({ ...a, [m.id]: true })); setOpenFor(null) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, display: 'block' }} />{e.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Editor rápido de una tarea de hoy (rename, dificultad, marcar hecha, quitar de hoy). */
+function TaskEditor({ epicaId, task, onSave, onDone, onUnplan, onClose }: {
+  epicaId: string; task: EpicaTask
+  onSave: (epicaId: string, t: EpicaTask) => void; onDone: (epicaId: string, taskId: string) => void
+  onUnplan: (epicaId: string, t: EpicaTask) => void; onClose: () => void
+}) {
+  const [t, setT] = useState<EpicaTask>(task)
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', width: '100%', boxSizing: 'border-box' }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,100%)', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Editar tarea</span>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
-      ))}
+        <input autoFocus value={t.t} onChange={e => setT({ ...t, t: e.target.value })} style={{ ...field, fontSize: 16 }} />
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {(['facil', 'media', 'dificil'] as const).map(d => {
+            const on = t.difficulty === d
+            return <button key={d} onClick={() => setT({ ...t, difficulty: on ? undefined : d })} style={{ border: `1px solid ${on ? '#b4653a' : '#e2d9cb'}`, background: on ? '#f7ece2' : 'transparent', color: '#1c1a17', borderRadius: 999, padding: '7px 14px', fontSize: 13, cursor: 'pointer', textTransform: 'capitalize' }}>{d}{d === 'dificil' ? ' · 2h' : d === 'media' ? ' · 1h' : ' · 30m'}</button>
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
+          <button onClick={() => onSave(epicaId, t)} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={() => onDone(epicaId, t.id!)} style={{ border: '1px solid #dbe2cd', background: '#eef1e7', color: '#4f6238', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Marcar hecha</button>
+          <button onClick={() => onUnplan(epicaId, t)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
+        </div>
+        <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Los cambios se guardan en Épicas. “Quitar de hoy” le quita la fecha de plan; la tarea no se borra.</span>
+      </div>
     </div>
   )
 }
