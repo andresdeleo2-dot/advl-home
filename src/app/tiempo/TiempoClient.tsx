@@ -208,13 +208,24 @@ export default function TiempoClient() {
       verdictBg = '#f6e3dd'; verdictBorder = '#e8cabf'; verdictFg = '#8a3c2a'
     }
 
-    // barra del resto del día
+    // barra del día: lo YA HECHO (pasado, por su hora) + protegido/libre (futuro)
+    const dayISO = iso(new Date())
+    const doneToday = data.history.filter(h => h.date === dayISO && h.start < now).sort((a, b) => a.start - b.start)
     const scaleEnd = Math.max(bed + 30, simEnd + 15)
-    const total = Math.max(1, scaleEnd - now)
-    const raw: { s: number; e: number; kind: 'free' | 'prot' }[] = []
-    let cursor = now
-    for (const b of timeline) {
-      const s = Math.max(b.start, now), e = Math.min(b.start + b.dur, scaleEnd)
+    const barStart = doneToday.length ? Math.min(now, doneToday[0].start) : now
+    const total = Math.max(1, scaleEnd - barStart)
+    const raw: { s: number; e: number; kind: 'free' | 'prot' | 'done'; area?: Area }[] = []
+    let cursor = barStart
+    for (const d of doneToday) {                       // tramo pasado = lo que hiciste
+      const s = Math.max(d.start, cursor), e = Math.min(d.start + d.dur, now)
+      if (e <= s) continue
+      if (s > cursor) raw.push({ s: cursor, e: s, kind: 'free' })
+      raw.push({ s, e, kind: 'done', area: d.area })
+      cursor = Math.max(cursor, e)
+    }
+    if (cursor < now) { raw.push({ s: cursor, e: now, kind: 'free' }); cursor = now }
+    for (const b of timeline) {                        // tramo futuro = protegido/libre
+      const s = Math.max(b.start, cursor), e = Math.min(b.start + b.dur, scaleEnd)
       if (e <= s) continue
       if (s > cursor) raw.push({ s: cursor, e: s, kind: 'free' })
       raw.push({ s: Math.max(s, cursor), e, kind: 'prot' })
@@ -223,6 +234,7 @@ export default function TiempoClient() {
     if (cursor < scaleEnd) raw.push({ s: cursor, e: scaleEnd, kind: 'free' })
     const segs: { w: number; bg: string }[] = []
     for (const r of raw) {
+      if (r.kind === 'done') { segs.push({ w: ((r.e - r.s) / total) * 100, bg: AREAS[r.area!]?.color || '#8b8379' }); continue }
       const parts: { s: number; e: number; work: boolean }[] = []
       const iS = Math.max(r.s, simStart), iE = Math.min(r.e, simEnd)
       if (iE > iS) {
@@ -341,7 +353,7 @@ export default function TiempoClient() {
       durLabel: hm(dur), endLabel: clock(simEnd),
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
-      segs, upcoming, scaleEndLabel: clock(scaleEnd),
+      segs, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart),
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
       routineNext, allTotals, taskSummary,
       weekTotalLabel: hm(weekTotal), areaStats, days,
@@ -516,6 +528,7 @@ export default function TiempoClient() {
                   <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={LBL}>tu energía estimada por hora</span>
                   <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 54 }}>
                     {V.energy.map((e, i) => <div key={i} style={{ flex: 1, height: `${e.h}%`, background: e.bg, borderRadius: '4px 4px 2px 2px', minHeight: 4 }} />)}
                   </div>
@@ -654,15 +667,16 @@ export default function TiempoClient() {
             {/* Tarjeta C — el resto del día */}
             <div style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
-                <span style={LBL}>el resto del día</span>
-                <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.nowLabel} a {V.scaleEndLabel}</span>
+                <span style={LBL}>el día</span>
+                <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.barStartLabel} a {V.scaleEndLabel}</span>
               </div>
               <div style={{ display: 'flex', height: 52, gap: 2 }}>
                 {V.segs.map((s, i) => <div key={i} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2 }} />)}
               </div>
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
+                <Legend c="#8b8379">lo que ya hiciste</Legend>
                 <Legend c="#b4653a">el bloque que estás evaluando</Legend>
-                <Legend c="#8a3c2a">tiempo protegido que invadirías</Legend>
+                <Legend c="#8a3c2a">protegido que invadirías</Legend>
                 <Legend c="#6f8256">protegido intacto</Legend>
                 <Legend c="#eee6da">libre</Legend>
               </div>
@@ -913,7 +927,7 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { ta
                 <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
                 <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
               </span>
-              <button onClick={() => onEdit(t)} title="Editar tarea (todo)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
+              <button onClick={() => onEdit(t)} title="Ver / trabajar la tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
               <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
@@ -1178,7 +1192,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
               <button onClick={() => onUnplan(epId, withNote())} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
             </>}
         </div>
-        {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}`} style={{ fontSize: 13, color: '#8a4b28', textAlign: 'center' }}>Abrir en Épicas →</a>}
+        {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} style={{ textAlign: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 16px', fontSize: 14, color: '#8a4b28', textDecoration: 'none', background: '#f3ece1' }}>✎ Editar en Épicas (todas las funciones) →</a>}
       </div>
     </div>
   )

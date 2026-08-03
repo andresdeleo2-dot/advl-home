@@ -329,6 +329,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
      compartible y recargar te deja donde estabas. Se aplica DESPUÉS de las
      preferencias (la URL manda sobre lo guardado). */
   const urlReady = useRef(false)
+  // Permite abrir el editor de una tarea desde otra sección (Tiempo) por deep-link (?e=&t=).
+  const openTaskEditRef = useRef<((epicId: string, tid: string) => void) | null>(null)
   useEffect(() => {
     const MODES = ['dia', 'semana', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen']
     const applyFromUrl = () => {
@@ -336,6 +338,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode(v as typeof planMode)
       const d = q.get('d'); if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setViewDate(d)
       const e = q.get('e'); if (e) setFeaturedId(e)
+      const tsk = q.get('t'); if (tsk && e) setTimeout(() => openTaskEditRef.current?.(e, tsk), 0)
       const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance'].includes(f)) setPlanFilter(f as typeof planFilter)
       const ep = q.get('ep'); if (ep) setWeekEpica(ep)
       const df = q.get('df'); if (df && ['todas', 'facil', 'media', 'dificil'].includes(df)) setWeekDif(df as typeof weekDif)
@@ -1493,6 +1496,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setTaskEdit({ epicId, tid })
     setTaskEditTarget(epicId)
   }
+  openTaskEditRef.current = (epicId, tid) => openTaskEdit(epicId, tid)
   /** Épica destino por defecto al crear una tarea: si estás filtrando por una épica
    *  (en el backlog), esa; si no, la épica que tienes destacada. */
   const defaultEpicId = () => (backlogFEpica !== 'todas' ? backlogFEpica : (featured?.id || activeEpics[0]?.id))
