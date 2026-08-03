@@ -10,7 +10,7 @@ export type Block = { id: string; name: string; area: Area; start: number; dur: 
 /** Sesión en curso. Si viene de una tarea de Épicas, guarda epicaId/taskId para
  *  marcarla como Terminada al cerrar el bloque. */
 export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string } | null
-export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string }
+export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean }
 
 /** Chips de día en el orden L M X J V S D con su índice getDay(). */
 export const DOW_CHIPS: { lbl: string; i: number }[] = [

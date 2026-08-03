@@ -21,12 +21,26 @@ const SERIF = 'var(--tiempo-serif), Georgia, serif'
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
 
-/** Tarea de hoy sacada de Épicas (plan === hoy, sin terminar). */
-type TodayTask = { epicaId: string; epicaName: string; color: string; task: EpicaTask }
+/** Tarea de hoy sacada de Épicas (plan === hoy o recurrente diaria). */
+type TodayTask = { epicaId: string; epicaName: string; color: string; task: EpicaTask; recurring?: boolean }
+/** ¿la tarea recurrente aplica HOY? (soporta "cada día"; semanal/mensual usan plan). */
+function recurringDueToday(t: EpicaTask, today: string): boolean {
+  if (!t.repeat || t.status === 'Archivada') return false
+  if (t.repeatDone?.includes(today)) return false
+  if (t.repeatUntil && today > t.repeatUntil) return false
+  return t.repeat.unit === 'dia'
+}
 /** Reunión del calendario de hoy, ya en minutos desde medianoche. */
 type Meeting = { id: string; name: string; start: number; dur: number }
 
 const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
+
+// Helpers de fecha local (sin UTC) para el selector de día.
+const addDaysISO = (s: string, n: number) => { const [y, m, d] = s.split('-').map(Number); return iso(new Date(y, m - 1, d + n)) }
+const weekOfISO = (s: string) => { const [y, m, d] = s.split('-').map(Number); const dow = (new Date(y, m - 1, d).getDay() + 6) % 7; const mon = addDaysISO(s, -dow); return Array.from({ length: 7 }, (_, i) => addDaysISO(mon, i)) }
+const DOW_LETTER = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
+const dowLetterOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return DOW_LETTER[new Date(y, m - 1, d).getDay()] }
+const longDayOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); const dt = new Date(y, m - 1, d); const dn = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']; const mn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']; return `${dn[dt.getDay()]} ${d} de ${mn[m - 1]}` }
 
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
@@ -35,7 +49,8 @@ export default function TiempoClient() {
   const [act, setAct] = useState('Trabajo profundo')
   const [data, setData] = useState<AppData>(() => defaults())
   const [loaded, setLoaded] = useState(false)
-  const [tasks, setTasks] = useState<TodayTask[] | null>(null)   // null = cargando
+  const [allTasks, setAllTasks] = useState<TodayTask[] | null>(null)   // null = cargando; TODAS las tareas abiertas
+  const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
   const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
@@ -46,7 +61,7 @@ export default function TiempoClient() {
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
-  useEffect(() => { tasksRef.current = tasks || [] }, [tasks])
+  useEffect(() => { tasksRef.current = allTasks || [] }, [allTasks])
 
   useEffect(() => {
     let d = defaults()
@@ -62,20 +77,20 @@ export default function TiempoClient() {
 
   // Tareas de HOY desde Épicas (plan === hoy, sin terminar/archivar).
   useEffect(() => {
-    const today = iso(new Date())
     fetch('/api/epicas').then(r => r.json()).then(j => {
-      if (!j.ok) { setTasks([]); return }
+      if (!j.ok) { setAllTasks([]); return }
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string }[] = []
       for (const e of j.data as Epica[]) {
         if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a' })
         for (const t of e.tasks || []) {
-          if (t.plan === today && t.status !== 'Terminada' && t.status !== 'Archivada')
-            out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
+          if (t.status === 'Terminada' || t.status === 'Archivada') continue
+          // Guardamos TODAS las abiertas; el día visible se filtra abajo (permite navegar días).
+          if (t.plan || t.repeat) out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
         }
       }
-      setTasks(out); setEpicasList(epList)
-    }).catch(() => setTasks([]))
+      setAllTasks(out); setEpicasList(epList)
+    }).catch(() => setAllTasks([]))
   }, [])
 
   // Reuniones de HOY desde el calendario de Google (eventos con hora).
@@ -95,6 +110,12 @@ export default function TiempoClient() {
     }).catch(() => {})
   }, [])
 
+  // Tareas del día visible (plan === día, o recurrente que aplica ese día).
+  const tasks = useMemo<TodayTask[] | null>(() => {
+    if (allTasks === null) return null
+    return allTasks.filter(t => t.task.plan === taskDay || recurringDueToday(t.task, taskDay))
+      .map(t => ({ ...t, recurring: recurringDueToday(t.task, taskDay) }))
+  }, [allTasks, taskDay])
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
 
@@ -118,6 +139,7 @@ export default function TiempoClient() {
     if (sortBy === 'alfa') arr.sort((a, b) => (a.task.t || '').localeCompare(b.task.t || '', 'es'))
     else if (sortBy === 'prioridad') arr.sort((a, b) => (PR[a.task.priority || ''] ?? 9) - (PR[b.task.priority || ''] ?? 9))
     else if (sortBy === 'dificultad') arr.sort((a, b) => (DF[a.task.difficulty || ''] ?? 9) - (DF[b.task.difficulty || ''] ?? 9))
+    else arr.sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))  // manual
     return arr
   }, [tasks, filters, sortBy])
 
@@ -263,7 +285,7 @@ export default function TiempoClient() {
 
     const todayLog = data.history.map((h, idx) => ({ h, idx })).filter(x => x.h.date === today).sort((a, b) => a.h.start - b.h.start).map(x => ({
       idx: x.idx, range: clock(x.h.start) + '–' + clock(x.h.start + x.h.dur), name: x.h.name, dur: hm(x.h.dur),
-      dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379',
+      dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false,
     }))
     const workedToday = data.history.filter(h => h.date === today && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
 
@@ -279,16 +301,24 @@ export default function TiempoClient() {
       : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
       : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.'
 
-    // Cuánto falta para cada bloque de la rutina de hoy (tarjeta de tiempo útil).
-    const routineNext = todayBlocks.slice().sort((a, b) => a.start - b.start).filter(b => b.start + b.dur > now).map(b => ({
-      name: b.name, dot: AREAS[b.area]?.color || '#8b8379',
-      when: b.start > now ? 'en ' + hm(b.start - now) : 'en curso', at: clock(b.start),
-    }))
+    // Todos los bloques de la rutina de hoy con su cuenta regresiva (o "ya pasó").
+    const routineNext = todayBlocks.slice().sort((a, b) => a.start - b.start).map(b => {
+      const past = b.start + b.dur <= now
+      return {
+        name: b.name, dot: AREAS[b.area]?.color || '#8b8379', at: clock(b.start), past,
+        when: b.start > now ? 'en ' + hm(b.start - now) : past ? 'ya pasó' : 'en curso',
+      }
+    })
 
     // Totales de TODO lo trabajado, agrupado por actividad (para el Historial).
     const totalsMap: Record<string, { min: number; n: number; area: Area }> = {}
     for (const h of data.history) totalsMap[h.name] = { min: (totalsMap[h.name]?.min || 0) + h.dur, n: (totalsMap[h.name]?.n || 0) + 1, area: h.area }
     const allTotals = Object.entries(totalsMap).map(([name, v]) => ({ name, mins: v.min, label: hm(v.min), n: v.n, dot: AREAS[v.area]?.color || '#8b8379' })).sort((a, b) => b.mins - a.mins)
+
+    // Resumen de TAREAS (de Épicas) trabajadas: tiempo invertido + si se completaron.
+    const taskWork: Record<string, { min: number; done: boolean; area: Area }> = {}
+    for (const h of data.history) if (h.taskId) { const k = h.name; taskWork[k] = { min: (taskWork[k]?.min || 0) + h.dur, done: (taskWork[k]?.done || false) || h.done === true, area: h.area } }
+    const taskSummary = Object.entries(taskWork).map(([name, v]) => ({ name, mins: v.min, label: hm(v.min), done: v.done, dot: AREAS[v.area]?.color || '#8b8379' })).sort((a, b) => b.mins - a.mins)
 
     return {
       nowLabel: clock(now),
@@ -313,7 +343,7 @@ export default function TiempoClient() {
       hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
       segs, upcoming, scaleEndLabel: clock(scaleEnd),
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
-      routineNext, allTotals,
+      routineNext, allTotals, taskSummary,
       weekTotalLabel: hm(weekTotal), areaStats, days,
       streakLabel: streak > 0 ? streak + (streak === 1 ? ' día seguido con la rutina protegida' : ' días seguidos con la rutina protegida') : 'Aún sin racha esta semana',
       streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
@@ -337,12 +367,12 @@ export default function TiempoClient() {
     fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [task] }) }).catch(() => {})
   const saveTaskEdit = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, task)
-    setTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task } : x))
+    setAllTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task } : x))
     setEditTask(null)
   }
   const unplanTask = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, { ...task, plan: '' })
-    setTasks(prev => (prev || []).filter(x => x.task.id !== task.id))
+    setAllTasks(prev => (prev || []).filter(x => x.task.id !== task.id))
     setSelTaskId(id => id === task.id ? null : id); setEditTask(null)
   }
   // Registro de hoy (localStorage): editar y borrar entradas.
@@ -360,7 +390,7 @@ export default function TiempoClient() {
       const upd: EpicaTask = { ...base, status: 'En curso', doneAt: undefined, plan: iso(new Date()) }
       syncTask(row.epicaId, upd)
       const ep = epicasList.find(e => e.id === row.epicaId)
-      setTasks(prev => {
+      setAllTasks(prev => {
         const list = prev || []
         return list.some(x => x.task.id === row.taskId)
           ? list.map(x => x.task.id === row.taskId ? { ...x, task: upd } : x)
@@ -374,15 +404,19 @@ export default function TiempoClient() {
     const t: EpicaTask = { id: (crypto?.randomUUID?.() || 'm' + Date.now()), t: m.name, status: 'Por hacer', due: '', note: '', plan: iso(new Date()), links: [] }
     fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [t] }) }).catch(() => {})
     const ep = epicasList.find(e => e.id === epicaId)
-    setTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task: t }])
+    setAllTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task: t }])
   }
-  // Marca la tarea como Terminada en Épicas (mismo canal que el resto de la app).
+  // Marca hecha en Épicas. Si es recurrente (diaria), marca el DÍA en repeatDone
+  // (no la cierra); si no, la pone Terminada.
   const markEpicTaskDone = (epicaId: string, taskId: string) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
-    const upd = { ...tt.task, status: 'Terminada', doneAt: iso(new Date()) }
+    const today = iso(new Date())
+    const upd: EpicaTask = tt.task.repeat
+      ? { ...tt.task, repeatDone: [...(tt.task.repeatDone || []), today] }
+      : { ...tt.task, status: 'Terminada', doneAt: today }
     fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [upd] }) }).catch(() => {})
-    setTasks(prev => (prev || []).filter(x => x.task.id !== taskId))
+    setAllTasks(prev => tt.task.repeat ? (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x) : (prev || []).filter(x => x.task.id !== taskId))
     setSelTaskId(id => id === taskId ? null : id)
   }
   // Cierra el bloque en curso: lo registra en el día y, si es una tarea de Épicas,
@@ -391,17 +425,30 @@ export default function TiempoClient() {
     const s = data.session; if (!s) return
     const elapsed = Math.max(1, Math.round(now - s.start))
     const today = iso(new Date())
-    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
+    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
         const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed } as EpicaProgressEntry]
-        const upd: EpicaTask = { ...tt.task, progressLog: log, ...(markDone ? { status: 'Terminada', doneAt: today } : {}) }
+        const doneChange = markDone ? (tt.task.repeat ? { repeatDone: [...(tt.task.repeatDone || []), today] } : { status: 'Terminada', doneAt: today }) : {}
+        const upd: EpicaTask = { ...tt.task, progressLog: log, ...doneChange }
         syncTask(s.epicaId, upd)
-        setTasks(prev => markDone ? (prev || []).filter(x => x.task.id !== s.taskId) : (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
+        setAllTasks(prev => (markDone && !tt.task.repeat) ? (prev || []).filter(x => x.task.id !== s.taskId) : (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
         if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
       }
     }
+  }
+  // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
+  const reorderTasks = (ids: string[]) => {
+    const byId = new Map((allTasks || []).map(t => [t.task.id!, t]))
+    const byEpic = new Map<string, EpicaTask[]>()
+    ids.forEach((id, i) => {
+      const tt = byId.get(id); if (!tt) return
+      const po = (i + 1) * 1000
+      if (tt.task.planOrder !== po) { const nt = { ...tt.task, planOrder: po }; byId.set(id, { ...tt, task: nt }); if (!byEpic.has(tt.epicaId)) byEpic.set(tt.epicaId, []); byEpic.get(tt.epicaId)!.push(nt) }
+    })
+    setAllTasks(prev => (prev || []).map(t => { const u = byId.get(t.task.id!); return u ? u : t }))
+    byEpic.forEach((arr, epicaId) => fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: arr }) }).catch(() => {}))
   }
   // Comenzar una tarea desde su detalle. dur = 0 → contador libre (hasta que pares).
   const startTask = (info: { epicaId: string; task: EpicaTask }, d: number) => {
@@ -413,13 +460,14 @@ export default function TiempoClient() {
     if (!epicaId) return
     const ep = epicasList.find(e => e.id === epicaId)
     fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [task] }) }).catch(() => {})
-    if (task.plan === iso(new Date())) setTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task }])
+    setAllTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task }])
     setEditTask(null)
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
   const areaOptions = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno').map(k => ({ id: k, label: AREAS[k].label }))
   const bed = data.bed, sleepGoal = data.sleep
+  const today = iso(new Date())
 
   const tabs: [typeof view, string][] = [['hoy', 'Hoy'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
 
@@ -474,7 +522,7 @@ export default function TiempoClient() {
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <span style={LBL}>cuánto falta para tu rutina</span>
                     {V.routineNext.map((r, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, opacity: r.past ? 0.5 : 1 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: r.dot, display: 'block' }} />
                         <span style={{ flex: 1 }}>{r.name}</span>
                         <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{r.at}</span>
@@ -522,9 +570,25 @@ export default function TiempoClient() {
                   </div>
 
                   {act === 'Trabajo profundo' && <>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                        <span style={{ fontSize: 13.5, color: '#6b645b', textTransform: 'capitalize' }}>{taskDay === today ? 'Tareas de hoy' : `Tareas · ${longDayOf(taskDay)}`}</span>
+                        {taskDay !== today && <button onClick={() => setTaskDay(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 12px', fontSize: 12, color: '#8a4b28', cursor: 'pointer' }}>Hoy</button>}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <button onClick={() => setTaskDay(addDaysISO(taskDay, -7))} title="Semana anterior" style={{ width: 28, height: 40, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer' }}>‹</button>
+                        {weekOfISO(taskDay).map(d => { const sel = d === taskDay, isT = d === today; return (
+                          <button key={d} onClick={() => setTaskDay(d)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, padding: '6px 0', borderRadius: 10, border: `1px solid ${sel ? '#b4653a' : 'transparent'}`, background: sel ? '#b4653a' : isT ? '#f3ece1' : 'transparent', color: sel ? '#faf7f1' : '#6b645b', cursor: 'pointer' }}>
+                            <span style={{ fontSize: 10, opacity: .8 }}>{dowLetterOf(d)}</span>
+                            <span style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{Number(d.slice(8))}</span>
+                          </button>
+                        ) })}
+                        <button onClick={() => setTaskDay(addDaysISO(taskDay, 7))} title="Semana siguiente" style={{ width: 28, height: 40, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer' }}>›</button>
+                      </div>
+                    </div>
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
-                    <div onClick={() => { const e = epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: iso(new Date()), links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea</div>
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <div onClick={() => { const e = epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
@@ -585,7 +649,7 @@ export default function TiempoClient() {
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
                     <span style={{ fontSize: 16, flex: 1, color: '#6b645b' }}>{l.name}</span>
                     <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 120, textAlign: 'right' }}>hecho ✓</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 120, textAlign: 'right' }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                   </div>
                 ))}
                 {V.upcoming.map((b, i) => (
@@ -712,6 +776,24 @@ export default function TiempoClient() {
               </div>
             </div>
 
+            {V.taskSummary.length > 0 && (
+              <div style={card(20)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>Tus tareas trabajadas</span>
+                  <span style={{ fontSize: 12.5, color: '#a49b90' }}>tiempo invertido y si se completaron</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {V.taskSummary.map((a, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: '1px solid #eee6da' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: a.dot, display: 'block' }} />
+                      <span style={{ fontSize: 15, flex: 1 }}>{a.name}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: a.done ? '#4f6238' : '#8a4b28' }}>{a.done ? 'completada' : 'solo tiempo'}</span>
+                      <span style={{ fontSize: 14, fontWeight: 600, width: 70, textAlign: 'right' }}>{a.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {V.allTotals.length > 0 && (
               <div style={card(20)}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -752,31 +834,66 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
 }
 
-/** Tareas de hoy (de Épicas) para elegir una y trabajarla, o editarla en la app. */
-function TaskPicker({ tasks, selId, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
-  if (tasks === null) return <span style={{ fontSize: 13, color: '#a49b90' }}>Cargando tus tareas de hoy…</span>
+/** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
+function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+  const [order, setOrder] = useState<string[] | null>(null)
+  const orderRef = useRef<string[] | null>(null)
+  const dragId = useRef<string | null>(null)
+  useEffect(() => { orderRef.current = order }, [order])
+  useEffect(() => { setOrder(null) }, [tasks])
+
+  if (tasks === null) return <span style={{ fontSize: 13, color: '#a49b90' }}>Cargando tus tareas…</span>
   if (!tasks.length) return (
-    <div style={{ fontSize: 13.5, color: '#8b8379', lineHeight: 1.5 }}>No tienes tareas planeadas para hoy en Épicas. <a href="/epicas" style={{ color: '#8a4b28' }}>Planéalas ahí</a> y aparecerán aquí para trabajarlas.</div>
+    <div style={{ fontSize: 13.5, color: '#8b8379', lineHeight: 1.5 }}>No hay tareas para este día. Créala abajo o <a href="/epicas" style={{ color: '#8a4b28' }}>planéala en Épicas</a>.</div>
   )
+  const display = (order && draggable) ? (order.map(id => tasks.find(t => t.task.id === id)).filter(Boolean) as TodayTask[]) : tasks
+
+  const startDrag = (e: React.PointerEvent, id: string) => {
+    e.preventDefault(); dragId.current = id; setOrder(tasks.map(t => t.task.id!))
+    const move = (ev: PointerEvent) => {
+      if (!dragId.current) return
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+      const row = el?.closest('[data-taskid]') as HTMLElement | null
+      if (!row) return
+      const overId = row.getAttribute('data-taskid')!
+      if (overId === dragId.current) return
+      setOrder(prev => {
+        const cur = prev || tasks.map(t => t.task.id!)
+        const from = cur.indexOf(dragId.current!), to = cur.indexOf(overId)
+        if (from < 0 || to < 0) return cur
+        const next = cur.slice(); next.splice(from, 1); next.splice(to, 0, dragId.current!)
+        return next
+      })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+      const final = orderRef.current; dragId.current = null
+      if (final) onReorder(final)
+    }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>tus tareas de hoy · toca una para trabajarla</span>
-      {tasks.length === 0 && <span style={{ fontSize: 13, color: '#a49b90', padding: '4px 2px' }}>Ninguna tarea con esos filtros.</span>}
-      {tasks.map(t => {
+      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>tus tareas · toca una para trabajarla{draggable ? ' · arrastra ⠿ para reordenar' : ''}</span>
+      {display.map(t => {
         const on = t.task.id === selId
         const ts = taskStyle(t.task.status)
+        const dragging = dragId.current === t.task.id
         return (
-          <div key={t.task.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f7ece2' : 'transparent' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div key={t.task.id} data-taskid={t.task.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : on ? '#f7ece2' : 'transparent' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {draggable && <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', flexShrink: 0, padding: '0 2px' }}>⠿</span>}
               <span onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
                 <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
                 <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
               </span>
-              <button onClick={() => onEdit(t)} title="Ver / editar tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
+              <button onClick={() => onEdit(t)} title="Editar tarea (todo)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 20 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
               <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
+              {t.recurring && <Tag c="#7A6FB0" bg="rgba(122,111,176,0.14)">diaria</Tag>}
               {t.task.priority && <Tag c={PRIO_TONE[t.task.priority]} bg={PRIO_TONE[t.task.priority] + '22'}>{t.task.priority}</Tag>}
               {t.task.difficulty && <Tag c="#5B6B86" bg="rgba(91,107,134,0.12)">{t.task.difficulty}</Tag>}
               {t.task.due && <Tag c="#A87A2C" bg="rgba(194,147,58,0.14)">vence {fmtDue(t.task.due)}</Tag>}
@@ -927,7 +1044,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
         </div>
 
         <Section title="nota" />
-        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 56, lineHeight: 1.55, width: '100%' }} />
+        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 56, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
 
         <Section title={`avance · ${t.progress || 0}%`} />
         <input type="range" min={0} max={100} step={5} value={t.progress || 0} onChange={e => setT({ ...t, progress: Number(e.target.value) })} style={{ width: '100%', accentColor: '#6f8256' }} />
@@ -1016,12 +1133,17 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onClose }: {
         <select value={r.area} onChange={e => setR({ ...r, area: e.target.value as Area })} style={{ ...field, width: '100%' }}>
           {(Object.keys(AREAS) as Area[]).map(k => <option key={k} value={k}>{AREAS[k].label}</option>)}
         </select>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => setR({ ...r, start: parse(e.target.value) })} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración (min)</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 100 }} /></label>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => { const s = parse(e.target.value); setR(p => ({ ...p, start: s })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>terminó</span><input type="time" value={clock(r.start + r.dur)} onChange={e => { let end = parse(e.target.value); if (end <= r.start) end += 1440; setR(p => ({ ...p, dur: Math.max(1, end - p.start) })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración (min)</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 92 }} /></label>
         </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={r.done !== false} onChange={e => setR({ ...r, done: e.target.checked })} />
+          Se terminó la actividad {r.done === false && <span style={{ color: '#8a4b28' }}>· solo se le invirtió tiempo</span>}
+        </label>
         <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
-          <button onClick={() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur })} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false })} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
         </div>
         {row.taskId && <button onClick={() => onReopen(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, cursor: 'pointer' }}>No estaba terminada · reabrir la tarea en Épicas</button>}
