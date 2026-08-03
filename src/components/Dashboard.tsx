@@ -331,6 +331,11 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="m13 2-3 7h6l-5 13 3-9H8z"/></svg>
               Épicas
             </Link>
+            <Link href="/tiempo"
+              className="flex items-center gap-1.5 rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              Tiempo
+            </Link>
             <div className="hidden items-center gap-1.5 lg:flex">
               <a href={CONFIG.quickLinks.excel} target="_blank" rel="noopener noreferrer"
                 className="rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">Excel</a>
