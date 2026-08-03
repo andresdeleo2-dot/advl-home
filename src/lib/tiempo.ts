@@ -1,34 +1,40 @@
-/* Sección "Tiempo" (estilo Margen): actividades personales que se acomodan en el
-   día y en la semana. Todo el tiempo se maneja como MINUTOS DESDE MEDIANOCHE
-   (0–1439) + una fecha 'YYYY-MM-DD' local. Nada de UTC para la aritmética del día. */
+/* Dominio de "Margen" (sección /tiempo). Portado fiel del prototipo del handoff.
+   Todo el tiempo son MINUTOS DESDE MEDIANOCHE (0–1439) + fecha 'YYYY-MM-DD' local.
+   El registro sólo existe para alimentar los patrones semanales. */
 
-export type Actividad = {
-  id: string
-  titulo: string
-  area: AreaId
-  fecha: string          // 'YYYY-MM-DD' local
-  inicio: number | null  // minutos desde medianoche; null = sin agendar (en el "por acomodar")
-  dur: number            // minutos
-  nota: string | null
-  hecho: boolean
-  orden: number | null
+export type Area = 'trabajo' | 'cuerpo' | 'ocio' | 'personas' | 'cierre' | 'sueno'
+
+export type Block = { id: string; name: string; area: Area; start: number; dur: number }
+export type Session = { name: string; area: Area; start: number; dur: number } | null
+export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number }
+
+export type AppData = {
+  blocks: Block[]
+  bed: number      // hora de dormir, ej. 1350 = 22:30
+  sleep: number    // sueño objetivo en minutos, ej. 480 = 8h
+  session: Session
+  history: HistoryRow[]
 }
 
-export type AreaId = 'trabajo' | 'cuerpo' | 'ocio' | 'personas' | 'cierre' | 'sueno'
+export const KEY = 'margen.v1'
 
-/* Áreas y su color (tomadas del sistema de diseño de Margen). */
-export const AREAS: Record<AreaId, { label: string; color: string; soft: string }> = {
-  trabajo:  { label: 'Trabajo',        color: '#b4653a', soft: '#f4e6db' },
-  cuerpo:   { label: 'Cuerpo',         color: '#6f8256', soft: '#e7ecdd' },
-  ocio:     { label: 'Ocio y descanso', color: '#c99a6f', soft: '#f2e7da' },
-  personas: { label: 'Personas',       color: '#8b8379', soft: '#eae5dd' },
-  cierre:   { label: 'Cierre del día',  color: '#a49b90', soft: '#ece7df' },
-  sueno:    { label: 'Sueño',          color: '#1c1a17', soft: '#e0ddd6' },
+export const AREAS: Record<Area, { label: string; color: string }> = {
+  trabajo: { label: 'Trabajo', color: '#b4653a' },
+  cuerpo: { label: 'Cuerpo', color: '#6f8256' },
+  ocio: { label: 'Ocio y descanso', color: '#c99a6f' },
+  personas: { label: 'Personas', color: '#8b8379' },
+  cierre: { label: 'Cierre del día', color: '#a49b90' },
+  sueno: { label: 'Sueño', color: '#1c1a17' },
 }
-export const AREA_IDS = Object.keys(AREAS) as AreaId[]
-export function areaOf(id: string) { return AREAS[(id as AreaId)] ?? AREAS.ocio }
 
-/* ── Formateadores de tiempo ─────────────────────────────────────────────── */
+export const ACTIVITIES: { id: string; area: Area }[] = [
+  { id: 'Trabajo profundo', area: 'trabajo' },
+  { id: 'Reuniones', area: 'trabajo' },
+  { id: 'Trámites', area: 'trabajo' },
+  { id: 'Aprendizaje', area: 'trabajo' },
+]
+
+export const DAY_NAMES = ['D', 'L', 'M', 'M', 'J', 'V', 'S']
 
 /** 195 → "3h 15m", 120 → "2h", 45 → "45m". Redondea, mínimo 0. */
 export function hm(m: number): string {
@@ -46,66 +52,44 @@ export function clock(m: number): string {
 }
 
 /** "22:30" → 1350. */
-export function parseClock(s: string): number {
+export function parse(s: string): number {
   const p = String(s || '').split(':')
   return (Number(p[0]) || 0) * 60 + (Number(p[1]) || 0)
 }
 
-/* ── Fechas locales (sin UTC) ────────────────────────────────────────────── */
-
-export function todayISO(d = new Date()): string {
+/** Fecha local 'YYYY-MM-DD' (sin UTC, para no correr el día en la tarde/noche MX). */
+export function iso(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-export function addDays(iso: string, n: number): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const dt = new Date(y, m - 1, d + n)
-  return todayISO(dt)
-}
-/** Lunes de la semana que contiene `iso` (semana L→D). */
-export function mondayOf(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const dt = new Date(y, m - 1, d)
-  const dow = (dt.getDay() + 6) % 7 // 0 = lunes
-  return addDays(iso, -dow)
-}
-/** Los 7 ISO de la semana (L→D) que contiene `iso`. */
-export function weekDays(iso: string): string[] {
-  const mon = mondayOf(iso)
-  return Array.from({ length: 7 }, (_, i) => addDays(mon, i))
-}
 
-const DOW_LONG = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
-const DOW_SHORT = ['D', 'L', 'M', 'M', 'J', 'V', 'S']
-const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
-
-export function dowShort(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  return DOW_SHORT[new Date(y, m - 1, d).getDay()]
-}
-/** "lunes 3 de agosto" */
-export function longDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const dt = new Date(y, m - 1, d)
-  return `${DOW_LONG[dt.getDay()]} ${d} de ${MONTHS[m - 1]}`
-}
-/** "L 3", "M 4"… para las cabeceras de la semana. */
-export function shortLabel(iso: string): string {
-  return `${dowShort(iso)} ${Number(iso.slice(8))}`
-}
-
-/** minutos "ahora" con decimales (para la línea de tiempo actual). */
-export function nowMinutes(d = new Date()): number {
-  return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60
-}
-
-/** Rango de horas [inicioH, finH] que cubre el timeline: 6→24 por defecto,
- *  ampliado para incluir cualquier actividad fuera de ese rango. */
-export function hourRange(acts: Actividad[]): [number, number] {
-  let lo = 6 * 60, hi = 24 * 60
-  for (const a of acts) {
-    if (a.inicio == null) continue
-    lo = Math.min(lo, a.inicio)
-    hi = Math.max(hi, a.inicio + a.dur)
+export function defaults(): AppData {
+  return {
+    blocks: [
+      { id: 'ex', name: 'Ejercicio', area: 'cuerpo', start: 1140, dur: 45 },
+      { id: 'ce', name: 'Cena', area: 'cuerpo', start: 1200, dur: 45 },
+      { id: 'tp', name: 'Tiempo personal', area: 'ocio', start: 1245, dur: 75 },
+      { id: 'rc', name: 'Rutina de cierre', area: 'cierre', start: 1320, dur: 30 },
+    ],
+    bed: 1350,
+    sleep: 480,
+    session: null,
+    history: seed(),
   }
-  return [Math.floor(lo / 60) * 60, Math.min(1440, Math.ceil(hi / 60) * 60)]
+}
+
+/** Semana de datos sembrados, para que Historial no arranque vacío. */
+export function seed(): HistoryRow[] {
+  const out: HistoryRow[] = [], today = new Date()
+  for (let i = 7; i >= 1; i--) {
+    const d = new Date(today.getTime() - i * 86400000)
+    const day = iso(d), dow = d.getDay()
+    const work = dow === 0 || dow === 6 ? 120 : 420 + ((i * 37) % 5) * 30
+    out.push({ date: day, name: 'Trabajo profundo', area: 'trabajo', start: 540, dur: work })
+    if (i !== 4 && dow !== 0) out.push({ date: day, name: 'Ejercicio', area: 'cuerpo', start: 1140, dur: 45 })
+    out.push({ date: day, name: 'Cena', area: 'cuerpo', start: 1200, dur: 45 })
+    out.push({ date: day, name: 'Tiempo personal', area: 'ocio', start: 1245, dur: i === 4 ? 20 : 75 })
+    if (dow === 6 || dow === 3) out.push({ date: day, name: 'Personas', area: 'personas', start: 1140, dur: 150 })
+    out.push({ date: day, name: 'Dormir', area: 'sueno', start: 1350, dur: i === 4 ? 380 : 460 - ((i * 13) % 3) * 15 })
+  }
+  return out
 }

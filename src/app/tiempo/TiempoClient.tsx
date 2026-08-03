@@ -1,490 +1,491 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import Link from 'next/link'
 import {
-  AREAS, AREA_IDS, areaOf, hm, clock, parseClock, todayISO, addDays,
-  weekDays, longDate, shortLabel, nowMinutes, hourRange,
-  type Actividad, type AreaId,
+  AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
+  type AppData, type Area,
 } from '@/lib/tiempo'
 
-/* Paleta del sistema de diseño "Margen". Se usa inline para no acoplar la
-   sección al Tailwind del resto de la app (que es navy/oro). */
-const C = {
-  page: '#f2ece2', surface: '#faf7f1', surfaceAlt: '#f5efe4', tint: '#f3ece1',
-  line: '#e7dfd2', lineSoft: '#eee6da', lineInput: '#e2d9cb', dashed: '#ccc2b2',
-  ink: '#1c1a17', inkHover: '#2e2a25', inkSoft: '#4c4741',
-  muted: '#6b645b', faint: '#8b8379', ghost: '#a49b90',
-  accent: '#b4653a', accentDeep: '#8a4b28', danger: '#8a3c2a', sage: '#6f8256',
-}
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
-const UI = 'var(--tiempo-ui), system-ui, sans-serif'
-const PPH = 60           // píxeles por hora en la vista Día
-const ROW_H = 76         // alto de cada mini-línea en la vista Semana
+const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
+const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
 
-type Preview = { id: string; fecha: string; inicio: number | null }
-type DragState = {
-  id: string; dur: number; kind: 'block' | 'chip'; grab: number
-  moved: boolean; sx: number; sy: number
-}
+export default function TiempoClient() {
+  const [now, setNow] = useState(0)
+  const [view, setView] = useState<'hoy' | 'rutina' | 'historial'>('hoy')
+  const [dur, setDur] = useState(90)
+  const [act, setAct] = useState('Trabajo profundo')
+  const [data, setData] = useState<AppData>(() => defaults())
+  const [loaded, setLoaded] = useState(false)
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
-export default function TiempoClient({ initial, ready }: { initial: Actividad[]; ready: boolean }) {
-  const [acts, setActs] = useState<Actividad[]>(initial)
-  const [view, setView] = useState<'dia' | 'semana'>('dia')
-  const [viewDate, setViewDate] = useState<string>(todayISO())
-  const [now, setNow] = useState<number>(nowMinutes())
-  const [edit, setEdit] = useState<Actividad | null>(null)
-  const [preview, setPreview] = useState<Preview | null>(null)
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [toast, setToast] = useState<string>('')
-
-  // Refs espejo para los handlers globales de puntero (no dependen del render).
-  const actsRef = useRef(acts); useEffect(() => { actsRef.current = acts }, [acts])
-  const previewRef = useRef(preview); useEffect(() => { previewRef.current = preview }, [preview])
-  const dragRef = useRef<DragState | null>(null)
-  const suppressClick = useRef(0)
-
-  // Reloj: la línea de "ahora" y el resaltado del día se refrescan solos.
   useEffect(() => {
-    const t = setInterval(() => setNow(nowMinutes()), 20000)
-    const onVis = () => setNow(nowMinutes())
-    document.addEventListener('visibilitychange', onVis)
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis) }
+    let d = defaults()
+    try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
+    const n = new Date()
+    setData(d); setLoaded(true)
+    setNow(n.getHours() * 60 + n.getMinutes() + n.getSeconds() / 60)
+    timer.current = setInterval(() => {
+      const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60)
+    }, 1000)
+    return () => { if (timer.current) clearInterval(timer.current) }
   }, [])
 
-  const flash = useCallback((m: string) => { setToast(m); setTimeout(() => setToast(''), 2600) }, [])
-
-  /* ── Persistencia (optimista) ───────────────────────────────────────────── */
-  const refetch = useCallback(async () => {
-    try {
-      const r = await fetch('/api/tiempo'); const j = await r.json()
-      if (j.ok) setActs(j.data)
-    } catch { /* sin red: se queda con lo local */ }
-  }, [])
-
-  const patch = useCallback(async (id: string, p: Partial<Actividad>) => {
-    setActs(prev => prev.map(a => a.id === id ? { ...a, ...p } : a))
-    try {
-      const r = await fetch(`/api/tiempo/${id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
-      })
-      if (!(await r.json()).ok) throw new Error()
-    } catch { flash('No se pudo guardar · reintenta'); refetch() }
-  }, [flash, refetch])
-
-  const createAt = useCallback(async (fecha: string, inicio: number | null) => {
-    const body = { fecha, area: 'ocio' as AreaId, titulo: '', inicio, dur: 30, hecho: false, nota: '' }
-    try {
-      const r = await fetch('/api/tiempo', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      })
-      const j = await r.json()
-      if (!j.ok) throw new Error(j.error)
-      setActs(prev => [...prev, j.data]); setEdit(j.data)
-    } catch { flash('No se pudo crear la actividad') }
-  }, [flash])
-
-  const remove = useCallback(async (id: string) => {
-    setActs(prev => prev.filter(a => a.id !== id)); setEdit(null)
-    try { await fetch(`/api/tiempo/${id}`, { method: 'DELETE' }) } catch { flash('No se pudo borrar'); refetch() }
-  }, [flash, refetch])
-
-  /* ── Actividades "efectivas" (aplican el preview del arrastre en vivo) ───── */
-  const eff = useMemo<Actividad[]>(() => {
-    if (!preview) return acts
-    return acts.map(a => a.id === preview.id ? { ...a, fecha: preview.fecha, inicio: preview.inicio } : a)
-  }, [acts, preview])
-
-  /* ── Arrastre unificado (Día y Semana; hora + entre días + agendar) ─────── */
-  const startDrag = (e: React.PointerEvent, a: Actividad, kind: 'block' | 'chip') => {
-    e.preventDefault()
-    let grab = 0
-    if (kind === 'block' && a.inicio != null) {
-      const r = e.currentTarget.getBoundingClientRect()
-      grab = view === 'dia'
-        ? ((e.clientY - r.top) / Math.max(1, r.height)) * a.dur
-        : ((e.clientX - r.left) / Math.max(1, r.width)) * a.dur
-    }
-    dragRef.current = { id: a.id, dur: a.dur, kind, grab, moved: false, sx: e.clientX, sy: e.clientY }
-    setDragId(a.id)
+  function save(patch: Partial<AppData>) {
+    const nd = { ...data, ...patch }
+    setData(nd)
+    try { localStorage.setItem(KEY, JSON.stringify(nd)) } catch {}
   }
+  const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
+    save({ blocks: data.blocks.map(b => b.id === id ? { ...b, ...patch } : b) })
 
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      const d = dragRef.current; if (!d) return
-      if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 5) d.moved = true
-      if (!d.moved) return
-      e.preventDefault()
-      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
-      const drop = el?.closest('[data-drop]') as HTMLElement | null
-      if (!drop) return
-      const fecha = drop.getAttribute('data-fecha')!
-      if (drop.getAttribute('data-drop') === 'backlog') { setPreview({ id: d.id, fecha, inicio: null }); return }
-      const lo = +drop.dataset.lo!, hi = +drop.dataset.hi!, orient = drop.dataset.orient
-      const r = drop.getBoundingClientRect()
-      const frac = orient === 'v' ? (e.clientY - r.top) / r.height : (e.clientX - r.left) / r.width
-      let mins = lo + Math.max(0, Math.min(1, frac)) * (hi - lo) - d.grab
-      mins = Math.round(mins / 15) * 15
-      mins = Math.max(0, Math.min(1440 - d.dur, mins))
-      setPreview({ id: d.id, fecha, inicio: mins })
+  /* ── Cálculo (portado de renderVals, tono "cuidadora") ─────────────────── */
+  const V = useMemo(() => {
+    const caring = true
+    const bed = data.bed, sleepGoal = data.sleep, session = data.session
+    const blocks = data.blocks.slice().sort((a, b) => a.start - b.start)
+    const sleepBlock = { id: '__sleep', name: 'Dormir', area: 'sueno' as Area, start: bed, dur: sleepGoal }
+    const timeline = blocks.concat([sleepBlock])
+
+    let free = Math.max(0, bed - now)
+    for (const b of blocks) free -= Math.max(0, Math.min(b.start + b.dur, bed) - Math.max(b.start, now))
+    free = Math.max(0, free)
+
+    const nextBlock = blocks.find(b => b.start + b.dur > now)
+    const windowMins = nextBlock ? Math.max(0, nextBlock.start - now) : Math.max(0, bed - now)
+    const safeMax = Math.max(15, Math.round(windowMins / 15) * 15)
+
+    const simStart = now, simEnd = simStart + dur
+    const overlap = (aS: number, aE: number, bS: number, bE: number) => Math.max(0, Math.min(aE, bE) - Math.max(aS, bS))
+    const afectados: { name: string; detail: string; mins: number; id: string }[] = []
+    const intactos: { name: string; detail: string; id: string }[] = []
+    for (const b of timeline) {
+      const o = overlap(simStart, simEnd, b.start, b.start + b.dur)
+      if (o >= 1) afectados.push({ name: b.name, detail: o >= b.dur - 1 ? 'se elimina' : '−' + hm(o), mins: o, id: b.id })
+      else if (b.start + b.dur > now) intactos.push({ name: b.name, detail: hm(b.dur), id: b.id })
     }
-    const onUp = () => {
-      const d = dragRef.current; dragRef.current = null; setDragId(null)
-      if (!d) return
-      if (!d.moved) {                                   // fue un clic → abrir editor
-        const a = actsRef.current.find(x => x.id === d.id)
-        setPreview(null); if (a) setEdit({ ...a }); return
+    const sleepDebt = overlap(simStart, simEnd, bed, bed + sleepGoal)
+    const hitAny = afectados.length > 0
+
+    let verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg
+    if (!hitAny) {
+      verdictKicker = 'cabe sin costo'
+      verdictTitle = 'Terminas a las ' + clock(simEnd) + ' y no tocas nada.'
+      verdictText = (caring ? 'Después te quedan ' : 'Margen posterior: ') + hm(Math.max(0, free - dur)) + ' de tiempo útil, y tu rutina sigue intacta.'
+      verdictBg = '#eef1e7'; verdictBorder = '#dbe2cd'; verdictFg = '#4f6238'
+    } else if (sleepDebt < 1) {
+      verdictKicker = 'cabe con costo'
+      verdictTitle = 'Terminas a las ' + clock(simEnd) + ' invadiendo ' + hm(afectados.reduce((s, a) => s + a.mins, 0)) + ' de tiempo protegido.'
+      verdictText = (caring ? 'Duermes igual, pero lo pagas con ' : 'Costo: ') + afectados.map(a => a.name.toLowerCase()).join(' y ') + '.'
+      verdictBg = '#f7ece2'; verdictBorder = '#ecd9cb'; verdictFg = '#8a4b28'
+    } else {
+      verdictKicker = 'sale de tu sueño'
+      verdictTitle = 'Terminarías a las ' + clock(simEnd) + ' y dormirías ' + hm(sleepGoal - sleepDebt) + '.'
+      verdictText = (caring ? 'Esto ya no se paga con ocio: se paga con mañana. ' : 'Déficit de sueño: ' + hm(sleepDebt) + '. ') + hm(safeMax) + ' ahora deja el día intacto.'
+      verdictBg = '#f6e3dd'; verdictBorder = '#e8cabf'; verdictFg = '#8a3c2a'
+    }
+
+    // barra del resto del día
+    const scaleEnd = Math.max(bed + 30, simEnd + 15)
+    const total = Math.max(1, scaleEnd - now)
+    const raw: { s: number; e: number; kind: 'free' | 'prot' }[] = []
+    let cursor = now
+    for (const b of timeline) {
+      const s = Math.max(b.start, now), e = Math.min(b.start + b.dur, scaleEnd)
+      if (e <= s) continue
+      if (s > cursor) raw.push({ s: cursor, e: s, kind: 'free' })
+      raw.push({ s: Math.max(s, cursor), e, kind: 'prot' })
+      cursor = Math.max(cursor, e)
+    }
+    if (cursor < scaleEnd) raw.push({ s: cursor, e: scaleEnd, kind: 'free' })
+    const segs: { w: number; bg: string }[] = []
+    for (const r of raw) {
+      const parts: { s: number; e: number; work: boolean }[] = []
+      const iS = Math.max(r.s, simStart), iE = Math.min(r.e, simEnd)
+      if (iE > iS) {
+        if (r.s < iS) parts.push({ s: r.s, e: iS, work: false })
+        parts.push({ s: iS, e: iE, work: true })
+        if (r.e > iE) parts.push({ s: iE, e: r.e, work: false })
+      } else parts.push({ s: r.s, e: r.e, work: false })
+      for (const p of parts) {
+        if (p.e - p.s < 0.5) continue
+        const bg = p.work ? (r.kind === 'prot' ? '#8a3c2a' : '#b4653a') : (r.kind === 'prot' ? '#6f8256' : '#eee6da')
+        segs.push({ w: ((p.e - p.s) / total) * 100, bg })
       }
-      suppressClick.current = Date.now()                // evita crear al soltar sobre el track
-      const p = previewRef.current; setPreview(null)
-      const a = actsRef.current.find(x => x.id === d.id)
-      if (!a || !p) return
-      if (a.fecha === p.fecha && a.inicio === p.inicio) return
-      patch(a.id, { fecha: p.fecha, inicio: p.inicio })
-    }
-    window.addEventListener('pointermove', onMove, { passive: false })
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-    return () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-    }
-  }, [view, patch])
-
-  const trackClick = (fecha: string, lo: number, hi: number, orient: 'v' | 'h') =>
-    (e: React.MouseEvent) => {
-      if (Date.now() - suppressClick.current < 300) return
-      if ((e.target as HTMLElement).closest('[data-block]')) return
-      const r = e.currentTarget.getBoundingClientRect()
-      const frac = orient === 'v' ? (e.clientY - r.top) / r.height : (e.clientX - r.left) / r.width
-      const mins = Math.max(0, Math.min(1425, Math.round((lo + frac * (hi - lo)) / 15) * 15))
-      createAt(fecha, mins)
     }
 
-  const today = todayISO()
+    const upcoming = timeline.filter(b => b.start + b.dur > now).map(b => {
+      const hit = afectados.find(a => a.id === b.id)
+      return {
+        range: clock(b.start) + '–' + clock(b.start + b.dur),
+        name: b.name, dur: hm(b.dur),
+        dot: AREAS[b.area] ? AREAS[b.area].color : '#8b8379',
+        nameColor: hit ? '#8a3c2a' : '#1c1a17',
+        state: hit ? hit.detail : 'protegido',
+        stateColor: hit ? '#8a3c2a' : '#4f6238',
+      }
+    })
+
+    // sesión
+    const elapsed = session ? Math.max(0, now - session.start) : 0
+    const planned = session ? session.dur : 0
+    const sEnd = session ? session.start + planned : 0
+
+    // semana
+    const today = iso(new Date())
+    const week: { date: string; dow: number }[] = []
+    for (let i = 6; i >= 0; i--) { const dt = new Date(Date.now() - i * 86400000); week.push({ date: iso(dt), dow: dt.getDay() }) }
+    const weekSet = week.map(w => w.date)
+    const inWeek = data.history.filter(h => weekSet.indexOf(h.date) >= 0)
+    const byArea: Record<string, number> = {}
+    for (const h of inWeek) byArea[h.area] = (byArea[h.area] || 0) + h.dur
+    const weekTotal = Object.values(byArea).reduce((a, b) => a + b, 0) || 1
+    const maxArea = Math.max.apply(null, Object.values(byArea).concat([1]))
+    const areaStats = (Object.keys(AREAS) as Area[]).filter(k => byArea[k]).sort((a, b) => byArea[b] - byArea[a]).map(k => ({
+      label: AREAS[k].label, hours: hm(byArea[k]),
+      share: Math.round((byArea[k] / weekTotal) * 100) + '%',
+      pct: (byArea[k] / maxArea) * 100, bg: AREAS[k].color,
+    }))
+
+    const dayOk: Record<string, boolean | null> = {}
+    for (const w of week) {
+      const rows = data.history.filter(h => h.date === w.date)
+      const sl = rows.filter(r => r.area === 'sueno').reduce((s, r) => s + r.dur, 0)
+      const body = rows.filter(r => r.area === 'cuerpo').reduce((s, r) => s + r.dur, 0)
+      dayOk[w.date] = rows.length === 0 ? null : (sl >= sleepGoal - 30 && body >= 45)
+    }
+    let streak = 0
+    for (let i = week.length - 1; i >= 0; i--) { const v = dayOk[week[i].date]; if (v === true) streak++; else if (v === false) break }
+    const days = week.map(w => ({ label: DAY_NAMES[w.dow], bg: dayOk[w.date] === null ? '#e2d9cb' : dayOk[w.date] ? '#6f8256' : '#b4653a' }))
+    const okCount = week.filter(w => dayOk[w.date] === true).length
+
+    const todayLog = data.history.filter(h => h.date === today).sort((a, b) => a.start - b.start).map(h => ({
+      range: clock(h.start) + '–' + clock(h.start + h.dur), name: h.name, dur: hm(h.dur),
+      dot: AREAS[h.area] ? AREAS[h.area].color : '#8b8379',
+    }))
+    const workedToday = data.history.filter(h => h.date === today && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+
+    const eBars: { h: number; bg: string }[] = []
+    for (let h = 7; h <= 22; h++) {
+      const val = h < 9 ? 0.42 : h < 12 ? 1 : h < 13 ? 0.8 : h < 15 ? 0.5 : h < 18 ? 0.78 : h < 20 ? 0.52 : h < 22 ? 0.36 : 0.24
+      const cur = Math.floor(now / 60) === h
+      eBars.push({ h: val * 100, bg: cur ? '#b4653a' : now / 60 > h ? '#e4dcd0' : '#ecd9cb' })
+    }
+    const nowH = Math.floor(now / 60)
+    const energyNote = nowH < 13 ? 'Estás dentro de tu pico de rendimiento: es el mejor momento para trabajo profundo.'
+      : nowH < 15 ? 'Bajón de media tarde. Buen momento para lo mecánico, no para lo difícil.'
+      : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
+      : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.'
+
+    return {
+      nowLabel: clock(now),
+      dateLabel: new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }),
+      free, freeLabel: hm(free),
+      freeExplain: 'Es lo que queda entre ahora y las ' + clock(bed) + ', descontando todo lo que decidiste proteger.',
+      windowLabel: nextBlock ? hm(windowMins) + ' (hasta ' + clock(nextBlock.start) + ')' : hm(windowMins),
+      bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
+      workedTodayLabel: workedToday ? hm(workedToday) : '—',
+      energy: eBars, energyNote,
+      hasSession: !!session, sessionName: session ? session.name : '',
+      sessionStartLabel: session ? clock(session.start) : '',
+      sessionElapsedLabel: session ? hm(elapsed) : '',
+      sessionPct: session ? Math.min(100, (elapsed / Math.max(1, planned)) * 100) : 0,
+      sessionNote: session ? (elapsed >= planned
+        ? 'Ya pasaste los ' + hm(planned) + ' que planeaste. Cada minuto extra sale de lo que viene.'
+        : 'Quedan ' + hm(planned - elapsed) + '. Terminarías a las ' + clock(sEnd) + '.') : '',
+      durLabel: hm(dur), endLabel: clock(simEnd),
+      verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
+      hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
+      segs, upcoming, scaleEndLabel: clock(scaleEnd),
+      weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
+      weekTotalLabel: hm(weekTotal), areaStats, days,
+      streakLabel: streak > 0 ? streak + (streak === 1 ? ' día seguido con la rutina protegida' : ' días seguidos con la rutina protegida') : 'Aún sin racha esta semana',
+      streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
+      todayLog, logEmpty: todayLog.length ? '' : 'Todavía no hay bloques cerrados hoy. Empieza uno desde Hoy y aparecerá aquí al terminarlo.',
+    }
+  }, [data, now, dur])
+
+  /* ── Acciones ──────────────────────────────────────────────────────────── */
+  const start = () => { const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]; save({ session: { name: a.id, area: a.area, start: Math.round(now), dur } }) }
+  const finish = () => { const s = data.session; if (!s) return; save({ session: null, history: data.history.concat([{ date: iso(new Date()), name: s.name, area: s.area, start: Math.round(s.start), dur: Math.max(1, Math.round(now - s.start)) }]) }) }
+  const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
+  const cancel = () => save({ session: null })
+  const areaOptions = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno').map(k => ({ id: k, label: AREAS[k].label }))
+  const bed = data.bed, sleepGoal = data.sleep
+
+  const tabs: [typeof view, string][] = [['hoy', 'Hoy'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
 
   return (
-    <div style={{ minHeight: '100vh', background: C.page, color: C.ink, fontFamily: UI, paddingBottom: 72 }}>
-      {/* ── Barra superior ─────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 1180, margin: '0 auto', padding: '22px 20px 8px', display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-          <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1 }}>Tiempo</span>
-          <span style={{ fontSize: 13, color: C.ghost }}>tu día y tu semana, con margen</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: SERIF, fontSize: 26, fontVariantNumeric: 'tabular-nums' }}>{clock(now)}</span>
-          <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
-            {(['dia', 'semana'] as const).map(v => (
-              <button key={v} onClick={() => setView(v)} style={{
-                border: 'none', cursor: 'pointer', padding: '8px 18px', borderRadius: 999, fontSize: 14, fontWeight: 500, fontFamily: UI,
-                background: view === v ? C.surface : 'transparent', color: view === v ? C.ink : C.muted,
-              }}>{v === 'dia' ? 'Día' : 'Semana'}</button>
-            ))}
+    <div className="margen-root" style={{ minHeight: '100vh', background: '#f2ece2', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif', color: '#1c1a17', WebkitFontSmoothing: 'antialiased' }}>
+      <style>{MARGEN_CSS}</style>
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 20px 64px' }}>
+        <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '22px 0 26px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
+            <span style={{ fontFamily: SERIF, fontSize: 28, lineHeight: 1 }}>Margen</span>
+            <span style={{ fontSize: 13, color: '#a49b90', textTransform: 'capitalize' }}>{loaded ? V.dateLabel : ''}</span>
           </div>
-          <Link href="/" style={{ fontSize: 12, fontWeight: 600, color: C.muted, textDecoration: 'none', border: `1px solid ${C.lineInput}`, borderRadius: 10, padding: '8px 12px' }}>← Accesos</Link>
-        </div>
-      </div>
-
-      {!ready && (
-        <div style={{ maxWidth: 1180, margin: '10px auto 0', padding: '0 20px' }}>
-          <div style={{ background: '#f6e3dd', border: `1px solid #e8cabf`, borderRadius: 16, padding: '14px 18px', fontSize: 14, color: C.danger }}>
-            Falta crear la tabla en Supabase. Corre <b>sql/tiempo-01-schema.sql</b> en el SQL editor y recarga.
-          </div>
-        </div>
-      )}
-
-      <div style={{ maxWidth: 1180, margin: '0 auto', padding: '18px 20px 0' }}>
-        {view === 'dia'
-          ? <DayView date={viewDate} today={today} acts={eff} now={now}
-              setDate={setViewDate} startDrag={startDrag} previewId={preview?.id ?? null}
-              trackClick={trackClick} onNew={() => createAt(viewDate, null)} />
-          : <WeekView date={viewDate} today={today} acts={eff}
-              setDate={setViewDate} startDrag={startDrag} previewId={preview?.id ?? null}
-              trackClick={trackClick} />}
-      </div>
-
-      {edit && (
-        <Editor a={edit} onChange={setEdit}
-          onSave={() => { const e = edit; setEdit(null); patch(e.id, { titulo: e.titulo, area: e.area, fecha: e.fecha, inicio: e.inicio, dur: e.dur, nota: e.nota, hecho: e.hecho }) }}
-          onClose={() => setEdit(null)} onDelete={() => remove(edit.id)} />
-      )}
-
-      {toast && (
-        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: C.ink, color: C.surface, padding: '12px 20px', borderRadius: 999, fontSize: 14, zIndex: 60 }}>{toast}</div>
-      )}
-      {dragId && <style>{`body{user-select:none;-webkit-user-select:none;}`}</style>}
-    </div>
-  )
-}
-
-/* ─────────────────────────── Vista Día ─────────────────────────── */
-function DayView({ date, today, acts, now, setDate, startDrag, previewId, trackClick, onNew }: {
-  date: string; today: string; acts: Actividad[]; now: number
-  setDate: (d: string) => void
-  startDrag: (e: React.PointerEvent, a: Actividad, k: 'block' | 'chip') => void
-  previewId: string | null
-  trackClick: (fecha: string, lo: number, hi: number, o: 'v' | 'h') => (e: React.MouseEvent) => void
-  onNew: () => void
-}) {
-  const dayActs = acts.filter(a => a.fecha === date)
-  const scheduled = dayActs.filter(a => a.inicio != null)
-  const backlog = dayActs.filter(a => a.inicio == null)
-  const [lo, hi] = hourRange(scheduled)
-  const height = ((hi - lo) / 60) * PPH
-  const totalDur = scheduled.reduce((s, a) => s + a.dur, 0)
-  const isToday = date === today
-
-  return (
-    <>
-      <SummaryBar
-        title={longDate(date)}
-        meta={`${dayActs.length} ${dayActs.length === 1 ? 'actividad' : 'actividades'} · ${hm(totalDur)} agendadas`}
-        onPrev={() => setDate(addDays(date, -1))} onNext={() => setDate(addDays(date, 1))}
-        onToday={() => setDate(today)} todayLabel="Hoy" isToday={isToday}
-        action={<GhostBtn onClick={onNew}>+ Nueva actividad</GhostBtn>} />
-
-      {/* Por acomodar (backlog) — también es zona para soltar y quitar la hora */}
-      <div data-drop="backlog" data-fecha={date} style={{
-        marginTop: 14, background: C.surfaceAlt, border: `1px dashed ${C.dashed}`, borderRadius: 16,
-        padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', minHeight: 52,
-      }}>
-        <span style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.ghost, fontWeight: 600, marginRight: 4 }}>por acomodar</span>
-        {backlog.length === 0 && <span style={{ fontSize: 13, color: C.ghost }}>Arrastra aquí para quitar la hora, o crea una nueva.</span>}
-        {backlog.map(a => <Chip key={a.id} a={a} startDrag={startDrag} previewId={previewId} />)}
-      </div>
-
-      {/* Línea de tiempo vertical */}
-      <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.line}`, borderRadius: 24, padding: 20, display: 'flex' }}>
-        <div style={{ width: 46, flexShrink: 0, position: 'relative', height }}>
-          {Array.from({ length: (hi - lo) / 60 + 1 }, (_, i) => (
-            <span key={i} style={{ position: 'absolute', top: i * PPH - 7, right: 8, fontSize: 11, color: C.ghost, fontVariantNumeric: 'tabular-nums' }}>{clock(lo + i * 60)}</span>
-          ))}
-        </div>
-        <div data-drop="day" data-fecha={date} data-orient="v" data-lo={lo} data-hi={hi}
-          onClick={trackClick(date, lo, hi, 'v')}
-          style={{ position: 'relative', flex: 1, height, borderLeft: `1px solid ${C.lineSoft}`, cursor: 'copy' }}>
-          {Array.from({ length: (hi - lo) / 60 + 1 }, (_, i) => (
-            <div key={i} style={{ position: 'absolute', top: i * PPH, left: 0, right: 0, borderTop: `1px solid ${C.lineSoft}` }} />
-          ))}
-          {isToday && now >= lo && now <= hi && (
-            <div style={{ position: 'absolute', top: ((now - lo) / 60) * PPH, left: 0, right: 0, height: 0, borderTop: `2px solid ${C.accent}`, zIndex: 5 }}>
-              <span style={{ position: 'absolute', left: -6, top: -4, width: 8, height: 8, borderRadius: 999, background: C.accent }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+            <Link href="/epicas" style={{ fontSize: 13, color: '#a49b90', textDecoration: 'none' }}>← Épicas</Link>
+            <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
+            <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
+              {tabs.map(([id, label]) => (
+                <div key={id} onClick={() => setView(id)} style={{ padding: '9px 20px', borderRadius: 999, fontSize: 14, fontWeight: 500, cursor: 'pointer', background: view === id ? '#faf7f1' : 'transparent', color: view === id ? '#1c1a17' : '#6b645b' }}>{label}</div>
+              ))}
             </div>
-          )}
-          {scheduled.map(a => {
-            const area = areaOf(a.area)
-            const top = ((a.inicio! - lo) / 60) * PPH
-            const h = Math.max(26, (a.dur / 60) * PPH)
-            return (
-              <div key={a.id} data-block onPointerDown={e => startDrag(e, a, 'block')}
-                style={{
-                  position: 'absolute', top, left: 8, right: 8, height: h, boxSizing: 'border-box',
-                  background: area.soft, borderLeft: `3px solid ${area.color}`, borderRadius: 12, padding: '5px 10px',
-                  overflow: 'hidden', cursor: 'grab', touchAction: 'none', zIndex: previewId === a.id ? 20 : 10,
-                  opacity: a.hecho ? 0.5 : 1, pointerEvents: previewId === a.id ? 'none' : 'auto',
-                  boxShadow: previewId === a.id ? '0 8px 20px rgba(28,26,23,.18)' : 'none',
-                }}>
-                <div style={{ fontSize: 14, fontWeight: 500, lineHeight: 1.25, textDecoration: a.hecho ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.titulo || 'Sin título'}</div>
-                {h > 34 && <div style={{ fontSize: 11, color: C.faint, fontVariantNumeric: 'tabular-nums' }}>{clock(a.inicio!)}–{clock(a.inicio! + a.dur)} · {hm(a.dur)}</div>}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </>
-  )
-}
-
-/* ─────────────────────────── Vista Semana ─────────────────────────── */
-function WeekView({ date, today, acts, setDate, startDrag, previewId, trackClick }: {
-  date: string; today: string; acts: Actividad[]
-  setDate: (d: string) => void
-  startDrag: (e: React.PointerEvent, a: Actividad, k: 'block' | 'chip') => void
-  previewId: string | null
-  trackClick: (fecha: string, lo: number, hi: number, o: 'v' | 'h') => (e: React.MouseEvent) => void
-}) {
-  const days = weekDays(date)
-  const set = new Set(days)
-  const weekActs = acts.filter(a => set.has(a.fecha) && a.inicio != null)
-  const [lo, hi] = hourRange(weekActs)
-  const span = hi - lo
-  const hours = Array.from({ length: (hi - lo) / 60 + 1 }, (_, i) => lo + i * 60)
-
-  return (
-    <>
-      <SummaryBar
-        title={`Semana del ${Number(days[0].slice(8))} al ${Number(days[6].slice(8))}`}
-        meta={`${weekActs.length} agendadas · ${hm(weekActs.reduce((s, a) => s + a.dur, 0))}`}
-        onPrev={() => setDate(addDays(date, -7))} onNext={() => setDate(addDays(date, 7))}
-        onToday={() => setDate(today)} todayLabel="Esta semana" isToday={set.has(today)} />
-
-      <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.line}`, borderRadius: 24, padding: '16px 18px' }}>
-        {/* Cabecera de horas alineada con los tracks */}
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-          <div style={{ width: 68, flexShrink: 0 }} />
-          <div style={{ position: 'relative', flex: 1, height: 14 }}>
-            {hours.map(h => (
-              <span key={h} style={{ position: 'absolute', left: `${((h - lo) / span) * 100}%`, transform: 'translateX(-50%)', fontSize: 10, color: C.ghost, fontVariantNumeric: 'tabular-nums' }}>{clock(h)}</span>
-            ))}
           </div>
         </div>
 
-        {days.map(iso => {
-          const dayActs = acts.filter(a => a.fecha === iso && a.inicio != null)
-          const nUn = acts.filter(a => a.fecha === iso && a.inicio == null).length
-          const isToday = iso === today
-          return (
-            <div key={iso} style={{ display: 'flex', alignItems: 'stretch', borderTop: `1px solid ${C.lineSoft}` }}>
-              <button onClick={() => { setDate(iso) }} title="Ver este día"
-                style={{ width: 68, flexShrink: 0, border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer', padding: '8px 6px 8px 2px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: isToday ? C.accent : C.ink }}>{shortLabel(iso)}</span>
-                {nUn > 0 && <span style={{ fontSize: 10, color: C.ghost }}>+{nUn} sin hora</span>}
-              </button>
-              <div data-drop="day" data-fecha={iso} data-orient="h" data-lo={lo} data-hi={hi}
-                onClick={trackClick(iso, lo, hi, 'h')}
-                style={{ position: 'relative', flex: 1, height: ROW_H, cursor: 'copy', background: isToday ? 'rgba(180,101,58,0.04)' : 'transparent' }}>
-                {hours.map(h => (
-                  <div key={h} style={{ position: 'absolute', left: `${((h - lo) / span) * 100}%`, top: 6, bottom: 6, borderLeft: `1px solid ${C.lineSoft}` }} />
-                ))}
-                {isToday && (() => { const n = nowMinutes(); return n >= lo && n <= hi ? <div style={{ position: 'absolute', left: `${((n - lo) / span) * 100}%`, top: 2, bottom: 2, borderLeft: `2px solid ${C.accent}` }} /> : null })()}
-                {dayActs.map(a => {
-                  const area = areaOf(a.area)
-                  const left = ((a.inicio! - lo) / span) * 100
-                  const width = (a.dur / span) * 100
-                  return (
-                    <div key={a.id} data-block onPointerDown={e => startDrag(e, a, 'block')}
-                      style={{
-                        position: 'absolute', left: `${left}%`, width: `${width}%`, minWidth: 8, top: 8, bottom: 8, boxSizing: 'border-box',
-                        background: area.soft, borderLeft: `3px solid ${area.color}`, borderRadius: 9, padding: '3px 7px',
-                        overflow: 'hidden', cursor: 'grab', touchAction: 'none', zIndex: previewId === a.id ? 20 : 10,
-                        opacity: a.hecho ? 0.5 : 1, pointerEvents: previewId === a.id ? 'none' : 'auto',
-                        boxShadow: previewId === a.id ? '0 8px 20px rgba(28,26,23,.18)' : 'none',
-                      }}>
-                      <div style={{ fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: a.hecho ? 'line-through' : 'none' }}>{a.titulo || 'Sin título'}</div>
-                      <div style={{ fontSize: 10, color: C.faint, fontVariantNumeric: 'tabular-nums' }}>{clock(a.inicio!)}</div>
+        {!loaded ? <div style={{ height: 320 }} /> : view === 'hoy' ? (
+          /* ── HOY ──────────────────────────────────────────────────── */
+          <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 20, alignItems: 'start' }}>
+
+              {/* Tarjeta A — Tiempo útil */}
+              <div style={card(26)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <span style={LBL}>tiempo útil restante hoy</span>
+                  <span style={{ fontFamily: SERIF, fontSize: 84, lineHeight: .88, letterSpacing: '-.02em' }}>{V.freeLabel}</span>
+                  <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 54 }}>
+                    {V.energy.map((e, i) => <div key={i} style={{ flex: 1, height: `${e.h}%`, background: e.bg, borderRadius: '4px 4px 2px 2px', minHeight: 4 }} />)}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#a49b90', letterSpacing: '.04em' }}>
+                    <span>07</span><span>11</span><span>15</span><span>19</span><span>23</span>
+                  </div>
+                  <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote}</span>
+                </div>
+                <div style={{ borderTop: '1px solid #eee6da', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
+                  <Row label="Hora de dormir" value={V.bedLabel} />
+                  <Row label="Trabajo registrado hoy" value={V.workedTodayLabel} />
+                </div>
+              </div>
+
+              {/* Tarjeta B — sesión o simulador */}
+              {V.hasSession ? (
+                <div style={{ background: '#1c1a17', color: '#faf7f1', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 26 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
+                    <span style={{ fontSize: 14, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <span style={{ fontSize: 20, fontWeight: 500 }}>{V.sessionName}</span>
+                    <span style={{ fontFamily: SERIF, fontSize: 68, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
+                    <span style={{ fontSize: 15, color: '#cdc4b8', lineHeight: 1.5 }}>{V.sessionNote}</span>
+                  </div>
+                  <div style={{ height: 6, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
+                    <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <div onClick={finish} style={{ flex: 1, minWidth: 150, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: 16, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Terminar ahora</div>
+                    <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 22px', fontSize: 15, cursor: 'pointer' }}>+15m</div>
+                    <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 22px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
+                  </div>
+                </div>
+              ) : (
+                <div style={card(24)}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <span style={LBL}>antes de empezar, mira el costo</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {ACTIVITIES.map(a => {
+                        const on = a.id === act
+                        return <div key={a.id} onClick={() => setAct(a.id)} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
+                      })}
                     </div>
-                  )
-                })}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: SERIF, fontSize: 62, lineHeight: .9 }}>{V.durLabel}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, textAlign: 'right' }}>
+                      <span style={{ ...LBL, letterSpacing: '.1em' }}>terminarías</span>
+                      <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
+                    </div>
+                  </div>
+                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 26, accentColor: '#b4653a' }} />
+                  <div style={{ borderRadius: 22, padding: 22, display: 'flex', flexDirection: 'column', gap: 10, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
+                    <span style={{ ...LBL, color: V.verdictFg }}>{V.verdictKicker}</span>
+                    <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1.2 }}>{V.verdictTitle}</span>
+                    <span style={{ fontSize: 15, lineHeight: 1.55, color: '#4c4741' }}>{V.verdictText}</span>
+                  </div>
+                  {V.hitAny && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 6 }}>sacrificarías</span>
+                      {V.afectados.map((a, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: '1px solid #eee6da' }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 999, background: '#8a3c2a', display: 'block' }} />
+                          <span style={{ fontSize: 16, flex: 1 }}>{a.name}</span>
+                          <span style={{ fontSize: 14, color: '#8a3c2a', fontWeight: 500 }}>{a.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                    <div onClick={start} style={{ flex: 1, minWidth: 170, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 17, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}><span>Empezar</span><span>{V.durLabel}</span></div>
+                    <div onClick={() => setDur(V.safeMax)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '17px 22px', fontSize: 15, cursor: 'pointer' }}>{V.altLabel}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Tarjeta C — el resto del día */}
+            <div style={card(22)}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
+                <span style={LBL}>el resto del día</span>
+                <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.nowLabel} a {V.scaleEndLabel}</span>
+              </div>
+              <div style={{ display: 'flex', height: 52, gap: 2 }}>
+                {V.segs.map((s, i) => <div key={i} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2 }} />)}
+              </div>
+              <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
+                <Legend c="#b4653a">el bloque que estás evaluando</Legend>
+                <Legend c="#8a3c2a">tiempo protegido que invadirías</Legend>
+                <Legend c="#6f8256">protegido intacto</Legend>
+                <Legend c="#eee6da">libre</Legend>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {V.upcoming.map((b, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
+                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: b.dot, display: 'block' }} />
+                    <span style={{ fontSize: 16, flex: 1, color: b.nameColor }}>{b.name}</span>
+                    <span style={{ fontSize: 14, color: '#a49b90' }}>{b.dur}</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: b.stateColor, width: 120, textAlign: 'right' }}>{b.state}</span>
+                  </div>
+                ))}
               </div>
             </div>
-          )
-        })}
-      </div>
-      <p style={{ fontSize: 12.5, color: C.ghost, margin: '12px 4px 0' }}>Arrastra una actividad dentro de su día para cambiar la hora, o hacia otro día para moverla. Toca el nombre del día para abrirlo. Las de “sin hora” se acomodan desde la vista Día.</p>
-    </>
-  )
-}
+          </div>
+        ) : view === 'rutina' ? (
+          /* ── MI RUTINA ────────────────────────────────────────────── */
+          <div style={{ width: '100%', maxWidth: 900, display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={card(24)}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Lo que decidiste proteger</span>
+                <span style={{ fontSize: 15, color: '#6b645b', lineHeight: 1.55, maxWidth: 560 }}>Estos bloques no son tareas: son el suelo de tu día. Todo lo que trabajes por encima de ellos tiene un costo, y la app te lo va a mostrar antes de empezar.</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {data.blocks.slice().sort((a, b) => a.start - b.start).map(b => (
+                  <div key={b.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: '#f5efe4', border: '1px solid #ebe3d6', borderRadius: 18, padding: '14px 16px' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: AREAS[b.area]?.color || '#8b8379', display: 'block' }} />
+                    <input type="text" value={b.name} onChange={e => patchBlock(b.id, { name: e.target.value })} style={{ flex: 1, minWidth: 160, background: 'transparent', border: 'none', borderBottom: '1px solid transparent', padding: '6px 0', fontSize: 16 }} />
+                    <select value={b.area} onChange={e => patchBlock(b.id, { area: e.target.value as Area })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, cursor: 'pointer' }}>
+                      {areaOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </select>
+                    <input type="time" value={clock(b.start)} onChange={e => patchBlock(b.id, { start: parse(e.target.value) })} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 76, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
+                      <span style={{ fontSize: 14, color: '#a49b90' }}>min</span>
+                    </div>
+                    <div onClick={() => save({ blocks: data.blocks.filter(x => x.id !== b.id) })} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
+                  </div>
+                ))}
+              </div>
+              <div onClick={() => save({ blocks: data.blocks.concat([{ id: 'b' + Date.now(), name: 'Nuevo bloque', area: 'ocio', start: 1080, dur: 30 }]) })} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '13px 22px', fontSize: 15, color: '#6b645b', cursor: 'pointer' }}>+ Añadir bloque protegido</div>
 
-/* ─────────────────────────── Piezas compartidas ─────────────────────────── */
-function SummaryBar({ title, meta, onPrev, onNext, onToday, todayLabel, isToday, action }: {
-  title: string; meta: string
-  onPrev: () => void; onNext: () => void; onToday: () => void; todayLabel: string; isToday: boolean
-  action?: React.ReactNode
-}) {
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <NavBtn onClick={onPrev}>‹</NavBtn>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1, textTransform: 'capitalize' }}>{title}</span>
-          <span style={{ fontSize: 12.5, color: C.ghost }}>{meta}</span>
-        </div>
-        <NavBtn onClick={onNext}>›</NavBtn>
-        {!isToday && <button onClick={onToday} style={{ marginLeft: 4, border: `1px solid ${C.lineInput}`, background: C.tint, color: C.accentDeep, borderRadius: 999, padding: '7px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: UI }}>{todayLabel}</button>}
-      </div>
-      {action}
-    </div>
-  )
-}
-
-function NavBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return <button onClick={onClick} style={{ width: 34, height: 34, borderRadius: 999, border: `1px solid ${C.lineInput}`, background: C.surface, color: C.muted, cursor: 'pointer', fontSize: 18, lineHeight: 1, fontFamily: UI }}>{children}</button>
-}
-function GhostBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return <button onClick={onClick} style={{ border: `1px dashed ${C.dashed}`, borderRadius: 999, background: 'transparent', color: C.muted, padding: '10px 18px', fontSize: 14, cursor: 'pointer', fontFamily: UI }}>{children}</button>
-}
-
-function Chip({ a, startDrag, previewId }: { a: Actividad; startDrag: (e: React.PointerEvent, a: Actividad, k: 'chip') => void; previewId: string | null }) {
-  const area = areaOf(a.area)
-  return (
-    <div data-block onPointerDown={e => startDrag(e, a, 'chip')} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 7, background: C.surface, border: `1px solid ${C.lineInput}`,
-      borderRadius: 999, padding: '7px 13px', fontSize: 13, cursor: 'grab', touchAction: 'none',
-      opacity: previewId === a.id ? 0.5 : (a.hecho ? 0.5 : 1), pointerEvents: previewId === a.id ? 'none' : 'auto',
-    }}>
-      <span style={{ width: 8, height: 8, borderRadius: 999, background: area.color }} />
-      <span style={{ fontWeight: 500 }}>{a.titulo || 'Sin título'}</span>
-      <span style={{ color: C.ghost }}>{hm(a.dur)}</span>
-    </div>
-  )
-}
-
-/* ─────────────────────────── Editor (modal) ─────────────────────────── */
-function Editor({ a, onChange, onSave, onClose, onDelete }: {
-  a: Actividad; onChange: (a: Actividad) => void; onSave: () => void; onClose: () => void; onDelete: () => void
-}) {
-  const scheduled = a.inicio != null
-  const field: React.CSSProperties = { background: C.surface, border: `1px solid ${C.lineInput}`, borderRadius: 12, padding: '10px 12px', fontSize: 14, fontFamily: UI, color: C.ink, width: '100%', boxSizing: 'border-box' }
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 70 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px, 100%)', background: C.surfaceAlt, border: `1px solid ${C.line}`, borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14, fontFamily: UI }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Actividad</span>
-          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: C.ghost, cursor: 'pointer', lineHeight: 1 }}>×</button>
-        </div>
-
-        <input autoFocus value={a.titulo} placeholder="¿Qué vas a hacer?" onChange={e => onChange({ ...a, titulo: e.target.value })} style={{ ...field, fontSize: 16 }} />
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {AREA_IDS.map(id => {
-            const ar = AREAS[id], on = a.area === id
-            return (
-              <button key={id} onClick={() => onChange({ ...a, area: id })} style={{
-                border: `1px solid ${on ? ar.color : C.lineInput}`, background: on ? ar.soft : 'transparent',
-                color: on ? C.ink : C.muted, borderRadius: 999, padding: '7px 13px', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: UI,
-              }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: ar.color }} />{ar.label}
-              </button>
-            )
-          })}
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <label style={{ flex: 1, minWidth: 130, display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <span style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: C.ghost, fontWeight: 600 }}>Día</span>
-            <input type="date" value={a.fecha} onChange={e => onChange({ ...a, fecha: e.target.value })} style={field} />
-          </label>
-          <label style={{ width: 118, display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <span style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: C.ghost, fontWeight: 600 }}>Duración</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="number" min={5} max={1440} step={5} value={a.dur} onChange={e => onChange({ ...a, dur: Math.max(5, Number(e.target.value) || 5) })} style={{ ...field, width: 74 }} />
-              <span style={{ fontSize: 13, color: C.ghost }}>min</span>
+              <div style={{ borderTop: '1px solid #eee6da', paddingTop: 24, display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={{ ...LBL, letterSpacing: '.1em' }}>hora de dormir</span>
+                  <input type="time" value={clock(bed)} onChange={e => save({ bed: parse(e.target.value) })} style={{ background: '#f5efe4', border: '1px solid #e2d9cb', borderRadius: 999, padding: '12px 18px', fontSize: 17, fontVariantNumeric: 'tabular-nums' }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 240 }}>
+                  <span style={{ ...LBL, letterSpacing: '.1em' }}>sueño objetivo · {hm(sleepGoal)}</span>
+                  <input type="range" min={300} max={600} step={15} value={sleepGoal} onChange={e => save({ sleep: Number(e.target.value) })} style={{ width: '100%', height: 26, accentColor: '#b4653a' }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ ...LBL, letterSpacing: '.1em' }}>te despertarías</span>
+                  <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{clock(bed + sleepGoal)}</span>
+                </div>
+              </div>
+              <div onClick={() => { if (window.confirm('¿Restaurar la rutina de ejemplo? Se reemplazan tus bloques y el historial.')) save(defaults()) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#a49b90', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>Restaurar la rutina de ejemplo</div>
             </div>
-          </label>
-        </div>
+          </div>
+        ) : (
+          /* ── HISTORIAL ────────────────────────────────────────────── */
+          <div style={{ width: '100%', maxWidth: 1180, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 20, alignItems: 'start' }}>
+            <div style={card(26)}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Cómo se repartió tu semana</span>
+                <span style={{ fontSize: 13, color: '#a49b90' }}>{V.weekRange} · {V.weekTotalLabel} registradas</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {V.areaStats.map((s, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <span style={{ fontSize: 15 }}>{s.label}</span>
+                      <span style={{ fontSize: 14, color: '#6b645b' }}>{s.hours} · {s.share}</span>
+                    </div>
+                    <div style={{ height: 8, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}>
+                      <div style={{ width: `${s.pct}%`, height: '100%', background: s.bg, borderRadius: 999 }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer' }}>
-            <input type="checkbox" checked={scheduled} onChange={e => onChange({ ...a, inicio: e.target.checked ? (a.inicio ?? 9 * 60) : null })} />
-            Con hora
-          </label>
-          {scheduled && (
-            <input type="time" value={clock(a.inicio!)} onChange={e => onChange({ ...a, inicio: parseClock(e.target.value) })} style={{ ...field, width: 130, fontVariantNumeric: 'tabular-nums' }} />
-          )}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', marginLeft: 'auto' }}>
-            <input type="checkbox" checked={a.hecho} onChange={e => onChange({ ...a, hecho: e.target.checked })} />
-            Hecha
-          </label>
-        </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <div style={{ background: '#f5efe4', border: '1px solid #ebe3d6', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 20 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={LBL}>racha</span>
+                  <span style={{ fontFamily: SERIF, fontSize: 28, lineHeight: 1.15 }}>{V.streakLabel}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {V.days.map((d, i) => (
+                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'center' }}>
+                      <span style={{ width: '100%', height: 38, borderRadius: 10, background: d.bg, display: 'block' }} />
+                      <span style={{ fontSize: 11, color: '#a49b90' }}>{d.label}</span>
+                    </div>
+                  ))}
+                </div>
+                <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.55 }}>{V.streakNote}</span>
+              </div>
 
-        <textarea value={a.nota ?? ''} placeholder="Nota (opcional)" onChange={e => onChange({ ...a, nota: e.target.value })} rows={2} style={{ ...field, resize: 'vertical' }} />
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-          <button onClick={onSave} style={{ flex: 1, background: C.ink, color: C.surface, border: 'none', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: 'pointer', fontFamily: UI }}>Guardar</button>
-          <button onClick={onDelete} style={{ border: `1px solid ${C.lineInput}`, background: 'transparent', color: C.danger, borderRadius: 999, padding: '14px 20px', fontSize: 15, cursor: 'pointer', fontFamily: UI }}>Borrar</button>
-        </div>
+              <div style={card(16)}>
+                <span style={LBL}>registro de hoy</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {V.todayLog.map((l, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da' }}>
+                      <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
+                      <span style={{ fontSize: 16, flex: 1 }}>{l.name}</span>
+                      <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
+                    </div>
+                  ))}
+                </div>
+                {V.logEmpty && <span style={{ fontSize: 14, color: '#a49b90', lineHeight: 1.5 }}>{V.logEmpty}</span>}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
 }
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15 }}>
+      <span style={{ color: '#6b645b' }}>{label}</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
+    </div>
+  )
+}
+function Legend({ c, children }: { c: string; children: React.ReactNode }) {
+  return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
+}
+
+const MARGEN_CSS = `
+.margen-root a:hover { color: #b4653a; }
+.margen-root input, .margen-root select { font-family: inherit; font-size: inherit; color: inherit; }
+.margen-root input:focus-visible, .margen-root select:focus-visible { outline: 2px solid #b4653a; outline-offset: 2px; }
+.margen-root input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; }
+.margen-root input[type=range]::-webkit-slider-runnable-track { height: 4px; background: #e2d9cb; border-radius: 999px; }
+.margen-root input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; margin-top: -11px; border-radius: 999px; background: #faf7f1; border: 1.5px solid #1c1a17; box-shadow: 0 2px 8px rgba(28,26,23,.16); cursor: grab; }
+.margen-root input[type=range]::-moz-range-track { height: 4px; background: #e2d9cb; border-radius: 999px; }
+.margen-root input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 999px; background: #faf7f1; border: 1.5px solid #1c1a17; }
+.margen-root input[type=text]:hover { border-bottom-color: #ddd4c6 !important; }
+.margen-root ::selection { background: #ecd9cb; }
+`
