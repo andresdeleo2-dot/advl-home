@@ -2113,6 +2113,30 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     </>
   )
 
+  /** Chips de épica (color por épica) para filtrar cualquier vista de tablero por
+   *  épica. Comparten el estado weekEpica; sólo listan las épicas presentes en esa
+   *  vista (cascada: si la épica activa no está, `eff` cae a 'todas'). */
+  const renderEpicaChips = (epicsForView: Epica[], eff: string) => {
+    if (epicsForView.length <= 1) return null
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <button onClick={() => setWeekEpica('todas')} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: eff === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: eff === 'todas' ? '#10233F' : '#fff', color: eff === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
+        {epicsForView.map(ep => {
+          const on = eff === ep.id
+          return (
+            <button key={ep.id} onClick={() => setWeekEpica(on ? 'todas' : ep.id)} title={`Sólo ${ep.name}`}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
+                border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
+                background: on ? hexA(ep.color, 0.12) : '#fff',
+                color: on ? ep.color : 'rgba(20,35,61,0.6)' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color, flexShrink: 0 }} />{ep.name}
+            </button>
+          )
+        })}
+      </span>
+    )
+  }
+
   const renderPlanWeek = () => {
     const monday = mondayISO(viewDate)
     const sunday = addDays(monday, 6)
@@ -2171,10 +2195,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
         {/* Filtro por épica */}
         {/* Sólo lista las épicas con tareas ESTA semana (o "sin épicas" si no hay ninguna) */}
-        <select value={effWeekEpica} onChange={e => setWeekEpica(e.target.value)} disabled={weekEpics.length === 0} title="Filtrar por épica" style={{ cursor: weekEpics.length === 0 ? 'default' : 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: effWeekEpica !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', opacity: weekEpics.length === 0 ? 0.55 : 1 }}>
-          <option value="todas">{weekEpics.length === 0 ? 'Sin épicas esta semana' : 'Todas las épicas'}</option>
-          {weekEpics.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
-        </select>
+        {renderEpicaChips(weekEpics, effWeekEpica)}
         {/* Filtro por dificultad */}
         <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
           <option value="todas">Toda dificultad</option>

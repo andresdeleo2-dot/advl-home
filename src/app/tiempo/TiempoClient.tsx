@@ -7,7 +7,7 @@ import {
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone } from '@/lib/supabase'
+import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
@@ -41,6 +41,8 @@ const weekOfISO = (s: string) => { const [y, m, d] = s.split('-').map(Number); c
 const DOW_LETTER = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
 const dowLetterOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return DOW_LETTER[new Date(y, m - 1, d).getDay()] }
 const longDayOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); const dt = new Date(y, m - 1, d); const dn = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']; const mn = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']; return `${dn[dt.getDay()]} ${d} de ${mn[m - 1]}` }
+const mondayOfISO = (s: string) => weekOfISO(s)[0]
+const dayIdxMon = (s: string) => { const [y, m, d] = s.split('-').map(Number); return (new Date(y, m - 1, d).getDay() + 6) % 7 }  // 0=Lun…6=Dom
 
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
@@ -51,12 +53,13 @@ export default function TiempoClient() {
   const [loaded, setLoaded] = useState(false)
   const [allTasks, setAllTasks] = useState<TodayTask[] | null>(null)   // null = cargando; TODAS las tareas abiertas
   const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
-  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[] }[]>([])
+  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
   const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean } | null>(null)
   const [histIdx, setHistIdx] = useState<number | null>(null)
+  const [barPick, setBarPick] = useState<string>('')
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -80,9 +83,9 @@ export default function TiempoClient() {
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setAllTasks([]); return }
       const out: TodayTask[] = []
-      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[] }[] = []
+      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[] = []
       for (const e of j.data as Epica[]) {
-        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [] })
+        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [] })
         for (const t of e.tasks || []) {
           if (t.status === 'Terminada' || t.status === 'Archivada') continue
           // Guardamos TODAS las abiertas; el día visible se filtra abajo (permite navegar días).
@@ -118,6 +121,17 @@ export default function TiempoClient() {
   }, [allTasks, taskDay])
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
+
+  // Rutinas diarias de Épicas que aplican el día visible (para marcarlas / iniciarlas aquí).
+  const todayRoutines = useMemo(() => {
+    const monday = mondayOfISO(taskDay), idx = dayIdxMon(taskDay)
+    const out: { epicaId: string; epicaName: string; color: string; rIdx: number; name: string; done: boolean }[] = []
+    for (const e of epicasList) (e.routines || []).forEach((r, rIdx) => {
+      if (r.days && r.days.length === 7 && !r.days[idx]) return
+      out.push({ epicaId: e.id, epicaName: e.name, color: e.color, rIdx, name: r.t, done: !!(r.weeks && r.weeks[monday] && r.weeks[monday][idx]) })
+    })
+    return out
+  }, [epicasList, taskDay])
 
   // Épicas presentes en las tareas de hoy (para el filtro por épica).
   const todayEpicas = useMemo(() => {
@@ -214,13 +228,13 @@ export default function TiempoClient() {
     const scaleEnd = Math.max(bed + 30, simEnd + 15)
     const barStart = doneToday.length ? Math.min(now, doneToday[0].start) : now
     const total = Math.max(1, scaleEnd - barStart)
-    const raw: { s: number; e: number; kind: 'free' | 'prot' | 'done'; area?: Area }[] = []
+    const raw: { s: number; e: number; kind: 'free' | 'prot' | 'done'; area?: Area; name?: string }[] = []
     let cursor = barStart
     for (const d of doneToday) {                       // tramo pasado = lo que hiciste
       const s = Math.max(d.start, cursor), e = Math.min(d.start + d.dur, now)
       if (e <= s) continue
       if (s > cursor) raw.push({ s: cursor, e: s, kind: 'free' })
-      raw.push({ s, e, kind: 'done', area: d.area })
+      raw.push({ s, e, kind: 'done', area: d.area, name: d.name })
       cursor = Math.max(cursor, e)
     }
     if (cursor < now) { raw.push({ s: cursor, e: now, kind: 'free' }); cursor = now }
@@ -228,13 +242,15 @@ export default function TiempoClient() {
       const s = Math.max(b.start, cursor), e = Math.min(b.start + b.dur, scaleEnd)
       if (e <= s) continue
       if (s > cursor) raw.push({ s: cursor, e: s, kind: 'free' })
-      raw.push({ s: Math.max(s, cursor), e, kind: 'prot' })
+      raw.push({ s: Math.max(s, cursor), e, kind: 'prot', name: b.name })
       cursor = Math.max(cursor, e)
     }
     if (cursor < scaleEnd) raw.push({ s: cursor, e: scaleEnd, kind: 'free' })
-    const segs: { w: number; bg: string }[] = []
+    const seg = (s: number, e: number, bg: string, name: string): { w: number; bg: string; label: string } =>
+      ({ w: ((e - s) / total) * 100, bg, label: `${name} · ${clock(s)}–${clock(e)}` })
+    const segs: { w: number; bg: string; label: string }[] = []
     for (const r of raw) {
-      if (r.kind === 'done') { segs.push({ w: ((r.e - r.s) / total) * 100, bg: AREAS[r.area!]?.color || '#8b8379' }); continue }
+      if (r.kind === 'done') { segs.push(seg(r.s, r.e, AREAS[r.area!]?.color || '#8b8379', r.name || 'Hecho')); continue }
       const parts: { s: number; e: number; work: boolean }[] = []
       const iS = Math.max(r.s, simStart), iE = Math.min(r.e, simEnd)
       if (iE > iS) {
@@ -245,9 +261,13 @@ export default function TiempoClient() {
       for (const p of parts) {
         if (p.e - p.s < 0.5) continue
         const bg = p.work ? (r.kind === 'prot' ? '#8a3c2a' : '#b4653a') : (r.kind === 'prot' ? '#6f8256' : '#eee6da')
-        segs.push({ w: ((p.e - p.s) / total) * 100, bg })
+        const nm = p.work ? 'El bloque que evalúas' : (r.kind === 'prot' ? (r.name || 'Protegido') : 'Libre')
+        segs.push(seg(p.s, p.e, bg, nm))
       }
     }
+    // Marcas de hora para la barra del día
+    const barTicks: { label: string; left: number }[] = []
+    for (let h = Math.ceil(barStart / 60); h <= Math.floor(scaleEnd / 60); h++) barTicks.push({ label: clock(h * 60), left: ((h * 60 - barStart) / total) * 100 })
 
     const upcoming = timeline.filter(b => b.start + b.dur > now).map(b => {
       const hit = afectados.find(a => a.id === b.id)
@@ -301,13 +321,20 @@ export default function TiempoClient() {
     }))
     const workedToday = data.history.filter(h => h.date === today && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
 
-    const eBars: { h: number; bg: string }[] = []
-    for (let h = 7; h <= 22; h++) {
-      const val = h < 9 ? 0.42 : h < 12 ? 1 : h < 13 ? 0.8 : h < 15 ? 0.5 : h < 18 ? 0.78 : h < 20 ? 0.52 : h < 22 ? 0.36 : 0.24
-      const cur = Math.floor(now / 60) === h
-      eBars.push({ h: val * 100, bg: cur ? '#b4653a' : now / 60 > h ? '#e4dcd0' : '#ecd9cb' })
+    // minutos trabajados por hora HOY (para ver si trabajas en tus horas buenas)
+    const workedByHour: Record<number, number> = {}
+    for (const hh of data.history) if (hh.date === dayISO) for (let h = Math.floor(hh.start / 60); h <= Math.floor((hh.start + hh.dur - 1) / 60); h++) {
+      workedByHour[h] = (workedByHour[h] || 0) + Math.max(0, Math.min((h + 1) * 60, hh.start + hh.dur) - Math.max(h * 60, hh.start))
     }
+    const energyVal = (h: number) => h < 9 ? 0.42 : h < 12 ? 1 : h < 13 ? 0.8 : h < 15 ? 0.5 : h < 18 ? 0.78 : h < 20 ? 0.52 : h < 22 ? 0.36 : 0.24
     const nowH = Math.floor(now / 60)
+    const eBars: { h: number; bg: string; worked: boolean; title: string; cur: boolean }[] = []
+    for (let h = 7; h <= 22; h++) {
+      const val = energyVal(h), cur = nowH === h, pct = Math.round(val * 100), worked = Math.round(workedByHour[h] || 0)
+      const base = val >= 0.9 ? '#b4653a' : val >= 0.7 ? '#c99a6f' : val >= 0.5 ? '#cdb79a' : '#dfceb8'
+      eBars.push({ h: val * 100, bg: cur ? '#1c1a17' : now / 60 > h + 1 ? '#e4dcd0' : base, worked: worked > 0, cur, title: `${String(h).padStart(2, '0')}:00 · energía ${pct}%${worked ? ` · trabajaste ${hm(worked)}` : ''}` })
+    }
+    const nowPct = Math.round(energyVal(nowH) * 100)
     const energyNote = nowH < 13 ? 'Estás dentro de tu pico de rendimiento: es el mejor momento para trabajo profundo.'
       : nowH < 15 ? 'Bajón de media tarde. Buen momento para lo mecánico, no para lo difícil.'
       : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
@@ -340,7 +367,7 @@ export default function TiempoClient() {
       windowLabel: nextBlock ? hm(windowMins) + ' (hasta ' + clock(nextBlock.start) + ')' : hm(windowMins),
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
       workedTodayLabel: workedToday ? hm(workedToday) : '—',
-      energy: eBars, energyNote,
+      energy: eBars, energyNote, energyNow: nowPct,
       hasSession: !!session, sessionOpen: !!session && !planned, sessionName: session ? session.name : '',
       sessionStartLabel: session ? clock(session.start) : '',
       sessionElapsedLabel: session ? hm(elapsed) : '',
@@ -353,7 +380,7 @@ export default function TiempoClient() {
       durLabel: hm(dur), endLabel: clock(simEnd),
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
-      segs, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart),
+      segs, barTicks, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart),
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
       routineNext, allTotals, taskSummary,
       weekTotalLabel: hm(weekTotal), areaStats, days,
@@ -461,6 +488,21 @@ export default function TiempoClient() {
     setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, kpis } : e))
     fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kpis }) }).catch(() => {})
   }
+  // Rutinas diarias: marcar hecha el día visible (weeks[lunes][idx]) y persistir a la épica.
+  const markRoutineDone = (epicaId: string, rIdx: number) => {
+    const ep = epicasList.find(e => e.id === epicaId); if (!ep) return
+    const monday = mondayOfISO(taskDay), idx = dayIdxMon(taskDay)
+    const routines = ep.routines.map((r, i) => {
+      if (i !== rIdx) return r
+      const weeks = { ...(r.weeks || {}) }
+      const arr = (weeks[monday] && weeks[monday].length === 7) ? [...weeks[monday]] : [false, false, false, false, false, false, false]
+      arr[idx] = !arr[idx]; weeks[monday] = arr
+      return { ...r, weeks }
+    })
+    setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, routines } : e))
+    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines }) }).catch(() => {})
+  }
+  const startRoutine = (name: string) => { save({ session: { name, area: 'trabajo', start: Math.round(now), dur: 0 } }); setView('hoy') }
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
   const reorderTasks = (ids: string[]) => {
     const byId = new Map((allTasks || []).map(t => [t.task.id!, t]))
@@ -528,14 +570,20 @@ export default function TiempoClient() {
                   <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <span style={LBL}>tu energía estimada por hora</span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+                    <span style={LBL}>tu energía estimada por hora</span>
+                    <span style={{ fontSize: 12, color: '#8a4b28', fontWeight: 600 }}>ahora ~{V.energyNow}%</span>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 54 }}>
-                    {V.energy.map((e, i) => <div key={i} style={{ flex: 1, height: `${e.h}%`, background: e.bg, borderRadius: '4px 4px 2px 2px', minHeight: 4 }} />)}
+                    {V.energy.map((e, i) => <div key={i} title={e.title} style={{ flex: 1, height: `${e.h}%`, background: e.bg, borderRadius: '4px 4px 2px 2px', minHeight: 4, outline: e.cur ? '2px solid #b4653a' : 'none', outlineOffset: 1 }} />)}
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, height: 8 }}>
+                    {V.energy.map((e, i) => <div key={i} style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>{e.worked && <span style={{ width: 5, height: 5, borderRadius: 999, background: '#6f8256', display: 'block' }} />}</div>)}
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#a49b90', letterSpacing: '.04em' }}>
                     <span>07</span><span>11</span><span>15</span><span>19</span><span>23</span>
                   </div>
-                  <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote}</span>
+                  <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote} <span style={{ color: '#6f8256' }}>● marca las horas en que trabajaste hoy</span></span>
                 </div>
                 <div style={{ borderTop: '1px solid #eee6da', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
@@ -623,6 +671,19 @@ export default function TiempoClient() {
                         <button onClick={() => setTaskDay(addDaysISO(taskDay, 7))} title="Semana siguiente" style={{ width: 28, height: 40, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer' }}>›</button>
                       </div>
                     </div>
+                    {todayRoutines.length > 0 && (
+                      <Collapsible title="rutinas diarias" count={`${todayRoutines.filter(r => r.done).length}/${todayRoutines.length}`} defaultOpen={false}>
+                        {todayRoutines.map(r => (
+                          <div key={r.epicaId + r.rIdx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px' }}>
+                            <button onClick={() => markRoutineDone(r.epicaId, r.rIdx)} title="Marcar hecha hoy" style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (r.done ? '#6f8256' : '#c2b9ab'), background: r.done ? '#6f8256' : 'transparent', cursor: 'pointer', flexShrink: 0 }} />
+                            <span style={{ width: 8, height: 8, borderRadius: 999, background: r.color, display: 'block', flexShrink: 0 }} />
+                            <span style={{ flex: 1, fontSize: 15, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: r.done ? 'line-through' : 'none', color: r.done ? '#a49b90' : '#1c1a17' }}>{r.name}</span>
+                            <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{r.epicaName}</span>
+                            <button onClick={() => startRoutine(r.name)} title="Empezar ahora" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶ Empezar</button>
+                          </div>
+                        ))}
+                      </Collapsible>
+                    )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
                     <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea</div>
@@ -671,8 +732,12 @@ export default function TiempoClient() {
                 <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.barStartLabel} a {V.scaleEndLabel}</span>
               </div>
               <div style={{ display: 'flex', height: 52, gap: 2 }}>
-                {V.segs.map((s, i) => <div key={i} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2 }} />)}
+                {V.segs.map((s, i) => <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2, cursor: 'pointer' }} />)}
               </div>
+              <div style={{ position: 'relative', height: 14 }}>
+                {V.barTicks.map((tk, i) => <span key={i} style={{ position: 'absolute', left: `${tk.left}%`, transform: 'translateX(-50%)', fontSize: 10.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{tk.label}</span>)}
+              </div>
+              <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'Toca un segmento de la barra para ver qué es.'}</div>
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
                 <Legend c="#8b8379">lo que ya hiciste</Legend>
                 <Legend c="#b4653a">el bloque que estás evaluando</Legend>
@@ -875,6 +940,7 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
 function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
+  const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
   const dragId = useRef<string | null>(null)
   useEffect(() => { orderRef.current = order }, [order])
@@ -913,7 +979,12 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { ta
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>tus tareas · toca una para trabajarla{draggable ? ' · arrastra ⠿ para reordenar' : ''}</span>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: '0 0 4px', width: '100%' }}>
+        <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', color: '#a49b90', fontSize: 12 }}>▸</span>
+        <span style={{ ...LBL, letterSpacing: '.1em' }}>tus tareas del día</span>
+        <span style={{ fontSize: 12, color: '#a49b90' }}>{display.length}{draggable ? ' · arrastra ⠿' : ' · toca una'}</span>
+      </button>
+      {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 380, overflowY: 'auto' }}>
       {display.map(t => {
         const on = t.task.id === selId
         const ts = taskStyle(t.task.status)
@@ -940,6 +1011,7 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { ta
           </div>
         )
       })}
+      </div>}
     </div>
   )
 }
@@ -988,6 +1060,19 @@ function Tag({ c, bg, children }: { c: string; bg: string; children: React.React
 }
 function Section({ title }: { title: string }) {
   return <span style={{ ...LBL, letterSpacing: '.1em', marginTop: 6 }}>{title}</span>
+}
+function Collapsible({ title, count, defaultOpen, children }: { title: string; count?: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(!!defaultOpen)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: open ? 8 : 0, borderTop: '1px solid #eee6da', paddingTop: 10 }}>
+      <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, width: '100%' }}>
+        <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', color: '#a49b90', fontSize: 12 }}>▸</span>
+        <span style={{ ...LBL, letterSpacing: '.1em' }}>{title}</span>
+        {count && <span style={{ fontSize: 12, color: '#a49b90' }}>{count}</span>}
+      </button>
+      {open && children}
+    </div>
+  )
 }
 function PrioIcon({ p, on }: { p: string; on: boolean }) {
   const c = on ? PRIO_TONE[p] : '#a49b90'
@@ -1192,7 +1277,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
               <button onClick={() => onUnplan(epId, withNote())} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
             </>}
         </div>
-        {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} style={{ textAlign: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 16px', fontSize: 14, color: '#8a4b28', textDecoration: 'none', background: '#f3ece1' }}>✎ Editar en Épicas (todas las funciones) →</a>}
+        {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} target="_blank" rel="noopener noreferrer" style={{ textAlign: 'center', fontSize: 12.5, color: '#a49b90' }}>También abrir en Épicas ↗ (nueva pestaña)</a>}
       </div>
     </div>
   )
