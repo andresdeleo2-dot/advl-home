@@ -5,7 +5,9 @@
 export type Area = 'trabajo' | 'cuerpo' | 'ocio' | 'personas' | 'cierre' | 'sueno'
 
 export type Block = { id: string; name: string; area: Area; start: number; dur: number }
-export type Session = { name: string; area: Area; start: number; dur: number } | null
+/** Sesión en curso. Si viene de una tarea de Épicas, guarda epicaId/taskId para
+ *  marcarla como Terminada al cerrar el bloque. */
+export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string } | null
 export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number }
 
 export type AppData = {

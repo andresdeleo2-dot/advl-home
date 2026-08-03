@@ -1,15 +1,23 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import Link from 'next/link'
+import SiteHeader from '@/components/SiteHeader'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   type AppData, type Area,
 } from '@/lib/tiempo'
+import type { Epica, EpicaTask } from '@/lib/supabase'
 
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
+
+/** Tarea de hoy sacada de Épicas (plan === hoy, sin terminar). */
+type TodayTask = { epicaId: string; epicaName: string; color: string; task: EpicaTask }
+/** Reunión del calendario de hoy, ya en minutos desde medianoche. */
+type Meeting = { id: string; name: string; start: number; dur: number }
+
+const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
 
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
@@ -18,7 +26,12 @@ export default function TiempoClient() {
   const [act, setAct] = useState('Trabajo profundo')
   const [data, setData] = useState<AppData>(() => defaults())
   const [loaded, setLoaded] = useState(false)
+  const [tasks, setTasks] = useState<TodayTask[] | null>(null)   // null = cargando
+  const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const tasksRef = useRef<TodayTask[]>([])
+  useEffect(() => { tasksRef.current = tasks || [] }, [tasks])
 
   useEffect(() => {
     let d = defaults()
@@ -32,6 +45,41 @@ export default function TiempoClient() {
     return () => { if (timer.current) clearInterval(timer.current) }
   }, [])
 
+  // Tareas de HOY desde Épicas (plan === hoy, sin terminar/archivar).
+  useEffect(() => {
+    const today = iso(new Date())
+    fetch('/api/epicas').then(r => r.json()).then(j => {
+      if (!j.ok) { setTasks([]); return }
+      const out: TodayTask[] = []
+      for (const e of j.data as Epica[]) {
+        for (const t of e.tasks || []) {
+          if (t.plan === today && t.status !== 'Terminada' && t.status !== 'Archivada')
+            out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
+        }
+      }
+      setTasks(out)
+    }).catch(() => setTasks([]))
+  }, [])
+
+  // Reuniones de HOY desde el calendario de Google (eventos con hora).
+  useEffect(() => {
+    const today = iso(new Date())
+    fetch('/api/calendar').then(r => r.json()).then((evs: { id: string; title: string; start: string; end: string; allDay: boolean }[]) => {
+      if (!Array.isArray(evs)) return
+      const mins = (s: string) => { const d = new Date(s); return d.getHours() * 60 + d.getMinutes() }
+      const out: Meeting[] = []
+      for (const e of evs) {
+        if (e.allDay || !e.start || e.start.slice(0, 10) !== today) continue
+        const start = mins(e.start)
+        const dur = e.end ? Math.max(15, mins(e.end) - start) : 30
+        out.push({ id: e.id, name: e.title || 'Reunión', start, dur })
+      }
+      setMeetings(out)
+    }).catch(() => {})
+  }, [])
+
+  const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
+
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
     setData(nd)
@@ -44,7 +92,9 @@ export default function TiempoClient() {
   const V = useMemo(() => {
     const caring = true
     const bed = data.bed, sleepGoal = data.sleep, session = data.session
-    const blocks = data.blocks.slice().sort((a, b) => a.start - b.start)
+    // Bloques protegidos (editables) + reuniones del calendario (fijas, no editables).
+    const meetingBlocks = meetings.map(m => ({ id: 'cal:' + m.id, name: m.name, area: 'personas' as Area, start: m.start, dur: m.dur, cal: true }))
+    const blocks = data.blocks.concat(meetingBlocks).sort((a, b) => a.start - b.start)
     const sleepBlock = { id: '__sleep', name: 'Dormir', area: 'sueno' as Area, start: bed, dur: sleepGoal }
     const timeline = blocks.concat([sleepBlock])
 
@@ -124,6 +174,7 @@ export default function TiempoClient() {
         nameColor: hit ? '#8a3c2a' : '#1c1a17',
         state: hit ? hit.detail : 'protegido',
         stateColor: hit ? '#8a3c2a' : '#4f6238',
+        cal: !!(b as { cal?: boolean }).cal,
       }
     })
 
@@ -204,11 +255,31 @@ export default function TiempoClient() {
       streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
       todayLog, logEmpty: todayLog.length ? '' : 'Todavía no hay bloques cerrados hoy. Empieza uno desde Hoy y aparecerá aquí al terminarlo.',
     }
-  }, [data, now, dur])
+  }, [data, now, dur, meetings])
 
   /* ── Acciones ──────────────────────────────────────────────────────────── */
-  const start = () => { const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]; save({ session: { name: a.id, area: a.area, start: Math.round(now), dur } }) }
-  const finish = () => { const s = data.session; if (!s) return; save({ session: null, history: data.history.concat([{ date: iso(new Date()), name: s.name, area: s.area, start: Math.round(s.start), dur: Math.max(1, Math.round(now - s.start)) }]) }) }
+  const start = () => {
+    if (selTask) {
+      save({ session: { name: selTask.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur, epicaId: selTask.epicaId, taskId: selTask.task.id } })
+    } else {
+      const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]
+      save({ session: { name: a.id, area: a.area, start: Math.round(now), dur } })
+    }
+  }
+  // Marca la tarea como Terminada en Épicas (mismo canal que el resto de la app).
+  const markEpicTaskDone = (epicaId: string, taskId: string) => {
+    const tt = tasksRef.current.find(x => x.task.id === taskId)
+    if (!tt) return
+    const upd = { ...tt.task, status: 'Terminada', doneAt: iso(new Date()) }
+    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [upd] }) }).catch(() => {})
+    setTasks(prev => (prev || []).filter(x => x.task.id !== taskId))
+    setSelTaskId(id => id === taskId ? null : id)
+  }
+  const finish = () => {
+    const s = data.session; if (!s) return
+    save({ session: null, history: data.history.concat([{ date: iso(new Date()), name: s.name, area: s.area, start: Math.round(s.start), dur: Math.max(1, Math.round(now - s.start)) }]) })
+    if (s.taskId && s.epicaId) markEpicTaskDone(s.epicaId, s.taskId)
+  }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
   const areaOptions = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno').map(k => ({ id: k, label: AREAS[k].label }))
@@ -220,15 +291,14 @@ export default function TiempoClient() {
     <div className="margen-root" style={{ minHeight: '100vh', background: '#f2ece2', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif', color: '#1c1a17', WebkitFontSmoothing: 'antialiased' }}>
       <style>{MARGEN_CSS}</style>
 
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 20px 64px' }}>
-        <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '22px 0 26px' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-            <span style={{ fontFamily: SERIF, fontSize: 28, lineHeight: 1 }}>Margen</span>
-            <span style={{ fontSize: 13, color: '#a49b90', textTransform: 'capitalize' }}>{loaded ? V.dateLabel : ''}</span>
-          </div>
+      {/* Header de marca compartido (banda ADVL) */}
+      <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" backHref="/epicas" backLabel="← Épicas" />
+
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
+        {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
+        <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '4px 0 26px' }}>
+          <span style={{ fontSize: 14, color: '#a49b90', textTransform: 'capitalize' }}>{loaded ? V.dateLabel : ''}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
-            <Link href="/epicas" style={{ fontSize: 13, color: '#a49b90', textDecoration: 'none' }}>← Épicas</Link>
             <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
             <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
@@ -294,10 +364,15 @@ export default function TiempoClient() {
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {ACTIVITIES.map(a => {
                         const on = a.id === act
-                        return <div key={a.id} onClick={() => setAct(a.id)} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
+                        return <div key={a.id} onClick={() => { setAct(a.id); if (a.id !== 'Trabajo profundo') setSelTaskId(null) }} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
                       })}
                     </div>
                   </div>
+
+                  {act === 'Trabajo profundo' && <TaskPicker tasks={tasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setDur(durByDiff(t.task)) }} />}
+                  {act === 'Reuniones' && <MeetingsList meetings={meetings} />}
+                  {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
+
                   <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: SERIF, fontSize: 62, lineHeight: .9 }}>{V.durLabel}</span>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, textAlign: 'right' }}>
@@ -351,13 +426,29 @@ export default function TiempoClient() {
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: b.dot, display: 'block' }} />
-                    <span style={{ fontSize: 16, flex: 1, color: b.nameColor }}>{b.name}</span>
+                    <span style={{ fontSize: 16, flex: 1, color: b.nameColor, display: 'flex', alignItems: 'center', gap: 8 }}>{b.name}{b.cal && <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#8b8379', border: '1px solid #e2d9cb', borderRadius: 999, padding: '2px 7px' }}>calendario</span>}</span>
                     <span style={{ fontSize: 14, color: '#a49b90' }}>{b.dur}</span>
                     <span style={{ fontSize: 13, fontWeight: 500, color: b.stateColor, width: 120, textAlign: 'right' }}>{b.state}</span>
                   </div>
                 ))}
               </div>
             </div>
+
+            {V.todayLog.length > 0 && (
+              <div style={card(16)}>
+                <span style={LBL}>lo que llevas hoy</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {V.todayLog.map((l, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da' }}>
+                      <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
+                      <span style={{ fontSize: 16, flex: 1 }}>{l.name}</span>
+                      <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : view === 'rutina' ? (
           /* ── MI RUTINA ────────────────────────────────────────────── */
@@ -475,6 +566,47 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
+}
+
+/** Tareas de hoy (de Épicas) para elegir una y trabajarla. */
+function TaskPicker({ tasks, selId, onPick }: { tasks: TodayTask[] | null; selId: string | null; onPick: (t: TodayTask) => void }) {
+  if (tasks === null) return <span style={{ fontSize: 13, color: '#a49b90' }}>Cargando tus tareas de hoy…</span>
+  if (!tasks.length) return (
+    <div style={{ fontSize: 13.5, color: '#8b8379', lineHeight: 1.5 }}>No tienes tareas planeadas para hoy en Épicas. <a href="/epicas" style={{ color: '#8a4b28' }}>Planéalas ahí</a> y aparecerán aquí para trabajarlas.</div>
+  )
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>tus tareas de hoy · toca una para trabajarla</span>
+      {tasks.map(t => {
+        const on = t.task.id === selId
+        return (
+          <div key={t.task.id} onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 12px', borderRadius: 12, cursor: 'pointer', border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f7ece2' : 'transparent' }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block' }} />
+            <span style={{ fontSize: 15, flex: 1 }}>{t.task.t || 'Sin título'}</span>
+            <span style={{ fontSize: 12.5, color: '#a49b90' }}>{t.epicaName}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Reuniones de hoy jaladas del calendario (solo lectura; ya cuentan en el día). */
+function MeetingsList({ meetings }: { meetings: Meeting[] }) {
+  if (!meetings.length) return <span style={{ fontSize: 13.5, color: '#8b8379' }}>No hay reuniones en tu calendario para hoy.</span>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>reuniones de hoy · de tu calendario</span>
+      {meetings.slice().sort((a, b) => a.start - b.start).map(m => (
+        <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: '1px solid #eee6da' }}>
+          <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: '#8b8379', display: 'block' }} />
+          <span style={{ fontSize: 15, flex: 1 }}>{m.name}</span>
+          <span style={{ fontSize: 13, color: '#a49b90' }}>{hm(m.dur)}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 const MARGEN_CSS = `
