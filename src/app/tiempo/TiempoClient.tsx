@@ -7,6 +7,14 @@ import {
   type AppData, type Area,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask } from '@/lib/supabase'
+import { taskStyle, fmtDue, safeUrl } from '@/components/epicas/core'
+import { sanitizeHtml } from '@/lib/sanitize'
+
+const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
+const PRIOS = ['alta', 'media', 'baja'] as const
+const DIFFS = ['facil', 'media', 'dificil'] as const
+const PRIO_TONE: Record<string, string> = { alta: '#B0522E', media: '#A87A2C', baja: '#5B6B86' }
+type Filters = { epica: string | null; prio: Set<string>; diff: Set<string>; estado: Set<string> }
 
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
@@ -31,7 +39,9 @@ export default function TiempoClient() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
-  const [editTask, setEditTask] = useState<{ epicaId: string; task: EpicaTask } | null>(null)
+  const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask } | null>(null)
+  const [histIdx, setHistIdx] = useState<number | null>(null)
+  const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = tasks || [] }, [tasks])
@@ -85,6 +95,23 @@ export default function TiempoClient() {
 
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
+
+  // Épicas presentes en las tareas de hoy (para el filtro por épica).
+  const todayEpicas = useMemo(() => {
+    const seen = new Map<string, { id: string; name: string; color: string }>()
+    for (const t of tasks || []) if (!seen.has(t.epicaId)) seen.set(t.epicaId, { id: t.epicaId, name: t.epicaName, color: t.color })
+    return [...seen.values()]
+  }, [tasks])
+  const filteredTasks = useMemo(() => {
+    if (tasks === null) return null
+    return tasks.filter(t => {
+      if (filters.epica && t.epicaId !== filters.epica) return false
+      if (filters.prio.size && !filters.prio.has(t.task.priority || '')) return false
+      if (filters.diff.size && !filters.diff.has(t.task.difficulty || '')) return false
+      if (filters.estado.size && !filters.estado.has(t.task.status || '')) return false
+      return true
+    })
+  }, [tasks, filters])
 
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
@@ -217,9 +244,9 @@ export default function TiempoClient() {
     const days = week.map(w => ({ label: DAY_NAMES[w.dow], bg: dayOk[w.date] === null ? '#e2d9cb' : dayOk[w.date] ? '#6f8256' : '#b4653a' }))
     const okCount = week.filter(w => dayOk[w.date] === true).length
 
-    const todayLog = data.history.filter(h => h.date === today).sort((a, b) => a.start - b.start).map(h => ({
-      range: clock(h.start) + '–' + clock(h.start + h.dur), name: h.name, dur: hm(h.dur),
-      dot: AREAS[h.area] ? AREAS[h.area].color : '#8b8379',
+    const todayLog = data.history.map((h, idx) => ({ h, idx })).filter(x => x.h.date === today).sort((a, b) => a.h.start - b.h.start).map(x => ({
+      idx: x.idx, range: clock(x.h.start) + '–' + clock(x.h.start + x.h.dur), name: x.h.name, dur: hm(x.h.dur),
+      dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379',
     }))
     const workedToday = data.history.filter(h => h.date === today && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
 
@@ -287,6 +314,12 @@ export default function TiempoClient() {
     setTasks(prev => (prev || []).filter(x => x.task.id !== task.id))
     setSelTaskId(id => id === task.id ? null : id); setEditTask(null)
   }
+  // Registro de hoy (localStorage): editar y borrar entradas.
+  const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
+    save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) }); setHistIdx(null)
+  }
+  const delHist = (idx: number) => { save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null) }
+
   // Crea la reunión como tarea de HOY en la épica elegida.
   const meetingToEpica = (m: Meeting, epicaId: string) => {
     const t: EpicaTask = { id: (crypto?.randomUUID?.() || 'm' + Date.now()), t: m.name, status: 'Por hacer', due: '', note: '', plan: iso(new Date()), links: [] }
@@ -397,7 +430,10 @@ export default function TiempoClient() {
                     </div>
                   </div>
 
-                  {act === 'Trabajo profundo' && <TaskPicker tasks={tasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, task: { ...t.task } })} />}
+                  {act === 'Trabajo profundo' && <>
+                    <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} />
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                  </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
                   {selMeeting && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}). Al terminar queda en tu día y en el historial.</span>}
@@ -468,11 +504,12 @@ export default function TiempoClient() {
                 <span style={LBL}>lo que llevas hoy</span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {V.todayLog.map((l, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da' }}>
+                    <div key={i} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                       <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
                       <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
                       <span style={{ fontSize: 16, flex: 1 }}>{l.name}</span>
                       <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
+                      <span style={{ fontSize: 12, color: '#c2b9ab' }}>editar</span>
                     </div>
                   ))}
                 </div>
@@ -567,11 +604,12 @@ export default function TiempoClient() {
                 <span style={LBL}>registro de hoy</span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {V.todayLog.map((l, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da' }}>
+                    <div key={i} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                       <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
                       <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
                       <span style={{ fontSize: 16, flex: 1 }}>{l.name}</span>
                       <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
+                      <span style={{ fontSize: 12, color: '#c2b9ab' }}>editar</span>
                     </div>
                   ))}
                 </div>
@@ -582,7 +620,8 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskEditor epicaId={editTask.epicaId} task={editTask.task} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onClose={() => setEditTask(null)} />}
+      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onClose={() => setHistIdx(null)} />}
     </div>
   )
 }
@@ -608,16 +647,27 @@ function TaskPicker({ tasks, selId, onPick, onEdit }: { tasks: TodayTask[] | nul
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 4 }}>tus tareas de hoy · toca una para trabajarla</span>
+      {tasks.length === 0 && <span style={{ fontSize: 13, color: '#a49b90', padding: '4px 2px' }}>Ninguna tarea con esos filtros.</span>}
       {tasks.map(t => {
         const on = t.task.id === selId
+        const ts = taskStyle(t.task.status)
         return (
-          <div key={t.task.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f7ece2' : 'transparent' }}>
-            <span onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
-              <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
-              <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
-            </span>
-            <button onClick={() => onEdit(t)} title="Editar tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
+          <div key={t.task.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f7ece2' : 'transparent' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
+                <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
+                <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
+              </span>
+              <button onClick={() => onEdit(t)} title="Ver / editar tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 20 }}>
+              <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
+              {t.task.priority && <Tag c={PRIO_TONE[t.task.priority]} bg={PRIO_TONE[t.task.priority] + '22'}>{t.task.priority}</Tag>}
+              {t.task.difficulty && <Tag c="#5B6B86" bg="rgba(91,107,134,0.12)">{t.task.difficulty}</Tag>}
+              {t.task.due && <Tag c="#A87A2C" bg="rgba(194,147,58,0.14)">vence {fmtDue(t.task.due)}</Tag>}
+              {typeof t.task.progress === 'number' && t.task.progress > 0 && <Tag c="#2E6E6E" bg="rgba(62,142,142,0.14)">{t.task.progress}%</Tag>}
+            </div>
           </div>
         )
       })}
@@ -664,33 +714,156 @@ function MeetingsList({ meetings, selId, onPick, epicas, onAddEpica }: { meeting
 }
 
 /** Editor rápido de una tarea de hoy (rename, dificultad, marcar hecha, quitar de hoy). */
-function TaskEditor({ epicaId, task, onSave, onDone, onUnplan, onClose }: {
-  epicaId: string; task: EpicaTask
+function Tag({ c, bg, children }: { c: string; bg: string; children: React.ReactNode }) {
+  return <span style={{ fontSize: 11, fontWeight: 600, color: c, background: bg, borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>{children}</span>
+}
+
+/** Barra de filtros de las tareas de hoy (por épica, prioridad, dificultad, estado). */
+function FilterBar({ epicas, filters, setFilters }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void }) {
+  const toggle = (dim: 'prio' | 'diff' | 'estado', val: string) => setFilters(f => { const s = new Set(f[dim]); s.has(val) ? s.delete(val) : s.add(val); return { ...f, [dim]: s } })
+  const chip = (on: boolean, c: string) => ({ border: `1px solid ${on ? c : '#e2d9cb'}`, background: on ? c + '20' : 'transparent', color: on ? c : '#6b645b', borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', textTransform: 'capitalize' as const })
+  const any = filters.epica || filters.prio.size || filters.diff.size || filters.estado.size
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '2px 2px 8px', borderBottom: '1px solid #eee6da' }}>
+      {epicas.length > 1 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {epicas.map(e => <button key={e.id} onClick={() => setFilters(f => ({ ...f, epica: f.epica === e.id ? null : e.id }))} style={{ ...chip(filters.epica === e.id, e.color), display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, display: 'block' }} />{e.name}</button>)}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+        {PRIOS.map(p => <button key={p} onClick={() => toggle('prio', p)} style={chip(filters.prio.has(p), PRIO_TONE[p])}>{p}</button>)}
+        <span style={{ width: 1, height: 16, background: '#e2d9cb' }} />
+        {DIFFS.map(d => <button key={d} onClick={() => toggle('diff', d)} style={chip(filters.diff.has(d), '#5B6B86')}>{d}</button>)}
+        <span style={{ width: 1, height: 16, background: '#e2d9cb' }} />
+        {TASK_STATUSES.map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => toggle('estado', s)} style={chip(filters.estado.has(s), ts.c)}>{s}</button> })}
+        {any && <button onClick={() => setFilters(() => ({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() }))} style={{ border: 'none', background: 'transparent', color: '#a49b90', fontSize: 12, cursor: 'pointer', marginLeft: 'auto' }}>limpiar</button>}
+      </div>
+    </div>
+  )
+}
+
+/** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
+function TaskDetail({ info, onSave, onDone, onUnplan, onClose }: {
+  info: { epicaId: string; epicaName: string; color: string; task: EpicaTask }
   onSave: (epicaId: string, t: EpicaTask) => void; onDone: (epicaId: string, taskId: string) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void; onClose: () => void
 }) {
-  const [t, setT] = useState<EpicaTask>(task)
-  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', width: '100%', boxSizing: 'border-box' }
+  const { epicaId, epicaName, color } = info
+  const [t, setT] = useState<EpicaTask>(info.task)
+  const noteRef = useRef<HTMLDivElement>(null)
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
+  const chipS = (on: boolean, c: string): CSSProperties => ({ border: `1px solid ${on ? c : '#e2d9cb'}`, background: on ? c + '22' : 'transparent', color: on ? c : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer', textTransform: 'capitalize' })
+  const commit = () => { const note = sanitizeHtml(noteRef.current?.innerHTML || t.note || ''); onSave(epicaId, { ...t, note }) }
+  const epLink = `/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epicaId}`
+  const Section = ({ title }: { title: string }) => <span style={{ ...LBL, letterSpacing: '.1em', marginTop: 6 }}>{title}</span>
+
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(460px,100%)', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,100%)', maxHeight: '88vh', overflowY: 'auto', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Editar tarea</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: color, display: 'block' }} /><span style={{ fontSize: 13, color: '#6b645b' }}>{epicaName}</span></span>
           <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
-        <input autoFocus value={t.t} onChange={e => setT({ ...t, t: e.target.value })} style={{ ...field, fontSize: 16 }} />
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {(['facil', 'media', 'dificil'] as const).map(d => {
-            const on = t.difficulty === d
-            return <button key={d} onClick={() => setT({ ...t, difficulty: on ? undefined : d })} style={{ border: `1px solid ${on ? '#b4653a' : '#e2d9cb'}`, background: on ? '#f7ece2' : 'transparent', color: '#1c1a17', borderRadius: 999, padding: '7px 14px', fontSize: 13, cursor: 'pointer', textTransform: 'capitalize' }}>{d}{d === 'dificil' ? ' · 2h' : d === 'media' ? ' · 1h' : ' · 30m'}</button>
-          })}
+
+        <input autoFocus value={t.t} onChange={e => setT({ ...t, t: e.target.value })} style={{ ...field, width: '100%', fontSize: 17 }} />
+
+        <Section title="estado" />
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {TASK_STATUSES.map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => setT({ ...t, status: s })} style={chipS(t.status === s, ts.c)}>{ts.label}</button> })}
         </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
-          <button onClick={() => onSave(epicaId, t)} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
-          <button onClick={() => onDone(epicaId, t.id!)} style={{ border: '1px solid #dbe2cd', background: '#eef1e7', color: '#4f6238', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Marcar hecha</button>
-          <button onClick={() => onUnplan(epicaId, t)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
+
+        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Section title="prioridad" />
+            <div style={{ display: 'flex', gap: 6 }}>{PRIOS.map(p => <button key={p} onClick={() => setT({ ...t, priority: t.priority === p ? undefined : p })} style={chipS(t.priority === p, PRIO_TONE[p])}>{p}</button>)}</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Section title="dificultad" />
+            <div style={{ display: 'flex', gap: 6 }}>{DIFFS.map(d => <button key={d} onClick={() => setT({ ...t, difficulty: t.difficulty === d ? undefined : d })} style={chipS(t.difficulty === d, '#5B6B86')}>{d}</button>)}</div>
+          </div>
         </div>
-        <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Los cambios se guardan en Épicas. “Quitar de hoy” le quita la fecha de plan; la tarea no se borra.</span>
+
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="planeada para" /><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={field} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="vence" /><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={field} /></label>
+        </div>
+
+        <Section title="nota" />
+        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 60, lineHeight: 1.55, width: '100%' }} />
+
+        {typeof t.progress === 'number' && t.progress > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Section title={`avance · ${t.progress}%`} />
+            <div style={{ height: 8, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${t.progress}%`, height: '100%', background: '#6f8256' }} /></div>
+          </div>
+        )}
+
+        {!!(t.subtasks && t.subtasks.length) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Section title={`subtareas · ${t.subtasks.filter(s => s.done).length}/${t.subtasks.length}`} />
+            {t.subtasks.map((s, i) => (
+              <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14 }}>
+                <span style={{ width: 15, height: 15, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#6f8256' : '#c2b9ab'), background: s.done ? '#6f8256' : 'transparent', flexShrink: 0 }} />
+                <span style={{ flex: 1, textDecoration: s.done ? 'line-through' : 'none', color: s.done ? '#a49b90' : '#1c1a17' }}>{s.t}</span>
+                {typeof s.progress === 'number' && s.progress > 0 && !s.done && <span style={{ fontSize: 12, color: '#a49b90' }}>{s.progress}%</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!!(t.links && t.links.length) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Section title="links" />
+            {t.links.map((l, i) => <a key={i} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 14, color: '#8a4b28' }}>{l.label || l.url}</a>)}
+          </div>
+        )}
+
+        {!!(t.comentarios && t.comentarios.length) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Section title="comentarios" />
+            {t.comentarios.map((c, i) => (
+              <div key={i} style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.5 }}><span style={{ color: '#a49b90' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
+          <button onClick={commit} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={() => onDone(epicaId, t.id!)} style={{ border: '1px solid #dbe2cd', background: '#eef1e7', color: '#4f6238', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Marcar hecha</button>
+          <button onClick={() => onUnplan(epicaId, t)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
+        </div>
+        <a href={epLink} style={{ fontSize: 13, color: '#8a4b28', textAlign: 'center' }}>Abrir en Épicas (subtareas, links y comentarios) →</a>
+      </div>
+    </div>
+  )
+}
+
+/** Editor de una entrada del registro de hoy (localStorage). */
+function HistoryEditor({ row, idx, onSave, onDelete, onClose }: {
+  row: AppData['history'][number]; idx: number
+  onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onClose: () => void
+}) {
+  const [r, setR] = useState(row)
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(440px,100%)', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Editar registro</span>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        <input autoFocus value={r.name} onChange={e => setR({ ...r, name: e.target.value })} style={{ ...field, width: '100%', fontSize: 16 }} />
+        <select value={r.area} onChange={e => setR({ ...r, area: e.target.value as Area })} style={{ ...field, width: '100%' }}>
+          {(Object.keys(AREAS) as Area[]).map(k => <option key={k} value={k}>{AREAS[k].label}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => setR({ ...r, start: parse(e.target.value) })} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración (min)</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 100 }} /></label>
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+          <button onClick={() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur })} style={{ flex: 1, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
+        </div>
       </div>
     </div>
   )
