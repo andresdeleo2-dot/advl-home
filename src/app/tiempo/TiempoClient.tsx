@@ -88,8 +88,9 @@ export default function TiempoClient() {
         if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [] })
         for (const t of e.tasks || []) {
           if (t.status === 'Terminada' || t.status === 'Archivada') continue
-          // Guardamos TODAS las abiertas; el día visible se filtra abajo (permite navegar días).
-          if (t.plan || t.repeat) out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
+          // TODAS las abiertas (con objeto completo): así se pueden marcar/reabrir sin
+          // perder datos; el día visible se filtra abajo (permite navegar días).
+          out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
         }
       }
       setAllTasks(out); setEpicasList(epList)
@@ -116,7 +117,7 @@ export default function TiempoClient() {
   // Tareas del día visible (plan === día, o recurrente que aplica ese día).
   const tasks = useMemo<TodayTask[] | null>(() => {
     if (allTasks === null) return null
-    return allTasks.filter(t => t.task.plan === taskDay || recurringDueToday(t.task, taskDay))
+    return allTasks.filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay)))
       .map(t => ({ ...t, recurring: recurringDueToday(t.task, taskDay) }))
   }, [allTasks, taskDay])
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
@@ -419,23 +420,25 @@ export default function TiempoClient() {
     save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) }); setHistIdx(null)
   }
   const delHist = (idx: number) => { save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null) }
-  // "No estaba terminada": quita el registro y, si venía de una tarea, la REABRE en Épicas.
+  // Reabre una tarea en Épicas (En curso, sin doneAt) SIN clobber: usa el objeto completo.
+  const reopenByTask = (epicaId: string, taskId: string) => {
+    const tt = tasksRef.current.find(x => x.task.id === taskId)
+    if (!tt) return
+    const upd: EpicaTask = { ...tt.task, status: 'En curso', doneAt: undefined }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
+  // "No estaba terminada": quita el registro y reabre la tarea en Épicas.
   const reopenTask = (idx: number) => {
     const row = data.history[idx]; if (!row) return
     delHist(idx)
-    if (row.taskId && row.epicaId) {
-      const tt = tasksRef.current.find(x => x.task.id === row.taskId)
-      const base: EpicaTask = tt?.task || { id: row.taskId, t: row.name, status: 'Por hacer', due: '', note: '', links: [] }
-      const upd: EpicaTask = { ...base, status: 'En curso', doneAt: undefined, plan: iso(new Date()) }
-      syncTask(row.epicaId, upd)
-      const ep = epicasList.find(e => e.id === row.epicaId)
-      setAllTasks(prev => {
-        const list = prev || []
-        return list.some(x => x.task.id === row.taskId)
-          ? list.map(x => x.task.id === row.taskId ? { ...x, task: upd } : x)
-          : [...list, { epicaId: row.epicaId!, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task: upd }]
-      })
-    }
+    if (row.taskId && row.epicaId) reopenByTask(row.epicaId, row.taskId)
+  }
+  // Al guardar el registro con el check "se terminó" cambiado, sincroniza a Épicas.
+  const syncHistDone = (row: AppData['history'][number], done: boolean) => {
+    if (!row.taskId || !row.epicaId) return
+    if (done) markEpicTaskDone(row.epicaId, row.taskId)
+    else reopenByTask(row.epicaId, row.taskId)
   }
 
   // Crea la reunión como tarea de HOY en la épica elegida.
@@ -451,11 +454,12 @@ export default function TiempoClient() {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
     const today = iso(new Date())
+    const rd = tt.task.repeatDone || []
     const upd: EpicaTask = tt.task.repeat
-      ? { ...tt.task, repeatDone: [...(tt.task.repeatDone || []), today] }
+      ? { ...tt.task, repeatDone: rd.includes(today) ? rd : [...rd, today] }
       : { ...tt.task, status: 'Terminada', doneAt: today }
     fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [upd] }) }).catch(() => {})
-    setAllTasks(prev => tt.task.repeat ? (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x) : (prev || []).filter(x => x.task.id !== taskId))
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
   }
   // Cierra el bloque en curso: lo registra en el día y, si es una tarea de Épicas,
@@ -472,7 +476,7 @@ export default function TiempoClient() {
         const doneChange = markDone ? (tt.task.repeat ? { repeatDone: [...(tt.task.repeatDone || []), today] } : { status: 'Terminada', doneAt: today }) : {}
         const upd: EpicaTask = { ...tt.task, progressLog: log, ...doneChange }
         syncTask(s.epicaId, upd)
-        setAllTasks(prev => (markDone && !tt.task.repeat) ? (prev || []).filter(x => x.task.id !== s.taskId) : (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
+        setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
         if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
       }
     }
@@ -923,7 +927,7 @@ export default function TiempoClient() {
       </div>
 
       {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
-      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onClose={() => setHistIdx(null)} />}
+      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onClose={() => setHistIdx(null)} />}
     </div>
   )
 }
@@ -1287,9 +1291,10 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
 }
 
 /** Editor de una entrada del registro de hoy (localStorage). */
-function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onClose }: {
+function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClose }: {
   row: AppData['history'][number]; idx: number
-  onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onReopen: (idx: number) => void; onClose: () => void
+  onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onReopen: (idx: number) => void
+  onSyncDone: (row: AppData['history'][number], done: boolean) => void; onClose: () => void
 }) {
   const [r, setR] = useState(row)
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
@@ -1314,7 +1319,7 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onClose }: {
           Se terminó la actividad {r.done === false && <span style={{ color: '#8a4b28' }}>· solo se le invirtió tiempo</span>}
         </label>
         <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
-          <button onClick={() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false })} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={() => { const done = r.done !== false; if (row.taskId) onSyncDone(row, done); onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done }) }} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
         </div>
         {row.taskId && <button onClick={() => onReopen(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, cursor: 'pointer' }}>No estaba terminada · reabrir la tarea en Épicas</button>}
