@@ -627,7 +627,7 @@ export default function TiempoClient() {
                     {V.todayLog.map(l => (
                       <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                         <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                         <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 72, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                       </div>
@@ -1346,6 +1346,7 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClo
 
 const MARGEN_CSS = `
 .hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; align-items: start; }
+.hoy-grid > * { min-width: 0; }
 @media (min-width: 1040px) { .hoy-grid { grid-template-columns: 1fr 1.4fr 0.8fr; } }
 .margen-root a:hover { color: #b4653a; }
 .margen-root input, .margen-root select { font-family: inherit; font-size: inherit; color: inherit; }
