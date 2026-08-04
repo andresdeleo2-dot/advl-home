@@ -515,7 +515,7 @@ export default function TiempoClient() {
 
     const todayLog = data.history.map((h, idx) => ({ h, idx })).filter(x => x.h.date === today).sort((a, b) => a.h.start - b.h.start).map(x => ({
       idx: x.idx, range: clock(x.h.start) + '–' + clock(x.h.start + x.h.dur), name: x.h.name, dur: hm(x.h.dur),
-      dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false,
+      dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false, taskId: x.h.taskId,
     }))
     const workedToday = data.history.filter(h => h.date === today && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
 
@@ -830,6 +830,16 @@ export default function TiempoClient() {
     save({ session: { name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) } })
     setHistIdx(null); setView('hoy')
   }
+  // Ver el detalle COMPLETO de una entrada del día: si vino de una tarea de Épicas, abre el
+  // editor completo (avance, subtareas, bitácora, links…, incl. tareas ya Terminadas). Si es
+  // actividad libre (sin tarea), abre el editor del registro.
+  const viewLog = (row: AppData['history'][number], idx: number) => {
+    if (row.taskId) {
+      const tt = tasksRef.current.find(x => x.task.id === row.taskId)
+      if (tt) { setHistIdx(null); setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }); return }
+    }
+    setHistIdx(idx)
+  }
   // Agendar en la cinta: abre el selector para elegir una tarea de Épicas (o actividad libre)
   // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
   const addActivityAt = (startMin: number) => { setSchedulePreset(null); setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15))) }
@@ -980,6 +990,7 @@ export default function TiempoClient() {
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block', flexShrink: 0 }} />
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                         <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                        {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
                         <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
                         <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                       </div>
@@ -1102,6 +1113,7 @@ export default function TiempoClient() {
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
                     <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                     <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                    {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa (avance, subtareas, bitácora…)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
                     <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                   </div>
@@ -1272,6 +1284,7 @@ export default function TiempoClient() {
                       <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
                       <span style={{ fontSize: 16, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                       <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                      {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 11px', fontSize: 12, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
                       <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 10px', fontSize: 12, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     </div>
                   ))}
