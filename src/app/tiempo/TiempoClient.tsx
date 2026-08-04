@@ -160,7 +160,7 @@ export default function TiempoClient() {
     try { window.history.replaceState({}, '', '/tiempo') } catch {}
     setPendingStart(null)
     if (!tt) return
-    if (!data.session) save({ session: { name: tt.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: 0, epicaId: tt.epicaId, taskId: tt.task.id } })
+    beginSession({ name: tt.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: 0, epicaId: tt.epicaId, taskId: tt.task.id })
     setView('hoy')
   }, [pendingStart, allTasks])   // eslint-disable-line react-hooks/exhaustive-deps
   const requestNotif = async () => {
@@ -697,14 +697,9 @@ export default function TiempoClient() {
 
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
-    if (selMeeting) {
-      save({ session: { name: selMeeting.name, area: 'personas', start: Math.round(now), dur } })
-    } else if (selTask) {
-      save({ session: { name: selTask.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur, epicaId: selTask.epicaId, taskId: selTask.task.id } })
-    } else {
-      const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]
-      save({ session: { name: a.id, area: a.area, start: Math.round(now), dur } })
-    }
+    if (selMeeting) beginSession({ name: selMeeting.name, area: 'personas', start: Math.round(now), dur })
+    else if (selTask) beginSession({ name: selTask.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur, epicaId: selTask.epicaId, taskId: selTask.task.id })
+    else { const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]; beginSession({ name: a.id, area: a.area, start: Math.round(now), dur }) }
   }
   // Escribe cambios de una tarea de vuelta a Épicas (mismo canal que el resto).
   const syncTask = (epicaId: string, task: EpicaTask) => {
@@ -712,6 +707,31 @@ export default function TiempoClient() {
     // (updatedAt viejo tras varias operaciones) y descarta el cambio.
     const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
     return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) }).catch(() => {})
+  }
+  // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
+  // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
+  // sacar un bloque de agendados). Devuelve true si arrancó (false si el usuario canceló).
+  const beginSession = (ns: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
+    const s = data.session
+    if (s) {
+      const el = Math.max(1, Math.round(elapsedMin(s.start, now)))
+      if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
+      const today0 = iso(new Date())
+      const hist = { date: today0, name: s.name, area: s.area, start: Math.round(s.start), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+      save({ session: ns, history: data.history.concat([hist]), ...extraPatch })
+      if (s.taskId && s.epicaId) {
+        const tt = tasksRef.current.find(x => x.task.id === s.taskId)
+        if (tt) {
+          const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today0, note: `⏱ ${hm(el)} trabajado`, pct: tt.task.progress, min: el } as EpicaProgressEntry]
+          const upd: EpicaTask = { ...tt.task, progressLog: log }
+          syncTask(s.epicaId, upd)
+          setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
+        }
+      }
+    } else {
+      save({ session: ns, ...extraPatch })
+    }
+    return true
   }
   const saveTaskEdit = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, task)
@@ -815,7 +835,7 @@ export default function TiempoClient() {
     setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, routines } : e))
     fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines }) }).catch(() => {})
   }
-  const startRoutine = (name: string) => { save({ session: { name, area: 'trabajo', start: Math.round(now), dur: 0 } }); setView('hoy') }
+  const startRoutine = (name: string) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0 })) setView('hoy') }
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
   const reorderTasks = (ids: string[]) => {
     const byId = new Map((allTasks || []).map(t => [t.task.id!, t]))
@@ -835,8 +855,7 @@ export default function TiempoClient() {
   }
   // Comenzar una tarea desde su detalle. dur = 0 → contador libre (hasta que pares).
   const startTask = (info: { epicaId: string; task: EpicaTask }, d: number) => {
-    save({ session: { name: info.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: d, epicaId: info.epicaId, taskId: info.task.id } })
-    setEditTask(null); setView('hoy')
+    if (beginSession({ name: info.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: d, epicaId: info.epicaId, taskId: info.task.id })) { setEditTask(null); setView('hoy') }
   }
   // Crear una tarea nueva en la épica elegida (mismos campos que Épicas).
   const createTask = (epicaId: string, task: EpicaTask) => {
@@ -852,9 +871,7 @@ export default function TiempoClient() {
   // arranca una NUEVA sesión con el mismo nombre/área (y su tarea de Épicas si venía de una),
   // contador libre. Se ACUMULA: al terminar genera otro bloque en el día y otra entrada de tiempo.
   const resumeActivity = (row: AppData['history'][number]) => {
-    if (data.session) { window.alert('Ya tienes una sesión en curso. Termínala antes de retomar otra.'); return }
-    save({ session: { name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) } })
-    setHistIdx(null); setView('hoy')
+    if (beginSession({ name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) })) { setHistIdx(null); setView('hoy') }
   }
   // Ver el detalle COMPLETO de una entrada del día: si vino de una tarea de Épicas, abre el
   // editor completo (avance, subtareas, bitácora, links…, incl. tareas ya Terminadas). Si es
@@ -891,8 +908,9 @@ export default function TiempoClient() {
   const removeScheduled = (id: string) => save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) })
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
   const startScheduled = (s: ScheduledBlock) => {
-    save({ session: { name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })
-    setPromptedSched(p => { const n = new Set(p); n.add(s.id); return n }); setView('hoy')
+    if (beginSession({ name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, { scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })) {
+      setPromptedSched(p => { const n = new Set(p); n.add(s.id); return n }); setView('hoy')
+    }
   }
   const dismissSched = (id: string) => setPromptedSched(p => { const n = new Set(p); n.add(id); return n })
   // Registrar (o reemplazar) el sueño de un día: alimenta la racha y la deuda de sueño.
