@@ -27,6 +27,24 @@ const SERIF = 'var(--tiempo-serif), Georgia, serif'
 // Luminancia de un color hex → elige texto claro/oscuro para etiquetas dentro de la barra.
 const lum = (hex: string) => { const h = hex.replace('#', ''); if (h.length < 6) return 1; const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16); return (0.299 * r + 0.587 * g + 0.114 * b) / 255 }
 const textOn = (hex: string) => lum(hex) > 0.62 ? '#4c4741' : '#faf7f1'
+// Beep corto con WebAudio (sin assets); silencioso si el navegador lo bloquea.
+function beep() {
+  try {
+    const AC: typeof AudioContext | undefined = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) return
+    const ctx = new AC(); ctx.resume?.()
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.connect(g); g.connect(ctx.destination); o.type = 'sine'; o.frequency.value = 880
+    g.gain.setValueAtTime(0.0001, ctx.currentTime)
+    g.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.02)
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.55)
+    o.start(); o.stop(ctx.currentTime + 0.55); o.onended = () => ctx.close()
+  } catch {}
+}
+// Notificación del navegador (si el usuario dio permiso). No hace nada si no.
+function notify(title: string, body: string) {
+  try { if (typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification(title, { body, icon: '/icon.png' }) } catch {}
+}
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
 
@@ -74,9 +92,12 @@ export default function TiempoClient() {
   const [scheduleAt, setScheduleAt] = useState<number | null>(null)   // hora (min) para agendar una tarea; abre el selector
   const [schedulePreset, setSchedulePreset] = useState<string | null>(null)  // tarea preseleccionada al agendar desde su fila
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
+  const [notifOn, setNotifOn] = useState(false)              // permiso de notificaciones del navegador
+  const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
+  const dueNotifiedRef = useRef<string | null>(null)         // id de agendado ya notificado (llegó la hora)
+  const remindNotified = useRef<Set<string>>(new Set())      // recordatorios (remindAt) ya avisados
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
@@ -87,9 +108,7 @@ export default function TiempoClient() {
     try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
     const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
     setData(d); setLoaded(true); tick()
-    // Todo se muestra al minuto (0m, veredicto, cronómetro en hm), así que tickear
-    // cada 15s en vez de cada 1s reduce ~15x los re-renders sin cambio visible.
-    timer.current = setInterval(tick, 15000)
+    // El ritmo del reloj lo maneja otro efecto (1s en sesión activa, 15s en reposo).
     const onVis = () => { if (document.visibilityState === 'visible') tick() }
     document.addEventListener('visibilitychange', onVis)
     // Flush del último push pendiente al salir/cerrar (keepalive), para no perder la
@@ -116,8 +135,53 @@ export default function TiempoClient() {
           .then(r => r.json()).then(k => { if (k?.ts) try { localStorage.setItem(TS_KEY, String(k.ts)) } catch {} }).catch(() => {})
       }
     }).catch(() => {})
-    return () => { if (timer.current) clearInterval(timer.current); if (pushTimer.current) clearTimeout(pushTimer.current); flush(); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', onVis) }
+    return () => { if (pushTimer.current) clearTimeout(pushTimer.current); flush(); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', onVis) }
   }, [])
+
+  // Reloj: 1s mientras hay sesión activa (cronómetro vivo), 15s en reposo para ahorrar renders.
+  const sessionActive = !!data.session
+  useEffect(() => {
+    const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
+    tick()
+    const id = setInterval(tick, sessionActive ? 1000 : 15000)
+    return () => clearInterval(id)
+  }, [sessionActive])
+
+  // Estado inicial del permiso de notificaciones.
+  useEffect(() => { try { if (typeof Notification !== 'undefined') setNotifOn(Notification.permission === 'granted') } catch {} }, [])
+  const requestNotif = async () => {
+    try {
+      if (typeof Notification === 'undefined') { alert('Tu navegador no soporta notificaciones.'); return }
+      const p = await Notification.requestPermission()
+      setNotifOn(p === 'granted')
+      if (p === 'granted') { beep(); new Notification('Avisos activados', { body: 'Te avisaré cuando llegue la hora de lo que agendes y cuando termine un bloque.', icon: '/icon.png' }) }
+    } catch {}
+  }
+
+  // Fin de bloque: al cumplir la duración planeada, suena + notifica (una vez por sesión).
+  useEffect(() => {
+    const s = data.session
+    if (!s || !s.dur) return
+    if (elapsedMin(s.start, now) >= s.dur && endNotifiedFor.current !== s.start) {
+      endNotifiedFor.current = s.start
+      beep(); notify('Terminó tu bloque', `${s.name}: ya se cumplieron los ${hm(s.dur)} que planeaste.`)
+    }
+  }, [now, data.session])
+
+  // Recordatorios de tareas (remindAt de Épicas) del día: avisan al llegar la hora (ventana 30m).
+  useEffect(() => {
+    if (!allTasks) return
+    const d = new Date(), today = iso(d), curMin = d.getHours() * 60 + d.getMinutes()
+    for (const t of allTasks) {
+      const ra = t.task.remindAt
+      if (!ra || !ra.includes('T') || ra.slice(0, 10) !== today) continue
+      const m = parse(ra.slice(11, 16)), key = t.task.id + '@' + ra
+      if (curMin >= m && curMin <= m + 30 && !remindNotified.current.has(key)) {
+        remindNotified.current.add(key)
+        beep(); notify('Recordatorio', `${t.task.t || 'Tarea'} · ${ra.slice(11, 16)}`)
+      }
+    }
+  }, [now, allTasks])
 
   // Carga (o recarga) tareas y épicas desde Épicas. NO toca día/filtros (van en su propio estado).
   const [refreshing, setRefreshing] = useState(false)
@@ -771,6 +835,15 @@ export default function TiempoClient() {
     ? (data.scheduled || []).find(s => !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
     : undefined
 
+  // Al llegar la hora de un agendado: suena + notifica del navegador (una vez por id),
+  // útil sobre todo si la pestaña de Tiempo está en segundo plano.
+  useEffect(() => {
+    if (dueSched && dueNotifiedRef.current !== dueSched.id) {
+      dueNotifiedRef.current = dueSched.id
+      beep(); notify('Es hora de lo que agendaste', `${dueSched.name} · ${clock(dueSched.start)}`)
+    }
+  }, [dueSched])
+
   return (
     <div className="margen-root" style={{ minHeight: '100vh', background: '#f2ece2', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif', color: '#1c1a17', WebkitFontSmoothing: 'antialiased' }}>
       <style>{MARGEN_CSS}</style>
@@ -787,6 +860,7 @@ export default function TiempoClient() {
           <span style={{ fontSize: 14, color: '#a49b90', textTransform: 'capitalize' }}>{loaded ? V.dateLabel : ''}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <button onClick={refreshTasks} title="Actualizar tareas de Épicas (mantiene día y filtros)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', transition: 'transform .6s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>↻</span>{refreshing ? 'Actualizando…' : 'Actualizar'}</button>
+            <button onClick={requestNotif} title={notifOn ? 'Avisos del navegador activados' : 'Activar avisos del navegador (agendados, recordatorios y fin de bloque)'} style={{ border: '1px solid ' + (notifOn ? '#cfe0c4' : '#e2d9cb'), background: notifOn ? '#eef1e7' : '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: notifOn ? '#4f6238' : '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{notifOn ? '🔔 Avisos on' : '🔔 Activar avisos'}</button>
             <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
             <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
