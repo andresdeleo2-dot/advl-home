@@ -61,6 +61,10 @@ function recurringDueToday(t: EpicaTask, today: string): boolean {
 type Meeting = { id: string; name: string; start: number; dur: number }
 
 const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
+const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
+// Al marcar terminada, la fecha de término es la fecha en que se IBA A HACER (plan) si existe;
+// si no, el día que se pasa (hoy/día visto). Así "terminó" queda en la fecha que decía "hacer".
+const doneDayFor = (task: EpicaTask, fallback: string) => isDateStr(task.plan) ? task.plan! : fallback
 
 // Helpers de fecha local (sin UTC) para el selector de día.
 const addDaysISO = (s: string, n: number) => { const [y, m, d] = s.split('-').map(Number); return iso(new Date(y, m - 1, d + n)) }
@@ -250,9 +254,15 @@ export default function TiempoClient() {
   // Tareas del día visible (plan === día, o recurrente que aplica ese día).
   const tasks = useMemo<TodayTask[] | null>(() => {
     if (allTasks === null) return null
-    return allTasks.filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay)))
+    const t0 = iso(new Date())
+    // Tareas a las que YA les pusiste tiempo hoy: salen de "lo que hiciste hoy", así que se
+    // quitan de la lista de tareas del día (sólo en la vista de hoy) para no duplicar.
+    const worked = new Set(data.history.filter(h => h.date === t0 && h.taskId).map(h => h.taskId))
+    return allTasks.filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada'
+      && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay))
+      && !(taskDay === t0 && worked.has(t.task.id)))
       .map(t => ({ ...t, recurring: recurringDueToday(t.task, taskDay) }))
-  }, [allTasks, taskDay])
+  }, [allTasks, taskDay, data.history])
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
 
@@ -733,19 +743,19 @@ export default function TiempoClient() {
     }
     return true
   }
-  const saveTaskEdit = (epicaId: string, task: EpicaTask) => {
+  // Auto-guardado del editor de tarea: escribe a Épicas y refresca la copia local SIN cerrar.
+  const autoSaveTask = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, task)
     setAllTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task } : x))
-    setEditTask(null)
   }
   const unplanTask = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, { ...task, plan: '' })
     setAllTasks(prev => (prev || []).filter(x => x.task.id !== task.id))
     setSelTaskId(id => id === task.id ? null : id); setEditTask(null)
   }
-  // Registro de hoy (localStorage): editar y borrar entradas.
+  // Registro de hoy (localStorage): editar entradas (auto-guardado, NO cierra el editor).
   const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
-    save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) }); setHistIdx(null)
+    save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) })
   }
   const delHist = (idx: number) => { save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null) }
   // Reabre una tarea en Épicas (En curso, sin doneAt) SIN clobber: usa el objeto completo.
@@ -782,13 +792,24 @@ export default function TiempoClient() {
   const markEpicTaskDone = (epicaId: string, taskId: string, day: string = iso(new Date())) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
+    const day2 = doneDayFor(tt.task, day)
     const rd = tt.task.repeatDone || []
     const upd: EpicaTask = tt.task.repeat
-      ? { ...tt.task, repeatDone: rd.includes(day) ? rd : [...rd, day] }
-      : { ...tt.task, status: 'Terminada', doneAt: day }
+      ? { ...tt.task, repeatDone: rd.includes(day2) ? rd : [...rd, day2] }
+      : { ...tt.task, status: 'Terminada', doneAt: day2 }
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
+  }
+  // Quitar una terminada de Épicas del día ("me equivoqué, no se trabajó"): la reabre
+  // (recurrente = saca el día de repeatDone; normal = En curso, sin doneAt).
+  const unmarkEpicDone = (tt: TodayTask) => {
+    const t0 = iso(new Date())
+    const upd: EpicaTask = tt.task.repeat
+      ? { ...tt.task, repeatDone: (tt.task.repeatDone || []).filter(d => d !== t0 && d !== tt.task.plan) }
+      : { ...tt.task, status: 'En curso', doneAt: undefined }
+    syncTask(tt.epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === tt.task.id ? { ...x, task: upd } : x))
   }
   // Cierra el bloque en curso: lo registra en el día y, si es una tarea de Épicas,
   // le SUMA el tiempo invertido (entra a la bitácora de avances). markDone la cierra.
@@ -802,7 +823,8 @@ export default function TiempoClient() {
       if (tt) {
         const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed } as EpicaProgressEntry]
         const rdF = tt.task.repeatDone || []
-        const doneChange = markDone ? (tt.task.repeat ? { repeatDone: rdF.includes(today) ? rdF : [...rdF, today] } : { status: 'Terminada', doneAt: today }) : {}
+        const dd = doneDayFor(tt.task, today)
+        const doneChange = markDone ? (tt.task.repeat ? { repeatDone: rdF.includes(dd) ? rdF : [...rdF, dd] } : { status: 'Terminada', doneAt: dd }) : {}
         const upd: EpicaTask = { ...tt.task, progressLog: log, ...doneChange }
         syncTask(s.epicaId, upd)
         setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
@@ -1167,6 +1189,7 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                     <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                     {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa (avance, subtareas, bitácora…)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
+                    <button onClick={e => { e.stopPropagation(); setHistIdx(l.idx) }} title="Editar el registro: cambiar hora/duración, marcar si se terminó, o borrarlo" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
                     <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                   </div>
@@ -1178,6 +1201,7 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
                     <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
                     <button onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
+                    <button onClick={() => unmarkEpicDone(t)} title="No se trabajó / me equivoqué: quitarla del día (la reabre en Épicas)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer', flexShrink: 0 }}>Quitar</button>
                     <button onClick={() => resumeActivity({ date: today, name: t.task.t || 'Tarea', area: 'trabajo', start: 0, dur: 0, epicaId: t.epicaId, taskId: t.task.id })} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 90, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
                   </div>
@@ -1397,7 +1421,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={(epicaId, taskId) => markEpicTaskDone(epicaId, taskId, taskDay)} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -1778,10 +1802,10 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
+function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[] }[]
-  onSave: (epicaId: string, t: EpicaTask) => void; onDone: (epicaId: string, taskId: string) => void
+  onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
   onLinkObjetivo: (epicaId: string, taskId: string, milestoneId: string | null) => void
@@ -1796,10 +1820,12 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
   const noteRef = useRef<HTMLDivElement>(null)
+  const saveT = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flushRef = useRef<() => void>(() => {})   // guarda pendiente lo último (usado al cerrar)
   // La nota es contentEditable NO controlado: se fija una sola vez al abrir; así el
   // re-render del reloj (cada segundo) no reescribe ni borra lo que estás tecleando.
   useEffect(() => { if (noteRef.current) noteRef.current.innerHTML = sanitizeHtml(info.task.note || '') }, [])
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { flushRef.current(); onClose() } }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
   // Diseño navy idéntico al editor de Épicas.
   const nf: CSSProperties = { background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#14233D', boxSizing: 'border-box' }
   const eb: CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }
@@ -1817,20 +1843,38 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
     }); setBitNote('')
   }
   const withNote = (): EpicaTask => ({ ...t, note: sanitizeHtml(noteRef.current?.innerHTML ?? t.note ?? '') })
+  // Auto-guardado: cada cambio se escribe solo a Épicas (debounce 600ms); no hay que picar "Guardar".
+  flushRef.current = () => { if (saveT.current) { clearTimeout(saveT.current); saveT.current = null } if (!creating) onAutoSave(epId, withNote()) }
+  useEffect(() => {
+    if (creating) return
+    if (saveT.current) clearTimeout(saveT.current)
+    saveT.current = setTimeout(() => onAutoSave(epId, withNote()), 600)
+    return () => { if (saveT.current) clearTimeout(saveT.current) }
+  }, [t, epId])   // eslint-disable-line react-hooks/exhaustive-deps
+  const close = () => { flushRef.current(); onClose() }
   const invested = (t.progressLog || []).reduce((s, e) => s + ((e as { min?: number }).min || 0), 0)
   const epColor = epicas.find(e => e.id === epId)?.color || info.color
   const setSubs = (fn: (a: NonNullable<EpicaTask['subtasks']>) => NonNullable<EpicaTask['subtasks']>) => setT(p => ({ ...p, subtasks: fn(p.subtasks || []) }))
   const setLinks = (fn: (a: NonNullable<EpicaTask['links']>) => NonNullable<EpicaTask['links']>) => setT(p => ({ ...p, links: fn(p.links || []) }))
   const addComment = () => { if (!comment.trim()) return; setT(p => ({ ...p, comentarios: [...(p.comentarios || []), { at: new Date().toISOString(), text: comment.trim() }] })); setComment('') }
+  // Marcar terminada desde aquí: guarda TODO (edits + terminada en la fecha "hacer") en una escritura y cierra.
+  const markDoneHere = () => {
+    if (saveT.current) { clearTimeout(saveT.current); saveT.current = null }
+    const base = withNote(); const day = doneDayFor(base, iso(new Date()))
+    const done: EpicaTask = base.repeat
+      ? { ...base, repeatDone: (base.repeatDone || []).includes(day) ? base.repeatDone! : [...(base.repeatDone || []), day] }
+      : { ...base, status: 'Terminada', doneAt: day }
+    onAutoSave(epId, done); onClose()
+  }
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+    <div onClick={creating ? onClose : close} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
       <div role="dialog" aria-modal="true" aria-label={creating ? 'Nueva tarea' : 'Editar tarea'} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
         <div style={{ height: 4, background: epColor }} />
         <div style={{ padding: '20px 24px 22px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: epColor }} />{creating ? 'Nueva tarea' : info.epicaName}</div>
-            <button aria-label="Cerrar" onClick={onClose} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: epColor }} />{creating ? 'Nueva tarea' : info.epicaName}{!creating && <span style={{ color: 'rgba(20,35,61,0.4)' }}>· se guarda solo</span>}</div>
+            <button aria-label="Cerrar" onClick={creating ? onClose : close} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
           </div>
 
           {creating && (<><NLbl>Épica</NLbl><select value={epId} onChange={e => setEpId(e.target.value)} style={{ ...nf, width: '100%' }}>{epicas.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></>)}
@@ -1890,7 +1934,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
           <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%' }} /></label>
 
           <NLbl>Nota</NLbl>
-          <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning style={{ ...nf, minHeight: 60, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
+          <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning onBlur={() => { if (!creating) onAutoSave(epId, withNote()) }} style={{ ...nf, minHeight: 60, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
 
           <div style={{ marginTop: 14 }}><NLbl>Subtareas · {(t.subtasks || []).filter(s => s.done).length}/{(t.subtasks || []).length}</NLbl></div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
@@ -1938,7 +1982,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid rgba(15,35,64,0.08)', paddingTop: 14, marginTop: 16 }}>
               <div style={eb}>Comenzar · {startDur ? 'estimo ' + hm(startDur) : 'contador libre'}</div>
               <input type="range" min={0} max={240} step={15} value={startDur} onChange={e => setStartDur(Number(e.target.value))} style={{ width: '100%', accentColor: '#C2933A' }} />
-              <button onClick={() => onStart({ epicaId: epId, task: withNote() }, startDur)} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>▶ Comenzar {startDur ? hm(startDur) : 'ahora'}</button>
+              <button onClick={() => { if (saveT.current) { clearTimeout(saveT.current); saveT.current = null } onStart({ epicaId: epId, task: withNote() }, startDur) }} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>▶ Comenzar {startDur ? hm(startDur) : 'ahora'}</button>
             </div>
           )}
 
@@ -1946,9 +1990,9 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
             {creating
               ? <button onClick={() => onCreate(epId, withNote())} disabled={!t.t.trim() || !epId} style={{ flex: 1, minWidth: 130, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: (!t.t.trim() || !epId) ? .5 : 1 }}>Crear tarea</button>
               : <>
-                <button onClick={() => onSave(epId, withNote())} style={{ flex: 1, minWidth: 120, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Guardar</button>
-                <button onClick={() => onDone(epId, t.id!)} style={{ background: '#2E6E6E', color: '#fff', border: 'none', borderRadius: 10, padding: '12px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>✓ Terminar</button>
-                <button onClick={() => onUnplan(epId, withNote())} style={{ border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, cursor: 'pointer' }}>Quitar de hoy</button>
+                <button onClick={markDoneHere} style={{ flex: 1, minWidth: 120, background: '#2E6E6E', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>✓ Terminar</button>
+                <button onClick={() => { if (saveT.current) { clearTimeout(saveT.current); saveT.current = null } onUnplan(epId, withNote()) }} style={{ border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, cursor: 'pointer' }}>Quitar de hoy</button>
+                <button onClick={close} style={{ border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.6)', borderRadius: 10, padding: '12px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>Listo</button>
               </>}
           </div>
           {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} target="_blank" rel="noopener noreferrer" style={{ textAlign: 'center', fontSize: 12, color: 'rgba(20,35,61,0.45)', marginTop: 10 }}>También abrir en Épicas ↗</a>}
@@ -1965,14 +2009,18 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onRes
   onSyncDone: (row: AppData['history'][number], done: boolean) => void; onResume: (row: AppData['history'][number]) => void; onClose: () => void
 }) {
   const [r, setR] = useState(row)
+  // Auto-guardado (debounce): cada cambio se guarda solo, sin picar "Guardar".
+  useEffect(() => { const id = setTimeout(() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false }), 450); return () => clearTimeout(id) }, [r])   // eslint-disable-line react-hooks/exhaustive-deps
+  const flush = () => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false })
+  const close = () => { flush(); onClose() }
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
+    <div onClick={close} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
       <div role="dialog" aria-modal="true" aria-label="Editar registro" onClick={e => e.stopPropagation()} style={{ width: 'min(440px,100%)', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Editar registro</span>
-          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Editar registro <span style={{ fontFamily: 'inherit', fontSize: 12, color: '#a49b90' }}>· se guarda solo</span></span>
+          <button onClick={close} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
         <input autoFocus value={r.name} onChange={e => setR({ ...r, name: e.target.value })} style={{ ...field, width: '100%', fontSize: 16 }} />
         <select value={r.area} onChange={e => setR({ ...r, area: e.target.value as Area })} style={{ ...field, width: '100%' }}>
@@ -1984,11 +2032,11 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onRes
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración · {hm(r.dur)}</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 92 }} /></label>
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14, cursor: 'pointer' }}>
-          <input type="checkbox" checked={r.done !== false} onChange={e => setR({ ...r, done: e.target.checked })} />
+          <input type="checkbox" checked={r.done !== false} onChange={e => { const v = e.target.checked; setR({ ...r, done: v }); if (row.taskId) onSyncDone(row, v) }} />
           Se terminó la actividad {r.done === false && <span style={{ color: '#8a4b28' }}>· solo se le invirtió tiempo</span>}
         </label>
         <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
-          <button onClick={() => { const done = r.done !== false; if (row.taskId) onSyncDone(row, done); onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done }) }} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={close} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Listo</button>
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
         </div>
         <button onClick={() => onResume(row)} title="Arranca una nueva sesión de esto ahora; se acumula al tiempo anterior" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>↻ Volver a trabajar en esto ahora</button>
