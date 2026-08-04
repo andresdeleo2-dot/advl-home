@@ -12,6 +12,10 @@ export type Block = { id: string; name: string; area: Area; start: number; dur: 
 export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string } | null
 export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean }
 
+/** Tarea de Épicas (o actividad libre) agendada para HOY a una hora concreta. Al llegar
+ *  la hora, la app pregunta si la quieres iniciar. Vive sólo en el estado de Tiempo. */
+export type ScheduledBlock = { id: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string }
+
 /** Chips de día en el orden L M X J V S D con su índice getDay(). */
 export const DOW_CHIPS: { lbl: string; i: number }[] = [
   { lbl: 'L', i: 1 }, { lbl: 'M', i: 2 }, { lbl: 'X', i: 3 }, { lbl: 'J', i: 4 }, { lbl: 'V', i: 5 }, { lbl: 'S', i: 6 }, { lbl: 'D', i: 0 },
@@ -33,6 +37,7 @@ export type AppData = {
   sleep: number    // sueño objetivo en minutos, ej. 480 = 8h
   session: Session
   history: HistoryRow[]
+  scheduled?: ScheduledBlock[]   // tareas/actividades agendadas a una hora hoy
 }
 
 export const KEY = 'margen.v1'
@@ -93,6 +98,7 @@ export function defaults(): AppData {
     sleep: 480,
     session: null,
     history: seed(),
+    scheduled: [],
   }
 }
 

@@ -7,7 +7,7 @@ import FavoritosStrip from '@/components/FavoritosStrip'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel,
-  type AppData, type Area,
+  type AppData, type Area, type ScheduledBlock,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap } from '@/components/epicas/core'
@@ -68,6 +68,8 @@ export default function TiempoClient() {
   const [barPick, setBarPick] = useState<string>('')
   const [energyLearned, setEnergyLearned] = useState(true)   // curva aprendida vs. típica
   const [costOpen, setCostOpen] = useState(false)            // popup "el costo de empezar ahora"
+  const [scheduleAt, setScheduleAt] = useState<number | null>(null)   // hora (min) para agendar una tarea; abre el selector
+  const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -315,13 +317,15 @@ export default function TiempoClient() {
       verdictBg = '#f6e3dd'; verdictBorder = '#e8cabf'; verdictFg = '#8a3c2a'
     }
 
-    // barra del día: lo YA HECHO (pasado, por su hora) + protegido/libre (futuro)
+    // barra del día: lo YA HECHO (pasado, por su hora) + protegido/agendado/libre (futuro)
     const dayISO = iso(new Date())
+    const scheduled = (data.scheduled || []).slice().sort((a, b) => a.start - b.start)
+    const maxSchedEnd = scheduled.reduce((m, s) => Math.max(m, s.start + s.dur), 0)
     const doneToday = data.history.filter(h => h.date === dayISO && h.start < now).sort((a, b) => a.start - b.start)
-    const scaleEnd = Math.max(bed + 30, simEnd + 15)
+    const scaleEnd = Math.max(bed + 30, simEnd + 15, maxSchedEnd + 15)
     const barStart = doneToday.length ? Math.min(now, doneToday[0].start) : now
     const total = Math.max(1, scaleEnd - barStart)
-    const raw: { s: number; e: number; kind: 'free' | 'prot' | 'done'; area?: Area; name?: string }[] = []
+    const raw: { s: number; e: number; kind: 'free' | 'prot' | 'done' | 'sched'; area?: Area; name?: string }[] = []
     let cursor = barStart
     for (const d of doneToday) {                       // tramo pasado = lo que hiciste
       const s = Math.max(d.start, cursor), e = Math.min(d.start + d.dur, now)
@@ -331,11 +335,16 @@ export default function TiempoClient() {
       cursor = Math.max(cursor, e)
     }
     if (cursor < now) { raw.push({ s: cursor, e: now, kind: 'free' }); cursor = now }
-    for (const b of timeline) {                        // tramo futuro = protegido/libre
+    // Futuro: protegido/reuniones (timeline) + lo agendado por ti, intercalado por hora.
+    const futureItems: { start: number; dur: number; name: string; kind: 'prot' | 'sched' }[] = [
+      ...timeline.map(b => ({ start: b.start, dur: b.dur, name: b.name, kind: 'prot' as const })),
+      ...scheduled.map(s => ({ start: s.start, dur: s.dur, name: s.name, kind: 'sched' as const })),
+    ].sort((a, b) => a.start - b.start)
+    for (const b of futureItems) {
       const s = Math.max(b.start, cursor), e = Math.min(b.start + b.dur, scaleEnd)
       if (e <= s) continue
       if (s > cursor) raw.push({ s: cursor, e: s, kind: 'free' })
-      raw.push({ s: Math.max(s, cursor), e, kind: 'prot', name: b.name })
+      raw.push({ s: Math.max(s, cursor), e, kind: b.kind, name: b.name })
       cursor = Math.max(cursor, e)
     }
     if (cursor < scaleEnd) raw.push({ s: cursor, e: scaleEnd, kind: 'free' })
@@ -344,6 +353,7 @@ export default function TiempoClient() {
     const segs: { w: number; bg: string; label: string }[] = []
     for (const r of raw) {
       if (r.kind === 'done') { segs.push(seg(r.s, r.e, AREAS[r.area!]?.color || '#8b8379', r.name || 'Hecho')); continue }
+      if (r.kind === 'sched') { segs.push(seg(r.s, r.e, '#c2933a', 'Agendado · ' + (r.name || 'Actividad'))); continue }
       const parts: { s: number; e: number; work: boolean }[] = []
       const iS = Math.max(r.s, simStart), iE = Math.min(r.e, simEnd)
       if (iE > iS) {
@@ -462,14 +472,22 @@ export default function TiempoClient() {
         : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
         : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.')
 
-    // Todos los bloques de la rutina de hoy con su cuenta regresiva (o "ya pasó").
+    // Todos los bloques de la rutina de hoy con su cuenta regresiva (o "ya pasó") y su duración.
     const routineNext = todayBlocks.slice().sort((a, b) => a.start - b.start).map(b => {
       const past = b.start + b.dur <= now
       return {
-        name: b.name, dot: AREAS[b.area]?.color || '#8b8379', at: clock(b.start), past,
+        name: b.name, dot: AREAS[b.area]?.color || '#8b8379', at: clock(b.start), past, dur: hm(b.dur),
         when: b.start > now ? 'en ' + hm(b.start - now) : past ? 'ya pasó' : 'en curso',
       }
     })
+
+    // Lo que agendaste hoy y aún no pasa (para verlo y arrancarlo desde la lista del día).
+    const scheduledUpcoming = scheduled.filter(s => s.start + s.dur > now).map(s => ({
+      id: s.id, name: s.name, taskId: s.taskId, epicaId: s.epicaId, start: s.start, dur: s.dur, area: s.area,
+      range: clock(s.start) + '–' + clock(s.start + s.dur), durLabel: hm(s.dur),
+      dot: AREAS[s.area]?.color || '#c2933a',
+      when: s.start > now ? 'en ' + hm(s.start - now) : 'ahora',
+    }))
 
     // Totales de TODO lo trabajado, agrupado por actividad (para el Historial).
     const totalsMap: Record<string, { min: number; n: number; area: Area }> = {}
@@ -503,7 +521,7 @@ export default function TiempoClient() {
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? (safeMax >= 1 ? 'Reducir a ' + hm(safeMax) : 'Sin margen ahora') : 'Otra duración',
       cutoff, cutoffLabel: cutoff != null ? clock(cutoff) : null,
-      segs, barTicks, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart), barStart, scaleEnd,
+      segs, barTicks, upcoming, scheduledUpcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart), barStart, scaleEnd,
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
       routineNext, allTotals, taskSummary,
       weekTotalLabel: hm(weekTotal), areaStats, days,
@@ -667,13 +685,17 @@ export default function TiempoClient() {
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
-  // Agregar una actividad al día en la hora donde diste doble clic en la cinta; abre el editor.
-  const addActivityAt = (startMin: number) => {
-    const entry = { date: iso(new Date()), name: 'Actividad', area: 'ocio' as Area, start: Math.max(0, Math.min(1439, Math.round(startMin))), dur: 30, done: true }
-    const idx = data.history.length
-    save({ history: [...data.history, entry] })
-    setHistIdx(idx)
+  // Agendar en la cinta: abre el selector para elegir una tarea de Épicas (o actividad libre)
+  // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
+  const addActivityAt = (startMin: number) => setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15)))
+  const scheduleActivity = (b: ScheduledBlock) => { save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null) }
+  const removeScheduled = (id: string) => save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) })
+  // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
+  const startScheduled = (s: ScheduledBlock) => {
+    save({ session: { name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })
+    setPromptedSched(p => { const n = new Set(p); n.add(s.id); return n }); setView('hoy')
   }
+  const dismissSched = (id: string) => setPromptedSched(p => { const n = new Set(p); n.add(id); return n })
   // Registrar (o reemplazar) el sueño de un día: alimenta la racha y la deuda de sueño.
   const logSleep = (date: string, mins: number) => {
     const rest = data.history.filter(h => !(h.date === date && h.area === 'sueno'))
@@ -685,6 +707,12 @@ export default function TiempoClient() {
   const today = iso(new Date())
 
   const tabs: [typeof view, string][] = [['hoy', 'Hoy'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
+
+  // Agendado cuya hora ya llegó y aún no preguntamos (y no hay sesión corriendo): dispara
+  // el aviso "¿iniciar ahora?". La ventana termina en start+dur para no avisar de algo ya vencido.
+  const dueSched = !data.session
+    ? (data.scheduled || []).find(s => !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
+    : undefined
 
   return (
     <div className="margen-root" style={{ minHeight: '100vh', background: '#f2ece2', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif', color: '#1c1a17', WebkitFontSmoothing: 'antialiased' }}>
@@ -761,10 +789,11 @@ export default function TiempoClient() {
                     <span style={LBL}>cuánto falta para tu rutina</span>
                     {V.routineNext.map((r, i) => (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, opacity: r.past ? 0.5 : 1 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 999, background: r.dot, display: 'block' }} />
-                        <span style={{ flex: 1 }}>{r.name}</span>
-                        <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{r.at}</span>
-                        <span style={{ fontWeight: 600, color: r.when === 'en curso' ? '#8a4b28' : '#6b645b', width: 92, textAlign: 'right' }}>{r.when}</span>
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: r.dot, display: 'block', flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                        <span style={{ color: '#a49b90', flexShrink: 0 }}>{r.dur}</span>
+                        <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums', width: 46, textAlign: 'right', flexShrink: 0 }}>{r.at}</span>
+                        <span style={{ fontWeight: 600, color: r.when === 'en curso' ? '#8a4b28' : '#6b645b', width: 82, textAlign: 'right', flexShrink: 0 }}>{r.when}</span>
                       </div>
                     ))}
                   </div>
@@ -858,11 +887,25 @@ export default function TiempoClient() {
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
                 <Legend c="#8b8379">lo que ya hiciste</Legend>
                 <Legend c="#b4653a">el bloque que estás evaluando</Legend>
+                <Legend c="#c2933a">agendado por ti</Legend>
                 <Legend c="#8a3c2a">protegido que invadirías</Legend>
                 <Legend c="#6f8256">protegido intacto</Legend>
                 <Legend c="#eee6da">libre</Legend>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {V.scheduledUpcoming.map(s => (
+                  <div key={'sch' + s.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
+                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{s.range}</span>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2933a', display: 'block' }} />
+                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#1c1a17', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                      <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#8a4b28', border: '1px solid #e6cfa4', borderRadius: 999, padding: '2px 7px', flexShrink: 0 }}>agendado {s.when}</span>
+                    </span>
+                    <span style={{ fontSize: 14, color: '#a49b90' }}>{s.durLabel}</span>
+                    <button onClick={() => startScheduled({ id: s.id, name: s.name, area: s.area, start: s.start, dur: s.dur, epicaId: s.epicaId, taskId: s.taskId })} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶ Iniciar</button>
+                    <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
                 {V.todayLog.map(l => (
                   <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
@@ -1116,6 +1159,25 @@ export default function TiempoClient() {
           </div>
         </div>
       )}
+
+      {/* Selector para agendar una tarea (de Épicas) o actividad libre a una hora del día */}
+      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} onSchedule={scheduleActivity} onClose={() => setScheduleAt(null)} />}
+
+      {/* Aviso: llegó la hora de algo que agendaste. ¿Iniciar ahora? */}
+      {dueSched && !V.hasSession && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 95 }}>
+          <div role="dialog" aria-modal="true" aria-label="Es hora de tu actividad agendada" style={{ width: 'min(420px,100%)', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 24, padding: 26, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <span style={LBL}>llegó la hora de lo que agendaste</span>
+            <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>{dueSched.name}</span>
+            <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5 }}>La agendaste para las <b>{clock(dueSched.start)}</b> · {hm(dueSched.dur)}{dueSched.taskId ? '. Al terminar se marca hecha en Épicas.' : '.'} ¿La inicias ahora?</span>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+              <div onClick={() => startScheduled(dueSched)} style={{ flex: 1, minWidth: 150, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>▶ Iniciar ahora</div>
+              <div onClick={() => dismissSched(dueSched.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '14px 18px', fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap' }}>Ahora no</div>
+              <div onClick={() => { removeScheduled(dueSched.id); dismissSched(dueSched.id) }} title="Quitar de agendados" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '14px 16px', fontSize: 14, color: '#a49b90', cursor: 'pointer', whiteSpace: 'nowrap' }}>Quitar</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1130,6 +1192,97 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
+}
+
+/** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
+ *  Al llegar la hora, la app pregunta si la quieres iniciar. */
+function ScheduleModal({ tasks, defaultStart, onSchedule, onClose }: {
+  tasks: TodayTask[] | null; defaultStart: number
+  onSchedule: (b: ScheduledBlock) => void; onClose: () => void
+}) {
+  const list = (tasks || [])
+  const [mode, setMode] = useState<'task' | 'free'>(list.length ? 'task' : 'free')
+  const [sel, setSel] = useState<string>(list[0]?.task.id || '')
+  const [name, setName] = useState('Actividad')
+  const [area, setArea] = useState<Area>('ocio')
+  const [startStr, setStartStr] = useState(clock(defaultStart))
+  const [dur, setDur] = useState<number>(list[0] ? durByDiff(list[0].task) : 60)
+  const startMin = parse(startStr)
+  const endStr = clock(startMin + dur)
+  const areaOpts = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno')
+  const canSave = mode === 'task' ? !!sel : name.trim().length > 0
+  const confirm = () => {
+    if (!canSave) return
+    if (mode === 'task') {
+      const t = list.find(x => x.task.id === sel); if (!t) return
+      onSchedule({ id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start: startMin, dur, epicaId: t.epicaId, taskId: t.task.id })
+    } else {
+      onSchedule({ id: uid(), name: name.trim() || 'Actividad', area, start: startMin, dur })
+    }
+  }
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 92 }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Agendar en tu día" style={{ width: 'min(460px,100%)', maxHeight: '90vh', overflowY: 'auto', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={LBL}>agendar a las {clock(startMin)}</span>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999, alignSelf: 'flex-start' }}>
+          {([['task', 'Tarea de Épicas'], ['free', 'Actividad libre']] as const).map(([k, lbl]) => {
+            const on = mode === k
+            return <button key={k} onClick={() => setMode(k)} style={{ border: 'none', cursor: 'pointer', padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: 500, background: on ? '#faf7f1' : 'transparent', color: on ? '#1c1a17' : '#6b645b' }}>{lbl}</button>
+          })}
+        </div>
+
+        {mode === 'task' ? (
+          list.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', border: '1px solid #eee6da', borderRadius: 14, padding: 8 }}>
+              {list.map(t => { const on = t.task.id === sel; return (
+                <button key={t.task.id} onClick={() => { setSel(t.task.id!); setDur(durByDiff(t.task)) }} style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f5ece2' : 'transparent', borderRadius: 12, padding: '9px 11px', cursor: 'pointer' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
+                  <span style={{ fontSize: 12, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
+                </button>
+              ) })}
+            </div>
+          ) : <span style={{ fontSize: 13.5, color: '#a49b90', lineHeight: 1.5 }}>No tienes tareas para este día. Cambia a “Actividad libre” o plánealas en Épicas.</span>
+        ) : (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="¿Qué vas a hacer?" style={{ ...field, flex: 1, minWidth: 180 }} />
+            <select value={area} onChange={e => setArea(e.target.value as Area)} style={{ ...field, cursor: 'pointer' }}>
+              {areaOpts.map(k => <option key={k} value={k}>{AREAS[k].label}</option>)}
+            </select>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={LBL}>a las</span>
+            <input type="time" value={startStr} onChange={e => setStartStr(e.target.value)} style={field} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={LBL}>termina</span>
+            <input type="time" value={endStr} onChange={e => { let end = parse(e.target.value); if (end <= startMin) end += 1440; setDur(Math.max(5, end - startMin)) }} style={field} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={LBL}>duración</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="number" min={5} max={600} step={5} value={dur} onChange={e => setDur(Math.max(5, Number(e.target.value) || 5))} style={{ ...field, width: 78 }} />
+              <span style={{ fontSize: 13, color: '#a49b90' }}>{hm(dur)}</span>
+            </div>
+          </div>
+        </div>
+        <input type="range" min={15} max={300} step={15} value={Math.min(300, dur)} onChange={e => setDur(Number(e.target.value))} aria-label="Duración" style={{ width: '100%', height: 24, accentColor: '#c2933a' }} />
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+          <button disabled={!canSave} onClick={confirm} style={{ flex: 1, textAlign: 'center', background: canSave ? '#1c1a17' : '#c9c0b3', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: canSave ? 'pointer' : 'default' }}>Agendar a las {clock(startMin)}</button>
+          <button onClick={onClose} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '14px 18px', fontSize: 14, cursor: 'pointer' }}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
