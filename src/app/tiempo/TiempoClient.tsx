@@ -225,6 +225,20 @@ export default function TiempoClient() {
     const windowMins = nextBlock ? Math.max(0, nextBlock.start - now) : Math.max(0, bed - now)
     const safeMax = Math.max(15, Math.round(windowMins / 15) * 15)
 
+    // Hora de corte inversa: la última hora en que puedes EMPEZAR `dur` sin tocar la
+    // rutina ni el sueño. Se buscan las ventanas libres entre ahora y la hora de dormir.
+    const freeWindows: { s: number; e: number }[] = []
+    let fc = now
+    for (const b of blocks) {
+      const s = Math.max(b.start, now), e = b.start + b.dur
+      if (e <= now) continue
+      if (s > fc) freeWindows.push({ s: fc, e: s })
+      fc = Math.max(fc, e)
+    }
+    if (fc < bed) freeWindows.push({ s: fc, e: bed })
+    let cutoff: number | null = null
+    for (const w of freeWindows) if (w.e - w.s >= dur) cutoff = Math.max(cutoff ?? -1, w.e - dur)
+
     const simStart = now, simEnd = simStart + dur
     const overlap = (aS: number, aE: number, bS: number, bE: number) => Math.max(0, Math.min(aE, bE) - Math.max(aS, bS))
     const afectados: { name: string; detail: string; mins: number; id: string }[] = []
@@ -337,11 +351,14 @@ export default function TiempoClient() {
     }))
 
     const dayOk: Record<string, boolean | null> = {}
+    let weekSleepDebt = 0, sleptDays = 0
     for (const w of week) {
       const rows = data.history.filter(h => h.date === w.date)
       const sl = rows.filter(r => r.area === 'sueno').reduce((s, r) => s + r.dur, 0)
       const body = rows.filter(r => r.area === 'cuerpo').reduce((s, r) => s + r.dur, 0)
       dayOk[w.date] = rows.length === 0 ? null : (sl >= sleepGoal - 30 && body >= 45)
+      // Deuda de sueño: solo cuenta días con registro de sueño (no futuros/vacíos).
+      if (sl > 0) { weekSleepDebt += Math.max(0, sleepGoal - sl); sleptDays++ }
     }
     let streak = 0
     for (let i = week.length - 1; i >= 0; i--) { const v = dayOk[week[i].date]; if (v === true) streak++; else if (v === false) break }
@@ -413,10 +430,12 @@ export default function TiempoClient() {
       durLabel: hm(dur), endLabel: clock(simEnd),
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
+      cutoff, cutoffLabel: cutoff != null ? clock(cutoff) : null,
       segs, barTicks, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart),
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
       routineNext, allTotals, taskSummary,
       weekTotalLabel: hm(weekTotal), areaStats, days,
+      weekSleepDebt, weekSleepDebtLabel: hm(weekSleepDebt), sleptDays,
       streakLabel: streak > 0 ? streak + (streak === 1 ? ' día seguido con la rutina protegida' : ' días seguidos con la rutina protegida') : 'Aún sin racha esta semana',
       streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
       todayLog, logEmpty: todayLog.length ? '' : 'Todavía no hay bloques cerrados hoy. Empieza uno desde Hoy y aparecerá aquí al terminarlo.',
@@ -752,6 +771,9 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 12.5, lineHeight: 1.35, color: '#3a352f' }}>{V.verdictTitle}</span>
                   </div>
                   {V.hitAny && <span style={{ fontSize: 12, color: '#8a3c2a' }}><span style={{ color: '#a49b90' }}>sacrificas: </span>{V.afectados.map(a => `${a.name} ${a.detail}`).join(' · ')}</span>}
+                  <span style={{ fontSize: 12, color: '#6f8256', lineHeight: 1.4 }}>{V.cutoff != null && V.cutoff > now
+                    ? <>⏳ Hora de corte: empieza este bloque a más tardar <b>{V.cutoffLabel}</b> para no tocar tu rutina.</>
+                    : <span style={{ color: '#8a3c2a' }}>⏳ Ya no cabe {V.durLabel} sin tocar tu rutina.</span>}</span>
                   <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
                     <div onClick={start} style={{ flex: 1, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Empezar {V.durLabel}</div>
                     <div onClick={() => setDur(V.safeMax)} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 14px', fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>{V.altLabel}</div>
@@ -897,6 +919,11 @@ export default function TiempoClient() {
                   ))}
                 </div>
                 <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.55 }}>{V.streakNote}</span>
+                <div style={{ borderTop: '1px solid #ebe3d6', paddingTop: 14, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                  <span style={{ ...LBL }}>deuda de sueño · semana</span>
+                  <span style={{ fontFamily: SERIF, fontSize: 22, color: V.weekSleepDebt > 0 ? '#8a3c2a' : '#4f6238' }}>{V.weekSleepDebt > 0 ? V.weekSleepDebtLabel : 'al día ✓'}</span>
+                </div>
+                {V.weekSleepDebt > 0 && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Llevas {V.weekSleepDebtLabel} tomadas del sueño en {V.sleptDays} {V.sleptDays === 1 ? 'noche' : 'noches'} registradas. Eso no se recupera con ocio: se paga con mañana.</span>}
               </div>
 
               <div style={card(16)}>
