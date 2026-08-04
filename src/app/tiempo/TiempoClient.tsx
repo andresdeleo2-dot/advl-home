@@ -64,6 +64,7 @@ export default function TiempoClient() {
   const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean } | null>(null)
   const [histIdx, setHistIdx] = useState<number | null>(null)
   const [barPick, setBarPick] = useState<string>('')
+  const [energyLearned, setEnergyLearned] = useState(true)   // curva aprendida vs. típica
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -407,7 +408,25 @@ export default function TiempoClient() {
     for (const hh of data.history) if (hh.date === dayISO) for (let h = Math.floor(hh.start / 60); h <= Math.floor((hh.start + hh.dur - 1) / 60); h++) {
       workedByHour[h] = (workedByHour[h] || 0) + Math.max(0, Math.min((h + 1) * 60, hh.start + hh.dur) - Math.max(h * 60, hh.start))
     }
-    const energyVal = (h: number) => h < 9 ? 0.42 : h < 12 ? 1 : h < 13 ? 0.8 : h < 15 ? 0.5 : h < 18 ? 0.78 : h < 20 ? 0.52 : h < 22 ? 0.36 : 0.24
+    // Curva de energía APRENDIDA de tus horas reales de trabajo (área 'trabajo'), con una
+    // curva típica como "previa" que domina cuando hay pocos datos. El peso de lo aprendido
+    // crece con la cantidad de historial (tope 0.7).
+    const workHist: Record<number, number> = {}
+    let totalWork = 0
+    for (const hh of data.history) {
+      if (hh.area !== 'trabajo') continue
+      for (let h = Math.floor(hh.start / 60); h <= Math.floor((hh.start + hh.dur - 1) / 60); h++) {
+        if (h < 0 || h > 23) continue
+        const ov = Math.max(0, Math.min((h + 1) * 60, hh.start + hh.dur) - Math.max(h * 60, hh.start))
+        workHist[h] = (workHist[h] || 0) + ov; totalWork += ov
+      }
+    }
+    const learnAvail = totalWork >= 240
+    const useLearned = energyLearned && learnAvail
+    const maxW = Math.max(1, ...Object.values(workHist))
+    const wLearn = Math.min(0.7, totalWork / 2400)
+    const prior = (h: number) => h < 9 ? 0.42 : h < 12 ? 1 : h < 13 ? 0.8 : h < 15 ? 0.5 : h < 18 ? 0.78 : h < 20 ? 0.52 : h < 22 ? 0.36 : 0.24
+    const energyVal = (h: number) => useLearned ? (1 - wLearn) * prior(h) + wLearn * ((workHist[h] || 0) / maxW) : prior(h)
     const nowH = Math.floor(now / 60)
     const eBars: { h: number; bg: string; worked: boolean; title: string; cur: boolean }[] = []
     for (let h = 7; h <= 22; h++) {
@@ -416,10 +435,14 @@ export default function TiempoClient() {
       eBars.push({ h: val * 100, bg: cur ? '#1c1a17' : now / 60 > h + 1 ? '#e4dcd0' : base, worked: worked > 0, cur, title: `${String(h).padStart(2, '0')}:00 · energía ${pct}%${worked ? ` · trabajaste ${hm(worked)}` : ''}` })
     }
     const nowPct = Math.round(energyVal(nowH) * 100)
-    const energyNote = nowH < 13 ? 'Estás dentro de tu pico de rendimiento: es el mejor momento para trabajo profundo.'
-      : nowH < 15 ? 'Bajón de media tarde. Buen momento para lo mecánico, no para lo difícil.'
-      : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
-      : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.'
+    const energyNote = useLearned
+      ? (nowPct >= 78 ? 'Según tus horas registradas, a esta hora sueles rendir alto: buen momento para lo difícil.'
+        : nowPct >= 52 ? 'Según tu historial, rendimiento medio ahora: bien para lo mecánico, no para lo difícil.'
+        : 'Según tu historial, a esta hora sueles rendir poco: lo que hagas cuesta más y vale menos.')
+      : (nowH < 13 ? 'Estás dentro de tu pico de rendimiento: es el mejor momento para trabajo profundo.'
+        : nowH < 15 ? 'Bajón de media tarde. Buen momento para lo mecánico, no para lo difícil.'
+        : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
+        : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.')
 
     // Todos los bloques de la rutina de hoy con su cuenta regresiva (o "ya pasó").
     const routineNext = todayBlocks.slice().sort((a, b) => a.start - b.start).map(b => {
@@ -448,7 +471,7 @@ export default function TiempoClient() {
       windowLabel: nextBlock ? hm(windowMins) + ' (hasta ' + clock(nextBlock.start) + ')' : hm(windowMins),
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
       workedTodayLabel: workedToday ? hm(workedToday) : '—',
-      energy: eBars, energyNote, energyNow: nowPct,
+      energy: eBars, energyNote, energyNow: nowPct, energyLearnedActive: useLearned, energyLearnAvail: learnAvail,
       hasSession: !!session, sessionOpen: !!session && !planned, sessionName: session ? session.name : '',
       sessionStartLabel: session ? clock(session.start) : '',
       sessionElapsedLabel: session ? hm(elapsed) : '',
@@ -471,7 +494,7 @@ export default function TiempoClient() {
       streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
       todayLog, logEmpty: todayLog.length ? '' : 'Todavía no hay bloques cerrados hoy. Empieza uno desde Hoy y aparecerá aquí al terminarlo.',
     }
-  }, [data, now, dur, meetings])
+  }, [data, now, dur, meetings, energyLearned])
 
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
@@ -626,6 +649,11 @@ export default function TiempoClient() {
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
+  // Registrar (o reemplazar) el sueño de un día: alimenta la racha y la deuda de sueño.
+  const logSleep = (date: string, mins: number) => {
+    const rest = data.history.filter(h => !(h.date === date && h.area === 'sueno'))
+    save({ history: mins > 0 ? [...rest, { date, name: 'Dormir', area: 'sueno' as Area, start: data.bed, dur: Math.round(mins) }] : rest })
+  }
   const areaOptions = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno').map(k => ({ id: k, label: AREAS[k].label }))
   const bed = data.bed, sleepGoal = data.sleep
   const today = iso(new Date())
@@ -667,9 +695,18 @@ export default function TiempoClient() {
                   <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                    <span style={LBL}>tu energía estimada por hora</span>
-                    <span style={{ fontSize: 12, color: '#8a4b28', fontWeight: 600 }}>ahora ~{V.energyNow}%</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={LBL}>tu energía por hora</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {V.energyLearnAvail && (
+                        <div style={{ display: 'flex', gap: 2, background: '#e7dfd2', padding: 2, borderRadius: 999 }}>
+                          {([['learned', 'Aprendida'], ['typical', 'Típica']] as const).map(([k, lbl]) => { const on = (k === 'learned') === energyLearned; return (
+                            <button key={k} onClick={() => setEnergyLearned(k === 'learned')} style={{ border: 'none', cursor: 'pointer', padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: on ? '#faf7f1' : 'transparent', color: on ? '#1c1a17' : '#8b8379' }}>{lbl}</button>
+                          ) })}
+                        </div>
+                      )}
+                      <span style={{ fontSize: 12, color: '#8a4b28', fontWeight: 600 }}>ahora ~{V.energyNow}%</span>
+                    </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 54 }}>
                     {V.energy.map((e, i) => <div key={i} title={e.title} style={{ flex: 1, height: `${e.h}%`, background: e.bg, borderRadius: '4px 4px 2px 2px', minHeight: 4, outline: e.cur ? '2px solid #b4653a' : 'none', outlineOffset: 1 }} />)}
@@ -681,7 +718,9 @@ export default function TiempoClient() {
                     {V.energy.map((_, i) => <span key={i} style={{ flex: 1, textAlign: 'center' }}>{String(7 + i).padStart(2, '0')}</span>)}
                   </div>
                   <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote} <span style={{ color: '#6f8256' }}>● marca las horas en que trabajaste hoy</span></span>
-                  <span style={{ fontSize: 12, color: '#a49b90', lineHeight: 1.45 }}>Es una <b style={{ fontWeight: 600 }}>curva típica</b> del día (mañana alta, bajón post-comida, segunda ventana en la tarde), igual para todos — todavía no aprende de ti.</span>
+                  <span style={{ fontSize: 12, color: '#a49b90', lineHeight: 1.45 }}>{V.energyLearnedActive
+                    ? <><b style={{ fontWeight: 600 }}>Aprendida de tus horas</b>: pondera cuándo sueles trabajar de verdad (área Trabajo del historial), mezclado con una curva típica; cuanto más historial, más se ajusta a ti.</>
+                    : <>Es una <b style={{ fontWeight: 600 }}>curva típica</b> del día (mañana alta, bajón post-comida, segunda ventana en la tarde), igual para todos.{V.energyLearnAvail ? ' Cambia a “Aprendida” para usar tus horas reales.' : ' Aprenderá de ti cuando acumules historial de trabajo.'}</>}</span>
                 </div>
                 <div style={{ borderTop: '1px solid #eee6da', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
@@ -961,6 +1000,7 @@ export default function TiempoClient() {
                   <span style={{ fontFamily: SERIF, fontSize: 22, color: V.weekSleepDebt > 0 ? '#8a3c2a' : '#4f6238' }}>{V.weekSleepDebt > 0 ? V.weekSleepDebtLabel : 'al día ✓'}</span>
                 </div>
                 {V.weekSleepDebt > 0 && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Llevas {V.weekSleepDebtLabel} tomadas del sueño en {V.sleptDays} {V.sleptDays === 1 ? 'noche' : 'noches'} registradas. Eso no se recupera con ocio: se paga con mañana.</span>}
+                <SleepLogger onLog={logSleep} />
               </div>
 
               <div style={card(16)}>
@@ -1431,6 +1471,25 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClo
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
         </div>
         {row.taskId && <button onClick={() => onReopen(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, cursor: 'pointer' }}>No estaba terminada · reabrir la tarea en Épicas</button>}
+      </div>
+    </div>
+  )
+}
+
+/** Registrar cuánto dormiste una noche (alimenta racha y deuda de sueño). */
+function SleepLogger({ onLog }: { onLog: (date: string, mins: number) => void }) {
+  const [h, setH] = useState('')
+  const [date, setDate] = useState(addDaysISO(iso(new Date()), -1))
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '7px 11px', fontSize: 13, color: '#1c1a17', boxSizing: 'border-box' }
+  const submit = () => { const hrs = parseFloat(h.replace(',', '.')); if (!isNaN(hrs) && hrs >= 0 && hrs <= 24) { onLog(date, Math.round(hrs * 60)); setH('') } }
+  return (
+    <div style={{ borderTop: '1px solid #ebe3d6', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ ...LBL }}>registrar cuánto dormiste</span>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} />
+        <input type="number" min={0} max={24} step={0.25} value={h} placeholder="horas" onChange={e => setH(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submit() }} style={{ ...field, width: 84 }} />
+        <span style={{ fontSize: 13, color: '#a49b90' }}>h</span>
+        <button onClick={submit} style={{ background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: '7px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>Registrar</button>
       </div>
     </div>
   )
