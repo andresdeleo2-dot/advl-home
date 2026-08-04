@@ -5682,6 +5682,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
                   <span style={{ flex: 1 }} />
+                  {/* Comenzar ahora: abre Tiempo, la agrega al día y arranca el cronómetro ligado a esta tarea */}
+                  <button onClick={() => { window.location.href = '/tiempo?start=' + encodeURIComponent(t.id!) }}
+                    title="Empezar ahora con cronómetro en Tiempo (la agrega a tu día; el tiempo se registra en esta tarea)"
+                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 800, border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.12)', color: '#8a5a12' }}>▶ Comenzar</button>
                   {/* Marcar terminada (o reabrir) — acción principal, siempre a la vista */}
                   {(() => {
                     const done = t.status === 'Terminada'

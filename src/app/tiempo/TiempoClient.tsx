@@ -93,6 +93,7 @@ export default function TiempoClient() {
   const [schedulePreset, setSchedulePreset] = useState<string | null>(null)  // tarea preseleccionada al agendar desde su fila
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [notifOn, setNotifOn] = useState(false)              // permiso de notificaciones del navegador
+  const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
   const dueNotifiedRef = useRef<string | null>(null)         // id de agendado ya notificado (llegó la hora)
   const remindNotified = useRef<Set<string>>(new Set())      // recordatorios (remindAt) ya avisados
@@ -149,6 +150,19 @@ export default function TiempoClient() {
 
   // Estado inicial del permiso de notificaciones.
   useEffect(() => { try { if (typeof Notification !== 'undefined') setNotifOn(Notification.permission === 'granted') } catch {} }, [])
+
+  // "Comenzar" desde Épicas (?start=<taskId>): al cargar las tareas, arranca el cronómetro
+  // ligado a esa tarea (contador libre) y limpia la URL. No pisa una sesión ya en curso.
+  useEffect(() => { try { const p = new URLSearchParams(window.location.search).get('start'); if (p) setPendingStart(p) } catch {} }, [])
+  useEffect(() => {
+    if (!pendingStart || !allTasks) return
+    const tt = allTasks.find(x => x.task.id === pendingStart)
+    try { window.history.replaceState({}, '', '/tiempo') } catch {}
+    setPendingStart(null)
+    if (!tt) return
+    if (!data.session) save({ session: { name: tt.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: 0, epicaId: tt.epicaId, taskId: tt.task.id } })
+    setView('hoy')
+  }, [pendingStart, allTasks])   // eslint-disable-line react-hooks/exhaustive-deps
   const requestNotif = async () => {
     try {
       if (typeof Notification === 'undefined') { alert('Tu navegador no soporta notificaciones.'); return }
@@ -669,6 +683,18 @@ export default function TiempoClient() {
     return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
   }, [data.blocks, data.bed, data.sleep, data.scheduled, data.history, allTasks, meetings, taskDay])
 
+  // Tareas TERMINADAS hoy en Épicas (doneAt hoy, o recurrente con repeatDone hoy) que NO tienen
+  // un registro con tiempo en el día: se muestran igual como "hecho" en el día, aunque no las
+  // hayas cronometrado desde Tiempo (Andrés: "marco terminada en Épicas → verse terminada en el día").
+  const epicDoneToday = useMemo(() => {
+    const t0 = iso(new Date())
+    const histIds = new Set((data.history || []).filter(h => h.date === t0 && h.taskId).map(h => h.taskId))
+    return (allTasks || []).filter(x => {
+      const done = x.task.doneAt === t0 || (x.task.repeatDone || []).includes(t0)
+      return done && !histIds.has(x.task.id)
+    })
+  }, [allTasks, data.history])
+
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
     if (selMeeting) {
@@ -982,7 +1008,7 @@ export default function TiempoClient() {
                     ))}
                   </div>
                 )}
-                {V.todayLog.length > 0 && (
+                {(V.todayLog.length > 0 || epicDoneToday.length > 0) && (
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <span style={LBL}>lo que hiciste hoy</span>
                     {V.todayLog.map(l => (
@@ -993,6 +1019,15 @@ export default function TiempoClient() {
                         {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
                         <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
                         <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
+                      </div>
+                    ))}
+                    {epicDoneToday.map(t => (
+                      <div key={'epc' + t.task.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
+                        <span style={{ fontSize: 11, color: '#c2b9ab', flexShrink: 0 }}>en Épicas</span>
+                        <button onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
+                        <span style={{ fontWeight: 600, color: '#4f6238', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>hecho ✓</span>
                       </div>
                     ))}
                   </div>
@@ -1116,6 +1151,17 @@ export default function TiempoClient() {
                     {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa (avance, subtareas, bitácora…)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
                     <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
+                  </div>
+                ))}
+                {epicDoneToday.map(t => (
+                  <div key={'epc' + t.task.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
+                    <span style={{ fontSize: 12, color: '#c2b9ab', width: 96, flexShrink: 0 }}>en Épicas</span>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
+                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
+                    <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
+                    <button onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
+                    <button onClick={() => resumeActivity({ date: today, name: t.task.t || 'Tarea', area: 'trabajo', start: 0, dur: 0, epicaId: t.epicaId, taskId: t.task.id })} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 90, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
                   </div>
                 ))}
                 {V.upcoming.map((b, i) => (
