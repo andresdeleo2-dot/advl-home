@@ -822,6 +822,14 @@ export default function TiempoClient() {
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
+  // Volver a trabajar una actividad YA registrada hoy (la hiciste a las 11 y la retomas a las 3):
+  // arranca una NUEVA sesión con el mismo nombre/área (y su tarea de Épicas si venía de una),
+  // contador libre. Se ACUMULA: al terminar genera otro bloque en el día y otra entrada de tiempo.
+  const resumeActivity = (row: AppData['history'][number]) => {
+    if (data.session) { window.alert('Ya tienes una sesión en curso. Termínala antes de retomar otra.'); return }
+    save({ session: { name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) } })
+    setHistIdx(null); setView('hoy')
+  }
   // Agendar en la cinta: abre el selector para elegir una tarea de Épicas (o actividad libre)
   // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
   const addActivityAt = (startMin: number) => { setSchedulePreset(null); setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15))) }
@@ -969,10 +977,11 @@ export default function TiempoClient() {
                     <span style={LBL}>lo que hiciste hoy</span>
                     {V.todayLog.map(l => (
                       <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block', flexShrink: 0 }} />
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                         <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
-                        <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 72, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
+                        <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
+                        <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                       </div>
                     ))}
                   </div>
@@ -1091,9 +1100,10 @@ export default function TiempoClient() {
                   <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
-                    <span style={{ fontSize: 16, flex: 1, color: '#6b645b' }}>{l.name}</span>
-                    <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 120, textAlign: 'right' }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
+                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                    <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                    <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                   </div>
                 ))}
                 {V.upcoming.map((b, i) => (
@@ -1260,9 +1270,9 @@ export default function TiempoClient() {
                     <div key={i} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                       <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
                       <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
-                      <span style={{ fontSize: 16, flex: 1 }}>{l.name}</span>
-                      <span style={{ fontSize: 14, color: '#a49b90' }}>{l.dur}</span>
-                      <span style={{ fontSize: 12, color: '#c2b9ab' }}>editar</span>
+                      <span style={{ fontSize: 16, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                      <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                      <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 10px', fontSize: 12, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     </div>
                   ))}
                 </div>
@@ -1311,7 +1321,7 @@ export default function TiempoClient() {
       </div>
 
       {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={(epicaId, taskId) => markEpicTaskDone(epicaId, taskId, taskDay)} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
-      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onClose={() => setHistIdx(null)} />}
+      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
       {costOpen && !V.hasSession && (
@@ -1872,10 +1882,10 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
 }
 
 /** Editor de una entrada del registro de hoy (localStorage). */
-function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClose }: {
+function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onResume, onClose }: {
   row: AppData['history'][number]; idx: number
   onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onReopen: (idx: number) => void
-  onSyncDone: (row: AppData['history'][number], done: boolean) => void; onClose: () => void
+  onSyncDone: (row: AppData['history'][number], done: boolean) => void; onResume: (row: AppData['history'][number]) => void; onClose: () => void
 }) {
   const [r, setR] = useState(row)
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
@@ -1904,6 +1914,7 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClo
           <button onClick={() => { const done = r.done !== false; if (row.taskId) onSyncDone(row, done); onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done }) }} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
         </div>
+        <button onClick={() => onResume(row)} title="Arranca una nueva sesión de esto ahora; se acumula al tiempo anterior" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>↻ Volver a trabajar en esto ahora</button>
         {row.taskId && <button onClick={() => onReopen(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '11px 16px', fontSize: 13.5, cursor: 'pointer' }}>No estaba terminada · reabrir la tarea en Épicas</button>}
       </div>
     </div>
