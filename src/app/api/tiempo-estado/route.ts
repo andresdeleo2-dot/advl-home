@@ -14,17 +14,11 @@ export async function GET() {
 export async function PUT(req: Request) {
   try {
     const body = await req.json()
-    const ts = Number(body.ts) || 0
-    // "Gana el más nuevo": no sobrescribir un estado con ts igual o más nuevo. Esto evita
-    // que un push viejo (reloj atrasado, reintento) haga retroceder el estado durable.
-    const { data: cur } = await supabase.from('tiempo_estado').select('ts').eq('id', 'main').maybeSingle()
-    if (cur && Number(cur.ts) >= ts) return NextResponse.json({ ok: true, skipped: true })
-    const { error } = await supabase.from('tiempo_estado').upsert(
-      { id: 'main', data: body.data ?? {}, ts, updated_at: new Date().toISOString() },
-      { onConflict: 'id' },
-    )
+    // El ts lo asigna el SERVIDOR de forma atómica y monótona (ver función SQL). Así no hay
+    // carrera TOCTOU ni pérdida por reloj de cliente desfasado. Devuelve el ts asignado.
+    const { data: ts, error } = await supabase.rpc('tiempo_estado_put', { p_data: body.data ?? {} })
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, ts: Number(ts) || 0 })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e) }, { status: 400 })
   }

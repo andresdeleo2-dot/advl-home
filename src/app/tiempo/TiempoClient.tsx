@@ -69,6 +69,7 @@ export default function TiempoClient() {
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingPush = useRef<AppData | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = allTasks || [] }, [allTasks])
 
@@ -82,6 +83,10 @@ export default function TiempoClient() {
     timer.current = setInterval(tick, 15000)
     const onVis = () => { if (document.visibilityState === 'visible') tick() }
     document.addEventListener('visibilitychange', onVis)
+    // Flush del último push pendiente al salir/cerrar (keepalive), para no perder la
+    // última edición si se desmonta o se cierra la pestaña dentro de la ventana del debounce.
+    const flush = () => { if (!pendingPush.current) return; const body = pendingPush.current; pendingPush.current = null; fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }), keepalive: true }).catch(() => {}) }
+    window.addEventListener('pagehide', flush)
     // Estado durable en Supabase: gana el más nuevo (por ts). Si el server no tiene
     // nada y aquí sí, se sube (migración). localStorage queda como caché offline.
     fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
@@ -98,10 +103,11 @@ export default function TiempoClient() {
         // FRESCO (no el snapshot de montaje), para no reenviar datos pre-edición.
         let localData = d
         try { const raw = localStorage.getItem(KEY); if (raw) localData = Object.assign(defaults(), JSON.parse(raw)) } catch {}
-        fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: localData, ts: curTs }) }).catch(() => {})
+        fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: localData }) })
+          .then(r => r.json()).then(k => { if (k?.ts) try { localStorage.setItem(TS_KEY, String(k.ts)) } catch {} }).catch(() => {})
       }
     }).catch(() => {})
-    return () => { if (timer.current) clearInterval(timer.current); if (pushTimer.current) clearTimeout(pushTimer.current); document.removeEventListener('visibilitychange', onVis) }
+    return () => { if (timer.current) clearInterval(timer.current); if (pushTimer.current) clearTimeout(pushTimer.current); flush(); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', onVis) }
   }, [])
 
   // Carga (o recarga) tareas y épicas desde Épicas. NO toca día/filtros (van en su propio estado).
@@ -197,13 +203,16 @@ export default function TiempoClient() {
 
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
-    const ts = Date.now()
     setData(nd)
-    try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(ts)) } catch {}
-    // Push durable a Supabase (debounce): localStorage es el instantáneo/offline.
+    try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(Date.now())) } catch {}
+    // Push durable a Supabase (debounce): localStorage es el instantáneo/offline. El ts lo
+    // asigna el servidor y lo guardamos al responder (fuente única de versión).
+    pendingPush.current = nd
     if (pushTimer.current) clearTimeout(pushTimer.current)
     pushTimer.current = setTimeout(() => {
-      fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: nd, ts }) }).catch(() => {})
+      const body = pendingPush.current; pendingPush.current = null
+      fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }) })
+        .then(r => r.json()).then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} }).catch(() => {})
     }, 900)
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
@@ -241,10 +250,13 @@ export default function TiempoClient() {
     }
     free = Math.max(0, free)
 
-    const nextBlock = blocks.find(b => b.start + b.dur > now)
+    // Cap en `bed`: un bloque/reunión que empieza DESPUÉS de dormir no cuenta como
+    // "próxima interrupción" (si no, la ventana se pasaría del sueño).
+    const nextBlock = blocks.find(b => b.start + b.dur > now && b.start < bed)
     const windowMins = nextBlock ? Math.max(0, nextBlock.start - now) : Math.max(0, bed - now)
-    // Redondea HACIA ABAJO: la duración "segura" nunca debe exceder la ventana real.
-    const safeMax = windowMins >= 15 ? Math.floor(windowMins / 15) * 15 : Math.round(windowMins)
+    // Redondea HACIA ABAJO a múltiplos de 15 (malla del slider): la duración "segura"
+    // nunca excede la ventana; si la ventana es <15, safeMax=0 y la píldora se deshabilita.
+    const safeMax = Math.floor(windowMins / 15) * 15
 
     // Hora de corte inversa: la última hora en que puedes EMPEZAR `dur` sin tocar la
     // rutina ni el sueño. Se buscan las ventanas libres entre ahora y la hora de dormir.
@@ -389,8 +401,10 @@ export default function TiempoClient() {
       const body = rows.filter(r => r.area === 'cuerpo').reduce((s, r) => s + r.dur, 0)
       // El día EN CURSO queda pendiente (null): aún no duermes, así no rompe la racha.
       dayOk[w.date] = (rows.length === 0 || w.date === today) ? null : (sl >= sleepGoal - 30 && body >= 45)
-      // Deuda de sueño: solo cuenta días con registro de sueño (no futuros/vacíos).
-      if (sl > 0) { weekSleepDebt += Math.max(0, sleepGoal - sl); sleptDays++ }
+      // Deuda de sueño: cuenta los días con registro de sueño (aunque sea 0h = deuda máxima);
+      // los días sin registro (futuros/vacíos) no entran.
+      const hasSleep = rows.some(r => r.area === 'sueno')
+      if (hasSleep) { weekSleepDebt += Math.max(0, sleepGoal - sl); sleptDays++ }
     }
     let streak = 0
     for (let i = week.length - 1; i >= 0; i--) { const v = dayOk[week[i].date]; if (v === true) streak++; else if (v === false) break }
@@ -405,7 +419,7 @@ export default function TiempoClient() {
 
     // minutos trabajados por hora HOY (para ver si trabajas en tus horas buenas)
     const workedByHour: Record<number, number> = {}
-    for (const hh of data.history) if (hh.date === dayISO) for (let h = Math.floor(hh.start / 60); h <= Math.floor((hh.start + hh.dur - 1) / 60); h++) {
+    for (const hh of data.history) if (hh.date === dayISO && hh.area === 'trabajo') for (let h = Math.floor(hh.start / 60); h <= Math.floor((hh.start + hh.dur - 1) / 60); h++) {
       workedByHour[h] = (workedByHour[h] || 0) + Math.max(0, Math.min((h + 1) * 60, hh.start + hh.dur) - Math.max(h * 60, hh.start))
     }
     // Curva de energía APRENDIDA de tus horas reales de trabajo (área 'trabajo'), con una
@@ -439,7 +453,8 @@ export default function TiempoClient() {
       ? (nowPct >= 78 ? 'Según tus horas registradas, a esta hora sueles rendir alto: buen momento para lo difícil.'
         : nowPct >= 52 ? 'Según tu historial, rendimiento medio ahora: bien para lo mecánico, no para lo difícil.'
         : 'Según tu historial, a esta hora sueles rendir poco: lo que hagas cuesta más y vale menos.')
-      : (nowH < 13 ? 'Estás dentro de tu pico de rendimiento: es el mejor momento para trabajo profundo.'
+      : (nowH < 9 ? 'Aún no llegas a tu pico: calienta con algo ligero antes del trabajo profundo.'
+        : nowH < 13 ? 'Estás dentro de tu pico de rendimiento: es el mejor momento para trabajo profundo.'
         : nowH < 15 ? 'Bajón de media tarde. Buen momento para lo mecánico, no para lo difícil.'
         : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
         : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.')
@@ -652,7 +667,8 @@ export default function TiempoClient() {
   // Registrar (o reemplazar) el sueño de un día: alimenta la racha y la deuda de sueño.
   const logSleep = (date: string, mins: number) => {
     const rest = data.history.filter(h => !(h.date === date && h.area === 'sueno'))
-    save({ history: mins > 0 ? [...rest, { date, name: 'Dormir', area: 'sueno' as Area, start: data.bed, dur: Math.round(mins) }] : rest })
+    // Siempre inserta (incluso 0h): registrar 0 significa "dormí 0", no borrar la noche.
+    save({ history: [...rest, { date, name: 'Dormir', area: 'sueno' as Area, start: data.bed, dur: Math.max(0, Math.round(mins)) }] })
   }
   const areaOptions = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno').map(k => ({ id: k, label: AREAS[k].label }))
   const bed = data.bed, sleepGoal = data.sleep

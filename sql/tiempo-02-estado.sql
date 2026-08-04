@@ -16,6 +16,23 @@ create table if not exists public.tiempo_estado (
   updated_at  timestamptz not null default now()
 );
 
+-- Escritura ATÓMICA con "gana el más nuevo": el ts lo asigna el SERVIDOR (monótono),
+-- no el reloj del cliente. Esto evita (a) la carrera TOCTOU de un read-modify-write y
+-- (b) que un dispositivo con el reloj desfasado descarte/pierda ediciones ajenas.
+create or replace function public.tiempo_estado_put(p_data jsonb)
+returns bigint language plpgsql as $$
+declare next_ts bigint;
+begin
+  select greatest(coalesce((select ts from public.tiempo_estado where id = 'main'), 0) + 1,
+                  (extract(epoch from now()) * 1000)::bigint)
+    into next_ts;
+  insert into public.tiempo_estado (id, data, ts, updated_at)
+    values ('main', p_data, next_ts, now())
+    on conflict (id) do update
+      set data = excluded.data, ts = excluded.ts, updated_at = excluded.updated_at;
+  return next_ts;
+end $$;
+
 -- Limpieza: la tabla de la primera versión (equivocada) ya no se usa.
 drop table if exists public.tiempo_actividades;
 
