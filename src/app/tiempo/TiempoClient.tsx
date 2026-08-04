@@ -17,6 +17,7 @@ const DIFFS = ['facil', 'media', 'dificil'] as const
 const PRIO_TONE: Record<string, string> = { alta: '#B0522E', media: '#A87A2C', baja: '#5B6B86' }
 type Filters = { epica: string | null; prio: Set<string>; diff: Set<string>; estado: Set<string> }
 
+const TS_KEY = KEY + '.ts'
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
@@ -63,12 +64,14 @@ export default function TiempoClient() {
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = allTasks || [] }, [allTasks])
 
   useEffect(() => {
     let d = defaults()
     try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
+    const localTs = Number(localStorage.getItem(TS_KEY) || 0)
     const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
     setData(d); setLoaded(true); tick()
     // Todo se muestra al minuto (0m, veredicto, cronómetro en hm), así que tickear
@@ -76,6 +79,19 @@ export default function TiempoClient() {
     timer.current = setInterval(tick, 15000)
     const onVis = () => { if (document.visibilityState === 'visible') tick() }
     document.addEventListener('visibilitychange', onVis)
+    // Estado durable en Supabase: gana el más nuevo (por ts). Si el server no tiene
+    // nada y aquí sí, se sube (migración). localStorage queda como caché offline.
+    fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
+      if (!j?.ok) return
+      const serverTs = Number(j.ts) || 0
+      if (serverTs > localTs && j.data && Object.keys(j.data).length) {
+        const merged = Object.assign(defaults(), j.data)
+        setData(merged)
+        try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
+      } else if (localTs > 0 && serverTs < localTs) {
+        fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: d, ts: localTs }) }).catch(() => {})
+      }
+    }).catch(() => {})
     return () => { if (timer.current) clearInterval(timer.current); document.removeEventListener('visibilitychange', onVis) }
   }, [])
 
@@ -170,8 +186,14 @@ export default function TiempoClient() {
 
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
+    const ts = Date.now()
     setData(nd)
-    try { localStorage.setItem(KEY, JSON.stringify(nd)) } catch {}
+    try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(ts)) } catch {}
+    // Push durable a Supabase (debounce): localStorage es el instantáneo/offline.
+    if (pushTimer.current) clearTimeout(pushTimer.current)
+    pushTimer.current = setTimeout(() => {
+      fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: nd, ts }) }).catch(() => {})
+    }, 900)
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
     save({ blocks: data.blocks.map(b => b.id === id ? { ...b, ...patch } : b) })
