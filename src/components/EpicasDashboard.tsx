@@ -5506,10 +5506,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   const log = t.progressLog || []
                   const deltas = progressDeltas(log)
                   const todayLogged = log.some(x => x.d === todayISO())
+                  // Tiempo invertido: suma de los minutos registrados desde la sección Tiempo (campo `min`).
+                  const investedMin = log.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+                  const fmtMin = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
                   return (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
-                        <span style={eb}>Bitácora de avance{log.length > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}> {log.length} {log.length === 1 ? 'día' : 'días'}</span>}</span>
+                        <span style={eb}>Bitácora de avance{log.length > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}> {log.length} {log.length === 1 ? 'día' : 'días'}</span>}{investedMin > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}> · ⏱ {fmtMin(investedMin)} invertidas</span>}</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                           <input type="date" value="" onChange={e => addProgressDay(ep, i, e.target.value)} title="Registrar otro día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '6px 8px', fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }} />
                           <button onClick={() => addProgressDay(ep, i, todayISO())} disabled={todayLogged} style={{ cursor: todayLogged ? 'default' : 'pointer', borderRadius: 9, padding: '7px 13px', fontSize: 12, fontWeight: 800, border: todayLogged ? '1px solid rgba(62,142,142,0.35)' : 'none', ...(todayLogged ? { background: 'rgba(62,142,142,0.12)', color: '#2E6E6E' } : { background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }) }}>{todayLogged ? '✓ Avancé hoy' : 'Avancé hoy'}</button>

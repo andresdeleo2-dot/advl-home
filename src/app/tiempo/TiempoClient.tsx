@@ -209,7 +209,10 @@ export default function TiempoClient() {
     const onVis = () => { if (document.visibilityState === 'visible') refreshTasks() }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', refreshTasks)
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', refreshTasks) }
+    // Poll "en vivo": mientras la pestaña esté visible, refresca cada 25s para reflejar
+    // cambios hechos en Épicas (marcar hecho, editar) sin tener que recargar.
+    const id = setInterval(() => { if (document.visibilityState === 'visible') refreshTasks() }, 25000)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', refreshTasks) }
   }, [refreshTasks])
 
   // Reuniones de HOY desde el calendario de Google (eventos con hora).
