@@ -577,7 +577,7 @@ export default function TiempoClient() {
         {!loaded ? <div style={{ height: 320 }} /> : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 20, alignItems: 'start' }}>
+            <div className="hoy-grid">
 
               {/* Tarjeta A — Tiempo útil */}
               <div style={card(26)}>
@@ -710,36 +710,25 @@ export default function TiempoClient() {
                   </div>
                 </div>
               ) : (
-                <div style={card(20)}>
-                  <span style={LBL}>antes de empezar, mira el costo</span>
-                  {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
-                  {selMeeting && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}). Al terminar queda en tu día y en el historial.</span>}
-                  {!selTask && !selMeeting && <span style={{ fontSize: 13.5, color: '#a49b90', lineHeight: 1.5 }}>Ajusta la duración para ver el costo. Elige una tarea o reunión a la izquierda para vincularla.</span>}
+                <div style={{ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 20, padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <span style={{ ...LBL, fontSize: 11 }}>el costo de empezar ahora</span>
+                  {selTask && <span style={{ fontSize: 12.5, color: '#8a4b28', lineHeight: 1.45 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}</span>}
+                  {selMeeting && <span style={{ fontSize: 12.5, color: '#8a4b28', lineHeight: 1.45 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)})</span>}
+                  {!selTask && !selMeeting && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.45 }}>Ajusta la duración; elige una tarea a la izquierda para vincularla.</span>}
 
-                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
-                    <span style={{ fontFamily: SERIF, fontSize: 32, lineHeight: .9 }}>{V.durLabel}</span>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ ...LBL, letterSpacing: '.1em' }}>terminarías</span>
-                      <span style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
-                    </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1 }}>{V.durLabel}</span>
+                    <span style={{ fontSize: 12.5, color: '#8b8379' }}>termina <b style={{ fontVariantNumeric: 'tabular-nums', color: '#1c1a17' }}>{V.endLabel}</b></span>
                   </div>
-                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 22, accentColor: '#b4653a' }} />
-                  <div style={{ borderRadius: 14, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 5, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
-                    <span style={{ ...LBL, color: V.verdictFg, fontSize: 11 }}>{V.verdictKicker}</span>
-                    <span style={{ fontFamily: SERIF, fontSize: 17, lineHeight: 1.2 }}>{V.verdictTitle}</span>
-                    <span style={{ fontSize: 13, lineHeight: 1.45, color: '#4c4741' }}>{V.verdictText}</span>
+                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 20, accentColor: '#b4653a' }} />
+                  <div style={{ borderRadius: 12, padding: '9px 12px', display: 'flex', flexDirection: 'column', gap: 3, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
+                    <span style={{ ...LBL, color: V.verdictFg, fontSize: 10 }}>{V.verdictKicker}</span>
+                    <span style={{ fontSize: 12.5, lineHeight: 1.35, color: '#3a352f' }}>{V.verdictTitle}</span>
                   </div>
-                  {V.hitAny && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                      <span style={{ ...LBL, letterSpacing: '.1em' }}>sacrificarías</span>
-                      {V.afectados.map((a, i) => (
-                        <span key={i} style={{ fontSize: 13, color: '#8a3c2a', fontWeight: 500 }}>{a.name} {a.detail}{i < V.afectados.length - 1 ? ' ·' : ''}</span>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
-                    <div onClick={start} style={{ flex: 1, minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 13, fontSize: 14, fontWeight: 500, cursor: 'pointer' }}><span>Empezar</span><span>{V.durLabel}</span></div>
-                    <div onClick={() => setDur(V.safeMax)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>{V.altLabel}</div>
+                  {V.hitAny && <span style={{ fontSize: 12, color: '#8a3c2a' }}><span style={{ color: '#a49b90' }}>sacrificas: </span>{V.afectados.map(a => `${a.name} ${a.detail}`).join(' · ')}</span>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+                    <div onClick={start} style={{ flex: 1, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Empezar {V.durLabel}</div>
+                    <div onClick={() => setDur(V.safeMax)} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 14px', fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>{V.altLabel}</div>
                   </div>
                 </div>
               )}
@@ -1356,6 +1345,8 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClo
 }
 
 const MARGEN_CSS = `
+.hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; align-items: start; }
+@media (min-width: 1040px) { .hoy-grid { grid-template-columns: 1fr 1.4fr 0.8fr; } }
 .margen-root a:hover { color: #b4653a; }
 .margen-root input, .margen-root select { font-family: inherit; font-size: inherit; color: inherit; }
 .margen-root input:focus-visible, .margen-root select:focus-visible { outline: 2px solid #b4653a; outline-offset: 2px; }
