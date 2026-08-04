@@ -52,7 +52,7 @@ const dayIdxMon = (s: string) => { const [y, m, d] = s.split('-').map(Number); r
 
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
-  const [view, setView] = useState<'hoy' | 'rutina' | 'historial'>('hoy')
+  const [view, setView] = useState<'hoy' | 'semana' | 'rutina' | 'historial'>('hoy')
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
   const [data, setData] = useState<AppData>(() => defaults())
@@ -69,6 +69,7 @@ export default function TiempoClient() {
   const [energyLearned, setEnergyLearned] = useState(true)   // curva aprendida vs. típica
   const [costOpen, setCostOpen] = useState(false)            // popup "el costo de empezar ahora"
   const [scheduleAt, setScheduleAt] = useState<number | null>(null)   // hora (min) para agendar una tarea; abre el selector
+  const [schedulePreset, setSchedulePreset] = useState<string | null>(null)  // tarea preseleccionada al agendar desde su fila
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
@@ -532,6 +533,42 @@ export default function TiempoClient() {
     }
   }, [data, now, dur, meetings, energyLearned])
 
+  /* ── Vista Semana: 7 mini-líneas de tiempo (rutina protegida por día + tareas planeadas) ── */
+  const WEEK = useMemo(() => {
+    const bed = data.bed, sleepGoal = data.sleep
+    const wake = (bed + sleepGoal) % 1440
+    const winStart = wake > 0 && wake < bed ? wake : 360     // ventana despierto: de despertar a dormir
+    const winEnd = bed
+    const span = Math.max(60, winEnd - winStart)
+    const todayISO = iso(new Date())
+    const dowOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getDay() }
+    const days = weekOfISO(taskDay).map(date => {
+      const dow = dowOf(date)
+      const base = data.blocks.filter(b => blockActiveOn(b, dow)).map(b => ({ start: b.start, dur: b.dur, area: b.area, name: b.name }))
+      // Reuniones (calendario) y lo agendado sólo existen para HOY, no para días futuros.
+      const extra = date === todayISO
+        ? meetings.map(m => ({ start: m.start, dur: m.dur, area: 'personas' as Area, name: m.name }))
+          .concat((data.scheduled || []).map(s => ({ start: s.start, dur: s.dur, area: s.area, name: s.name })))
+        : []
+      const blk = base.concat(extra).sort((a, b) => a.start - b.start)
+      const segs: { w: number; bg: string; label: string }[] = []
+      let cur = winStart, protMin = 0
+      for (const b of blk) {
+        const s = Math.max(b.start, cur), e = Math.min(b.start + b.dur, winEnd)
+        if (e <= Math.max(s, winStart)) continue
+        const ss = Math.max(s, winStart)
+        if (ss > cur) segs.push({ w: ((ss - cur) / span) * 100, bg: '#eee6da', label: 'libre' })
+        segs.push({ w: ((e - ss) / span) * 100, bg: AREAS[b.area]?.color || '#8b8379', label: `${b.name} · ${clock(b.start)}–${clock(b.start + b.dur)}` })
+        protMin += (e - ss); cur = Math.max(cur, e)
+      }
+      if (cur < winEnd) segs.push({ w: ((winEnd - cur) / span) * 100, bg: '#eee6da', label: 'libre' })
+      const free = Math.max(0, (winEnd - winStart) - protMin)
+      const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (t.task.plan === date || recurringDueToday(t.task, date))).length
+      return { date, letter: dowLetterOf(date), num: Number(date.slice(8)), isToday: date === todayISO, segs, freeLabel: hm(free), nTasks }
+    })
+    return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
+  }, [data.blocks, data.bed, data.sleep, data.scheduled, allTasks, meetings, taskDay])
+
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
     if (selMeeting) {
@@ -687,7 +724,10 @@ export default function TiempoClient() {
   const cancel = () => save({ session: null })
   // Agendar en la cinta: abre el selector para elegir una tarea de Épicas (o actividad libre)
   // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
-  const addActivityAt = (startMin: number) => setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15)))
+  const addActivityAt = (startMin: number) => { setSchedulePreset(null); setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15))) }
+  // Agendar una tarea concreta (desde su fila o su detalle): abre el selector ya con ella elegida,
+  // por default en el próximo cuarto de hora.
+  const scheduleTaskAt = (taskId: string) => { setSchedulePreset(taskId); setScheduleAt(Math.min(1425, Math.ceil(now / 15) * 15)) }
   const scheduleActivity = (b: ScheduledBlock) => { save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null) }
   const removeScheduled = (id: string) => save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) })
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
@@ -706,7 +746,7 @@ export default function TiempoClient() {
   const bed = data.bed, sleepGoal = data.sleep
   const today = iso(new Date())
 
-  const tabs: [typeof view, string][] = [['hoy', 'Hoy'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
+  const tabs: [typeof view, string][] = [['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
 
   // Agendado cuya hora ya llegó y aún no preguntamos (y no hay sesión corriendo): dispara
   // el aviso "¿iniciar ahora?". La ventana termina en start+dur para no avisar de algo ya vencido.
@@ -858,7 +898,7 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
@@ -925,6 +965,41 @@ export default function TiempoClient() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        ) : view === 'semana' ? (
+          /* ── SEMANA ───────────────────────────────────────────────── */
+          <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={card(22)}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Tu semana</span>
+                  <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.55, maxWidth: 580 }}>Cada línea es un día de {WEEK.winStartLabel} a {WEEK.winEndLabel}: en color lo que proteges, en claro lo que te queda libre. Toca un día para planearlo en Hoy.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button onClick={() => setTaskDay(addDaysISO(taskDay, -7))} title="Semana anterior" style={{ width: 36, height: 36, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer', fontSize: 16 }}>‹</button>
+                  <button onClick={() => setTaskDay(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer' }}>Esta semana</button>
+                  <button onClick={() => setTaskDay(addDaysISO(taskDay, 7))} title="Semana siguiente" style={{ width: 36, height: 36, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer', fontSize: 16 }}>›</button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {WEEK.days.map(d => (
+                  <div key={d.date} onClick={() => { setTaskDay(d.date); setView('hoy') }} title="Planear este día" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', borderRadius: 16, cursor: 'pointer', background: d.isToday ? '#f5ece2' : '#f5efe4', border: `1px solid ${d.isToday ? '#e6cfa4' : '#ebe3d6'}` }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 40, flexShrink: 0 }}>
+                      <span style={{ fontSize: 11, color: '#a49b90', textTransform: 'uppercase' }}>{d.letter}</span>
+                      <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1, color: d.isToday ? '#8a4b28' : '#1c1a17' }}>{d.num}</span>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, display: 'flex', height: 22, gap: 1.5, borderRadius: 7, overflow: 'hidden' }}>
+                      {d.segs.map((s, i) => <div key={i} title={s.label} style={{ width: `${s.w}%`, background: s.bg }} />)}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, width: 108, flexShrink: 0 }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 600, color: '#4f6238' }}>{d.freeLabel} libre</span>
+                      <span style={{ fontSize: 12, color: '#a49b90' }}>{d.nTasks} {d.nTasks === 1 ? 'tarea' : 'tareas'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.55 }}>Las reuniones y lo agendado sólo se ven en el día de hoy (vienen del calendario y del día en curso). En los demás días ves tu rutina protegida según los días que elegiste en “Mi rutina”, y cuántas tareas dejaste planeadas.</span>
             </div>
           </div>
         ) : view === 'rutina' ? (
@@ -1161,7 +1236,7 @@ export default function TiempoClient() {
       )}
 
       {/* Selector para agendar una tarea (de Épicas) o actividad libre a una hora del día */}
-      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} onSchedule={scheduleActivity} onClose={() => setScheduleAt(null)} />}
+      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null) }} />}
 
       {/* Aviso: llegó la hora de algo que agendaste. ¿Iniciar ahora? */}
       {dueSched && !V.hasSession && (
@@ -1196,17 +1271,18 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
 
 /** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
-function ScheduleModal({ tasks, defaultStart, onSchedule, onClose }: {
-  tasks: TodayTask[] | null; defaultStart: number
+function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose }: {
+  tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null
   onSchedule: (b: ScheduledBlock) => void; onClose: () => void
 }) {
   const list = (tasks || [])
-  const [mode, setMode] = useState<'task' | 'free'>(list.length ? 'task' : 'free')
-  const [sel, setSel] = useState<string>(list[0]?.task.id || '')
+  const presetTask = presetTaskId ? list.find(t => t.task.id === presetTaskId) : undefined
+  const [mode, setMode] = useState<'task' | 'free'>(presetTask || list.length ? 'task' : 'free')
+  const [sel, setSel] = useState<string>(presetTask?.task.id || list[0]?.task.id || '')
   const [name, setName] = useState('Actividad')
   const [area, setArea] = useState<Area>('ocio')
   const [startStr, setStartStr] = useState(clock(defaultStart))
-  const [dur, setDur] = useState<number>(list[0] ? durByDiff(list[0].task) : 60)
+  const [dur, setDur] = useState<number>(durByDiff((presetTask || list[0])?.task))
   const startMin = parse(startStr)
   const endStr = clock(startMin + dur)
   const areaOpts = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno')
@@ -1286,7 +1362,7 @@ function ScheduleModal({ tasks, defaultStart, onSchedule, onClose }: {
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onSchedule, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -1347,6 +1423,7 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onPick, onEdi
                 <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
               </span>
               <button onClick={() => onQuick(t)} title="Empezar ahora (contador libre)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶</button>
+              <button onClick={() => onSchedule(t)} title="Agendar a una hora del día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>⏰</button>
               <button onClick={() => onEdit(t)} title="Ver / trabajar la tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
