@@ -24,6 +24,9 @@ const TS_KEY = KEY + '.ts'
 // a minutos-del-día). Si la resta es fuertemente negativa (cruzó medianoche), +1440.
 const elapsedMin = (start: number, nowMin: number) => { let d = nowMin - start; if (d < -1) d += 1440; return d }
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
+// Luminancia de un color hex → elige texto claro/oscuro para etiquetas dentro de la barra.
+const lum = (hex: string) => { const h = hex.replace('#', ''); if (h.length < 6) return 1; const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16); return (0.299 * r + 0.587 * g + 0.114 * b) / 255 }
+const textOn = (hex: string) => lum(hex) > 0.62 ? '#4c4741' : '#faf7f1'
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
 
@@ -349,14 +352,18 @@ export default function TiempoClient() {
       cursor = Math.max(cursor, e)
     }
     if (cursor < scaleEnd) raw.push({ s: cursor, e: scaleEnd, kind: 'free' })
-    const seg = (s: number, e: number, bg: string, name: string): { w: number; bg: string; label: string } =>
-      ({ w: ((e - s) / total) * 100, bg, label: `${name} · ${clock(s)}–${clock(e)} · ${hm(e - s)}` })
-    const segs: { w: number; bg: string; label: string }[] = []
+    type Seg = { w: number; bg: string; name: string; kind: 'done' | 'sched' | 'sim' | 'prot' | 'free'; s: number; e: number; label: string }
+    const seg = (s: number, e: number, bg: string, name: string, kind: Seg['kind']): Seg =>
+      ({ w: ((e - s) / total) * 100, bg, name, kind, s, e, label: `${name} · ${clock(s)}–${clock(e)} · ${hm(e - s)}` })
+    const segs: Seg[] = []
+    // El bloque "evaluando" (simulación) sólo se dibuja mientras el popup de costo está abierto,
+    // para que la barra no muestre un bloque fantasma cuando no estás evaluando nada.
+    const simActive = costOpen
     for (const r of raw) {
-      if (r.kind === 'done') { segs.push(seg(r.s, r.e, AREAS[r.area!]?.color || '#8b8379', r.name || 'Hecho')); continue }
-      if (r.kind === 'sched') { segs.push(seg(r.s, r.e, '#c2933a', 'Agendado · ' + (r.name || 'Actividad'))); continue }
+      if (r.kind === 'done') { segs.push(seg(r.s, r.e, AREAS[r.area!]?.color || '#8b8379', r.name || 'Hecho', 'done')); continue }
+      if (r.kind === 'sched') { segs.push(seg(r.s, r.e, '#c2933a', r.name || 'Agendado', 'sched')); continue }
       const parts: { s: number; e: number; work: boolean }[] = []
-      const iS = Math.max(r.s, simStart), iE = Math.min(r.e, simEnd)
+      const iS = simActive ? Math.max(r.s, simStart) : Infinity, iE = simActive ? Math.min(r.e, simEnd) : -Infinity
       if (iE > iS) {
         if (r.s < iS) parts.push({ s: r.s, e: iS, work: false })
         parts.push({ s: iS, e: iE, work: true })
@@ -366,7 +373,7 @@ export default function TiempoClient() {
         if (p.e - p.s < 0.5) continue
         const bg = p.work ? (r.kind === 'prot' ? '#8a3c2a' : '#b4653a') : (r.kind === 'prot' ? '#6f8256' : '#eee6da')
         const nm = p.work ? 'El bloque que evalúas' : (r.kind === 'prot' ? (r.name || 'Protegido') : 'Libre')
-        segs.push(seg(p.s, p.e, bg, nm))
+        segs.push(seg(p.s, p.e, bg, nm, p.work ? 'sim' : (r.kind === 'prot' ? 'prot' : 'free')))
       }
     }
     // Marcas de hora para la barra del día
@@ -531,9 +538,11 @@ export default function TiempoClient() {
       streakNote: 'Protegiste sueño y cuerpo ' + okCount + ' de 7 días. Los días en terracota son los que costaron descanso o ejercicio.',
       todayLog, logEmpty: todayLog.length ? '' : 'Todavía no hay bloques cerrados hoy. Empieza uno desde Hoy y aparecerá aquí al terminarlo.',
     }
-  }, [data, now, dur, meetings, energyLearned])
+  }, [data, now, dur, meetings, energyLearned, costOpen])
 
-  /* ── Vista Semana: 7 mini-líneas de tiempo (rutina protegida por día + tareas planeadas) ── */
+  /* ── Vista Semana: 7 mini-líneas de tiempo ──
+     Por día combina, con prioridad: lo que HICISTE (historial real, sólido) > reuniones/agendado
+     (sólo hoy) > tu rutina protegida planeada (tenue). Un barrido por fronteras resuelve traslapes. */
   const WEEK = useMemo(() => {
     const bed = data.bed, sleepGoal = data.sleep
     const wake = (bed + sleepGoal) % 1440
@@ -542,32 +551,40 @@ export default function TiempoClient() {
     const span = Math.max(60, winEnd - winStart)
     const todayISO = iso(new Date())
     const dowOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getDay() }
+    type Ev = { start: number; end: number; color: string; name: string; prio: number; faded: boolean }
     const days = weekOfISO(taskDay).map(date => {
       const dow = dowOf(date)
-      const base = data.blocks.filter(b => blockActiveOn(b, dow)).map(b => ({ start: b.start, dur: b.dur, area: b.area, name: b.name }))
-      // Reuniones (calendario) y lo agendado sólo existen para HOY, no para días futuros.
-      const extra = date === todayISO
-        ? meetings.map(m => ({ start: m.start, dur: m.dur, area: 'personas' as Area, name: m.name }))
-          .concat((data.scheduled || []).map(s => ({ start: s.start, dur: s.dur, area: s.area, name: s.name })))
-        : []
-      const blk = base.concat(extra).sort((a, b) => a.start - b.start)
-      const segs: { w: number; bg: string; label: string }[] = []
-      let cur = winStart, protMin = 0
-      for (const b of blk) {
-        const s = Math.max(b.start, cur), e = Math.min(b.start + b.dur, winEnd)
-        if (e <= Math.max(s, winStart)) continue
-        const ss = Math.max(s, winStart)
-        if (ss > cur) segs.push({ w: ((ss - cur) / span) * 100, bg: '#eee6da', label: 'libre' })
-        segs.push({ w: ((e - ss) / span) * 100, bg: AREAS[b.area]?.color || '#8b8379', label: `${b.name} · ${clock(b.start)}–${clock(b.start + b.dur)}` })
-        protMin += (e - ss); cur = Math.max(cur, e)
+      const ev: Ev[] = []
+      // 1 · rutina protegida planeada (tenue)
+      for (const b of data.blocks.filter(b => blockActiveOn(b, dow))) ev.push({ start: b.start, end: b.start + b.dur, color: AREAS[b.area]?.color || '#8b8379', name: b.name, prio: 1, faded: true })
+      // 2 · reuniones + agendado (sólo hoy: son datos del día en curso)
+      if (date === todayISO) {
+        for (const m of meetings) ev.push({ start: m.start, end: m.start + m.dur, color: AREAS.personas.color, name: m.name, prio: 2, faded: false })
+        for (const s of (data.scheduled || [])) ev.push({ start: s.start, end: s.start + s.dur, color: '#c2933a', name: s.name, prio: 2, faded: false })
       }
-      if (cur < winEnd) segs.push({ w: ((winEnd - cur) / span) * 100, bg: '#eee6da', label: 'libre' })
-      const free = Math.max(0, (winEnd - winStart) - protMin)
+      // 3 · lo que hiciste ese día (historial real, sólido) — lo que pidió Andrés que se viera
+      for (const h of data.history.filter(h => h.date === date && h.area !== 'sueno')) ev.push({ start: h.start, end: h.start + h.dur, color: AREAS[h.area]?.color || '#8b8379', name: h.name, prio: 3, faded: false })
+
+      const bset = new Set<number>([winStart, winEnd])
+      for (const e of ev) { const s = Math.max(e.start, winStart), en = Math.min(e.end, winEnd); if (en > s) { bset.add(s); bset.add(en) } }
+      const pts = [...bset].filter(x => x >= winStart && x <= winEnd).sort((a, b) => a - b)
+      const segs: { w: number; bg: string; faded: boolean; label: string }[] = []
+      let doneMin = 0, protMin = 0
+      for (let i = 0; i < pts.length - 1; i++) {
+        const s = pts[i], e = pts[i + 1]; if (e <= s) continue
+        const mid = (s + e) / 2
+        const top = ev.filter(x => x.start <= mid && x.end > mid).sort((a, b) => b.prio - a.prio || (a.end - a.start) - (b.end - b.start))[0]
+        if (top) {
+          if (top.prio === 3) doneMin += (e - s); else protMin += (e - s)
+          segs.push({ w: ((e - s) / span) * 100, bg: top.color, faded: top.faded, label: `${top.name} · ${clock(s)}–${clock(e)}` })
+        } else segs.push({ w: ((e - s) / span) * 100, bg: '#eee6da', faded: false, label: 'libre · ' + clock(s) + '–' + clock(e) })
+      }
+      const free = Math.max(0, (winEnd - winStart) - doneMin - protMin)
       const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (t.task.plan === date || recurringDueToday(t.task, date))).length
-      return { date, letter: dowLetterOf(date), num: Number(date.slice(8)), isToday: date === todayISO, segs, freeLabel: hm(free), nTasks }
+      return { date, letter: dowLetterOf(date), num: Number(date.slice(8)), isToday: date === todayISO, segs, freeLabel: hm(free), doneLabel: hm(doneMin), doneMin, nTasks }
     })
     return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
-  }, [data.blocks, data.bed, data.sleep, data.scheduled, allTasks, meetings, taskDay])
+  }, [data.blocks, data.bed, data.sleep, data.scheduled, data.history, allTasks, meetings, taskDay])
 
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
@@ -917,13 +934,27 @@ export default function TiempoClient() {
                   <button onClick={() => addActivityAt(Math.round(now / 15) * 15)} title="Agregar una actividad al día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>
                 </div>
               </div>
-              <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} title="Doble clic para agregar una actividad en ese punto" style={{ display: 'flex', height: 52, gap: 2 }}>
-                {V.segs.map((s, i) => <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2, cursor: 'pointer' }} />)}
+              <div style={{ position: 'relative', paddingTop: 20 }}>
+                <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} title="Doble clic para agendar una actividad en ese punto" style={{ display: 'flex', height: 56, gap: 2, alignItems: 'stretch' }}>
+                  {V.segs.map((s, i) => {
+                    const past = s.e <= now && s.kind !== 'done' && s.kind !== 'sim'
+                    const showLabel = s.w > 6.5 && s.kind !== 'free'
+                    return (
+                      <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 6, minWidth: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', overflow: 'hidden', opacity: past ? 0.55 : 1, outline: s.kind === 'sched' ? '1.5px dashed rgba(255,255,255,.55)' : 'none', outlineOffset: -3 }}>
+                        {showLabel && <span style={{ fontSize: 11, fontWeight: 600, color: textOn(s.bg), padding: '0 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{s.name}{s.w > 13 ? ` · ${hm(s.e - s.s)}` : ''}</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+                {(() => { const nl = Math.max(0, Math.min(100, ((now - V.barStart) / Math.max(1, V.scaleEnd - V.barStart)) * 100)); return (<>
+                  <div style={{ position: 'absolute', top: 20, bottom: 0, left: `${nl}%`, width: 2, background: '#1c1a17', borderRadius: 2, pointerEvents: 'none', boxShadow: '0 0 0 1.5px rgba(242,236,226,.75)' }} />
+                  <div style={{ position: 'absolute', top: 0, left: `${nl}%`, transform: `translateX(${nl > 90 ? '-100%' : nl < 6 ? '0' : '-50%'})`, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', color: '#faf7f1', background: '#1c1a17', padding: '2px 8px', borderRadius: 999, pointerEvents: 'none', whiteSpace: 'nowrap' }}>ahora {V.nowLabel}</div>
+                </>) })()}
               </div>
-              <div style={{ position: 'relative', height: 14 }}>
+              <div style={{ position: 'relative', height: 14, marginTop: 8 }}>
                 {V.barTicks.map((tk, i) => <span key={i} style={{ position: 'absolute', left: `${tk.left}%`, transform: 'translateX(-50%)', fontSize: 10.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{tk.label}</span>)}
               </div>
-              <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'Toca un segmento para ver qué es · doble clic en la cinta para agregar una actividad ahí.'}</div>
+              <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'La línea marca “ahora”. Toca un bloque para ver el detalle · doble clic para agendar algo en ese punto.'}</div>
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
                 <Legend c="#8b8379">lo que ya hiciste</Legend>
                 <Legend c="#b4653a">el bloque que estás evaluando</Legend>
@@ -989,17 +1020,24 @@ export default function TiempoClient() {
                       <span style={{ fontSize: 11, color: '#a49b90', textTransform: 'uppercase' }}>{d.letter}</span>
                       <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1, color: d.isToday ? '#8a4b28' : '#1c1a17' }}>{d.num}</span>
                     </div>
-                    <div style={{ flex: 1, minWidth: 0, display: 'flex', height: 22, gap: 1.5, borderRadius: 7, overflow: 'hidden' }}>
-                      {d.segs.map((s, i) => <div key={i} title={s.label} style={{ width: `${s.w}%`, background: s.bg }} />)}
+                    <div style={{ flex: 1, minWidth: 0, display: 'flex', height: 24, gap: 1.5, borderRadius: 7, overflow: 'hidden', background: '#efe7d9' }}>
+                      {d.segs.map((s, i) => <div key={i} title={s.label} style={{ width: `${s.w}%`, background: s.bg, opacity: s.faded ? 0.4 : 1 }} />)}
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, width: 108, flexShrink: 0 }}>
-                      <span style={{ fontSize: 13.5, fontWeight: 600, color: '#4f6238' }}>{d.freeLabel} libre</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, width: 118, flexShrink: 0 }}>
+                      {d.doneMin > 0 && <span style={{ fontSize: 12.5, fontWeight: 600, color: '#8a4b28' }}>{d.doneLabel} hecho</span>}
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#4f6238' }}>{d.freeLabel} libre</span>
                       <span style={{ fontSize: 12, color: '#a49b90' }}>{d.nTasks} {d.nTasks === 1 ? 'tarea' : 'tareas'}</span>
                     </div>
                   </div>
                 ))}
               </div>
-              <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.55 }}>Las reuniones y lo agendado sólo se ven en el día de hoy (vienen del calendario y del día en curso). En los demás días ves tu rutina protegida según los días que elegiste en “Mi rutina”, y cuántas tareas dejaste planeadas.</span>
+              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12.5, color: '#6b645b' }}>
+                <Legend c="#b4653a">lo que hiciste (sólido)</Legend>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: '#6f8256', opacity: 0.4, display: 'block' }} />tu rutina planeada (tenue)</span>
+                <Legend c="#c2933a">agendado (hoy)</Legend>
+                <Legend c="#eee6da">libre</Legend>
+              </div>
+              <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.55 }}>En <b>sólido</b> ves lo que realmente hiciste cada día (tu registro); en <b>tenue</b>, la rutina que tienes planeada según “Mi rutina”. Reuniones y agendado sólo aparecen en hoy.</span>
             </div>
           </div>
         ) : view === 'rutina' ? (
