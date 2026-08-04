@@ -636,41 +636,17 @@ export default function TiempoClient() {
                 )}
               </div>
 
-              {/* Tarjeta B — sesión o simulador */}
-              {V.hasSession ? (
-                <div style={{ background: '#1c1a17', color: '#faf7f1', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 26 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
-                    <span style={{ fontSize: 14, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <span style={{ fontSize: 20, fontWeight: 500 }}>{V.sessionName}</span>
-                    <span style={{ fontFamily: SERIF, fontSize: 68, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
-                    <span style={{ fontSize: 15, color: '#cdc4b8', lineHeight: 1.5 }}>{V.sessionNote}</span>
-                  </div>
-                  {!V.sessionOpen && (
-                    <div style={{ height: 6, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 130, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: 16, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
-                    {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 18px', fontSize: 15, cursor: 'pointer' }}>Terminar y marcar hecha</div>}
-                    {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, cursor: 'pointer' }}>+15m</div>}
-                    <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
+              {/* Tarjeta B — workspace: elige qué vas a hacer */}
+              <div style={card(24)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <span style={LBL}>¿qué vas a hacer?</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {ACTIVITIES.map(a => {
+                      const on = a.id === act
+                      return <div key={a.id} onClick={() => { setAct(a.id); if (a.id !== 'Trabajo profundo') setSelTaskId(null); if (a.id !== 'Reuniones') setSelMeetingId(null) }} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
+                    })}
                   </div>
                 </div>
-              ) : (
-                <div style={card(24)}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                    <span style={LBL}>antes de empezar, mira el costo</span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {ACTIVITIES.map(a => {
-                        const on = a.id === act
-                        return <div key={a.id} onClick={() => { setAct(a.id); if (a.id !== 'Trabajo profundo') setSelTaskId(null); if (a.id !== 'Reuniones') setSelMeetingId(null) }} style={{ fontSize: 14, padding: '9px 16px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b' }}>{a.id}</div>
-                      })}
-                    </div>
-                  </div>
 
                   {act === 'Trabajo profundo' && <>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 6 }}>
@@ -707,8 +683,38 @@ export default function TiempoClient() {
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
+              </div>
+
+              {/* Tarjeta SIM — sesión en curso o simulador de costo */}
+              {V.hasSession ? (
+                <div style={{ background: '#1c1a17', color: '#faf7f1', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 22 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
+                    <span style={{ fontSize: 14, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <span style={{ fontSize: 20, fontWeight: 500 }}>{V.sessionName}</span>
+                    <span style={{ fontFamily: SERIF, fontSize: 68, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
+                    <span style={{ fontSize: 15, color: '#cdc4b8', lineHeight: 1.5 }}>{V.sessionNote}</span>
+                  </div>
+                  {!V.sessionOpen && (
+                    <div style={{ height: 6, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
+                      <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 130, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: 16, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
+                    {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 18px', fontSize: 15, cursor: 'pointer' }}>Terminar y marcar hecha</div>}
+                    {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, cursor: 'pointer' }}>+15m</div>}
+                    <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
+                  </div>
+                </div>
+              ) : (
+                <div style={card(20)}>
+                  <span style={LBL}>antes de empezar, mira el costo</span>
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
                   {selMeeting && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}). Al terminar queda en tu día y en el historial.</span>}
+                  {!selTask && !selMeeting && <span style={{ fontSize: 13.5, color: '#a49b90', lineHeight: 1.5 }}>Ajusta la duración para ver el costo. Elige una tarea o reunión a la izquierda para vincularla.</span>}
 
                   <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: SERIF, fontSize: 32, lineHeight: .9 }}>{V.durLabel}</span>
