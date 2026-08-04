@@ -18,6 +18,9 @@ const PRIO_TONE: Record<string, string> = { alta: '#B0522E', media: '#A87A2C', b
 type Filters = { epica: string | null; prio: Set<string>; diff: Set<string>; estado: Set<string> }
 
 const TS_KEY = KEY + '.ts'
+// Minutos transcurridos de una sesión, tolerando cruce de medianoche (now se reinicia
+// a minutos-del-día). Si la resta es fuertemente negativa (cruzó medianoche), +1440.
+const elapsedMin = (start: number, nowMin: number) => { let d = nowMin - start; if (d < -1) d += 1440; return d }
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
 const card = (gap: number): CSSProperties => ({ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap })
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
@@ -71,7 +74,6 @@ export default function TiempoClient() {
   useEffect(() => {
     let d = defaults()
     try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
-    const localTs = Number(localStorage.getItem(TS_KEY) || 0)
     const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
     setData(d); setLoaded(true); tick()
     // Todo se muestra al minuto (0m, veredicto, cronómetro en hm), así que tickear
@@ -84,15 +86,21 @@ export default function TiempoClient() {
     fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
       if (!j?.ok) return
       const serverTs = Number(j.ts) || 0
-      if (serverTs > localTs && j.data && Object.keys(j.data).length) {
+      // Re-lee el ts local AHORA: el usuario pudo editar mientras el fetch estaba en vuelo.
+      const curTs = Number(localStorage.getItem(TS_KEY) || 0)
+      if (serverTs > curTs && j.data && Object.keys(j.data).length) {
         const merged = Object.assign(defaults(), j.data)
         setData(merged)
         try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
-      } else if (localTs > 0 && serverTs < localTs) {
-        fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: d, ts: localTs }) }).catch(() => {})
+      } else if (j.ready && curTs > 0 && serverTs < curTs) {
+        // Migración/subida SOLO si el server respondió bien (ready): usa el estado local MÁS
+        // FRESCO (no el snapshot de montaje), para no reenviar datos pre-edición.
+        let localData = d
+        try { const raw = localStorage.getItem(KEY); if (raw) localData = Object.assign(defaults(), JSON.parse(raw)) } catch {}
+        fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: localData, ts: curTs }) }).catch(() => {})
       }
     }).catch(() => {})
-    return () => { if (timer.current) clearInterval(timer.current); document.removeEventListener('visibilitychange', onVis) }
+    return () => { if (timer.current) clearInterval(timer.current); if (pushTimer.current) clearTimeout(pushTimer.current); document.removeEventListener('visibilitychange', onVis) }
   }, [])
 
   // Carga (o recarga) tareas y épicas desde Épicas. NO toca día/filtros (van en su propio estado).
@@ -106,8 +114,9 @@ export default function TiempoClient() {
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[] = []
       for (const e of j.data as Epica[]) {
         if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [] })
+        // Guardamos TODAS (incl. Terminadas) para poder reabrir sin perder datos; la lista
+        // del día ya las oculta por estado (useMemo `tasks`).
         for (const t of e.tasks || []) {
-          if (t.status === 'Terminada' || t.status === 'Archivada') continue
           out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
         }
       }
@@ -133,7 +142,8 @@ export default function TiempoClient() {
       for (const e of evs) {
         if (e.allDay || !e.start || e.start.slice(0, 10) !== today) continue
         const start = mins(e.start)
-        const dur = e.end ? Math.max(15, mins(e.end) - start) : 30
+        // Duración desde los timestamps completos (no minutos-del-día): soporta cruce de medianoche.
+        const dur = e.end ? Math.max(15, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60000)) : 30
         out.push({ id: e.id, name: e.title || 'Reunión', start, dur })
       }
       setMeetings(out)
@@ -217,13 +227,23 @@ export default function TiempoClient() {
     const sleepBlock = { id: '__sleep', name: 'Dormir', area: 'sueno' as Area, start: bed, dur: sleepGoal }
     const timeline = blocks.concat([sleepBlock])
 
+    // Tiempo útil: minutos libres entre ahora y dormir. UNIÓN de bloques (blocks ya
+    // está ordenado), para no restar dos veces lo que una reunión y la rutina comparten.
     let free = Math.max(0, bed - now)
-    for (const b of blocks) free -= Math.max(0, Math.min(b.start + b.dur, bed) - Math.max(b.start, now))
+    let coveredEnd = now
+    for (const b of blocks) {
+      const s = Math.max(b.start, now), e = Math.min(b.start + b.dur, bed)
+      if (e <= s) continue
+      const from = Math.max(s, coveredEnd)
+      if (e > from) free -= (e - from)
+      coveredEnd = Math.max(coveredEnd, e)
+    }
     free = Math.max(0, free)
 
     const nextBlock = blocks.find(b => b.start + b.dur > now)
     const windowMins = nextBlock ? Math.max(0, nextBlock.start - now) : Math.max(0, bed - now)
-    const safeMax = Math.max(15, Math.round(windowMins / 15) * 15)
+    // Redondea HACIA ABAJO: la duración "segura" nunca debe exceder la ventana real.
+    const safeMax = windowMins >= 15 ? Math.floor(windowMins / 15) * 15 : Math.round(windowMins)
 
     // Hora de corte inversa: la última hora en que puedes EMPEZAR `dur` sin tocar la
     // rutina ni el sueño. Se buscan las ventanas libres entre ahora y la hora de dormir.
@@ -250,6 +270,16 @@ export default function TiempoClient() {
     }
     const sleepDebt = overlap(simStart, simEnd, bed, bed + sleepGoal)
     const hitAny = afectados.length > 0
+    // Minutos de tiempo PROTEGIDO (no sueño) realmente invadidos, en UNIÓN: si una
+    // reunión cae dentro de un bloque de rutina, esos minutos no se cuentan dos veces.
+    let invaded = 0, ic = simStart
+    for (const b of blocks) {
+      const s = Math.max(b.start, simStart), e = Math.min(b.start + b.dur, simEnd)
+      if (e <= s) continue
+      const from = Math.max(s, ic)
+      if (e > from) invaded += (e - from)
+      ic = Math.max(ic, e)
+    }
 
     let verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg
     if (!hitAny) {
@@ -259,13 +289,13 @@ export default function TiempoClient() {
       verdictBg = '#eef1e7'; verdictBorder = '#dbe2cd'; verdictFg = '#4f6238'
     } else if (sleepDebt < 1) {
       verdictKicker = 'cabe con costo'
-      verdictTitle = 'Terminas a las ' + clock(simEnd) + ' invadiendo ' + hm(afectados.reduce((s, a) => s + a.mins, 0)) + ' de tiempo protegido.'
+      verdictTitle = 'Terminas a las ' + clock(simEnd) + ' invadiendo ' + hm(invaded) + ' de tiempo protegido.'
       verdictText = (caring ? 'Duermes igual, pero lo pagas con ' : 'Costo: ') + afectados.map(a => a.name.toLowerCase()).join(' y ') + '.'
       verdictBg = '#f7ece2'; verdictBorder = '#ecd9cb'; verdictFg = '#8a4b28'
     } else {
       verdictKicker = 'sale de tu sueño'
       verdictTitle = 'Terminarías a las ' + clock(simEnd) + ' y dormirías ' + hm(sleepGoal - sleepDebt) + '.'
-      verdictText = (caring ? 'Esto ya no se paga con ocio: se paga con mañana. ' : 'Déficit de sueño: ' + hm(sleepDebt) + '. ') + hm(safeMax) + ' ahora deja el día intacto.'
+      verdictText = (caring ? 'Esto ya no se paga con ocio: se paga con mañana. ' : 'Déficit de sueño: ' + hm(sleepDebt) + '. ') + (safeMax >= 1 ? hm(safeMax) + ' ahora deja el día intacto.' : 'Ahora ya no queda margen sin costo.')
       verdictBg = '#f6e3dd'; verdictBorder = '#e8cabf'; verdictFg = '#8a3c2a'
     }
 
@@ -330,7 +360,7 @@ export default function TiempoClient() {
     })
 
     // sesión
-    const elapsed = session ? Math.max(0, now - session.start) : 0
+    const elapsed = session ? Math.max(0, elapsedMin(session.start, now)) : 0
     const planned = session ? session.dur : 0
     const sEnd = session ? session.start + planned : 0
 
@@ -356,7 +386,8 @@ export default function TiempoClient() {
       const rows = data.history.filter(h => h.date === w.date)
       const sl = rows.filter(r => r.area === 'sueno').reduce((s, r) => s + r.dur, 0)
       const body = rows.filter(r => r.area === 'cuerpo').reduce((s, r) => s + r.dur, 0)
-      dayOk[w.date] = rows.length === 0 ? null : (sl >= sleepGoal - 30 && body >= 45)
+      // El día EN CURSO queda pendiente (null): aún no duermes, así no rompe la racha.
+      dayOk[w.date] = (rows.length === 0 || w.date === today) ? null : (sl >= sleepGoal - 30 && body >= 45)
       // Deuda de sueño: solo cuenta días con registro de sueño (no futuros/vacíos).
       if (sl > 0) { weekSleepDebt += Math.max(0, sleepGoal - sl); sleptDays++ }
     }
@@ -429,7 +460,7 @@ export default function TiempoClient() {
           : 'Quedan ' + hm(planned - elapsed) + '. Terminarías a las ' + clock(sEnd) + '.') : '',
       durLabel: hm(dur), endLabel: clock(simEnd),
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
-      hitAny, afectados, safeMax, altLabel: hitAny ? 'Reducir a ' + hm(safeMax) : 'Otra duración',
+      hitAny, afectados, safeMax, altLabel: hitAny ? (safeMax >= 1 ? 'Reducir a ' + hm(safeMax) : 'Sin margen ahora') : 'Otra duración',
       cutoff, cutoffLabel: cutoff != null ? clock(cutoff) : null,
       segs, barTicks, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart),
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
@@ -483,16 +514,17 @@ export default function TiempoClient() {
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
-  // "No estaba terminada": quita el registro y reabre la tarea en Épicas.
+  // "No estaba terminada": reabre la tarea en Épicas y LUEGO quita el registro
+  // (así, si algo falla, no se pierde el registro).
   const reopenTask = (idx: number) => {
     const row = data.history[idx]; if (!row) return
-    delHist(idx)
     if (row.taskId && row.epicaId) reopenByTask(row.epicaId, row.taskId)
+    delHist(idx)
   }
   // Al guardar el registro con el check "se terminó" cambiado, sincroniza a Épicas.
   const syncHistDone = (row: AppData['history'][number], done: boolean) => {
     if (!row.taskId || !row.epicaId) return
-    if (done) markEpicTaskDone(row.epicaId, row.taskId)
+    if (done) markEpicTaskDone(row.epicaId, row.taskId, row.date)
     else reopenByTask(row.epicaId, row.taskId)
   }
 
@@ -505,14 +537,13 @@ export default function TiempoClient() {
   }
   // Marca hecha en Épicas. Si es recurrente (diaria), marca el DÍA en repeatDone
   // (no la cierra); si no, la pone Terminada.
-  const markEpicTaskDone = (epicaId: string, taskId: string) => {
+  const markEpicTaskDone = (epicaId: string, taskId: string, day: string = iso(new Date())) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
-    const today = iso(new Date())
     const rd = tt.task.repeatDone || []
     const upd: EpicaTask = tt.task.repeat
-      ? { ...tt.task, repeatDone: rd.includes(today) ? rd : [...rd, today] }
-      : { ...tt.task, status: 'Terminada', doneAt: today }
+      ? { ...tt.task, repeatDone: rd.includes(day) ? rd : [...rd, day] }
+      : { ...tt.task, status: 'Terminada', doneAt: day }
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
@@ -521,14 +552,15 @@ export default function TiempoClient() {
   // le SUMA el tiempo invertido (entra a la bitácora de avances). markDone la cierra.
   const finish = (markDone = false) => {
     const s = data.session; if (!s) return
-    const elapsed = Math.max(1, Math.round(now - s.start))
+    const elapsed = Math.max(1, Math.round(elapsedMin(s.start, now)))
     const today = iso(new Date())
     save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
         const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed } as EpicaProgressEntry]
-        const doneChange = markDone ? (tt.task.repeat ? { repeatDone: [...(tt.task.repeatDone || []), today] } : { status: 'Terminada', doneAt: today }) : {}
+        const rdF = tt.task.repeatDone || []
+        const doneChange = markDone ? (tt.task.repeat ? { repeatDone: rdF.includes(today) ? rdF : [...rdF, today] } : { status: 'Terminada', doneAt: today }) : {}
         const upd: EpicaTask = { ...tt.task, progressLog: log, ...doneChange }
         syncTask(s.epicaId, upd)
         setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
@@ -572,7 +604,12 @@ export default function TiempoClient() {
       if (tt.task.planOrder !== po) { const nt = { ...tt.task, planOrder: po }; byId.set(id, { ...tt, task: nt }); if (!byEpic.has(tt.epicaId)) byEpic.set(tt.epicaId, []); byEpic.get(tt.epicaId)!.push(nt) }
     })
     setAllTasks(prev => (prev || []).map(t => { const u = byId.get(t.task.id!); return u ? u : t }))
-    byEpic.forEach((arr, epicaId) => fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: arr }) }).catch(() => {}))
+    // Se quita updatedAt para FORZAR la escritura (si no, la API la descarta por "choque"
+    // cuando el updatedAt local quedó viejo tras otra escritura de esta sesión).
+    byEpic.forEach((arr, epicaId) => {
+      const upd = arr.map(t => { const r = { ...t }; delete (r as { updatedAt?: string }).updatedAt; return r })
+      fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: upd }) }).catch(() => {})
+    })
   }
   // Comenzar una tarea desde su detalle. dur = 0 → contador libre (hasta que pares).
   const startTask = (info: { epicaId: string; task: EpicaTask }, d: number) => {
@@ -776,7 +813,7 @@ export default function TiempoClient() {
                     : <span style={{ color: '#8a3c2a' }}>⏳ Ya no cabe {V.durLabel} sin tocar tu rutina.</span>}</span>
                   <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
                     <div onClick={start} style={{ flex: 1, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Empezar {V.durLabel}</div>
-                    <div onClick={() => setDur(V.safeMax)} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 14px', fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>{V.altLabel}</div>
+                    <div onClick={() => { if (V.safeMax >= 1) setDur(V.safeMax) }} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 14px', fontSize: 13, cursor: V.safeMax >= 1 ? 'pointer' : 'default', whiteSpace: 'nowrap', opacity: V.safeMax >= 1 ? 1 : 0.5 }}>{V.altLabel}</div>
                   </div>
                 </div>
               )}
@@ -983,7 +1020,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={markEpicTaskDone} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={(epicaId, taskId) => markEpicTaskDone(epicaId, taskId, taskDay)} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onClose={() => setHistIdx(null)} />}
     </div>
   )

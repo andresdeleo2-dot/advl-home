@@ -14,13 +14,15 @@ export async function GET() {
 export async function PUT(req: Request) {
   try {
     const body = await req.json()
-    const payload = {
-      id: 'main',
-      data: body.data ?? {},
-      ts: Number(body.ts) || 0,
-      updated_at: new Date().toISOString(),
-    }
-    const { error } = await supabase.from('tiempo_estado').upsert(payload, { onConflict: 'id' })
+    const ts = Number(body.ts) || 0
+    // "Gana el más nuevo": no sobrescribir un estado con ts igual o más nuevo. Esto evita
+    // que un push viejo (reloj atrasado, reintento) haga retroceder el estado durable.
+    const { data: cur } = await supabase.from('tiempo_estado').select('ts').eq('id', 'main').maybeSingle()
+    if (cur && Number(cur.ts) >= ts) return NextResponse.json({ ok: true, skipped: true })
+    const { error } = await supabase.from('tiempo_estado').upsert(
+      { id: 'main', data: body.data ?? {}, ts, updated_at: new Date().toISOString() },
+      { onConflict: 'id' },
+    )
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     return NextResponse.json({ ok: true })
   } catch (e) {
