@@ -694,7 +694,7 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
@@ -949,7 +949,7 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -1009,6 +1009,7 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onPick, onEdit }: { ta
                 <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
                 <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
               </span>
+              <button onClick={() => onQuick(t)} title="Empezar ahora (contador libre)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶</button>
               <button onClick={() => onEdit(t)} title="Ver / trabajar la tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
@@ -1069,8 +1070,8 @@ function MeetingsList({ meetings, selId, onPick, epicas, onAddEpica }: { meeting
 function Tag({ c, bg, children }: { c: string; bg: string; children: React.ReactNode }) {
   return <span style={{ fontSize: 11, fontWeight: 600, color: c, background: bg, borderRadius: 999, padding: '2px 9px', textTransform: 'capitalize' }}>{children}</span>
 }
-function Section({ title }: { title: string }) {
-  return <span style={{ ...LBL, letterSpacing: '.1em', marginTop: 6 }}>{title}</span>
+function NLbl({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 7, marginTop: 4 }}>{children}</div>
 }
 function Collapsible({ title, count, defaultOpen, children }: { title: string; count?: string; defaultOpen?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(!!defaultOpen)
@@ -1147,151 +1148,159 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
   // La nota es contentEditable NO controlado: se fija una sola vez al abrir; así el
   // re-render del reloj (cada segundo) no reescribe ni borra lo que estás tecleando.
   useEffect(() => { if (noteRef.current) noteRef.current.innerHTML = sanitizeHtml(info.task.note || '') }, [])
-  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
-  const smallBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }
-  const boxS = (on: boolean): CSSProperties => ({ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '11px 8px', borderRadius: 12, border: `1px solid ${on ? '#1c1a17' : '#e2d9cb'}`, background: on ? '#f3ece1' : '#faf7f1', cursor: 'pointer', fontSize: 12.5, fontWeight: 500 })
+  // Diseño navy idéntico al editor de Épicas.
+  const nf: CSSProperties = { background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#14233D', boxSizing: 'border-box' }
+  const eb: CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }
+  const smallBtn: CSSProperties = { border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }
+  const box = (on: boolean, c: string, bg: string): CSSProperties => ({ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '9px 6px', borderRadius: 10, cursor: 'pointer', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${c}` : '1px solid rgba(15,35,64,0.14)', background: on ? bg : '#fff', color: on ? c : 'rgba(20,35,61,0.55)' })
   const objetivos = (epicas.find(e => e.id === epId)?.kpis) || []
   const linkedId = objetivos.find(k => (k.taskIds || []).includes(t.id!))?.id || ''
   const addSubQuick = () => { const v = newSub.trim(); if (!v) return; setT(p => ({ ...p, subtasks: [...(p.subtasks || []), { id: uid(), t: v, done: false }] })); setNewSub('') }
+  const setLog = (fn: (a: EpicaProgressEntry[]) => EpicaProgressEntry[]) => setT(p => ({ ...p, progressLog: fn(p.progressLog || []) }))
   const logAdvance = () => {
-    setT(p => {
-      const log = [...(p.progressLog || [])]
-      const i = log.findIndex(e => e.d === bitDate && (e as { min?: number }).min == null)
-      const entry: EpicaProgressEntry = { d: bitDate, pct: p.progress ?? 0, ...(bitNote.trim() ? { note: bitNote.trim() } : {}) }
-      if (i >= 0) log[i] = { ...log[i], ...entry }; else log.push(entry)
-      return { ...p, progressLog: log }
+    setLog(a => {
+      const i = a.findIndex(e => e.d === bitDate && (e as { min?: number }).min == null)
+      const entry: EpicaProgressEntry = { d: bitDate, pct: t.progress ?? 0, ...(bitNote.trim() ? { note: bitNote.trim() } : {}) }
+      return i >= 0 ? a.map((x, j) => j === i ? { ...x, ...entry } : x) : [...a, entry]
     }); setBitNote('')
   }
   const withNote = (): EpicaTask => ({ ...t, note: sanitizeHtml(noteRef.current?.innerHTML ?? t.note ?? '') })
   const invested = (t.progressLog || []).reduce((s, e) => s + ((e as { min?: number }).min || 0), 0)
   const epColor = epicas.find(e => e.id === epId)?.color || info.color
-
   const setSubs = (fn: (a: NonNullable<EpicaTask['subtasks']>) => NonNullable<EpicaTask['subtasks']>) => setT(p => ({ ...p, subtasks: fn(p.subtasks || []) }))
   const setLinks = (fn: (a: NonNullable<EpicaTask['links']>) => NonNullable<EpicaTask['links']>) => setT(p => ({ ...p, links: fn(p.links || []) }))
   const addComment = () => { if (!comment.trim()) return; setT(p => ({ ...p, comentarios: [...(p.comentarios || []), { at: new Date().toISOString(), text: comment.trim() }] })); setComment('') }
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(560px,100%)', maxHeight: '90vh', overflowY: 'auto', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: epColor, display: 'block' }} /><span style={{ fontSize: 13, color: '#6b645b' }}>{creating ? 'Nueva tarea' : info.epicaName}</span></span>
-          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
-        </div>
-
-        {creating && (<><Section title="épica" /><select value={epId} onChange={e => setEpId(e.target.value)} style={{ ...field, width: '100%' }}>{epicas.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></>)}
-
-        <input autoFocus value={t.t} placeholder="¿Qué hay que hacer?" onChange={e => setT({ ...t, t: e.target.value })} style={{ ...field, width: '100%', fontSize: 17 }} />
-
-        <Section title="estado" />
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => setT({ ...t, status: s })} style={{ ...boxS(t.status === s), flex: '1 1 84px', color: t.status === s ? ts.c : '#6b645b' }}>{ts.label}</button> })}
-        </div>
-
-        {!creating && objetivos.length > 0 && (<>
-          <Section title="contribuye a" />
-          <select value={linkedId} onChange={e => onLinkObjetivo(epId, t.id!, e.target.value || null)} style={{ ...field, width: '100%' }}>
-            <option value="">— Ningún objetivo —</option>
-            {objetivos.map(o => <option key={o.id} value={o.id}>{o.t}</option>)}
-          </select>
-        </>)}
-
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
-            <Section title="prioridad" />
-            <div style={{ display: 'flex', gap: 6 }}>{PRIOS.map(p => <button key={p} onClick={() => setT({ ...t, priority: t.priority === p ? undefined : p })} style={{ ...boxS(t.priority === p), color: t.priority === p ? PRIO_TONE[p] : '#6b645b' }}><PrioIcon p={p} on={t.priority === p} />{cap(p)}</button>)}</div>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+        <div style={{ height: 4, background: epColor }} />
+        <div style={{ padding: '20px 24px 22px', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: epColor }} />{creating ? 'Nueva tarea' : info.epicaName}</div>
+            <button aria-label="Cerrar" onClick={onClose} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
-            <Section title="dificultad" />
-            <div style={{ display: 'flex', gap: 6 }}>{DIFFS.map((d, di) => <button key={d} onClick={() => setT({ ...t, difficulty: t.difficulty === d ? undefined : d })} style={boxS(t.difficulty === d)}><DiffIcon n={di + 1} />{cap(d)}</button>)}</div>
+
+          {creating && (<><NLbl>Épica</NLbl><select value={epId} onChange={e => setEpId(e.target.value)} style={{ ...nf, width: '100%' }}>{epicas.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></>)}
+
+          <input autoFocus value={t.t} placeholder="¿Qué hay que hacer?" onChange={e => setT({ ...t, t: e.target.value })} style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 24, lineHeight: 1.1, color: '#10233F', border: 'none', outline: 'none', background: 'transparent', margin: '8px 0 4px', padding: 0, width: '100%' }} />
+          {!creating && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginBottom: 8 }}>{t.createdAt ? `Creada · ${cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}` : ''}{invested > 0 ? `  ·  ⏱ ${hm(invested)} invertidos` : ''}</div>}
+
+          <NLbl>Estado</NLbl>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT({ ...t, status: s })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
           </div>
-        </div>
 
-        <Section title={`avance · ${t.progress || 0}%`} />
-        <input type="range" min={0} max={100} step={5} value={t.progress || 0} onChange={e => setT({ ...t, progress: Number(e.target.value) })} style={{ width: '100%', accentColor: '#6f8256' }} />
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ ...LBL, letterSpacing: '.1em' }}>bitácora de avance</span>
-          <span style={{ flex: 1 }} />
-          <input type="date" value={bitDate} onChange={e => setBitDate(e.target.value)} style={{ ...field, padding: '7px 10px' }} />
-          <button onClick={logAdvance} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 999, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Avancé este día</button>
-        </div>
-        <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...field, width: '100%', padding: '8px 10px' }} />
-        {(t.progressLog || []).filter(e => (e as { min?: number }).min == null).slice(-5).reverse().map((e, i) => (
-          <div key={i} style={{ fontSize: 13, color: '#6b645b' }}><span style={{ color: '#a49b90' }}>{e.d}{typeof e.pct === 'number' ? ` · ${e.pct}%` : ''}{e.note ? ' · ' : ''}</span>{e.note}</div>
-        ))}
+          {objetivos.length > 0 && (<><NLbl>Contribuye a</NLbl>
+            <select value={linkedId} onChange={e => onLinkObjetivo(epId, t.id!, e.target.value || null)} style={{ ...nf, width: '100%', fontWeight: 600, color: linkedId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>
+              <option value="">— Ningún objetivo —</option>
+              {objetivos.map(o => <option key={o.id} value={o.id}>{o.t}</option>)}
+            </select></>)}
 
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="hacer (plan)" /><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={field} /></label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="vence" /><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={field} /></label>
-        </div>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="recordarme 🔔" /><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...field, width: '100%' }} /></label>
-
-        <Section title="nota" />
-        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning style={{ ...field, background: '#faf7f1', minHeight: 56, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
-
-        {/* Subtareas */}
-        <Section title={`subtareas · ${(t.subtasks || []).filter(s => s.done).length}/${(t.subtasks || []).length}`} />
-        {(t.subtasks || []).map((s, i) => (
-          <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <button onClick={() => setSubs(a => a.map((x, j) => j === i ? { ...x, done: !x.done } : x))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#6f8256' : '#c2b9ab'), background: s.done ? '#6f8256' : 'transparent', cursor: 'pointer', flexShrink: 0 }} />
-            <input value={s.t} onChange={e => setSubs(a => a.map((x, j) => j === i ? { ...x, t: e.target.value } : x))} style={{ ...field, flex: 1, padding: '7px 10px', textDecoration: s.done ? 'line-through' : 'none' }} />
-            <button onClick={() => setSubs(a => a.filter((_, j) => j !== i))} style={{ ...smallBtn, padding: '6px 10px' }}>×</button>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
+            <div style={{ flex: 1, minWidth: 210 }}><NLbl>Prioridad</NLbl>
+              <div style={{ display: 'flex', gap: 6 }}>{PRIOS.map(p => { const on = t.priority === p; return <button key={p} onClick={() => setT({ ...t, priority: on ? undefined : p })} style={box(on, PRIO_TONE[p], PRIO_TONE[p] + '1f')}><PrioIcon p={p} on={on} />{cap(p)}</button> })}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 210 }}><NLbl>Dificultad</NLbl>
+              <div style={{ display: 'flex', gap: 6 }}>{DIFFS.map((d, di) => <button key={d} onClick={() => setT({ ...t, difficulty: t.difficulty === d ? undefined : d })} style={box(t.difficulty === d, '#5B6B86', 'rgba(91,107,134,0.12)')}><DiffIcon n={di + 1} />{cap(d)}</button>)}</div>
+            </div>
           </div>
-        ))}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <span style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px dashed #c2b9ab', flexShrink: 0 }} />
-          <input value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addSubQuick() }} placeholder="Agregar subtarea y Enter…" style={{ ...field, flex: 1, padding: '7px 10px' }} />
-        </div>
 
-        {/* Links */}
-        <Section title="links" />
-        {(t.links || []).map((l, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <input value={l.label} placeholder="nombre" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={{ ...field, width: 130, padding: '7px 10px' }} />
-            <input value={l.url} placeholder="https://…" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} style={{ ...field, flex: 1, minWidth: 150, padding: '7px 10px' }} />
-            <button onClick={() => setLinks(a => a.filter((_, j) => j !== i))} style={{ ...smallBtn, padding: '6px 10px' }}>×</button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 12, marginBottom: 6 }}>
+            <span style={eb}>Avance</span><span style={{ fontSize: 12, fontWeight: 800, color: '#16365F' }}>{t.progress || 0}%</span>
           </div>
-        ))}
-        <button onClick={() => setLinks(a => [...a, { label: '', url: '' }])} style={{ ...smallBtn, alignSelf: 'flex-start' }}>+ link</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <input type="range" min={0} max={100} step={5} value={t.progress || 0} onChange={e => setT({ ...t, progress: Number(e.target.value) })} style={{ flex: 1, accentColor: '#3E8E8E' }} />
+            <button onClick={() => setT({ ...t, progress: 100, status: 'Terminada' })} style={{ border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>100%</button>
+          </div>
 
-        {/* Comentarios */}
-        <Section title="comentarios" />
-        {(t.comentarios || []).map((c, i) => (
-          <div key={i} style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.5 }}><span style={{ color: '#a49b90' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
-        ))}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input value={comment} placeholder="Añadir comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...field, flex: 1, padding: '7px 10px' }} />
-          <button onClick={addComment} style={smallBtn}>Comentar</button>
-        </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 14, marginBottom: 6 }}>
+            <span style={eb}>Bitácora de avance</span><span style={{ flex: 1 }} />
+            <input type="date" value={bitDate} onChange={e => setBitDate(e.target.value)} style={{ ...nf, padding: '6px 9px' }} />
+            <button onClick={logAdvance} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 9, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Avancé este día</button>
+          </div>
+          <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...nf, width: '100%', marginBottom: 6 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(t.progressLog || []).slice().reverse().map((e, ri) => { const i = (t.progressLog || []).length - 1 - ri; const min = (e as { min?: number }).min; return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                <input type="date" value={e.d} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, d: ev.target.value } : x))} style={{ ...nf, padding: '6px 8px', fontSize: 12 }} />
+                <input type="number" min={0} max={100} value={typeof e.pct === 'number' ? e.pct : ''} placeholder="—" onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, pct: ev.target.value === '' ? undefined : Number(ev.target.value) } : x))} style={{ ...nf, width: 58, padding: '6px 8px', fontSize: 12 }} /><span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>%</span>
+                <span style={{ flex: 1, minWidth: 80, fontSize: 12.5, color: '#4c5a70' }}>{min ? `⏱ ${hm(min)} trabajado` : e.note || ''}</span>
+                <button onClick={() => setLog(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)', cursor: 'pointer' }}>✕</button>
+              </div>
+            ) })}
+          </div>
 
-        {/* Bitácora de tiempo invertido */}
-        {invested > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Section title={`tiempo invertido · ${hm(invested)}`} />
-            {(t.progressLog || []).filter(e => (e as { min?: number }).min).slice(-6).map((e, i) => (
-              <div key={i} style={{ fontSize: 13, color: '#6b645b' }}><span style={{ color: '#a49b90' }}>{e.d} · </span>{e.note || hm((e as { min?: number }).min || 0)}</div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
+            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
+            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Vence</NLbl><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={nf} /></label>
+          </div>
+          <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%' }} /></label>
+
+          <NLbl>Nota</NLbl>
+          <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning style={{ ...nf, minHeight: 60, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
+
+          <div style={{ marginTop: 14 }}><NLbl>Subtareas · {(t.subtasks || []).filter(s => s.done).length}/{(t.subtasks || []).length}</NLbl></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {(t.subtasks || []).map((s, i) => (
+              <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <button onClick={() => setSubs(a => a.map((x, j) => j === i ? { ...x, done: !x.done } : x))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#3E8E8E' : 'rgba(15,35,64,0.25)'), background: s.done ? '#3E8E8E' : '#fff', cursor: 'pointer', flexShrink: 0 }} />
+                <input value={s.t} onChange={e => setSubs(a => a.map((x, j) => j === i ? { ...x, t: e.target.value } : x))} style={{ ...nf, flex: 1, textDecoration: s.done ? 'line-through' : 'none' }} />
+                <button onClick={() => setSubs(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <span style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px dashed rgba(15,35,64,0.25)', flexShrink: 0 }} />
+              <input value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addSubQuick() }} placeholder="Agregar subtarea y Enter…" style={{ ...nf, flex: 1 }} />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6 }}>
+            <span style={eb}>Links</span>
+            <button onClick={() => setLinks(a => [...a, { label: '', url: '' }])} style={smallBtn}>+ Link</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {(t.links || []).map((l, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <input value={l.label} placeholder="Etiqueta" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={{ ...nf, flex: '0 0 110px', width: 110 }} />
+                <input value={l.url} placeholder="https://…" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} style={{ ...nf, flex: 1, minWidth: 0 }} />
+                {l.url && <a href={safeUrl(l.url)} target="_blank" rel="noreferrer" style={{ color: '#A87A2C', fontSize: 14, textDecoration: 'none', flexShrink: 0 }}>↗</a>}
+                <button onClick={() => setLinks(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
+              </div>
             ))}
           </div>
-        )}
 
-        {/* Comenzar (contador). dur 0 = libre */}
-        {!creating && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 14 }}>
-            <Section title={`comenzar · ${startDur ? 'estimo ' + hm(startDur) : 'contador libre'}`} />
-            <input type="range" min={0} max={240} step={15} value={startDur} onChange={e => setStartDur(Number(e.target.value))} style={{ width: '100%', accentColor: '#b4653a' }} />
-            <button onClick={() => onStart({ epicaId: epId, task: withNote() }, startDur)} style={{ background: '#b4653a', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Comenzar {startDur ? hm(startDur) : 'ahora'}</button>
+          <NLbl>Comentarios</NLbl>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {(t.comentarios || []).map((c, i) => (
+              <div key={i} style={{ fontSize: 13, color: '#3a4a63', lineHeight: 1.5 }}><span style={{ color: 'rgba(20,35,61,0.45)' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
+            ))}
+            <div style={{ display: 'flex', gap: 7 }}>
+              <input value={comment} placeholder="Escribe un comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...nf, flex: 1 }} />
+              <button onClick={addComment} style={smallBtn}>Comentar</button>
+            </div>
           </div>
-        )}
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap', borderTop: '1px solid #eee6da', paddingTop: 14 }}>
-          {creating
-            ? <button onClick={() => onCreate(epId, withNote())} disabled={!t.t.trim() || !epId} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer', opacity: (!t.t.trim() || !epId) ? .5 : 1 }}>Crear tarea</button>
-            : <>
-              <button onClick={() => onSave(epId, withNote())} style={{ flex: 1, minWidth: 130, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
-              <button onClick={() => onDone(epId, t.id!)} style={{ border: '1px solid #dbe2cd', background: '#eef1e7', color: '#4f6238', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Marcar hecha</button>
-              <button onClick={() => onUnplan(epId, withNote())} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '13px 16px', fontSize: 14, cursor: 'pointer' }}>Quitar de hoy</button>
-            </>}
+          {/* Comenzar (contador). dur 0 = libre */}
+          {!creating && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid rgba(15,35,64,0.08)', paddingTop: 14, marginTop: 16 }}>
+              <div style={eb}>Comenzar · {startDur ? 'estimo ' + hm(startDur) : 'contador libre'}</div>
+              <input type="range" min={0} max={240} step={15} value={startDur} onChange={e => setStartDur(Number(e.target.value))} style={{ width: '100%', accentColor: '#C2933A' }} />
+              <button onClick={() => onStart({ epicaId: epId, task: withNote() }, startDur)} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>▶ Comenzar {startDur ? hm(startDur) : 'ahora'}</button>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap', borderTop: '1px solid rgba(15,35,64,0.08)', paddingTop: 14 }}>
+            {creating
+              ? <button onClick={() => onCreate(epId, withNote())} disabled={!t.t.trim() || !epId} style={{ flex: 1, minWidth: 130, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: (!t.t.trim() || !epId) ? .5 : 1 }}>Crear tarea</button>
+              : <>
+                <button onClick={() => onSave(epId, withNote())} style={{ flex: 1, minWidth: 120, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Guardar</button>
+                <button onClick={() => onDone(epId, t.id!)} style={{ background: '#2E6E6E', color: '#fff', border: 'none', borderRadius: 10, padding: '12px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>✓ Terminar</button>
+                <button onClick={() => onUnplan(epId, withNote())} style={{ border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, cursor: 'pointer' }}>Quitar de hoy</button>
+              </>}
+          </div>
+          {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} target="_blank" rel="noopener noreferrer" style={{ textAlign: 'center', fontSize: 12, color: 'rgba(20,35,61,0.45)', marginTop: 10 }}>También abrir en Épicas ↗</a>}
         </div>
-        {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} target="_blank" rel="noopener noreferrer" style={{ textAlign: 'center', fontSize: 12.5, color: '#a49b90' }}>También abrir en Épicas ↗ (nueva pestaña)</a>}
       </div>
     </div>
   )
