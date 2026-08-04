@@ -888,14 +888,14 @@ export default function TiempoClient() {
       {/* Cinta de accesos rápidos (favoritos del home), igual que en Épicas */}
       <div style={{ maxWidth: 1180, margin: '14px auto 0', padding: '0 20px' }}><FavoritosStrip /></div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
+      <div className="tiempo-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
         {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
-        <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '4px 0 26px' }}>
+        <div className="tiempo-sub" style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '4px 0 26px' }}>
           <span style={{ fontSize: 14, color: '#a49b90', textTransform: 'capitalize' }}>{loaded ? V.dateLabel : ''}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <button onClick={refreshTasks} title="Actualizar tareas de Épicas (mantiene día y filtros)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', transition: 'transform .6s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>↻</span>{refreshing ? 'Actualizando…' : 'Actualizar'}</button>
             <button onClick={requestNotif} title={notifOn ? 'Avisos del navegador activados' : 'Activar avisos del navegador (agendados, recordatorios y fin de bloque)'} style={{ border: '1px solid ' + (notifOn ? '#cfe0c4' : '#e2d9cb'), background: notifOn ? '#eef1e7' : '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: notifOn ? '#4f6238' : '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{notifOn ? '🔔 Avisos on' : '🔔 Activar avisos'}</button>
-            <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
+            <span className="t-clock" style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
             <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
                 <div key={id} onClick={() => setView(id)} style={{ padding: '9px 20px', borderRadius: 999, fontSize: 14, fontWeight: 500, cursor: 'pointer', background: view === id ? '#faf7f1' : 'transparent', color: view === id ? '#1c1a17' : '#6b645b' }}>{label}</div>
@@ -913,7 +913,7 @@ export default function TiempoClient() {
               <div style={card(26)}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <span style={LBL}>tiempo útil restante hoy</span>
-                  <span style={{ fontFamily: SERIF, fontSize: 84, lineHeight: .88, letterSpacing: '-.02em' }}>{V.freeLabel}</span>
+                  <span className="t-hero" style={{ fontFamily: SERIF, fontSize: 84, lineHeight: .88, letterSpacing: '-.02em' }}>{V.freeLabel}</span>
                   <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
                   {V.committed > 0 && <span style={{ fontSize: 13.5, color: '#8a4b28', display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 999, padding: '5px 12px', alignSelf: 'flex-start' }}>De eso ya agendaste <b style={{ fontWeight: 600 }}>{V.committedLabel}</b> → quedan <b style={{ fontWeight: 600 }}>{V.freeUncommittedLabel}</b> sin comprometer.</span>}
                 </div>
@@ -1036,7 +1036,7 @@ export default function TiempoClient() {
             </div>
 
             {/* Tarjeta C — el resto del día */}
-            <div style={card(22)}>
+            <div className="t-card" style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
                 <span style={LBL}>el día</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1111,7 +1111,7 @@ export default function TiempoClient() {
         ) : view === 'semana' ? (
           /* ── SEMANA ───────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div style={card(22)}>
+            <div className="t-card" style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Tu semana</span>
@@ -1153,7 +1153,7 @@ export default function TiempoClient() {
         ) : view === 'rutina' ? (
           /* ── MI RUTINA ────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 900, display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div style={card(24)}>
+            <div className="t-card" style={card(24)}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Lo que decidiste proteger</span>
                 <span style={{ fontSize: 15, color: '#6b645b', lineHeight: 1.55, maxWidth: 560 }}>Estos bloques no son tareas: son el suelo de tu día. Todo lo que trabajes por encima de ellos tiene un costo, y la app te lo va a mostrar antes de empezar.</span>
@@ -1942,4 +1942,17 @@ const MARGEN_CSS = `
 .margen-root input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 999px; background: #faf7f1; border: 1.5px solid #1c1a17; }
 .margen-root input[type=text]:hover { border-bottom-color: #ddd4c6 !important; }
 .margen-root ::selection { background: #ecd9cb; }
+@media (max-width: 640px) {
+  .tiempo-body { padding: 14px 12px 56px !important; }
+  .tiempo-sub { gap: 10px !important; }
+  .hoy-grid { gap: 12px !important; }
+  .hoy-grid > *, .t-card { padding: 18px !important; border-radius: 20px !important; }
+  .t-hero { font-size: 56px !important; line-height: .9 !important; }
+  .t-clock { font-size: 24px !important; }
+  .t-daychip { min-width: 0 !important; }
+}
+@media (max-width: 400px) {
+  .t-hero { font-size: 46px !important; }
+  .hoy-grid > *, .t-card { padding: 15px !important; }
+}
 `
