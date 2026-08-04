@@ -502,7 +502,7 @@ export default function TiempoClient() {
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? (safeMax >= 1 ? 'Reducir a ' + hm(safeMax) : 'Sin margen ahora') : 'Otra duración',
       cutoff, cutoffLabel: cutoff != null ? clock(cutoff) : null,
-      segs, barTicks, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart),
+      segs, barTicks, upcoming, scaleEndLabel: clock(scaleEnd), barStartLabel: clock(barStart), barStart, scaleEnd,
       weekRange: week[0].date.slice(8) + '/' + week[0].date.slice(5, 7) + ' – ' + week[6].date.slice(8) + '/' + week[6].date.slice(5, 7),
       routineNext, allTotals, taskSummary,
       weekTotalLabel: hm(weekTotal), areaStats, days,
@@ -666,6 +666,13 @@ export default function TiempoClient() {
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
+  // Agregar una actividad al día en la hora donde diste doble clic en la cinta; abre el editor.
+  const addActivityAt = (startMin: number) => {
+    const entry = { date: iso(new Date()), name: 'Actividad', area: 'ocio' as Area, start: Math.max(0, Math.min(1439, Math.round(startMin))), dur: 30, done: true }
+    const idx = data.history.length
+    save({ history: [...data.history, entry] })
+    setHistIdx(idx)
+  }
   // Registrar (o reemplazar) el sueño de un día: alimenta la racha y la deuda de sueño.
   const logSleep = (date: string, mins: number) => {
     const rest = data.history.filter(h => !(h.date === date && h.area === 'sueno'))
@@ -859,13 +866,13 @@ export default function TiempoClient() {
                 <span style={LBL}>el día</span>
                 <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.barStartLabel} a {V.scaleEndLabel}</span>
               </div>
-              <div style={{ display: 'flex', height: 52, gap: 2 }}>
+              <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} title="Doble clic para agregar una actividad en ese punto" style={{ display: 'flex', height: 52, gap: 2 }}>
                 {V.segs.map((s, i) => <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2, cursor: 'pointer' }} />)}
               </div>
               <div style={{ position: 'relative', height: 14 }}>
                 {V.barTicks.map((tk, i) => <span key={i} style={{ position: 'absolute', left: `${tk.left}%`, transform: 'translateX(-50%)', fontSize: 10.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{tk.label}</span>)}
               </div>
-              <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'Toca un segmento de la barra para ver qué es.'}</div>
+              <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'Toca un segmento para ver qué es · doble clic en la cinta para agregar una actividad ahí.'}</div>
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
                 <Legend c="#8b8379">lo que ya hiciste</Legend>
                 <Legend c="#b4653a">el bloque que estás evaluando</Legend>
