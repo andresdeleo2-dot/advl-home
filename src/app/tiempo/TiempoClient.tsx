@@ -1144,6 +1144,9 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
   const noteRef = useRef<HTMLDivElement>(null)
+  // La nota es contentEditable NO controlado: se fija una sola vez al abrir; así el
+  // re-render del reloj (cada segundo) no reescribe ni borra lo que estás tecleando.
+  useEffect(() => { if (noteRef.current) noteRef.current.innerHTML = sanitizeHtml(info.task.note || '') }, [])
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
   const smallBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }
   const boxS = (on: boolean): CSSProperties => ({ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '11px 8px', borderRadius: 12, border: `1px solid ${on ? '#1c1a17' : '#e2d9cb'}`, background: on ? '#f3ece1' : '#faf7f1', cursor: 'pointer', fontSize: 12.5, fontWeight: 500 })
@@ -1223,7 +1226,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><Section title="recordarme 🔔" /><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...field, width: '100%' }} /></label>
 
         <Section title="nota" />
-        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} style={{ ...field, background: '#faf7f1', minHeight: 56, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
+        <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning style={{ ...field, background: '#faf7f1', minHeight: 56, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
 
         {/* Subtareas */}
         <Section title={`subtareas · ${(t.subtasks || []).filter(s => s.done).length}/${(t.subtasks || []).length}`} />
