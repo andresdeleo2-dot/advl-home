@@ -403,8 +403,12 @@ export default function TiempoClient() {
     }
   }
   // Escribe cambios de una tarea de vuelta a Épicas (mismo canal que el resto).
-  const syncTask = (epicaId: string, task: EpicaTask) =>
-    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [task] }) }).catch(() => {})
+  const syncTask = (epicaId: string, task: EpicaTask) => {
+    // Se omite `updatedAt` para FORZAR la escritura: si no, la API detecta "choque"
+    // (updatedAt viejo tras varias operaciones) y descarta el cambio.
+    const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
+    return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) }).catch(() => {})
+  }
   const saveTaskEdit = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, task)
     setAllTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task } : x))
@@ -458,7 +462,7 @@ export default function TiempoClient() {
     const upd: EpicaTask = tt.task.repeat
       ? { ...tt.task, repeatDone: rd.includes(today) ? rd : [...rd, today] }
       : { ...tt.task, status: 'Terminada', doneAt: today }
-    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [upd] }) }).catch(() => {})
+    syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
   }
