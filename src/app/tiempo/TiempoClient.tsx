@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
+import FavoritosStrip from '@/components/FavoritosStrip'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel,
@@ -692,6 +693,9 @@ export default function TiempoClient() {
       {/* Header de marca compartido (banda ADVL) */}
       <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="tiempo" />} />
 
+      {/* Cinta de accesos rápidos (favoritos del home), igual que en Épicas */}
+      <div style={{ maxWidth: 1180, margin: '14px auto 0', padding: '0 20px' }}><FavoritosStrip /></div>
+
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
         {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
         <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '4px 0 26px' }}>
@@ -833,38 +837,16 @@ export default function TiempoClient() {
                   {act === 'Trabajo profundo' && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#8a4b28', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>o empezar un bloque de foco sin tarea →</div>}
               </div>
 
-              {/* Sesión en curso (el simulador de costo vive en un popup) */}
-              {V.hasSession && (
-                <div style={{ background: '#1c1a17', color: '#faf7f1', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 22 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
-                    <span style={{ fontSize: 14, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <span style={{ fontSize: 20, fontWeight: 500 }}>{V.sessionName}</span>
-                    <span style={{ fontFamily: SERIF, fontSize: 68, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
-                    <span style={{ fontSize: 15, color: '#cdc4b8', lineHeight: 1.5 }}>{V.sessionNote}</span>
-                  </div>
-                  {!V.sessionOpen && (
-                    <div style={{ height: 6, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 130, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: 16, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
-                    {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 18px', fontSize: 15, cursor: 'pointer' }}>Terminar y marcar hecha</div>}
-                    {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, cursor: 'pointer' }}>+15m</div>}
-                    <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Tarjeta C — el resto del día */}
             <div style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
                 <span style={LBL}>el día</span>
-                <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.barStartLabel} a {V.scaleEndLabel}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.barStartLabel} a {V.scaleEndLabel}</span>
+                  <button onClick={() => addActivityAt(Math.round(now / 15) * 15)} title="Agregar una actividad al día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>
+                </div>
               </div>
               <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} title="Doble clic para agregar una actividad en ese punto" style={{ display: 'flex', height: 52, gap: 2 }}>
                 {V.segs.map((s, i) => <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 5, minWidth: 2, cursor: 'pointer' }} />)}
@@ -1105,6 +1087,32 @@ export default function TiempoClient() {
               <div onClick={() => { start(); setCostOpen(false) }} style={{ flex: 1, minWidth: 160, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 15, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Empezar {V.durLabel}</div>
               <div onClick={() => { if (V.safeMax >= 1) setDur(V.safeMax) }} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '15px 20px', fontSize: 14, cursor: V.safeMax >= 1 ? 'pointer' : 'default', whiteSpace: 'nowrap', opacity: V.safeMax >= 1 ? 1 : 0.5 }}>{V.altLabel}</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Popup flotante de la sesión en curso (siempre visible mientras corre) */}
+      {V.hasSession && (
+        <div style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, width: 'min(340px, calc(100vw - 40px))', background: '#1c1a17', color: '#faf7f1', borderRadius: 22, padding: 20, boxShadow: '0 22px 55px -15px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
+            <span style={{ fontSize: 12.5, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 16, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
+            <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
+            <span style={{ fontSize: 12.5, color: '#cdc4b8', lineHeight: 1.45 }}>{V.sessionNote}</span>
+          </div>
+          {!V.sessionOpen && (
+            <div style={{ height: 5, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 110, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
+            {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>✓ y hecha</div>}
+            {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>+15m</div>}
+            <div onClick={cancel} title="Descartar" style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
           </div>
         </div>
       )}
