@@ -7,6 +7,7 @@ import { CONFIG } from '@/lib/config'
 import { matchesQuery, groupItems, getFaviconUrl } from '@/lib/utils'
 import ItemCard from './ItemCard'
 import FavoriteTile from './FavoriteTile'
+import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
@@ -325,17 +326,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
             <HeaderStats />
             <CumplesWidget />
             <ExcepcionalesWidget />
-            <Link href="/epicas"
-              className="flex items-center gap-1.5 rounded-[10px] px-3 py-2 text-[12px] font-bold text-[#1B1305]"
-              style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', boxShadow: '0 8px 16px -8px rgba(194,147,58,.85)' }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="m13 2-3 7h6l-5 13 3-9H8z"/></svg>
-              Épicas
-            </Link>
-            <Link href="/tiempo"
-              className="flex items-center gap-1.5 rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-              Tiempo
-            </Link>
+            <SectionNav current="accesos" />
             <div className="hidden items-center gap-1.5 lg:flex">
               <a href={CONFIG.quickLinks.excel} target="_blank" rel="noopener noreferrer"
                 className="rounded-[10px] band-glass band-glass-hover px-3 py-2 text-[12px] font-semibold text-white/85">Excel</a>

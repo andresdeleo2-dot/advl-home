@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import SiteHeader from '@/components/SiteHeader'
+import SectionNav from '@/components/SectionNav'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel,
@@ -65,6 +66,7 @@ export default function TiempoClient() {
   const [histIdx, setHistIdx] = useState<number | null>(null)
   const [barPick, setBarPick] = useState<string>('')
   const [energyLearned, setEnergyLearned] = useState(true)   // curva aprendida vs. típica
+  const [costOpen, setCostOpen] = useState(false)            // popup "el costo de empezar ahora"
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -337,7 +339,7 @@ export default function TiempoClient() {
     }
     if (cursor < scaleEnd) raw.push({ s: cursor, e: scaleEnd, kind: 'free' })
     const seg = (s: number, e: number, bg: string, name: string): { w: number; bg: string; label: string } =>
-      ({ w: ((e - s) / total) * 100, bg, label: `${name} · ${clock(s)}–${clock(e)}` })
+      ({ w: ((e - s) / total) * 100, bg, label: `${name} · ${clock(s)}–${clock(e)} · ${hm(e - s)}` })
     const segs: { w: number; bg: string; label: string }[] = []
     for (const r of raw) {
       if (r.kind === 'done') { segs.push(seg(r.s, r.e, AREAS[r.area!]?.color || '#8b8379', r.name || 'Hecho')); continue }
@@ -681,7 +683,7 @@ export default function TiempoClient() {
       <style>{MARGEN_CSS}</style>
 
       {/* Header de marca compartido (banda ADVL) */}
-      <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" backHref="/epicas" backLabel="← Épicas" />
+      <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="tiempo" />} />
 
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
         {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
@@ -816,14 +818,16 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
-                  {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
+                  {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
+                  {(act === 'Trámites' || act === 'Aprendizaje') && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 18px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>Ver costo y empezar {act} →</div>}
+                  {act === 'Trabajo profundo' && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#8a4b28', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>o empezar un bloque de foco sin tarea →</div>}
               </div>
 
-              {/* Tarjeta SIM — sesión en curso o simulador de costo */}
-              {V.hasSession ? (
+              {/* Sesión en curso (el simulador de costo vive en un popup) */}
+              {V.hasSession && (
                 <div style={{ background: '#1c1a17', color: '#faf7f1', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 22 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
@@ -844,31 +848,6 @@ export default function TiempoClient() {
                     {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 18px', fontSize: 15, cursor: 'pointer' }}>Terminar y marcar hecha</div>}
                     {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, cursor: 'pointer' }}>+15m</div>}
                     <div onClick={cancel} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '16px 20px', fontSize: 15, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 20, padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <span style={{ ...LBL, fontSize: 11 }}>el costo de empezar ahora</span>
-                  {selTask && <span style={{ fontSize: 12.5, color: '#8a4b28', lineHeight: 1.45 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}</span>}
-                  {selMeeting && <span style={{ fontSize: 12.5, color: '#8a4b28', lineHeight: 1.45 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)})</span>}
-                  {!selTask && !selMeeting && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.45 }}>Ajusta la duración; elige una tarea a la izquierda para vincularla.</span>}
-
-                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1 }}>{V.durLabel}</span>
-                    <span style={{ fontSize: 12.5, color: '#8b8379' }}>termina <b style={{ fontVariantNumeric: 'tabular-nums', color: '#1c1a17' }}>{V.endLabel}</b></span>
-                  </div>
-                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} aria-label="Duración del bloque" aria-valuetext={`${hm(dur)}, terminarías ${V.endLabel}${V.hitAny ? `, invade ${V.afectados.map(a => a.name.toLowerCase()).join(' y ')}` : ', sin costo'}`} style={{ width: '100%', height: 20, accentColor: '#b4653a' }} />
-                  <div style={{ borderRadius: 12, padding: '9px 12px', display: 'flex', flexDirection: 'column', gap: 3, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
-                    <span style={{ ...LBL, color: V.verdictFg, fontSize: 10 }}>{V.verdictKicker}</span>
-                    <span style={{ fontSize: 12.5, lineHeight: 1.35, color: '#3a352f' }}>{V.verdictTitle}</span>
-                  </div>
-                  {V.hitAny && <span style={{ fontSize: 12, color: '#8a3c2a' }}><span style={{ color: '#a49b90' }}>sacrificas: </span>{V.afectados.map(a => `${a.name} ${a.detail}`).join(' · ')}</span>}
-                  <span style={{ fontSize: 12, color: '#6f8256', lineHeight: 1.4 }}>{V.cutoff != null && V.cutoff > now
-                    ? <>⏳ Hora de corte: empieza este bloque a más tardar <b>{V.cutoffLabel}</b> para no tocar tu rutina.</>
-                    : <span style={{ color: '#8a3c2a' }}>⏳ Ya no cabe {V.durLabel} sin tocar tu rutina.</span>}</span>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-                    <div onClick={start} style={{ flex: 1, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Empezar {V.durLabel}</div>
-                    <div onClick={() => { if (V.safeMax >= 1) setDur(V.safeMax) }} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '11px 14px', fontSize: 13, cursor: V.safeMax >= 1 ? 'pointer' : 'default', whiteSpace: 'nowrap', opacity: V.safeMax >= 1 ? 1 : 0.5 }}>{V.altLabel}</div>
                   </div>
                 </div>
               )}
@@ -1078,6 +1057,50 @@ export default function TiempoClient() {
 
       {editTask && <TaskDetail info={editTask} epicas={epicasList} onSave={saveTaskEdit} onDone={(epicaId, taskId) => markEpicTaskDone(epicaId, taskId, taskDay)} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onClose={() => setHistIdx(null)} />}
+
+      {/* Popup: el costo de empezar ahora */}
+      {costOpen && !V.hasSession && (
+        <div onClick={() => setCostOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="El costo de empezar ahora" style={{ width: 'min(460px,100%)', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 24, padding: 26, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={LBL}>antes de empezar, mira el costo</span>
+              <button onClick={() => setCostOpen(false)} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            {selTask && <span style={{ fontSize: 14, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
+            {selMeeting && <span style={{ fontSize: 14, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}).</span>}
+            {!selTask && !selMeeting && <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5 }}>Un bloque de <b>{act}</b>. Ajusta cuánto va a durar y mira el costo.</span>}
+
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: SERIF, fontSize: 56, lineHeight: .9 }}>{V.durLabel}</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'right' }}>
+                <span style={{ ...LBL, letterSpacing: '.1em' }}>terminarías</span>
+                <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
+              </div>
+            </div>
+            <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} aria-label="Duración del bloque" aria-valuetext={`${hm(dur)}, terminarías ${V.endLabel}${V.hitAny ? `, invade ${V.afectados.map(a => a.name.toLowerCase()).join(' y ')}` : ', sin costo'}`} style={{ width: '100%', height: 26, accentColor: '#b4653a' }} />
+
+            <div style={{ borderRadius: 18, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
+              <span style={{ ...LBL, color: V.verdictFg }}>{V.verdictKicker}</span>
+              <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.2 }}>{V.verdictTitle}</span>
+              <span style={{ fontSize: 14, lineHeight: 1.5, color: '#4c4741' }}>{V.verdictText}</span>
+            </div>
+            {V.hitAny && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                <span style={{ ...LBL, letterSpacing: '.1em' }}>sacrificarías</span>
+                {V.afectados.map((a, i) => <span key={i} style={{ fontSize: 13.5, color: '#8a3c2a', fontWeight: 500 }}>{a.name} {a.detail}{i < V.afectados.length - 1 ? ' ·' : ''}</span>)}
+              </div>
+            )}
+            <span style={{ fontSize: 12.5, color: '#6f8256', lineHeight: 1.45 }}>{V.cutoff != null && V.cutoff > now
+              ? <>⏳ Hora de corte: empieza a más tardar <b>{V.cutoffLabel}</b> para no tocar tu rutina.</>
+              : <span style={{ color: '#8a3c2a' }}>⏳ Ya no cabe {V.durLabel} sin tocar tu rutina.</span>}</span>
+
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+              <div onClick={() => { start(); setCostOpen(false) }} style={{ flex: 1, minWidth: 160, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 15, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Empezar {V.durLabel}</div>
+              <div onClick={() => { if (V.safeMax >= 1) setDur(V.safeMax) }} title={V.altLabel} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '15px 20px', fontSize: 14, cursor: V.safeMax >= 1 ? 'pointer' : 'default', whiteSpace: 'nowrap', opacity: V.safeMax >= 1 ? 1 : 0.5 }}>{V.altLabel}</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1512,9 +1535,8 @@ function SleepLogger({ onLog }: { onLog: (date: string, mins: number) => void })
 }
 
 const MARGEN_CSS = `
-.hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; align-items: start; }
+.hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; align-items: start; }
 .hoy-grid > * { min-width: 0; }
-@media (min-width: 1040px) { .hoy-grid { grid-template-columns: 1fr 1.4fr 0.8fr; } }
 .margen-root a:hover { color: #b4653a; }
 .margen-root input, .margen-root select { font-family: inherit; font-size: inherit; color: inherit; }
 .margen-root input:focus-visible, .margen-root select:focus-visible { outline: 2px solid #b4653a; outline-offset: 2px; }
