@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import SiteHeader from '@/components/SiteHeader'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
@@ -78,24 +78,32 @@ export default function TiempoClient() {
     return () => { if (timer.current) clearInterval(timer.current) }
   }, [])
 
-  // Tareas de HOY desde Épicas (plan === hoy, sin terminar/archivar).
-  useEffect(() => {
+  // Carga (o recarga) tareas y épicas desde Épicas. NO toca día/filtros (van en su propio estado).
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshTasks = useCallback(() => {
+    setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
-      if (!j.ok) { setAllTasks([]); return }
+      if (!j.ok) { setAllTasks(a => a || []); return }
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[] = []
       for (const e of j.data as Epica[]) {
         if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [] })
         for (const t of e.tasks || []) {
           if (t.status === 'Terminada' || t.status === 'Archivada') continue
-          // TODAS las abiertas (con objeto completo): así se pueden marcar/reabrir sin
-          // perder datos; el día visible se filtra abajo (permite navegar días).
           out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
         }
       }
       setAllTasks(out); setEpicasList(epList)
-    }).catch(() => setAllTasks([]))
+    }).catch(() => setAllTasks(a => a || [])).finally(() => setRefreshing(false))
   }, [])
+  useEffect(() => { refreshTasks() }, [refreshTasks])
+  // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') refreshTasks() }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', refreshTasks)
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', refreshTasks) }
+  }, [refreshTasks])
 
   // Reuniones de HOY desde el calendario de Google (eventos con hora).
   useEffect(() => {
@@ -555,7 +563,8 @@ export default function TiempoClient() {
         {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
         <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '4px 0 26px' }}>
           <span style={{ fontSize: 14, color: '#a49b90', textTransform: 'capitalize' }}>{loaded ? V.dateLabel : ''}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <button onClick={refreshTasks} title="Actualizar tareas de Épicas (mantiene día y filtros)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', transition: 'transform .6s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>↻</span>{refreshing ? 'Actualizando…' : 'Actualizar'}</button>
             <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
             <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
