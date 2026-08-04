@@ -69,21 +69,23 @@ export default function TiempoClient() {
   useEffect(() => {
     let d = defaults()
     try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
-    const n = new Date()
-    setData(d); setLoaded(true)
-    setNow(n.getHours() * 60 + n.getMinutes() + n.getSeconds() / 60)
-    timer.current = setInterval(() => {
-      const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60)
-    }, 1000)
-    return () => { if (timer.current) clearInterval(timer.current) }
+    const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
+    setData(d); setLoaded(true); tick()
+    // Todo se muestra al minuto (0m, veredicto, cronómetro en hm), así que tickear
+    // cada 15s en vez de cada 1s reduce ~15x los re-renders sin cambio visible.
+    timer.current = setInterval(tick, 15000)
+    const onVis = () => { if (document.visibilityState === 'visible') tick() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { if (timer.current) clearInterval(timer.current); document.removeEventListener('visibilitychange', onVis) }
   }, [])
 
   // Carga (o recarga) tareas y épicas desde Épicas. NO toca día/filtros (van en su propio estado).
   const [refreshing, setRefreshing] = useState(false)
+  const [tasksError, setTasksError] = useState(false)
   const refreshTasks = useCallback(() => {
     setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
-      if (!j.ok) { setAllTasks(a => a || []); return }
+      if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[] = []
       for (const e of j.data as Epica[]) {
@@ -93,8 +95,8 @@ export default function TiempoClient() {
           out.push({ epicaId: e.id, epicaName: e.name, color: e.color || '#b4653a', task: t })
         }
       }
-      setAllTasks(out); setEpicasList(epList)
-    }).catch(() => setAllTasks(a => a || [])).finally(() => setRefreshing(false))
+      setAllTasks(out); setEpicasList(epList); setTasksError(false)
+    }).catch(() => { setTasksError(true); setAllTasks(a => a || []) }).finally(() => setRefreshing(false))
   }, [])
   useEffect(() => { refreshTasks() }, [refreshTasks])
   // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
@@ -648,6 +650,8 @@ export default function TiempoClient() {
                   </div>
                 </div>
 
+                  {tasksError && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 14, padding: '10px 14px', fontSize: 13, color: '#8a3c2a' }}>No se pudieron cargar las tareas.<button onClick={refreshTasks} style={{ border: '1px solid #e8cabf', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer' }}>Reintentar</button></div>}
+
                   {act === 'Trabajo profundo' && <>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -720,7 +724,7 @@ export default function TiempoClient() {
                     <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1 }}>{V.durLabel}</span>
                     <span style={{ fontSize: 12.5, color: '#8b8379' }}>termina <b style={{ fontVariantNumeric: 'tabular-nums', color: '#1c1a17' }}>{V.endLabel}</b></span>
                   </div>
-                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 20, accentColor: '#b4653a' }} />
+                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} aria-label="Duración del bloque" aria-valuetext={`${hm(dur)}, terminarías ${V.endLabel}${V.hitAny ? `, invade ${V.afectados.map(a => a.name.toLowerCase()).join(' y ')}` : ', sin costo'}`} style={{ width: '100%', height: 20, accentColor: '#b4653a' }} />
                   <div style={{ borderRadius: 12, padding: '9px 12px', display: 'flex', flexDirection: 'column', gap: 3, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
                     <span style={{ ...LBL, color: V.verdictFg, fontSize: 10 }}>{V.verdictKicker}</span>
                     <span style={{ fontSize: 12.5, lineHeight: 1.35, color: '#3a352f' }}>{V.verdictTitle}</span>
@@ -1148,6 +1152,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
   // La nota es contentEditable NO controlado: se fija una sola vez al abrir; así el
   // re-render del reloj (cada segundo) no reescribe ni borra lo que estás tecleando.
   useEffect(() => { if (noteRef.current) noteRef.current.innerHTML = sanitizeHtml(info.task.note || '') }, [])
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
   // Diseño navy idéntico al editor de Épicas.
   const nf: CSSProperties = { background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#14233D', boxSizing: 'border-box' }
   const eb: CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }
@@ -1173,7 +1178,7 @@ function TaskDetail({ info, epicas, onSave, onDone, onUnplan, onCreate, onStart,
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+      <div role="dialog" aria-modal="true" aria-label={creating ? 'Nueva tarea' : 'Editar tarea'} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
         <div style={{ height: 4, background: epColor }} />
         <div style={{ padding: '20px 24px 22px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -1313,10 +1318,11 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClo
   onSyncDone: (row: AppData['history'][number], done: boolean) => void; onClose: () => void
 }) {
   const [r, setR] = useState(row)
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 90 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: 'min(440px,100%)', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div role="dialog" aria-modal="true" aria-label="Editar registro" onClick={e => e.stopPropagation()} style={{ width: 'min(440px,100%)', background: '#f5efe4', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontFamily: SERIF, fontSize: 22 }}>Editar registro</span>
           <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
