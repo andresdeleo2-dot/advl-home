@@ -1922,7 +1922,7 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
 
           <NLbl>Estado</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT({ ...t, status: s })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
+            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT(p => ({ ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || doneDayFor(p, iso(new Date()))) : undefined }))} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
           </div>
 
           {objetivos.length > 0 && (<><NLbl>Contribuye a</NLbl>
@@ -1966,6 +1966,7 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
           </div>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
+            {t.status === 'Terminada' && <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Terminada el</NLbl><input type="date" value={t.doneAt || ''} onChange={e => setT({ ...t, doneAt: e.target.value || undefined })} style={{ ...nf, border: '1px solid rgba(62,142,142,0.4)', color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff' }} /></label>}
             <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
             <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Vence</NLbl><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={nf} /></label>
           </div>

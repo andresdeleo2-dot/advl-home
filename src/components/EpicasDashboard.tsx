@@ -1203,6 +1203,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[ti].due = v
     patchEpic(e.id, { tasks })
   }
+  // Fecha en que se terminó (editable). Vacío = la quita (sin cambiar el estado).
+  const setTaskDoneAt = (e: Epica, ti: number, v: string) => {
+    const tasks = clone(e.tasks); if (v) tasks[ti].doneAt = v; else delete tasks[ti].doneAt
+    patchEpic(e.id, { tasks })
+  }
   // Recordatorio de la tarea (ISO datetime, o '' para limpiar). Al fijarlo pide permiso
   // de notificación. Necesita la columna remind_at (gate).
   const setTaskRemind = (e: Epica, ti: number, iso: string) => {
@@ -5563,6 +5568,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                 {/* Fechas (editables) */}
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
+                  {t.status === 'Terminada' && <div><div style={eb}>Terminada el</div><input type="date" value={t.doneAt || ''} onChange={e => setTaskDoneAt(ep, i, e.target.value)} style={{ border: '1px solid rgba(62,142,142,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff', outline: 'none' }} /></div>}
                   <div><div style={eb}>Hacer</div><input type="date" value={t.plan || ''} onChange={e => setTaskPlan(ep, i, e.target.value)} style={{ border: '1px solid rgba(46,90,158,0.35)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} /></div>
                   <div><div style={eb}>Vence</div><input type="date" value={t.due} onChange={e => setTaskDue(ep, i, e.target.value)} style={{ border: `1px solid ${dt.border}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} /></div>
                   {/* Recordatorio: dispara una notificación a esa hora (con la app abierta) */}
