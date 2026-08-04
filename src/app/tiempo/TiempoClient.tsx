@@ -9,8 +9,8 @@ import {
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area, type ScheduledBlock,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine } from '@/lib/supabase'
-import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap } from '@/components/epicas/core'
+import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
+import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
@@ -84,7 +84,7 @@ export default function TiempoClient() {
   const [loaded, setLoaded] = useState(false)
   const [allTasks, setAllTasks] = useState<TodayTask[] | null>(null)   // null = cargando; TODAS las tareas abiertas
   const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
-  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[]>([])
+  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
@@ -209,9 +209,9 @@ export default function TiempoClient() {
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
       const out: TodayTask[] = []
-      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[] }[] = []
+      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[] = []
       for (const e of j.data as Epica[]) {
-        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [] })
+        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [], links: e.links || [] })
         // Guardamos TODAS (incl. Terminadas) para poder reabrir sin perder datos; la lista
         // del día ya las oculta por estado (useMemo `tasks`).
         for (const t of e.tasks || []) {
@@ -1804,7 +1804,7 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
 function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
-  epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[] }[]
+  epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[] }[]
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
@@ -1819,6 +1819,9 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
   const [newSub, setNewSub] = useState('')
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
+  const [epLinksOpen, setEpLinksOpen] = useState(false)   // dropdown "Enlaces de {épica}"
+  const [nlLabel, setNlLabel] = useState('')              // nuevo link: etiqueta
+  const [nlUrl, setNlUrl] = useState('')                  // nuevo link: url
   const noteRef = useRef<HTMLDivElement>(null)
   const saveT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flushRef = useRef<() => void>(() => {})   // guarda pendiente lo último (usado al cerrar)
@@ -1853,7 +1856,12 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
   }, [t, epId])   // eslint-disable-line react-hooks/exhaustive-deps
   const close = () => { flushRef.current(); onClose() }
   const invested = (t.progressLog || []).reduce((s, e) => s + ((e as { min?: number }).min || 0), 0)
-  const epColor = epicas.find(e => e.id === epId)?.color || info.color
+  const epObj = epicas.find(e => e.id === epId)
+  const epColor = epObj?.color || info.color
+  const epLinks = (epObj?.links || []).filter(l => l.url && l.url !== '#')   // conexiones de la épica (Personas, etc.)
+  const diasTrab = new Set((t.progressLog || []).map(l => l.d)).size          // días distintos trabajados
+  const diasCon = t.createdAt ? Math.max(0, Math.round((Date.parse(iso(new Date()) + 'T00:00:00') - Date.parse(t.createdAt + 'T00:00:00')) / 86400000)) : 0
+  const addLink = () => { const url = nlUrl.trim(), label = nlLabel.trim(); if (!url && !label) return; setLinks(a => [...a, { label, url }]); setNlLabel(''); setNlUrl('') }
   const setSubs = (fn: (a: NonNullable<EpicaTask['subtasks']>) => NonNullable<EpicaTask['subtasks']>) => setT(p => ({ ...p, subtasks: fn(p.subtasks || []) }))
   const setLinks = (fn: (a: NonNullable<EpicaTask['links']>) => NonNullable<EpicaTask['links']>) => setT(p => ({ ...p, links: fn(p.links || []) }))
   const addComment = () => { if (!comment.trim()) return; setT(p => ({ ...p, comentarios: [...(p.comentarios || []), { at: new Date().toISOString(), text: comment.trim() }] })); setComment('') }
@@ -1880,7 +1888,37 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
           {creating && (<><NLbl>Épica</NLbl><select value={epId} onChange={e => setEpId(e.target.value)} style={{ ...nf, width: '100%' }}>{epicas.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></>)}
 
           <input autoFocus value={t.t} placeholder="¿Qué hay que hacer?" onChange={e => setT({ ...t, t: e.target.value })} style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 24, lineHeight: 1.1, color: '#10233F', border: 'none', outline: 'none', background: 'transparent', margin: '8px 0 4px', padding: 0, width: '100%' }} />
-          {!creating && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginBottom: 8 }}>{t.createdAt ? `Creada · ${cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}` : ''}{invested > 0 ? `  ·  ⏱ ${hm(invested)} invertidos` : ''}</div>}
+          {!creating && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '2px 0 10px' }}>
+              {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
+              {invested > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: '#2E6E6E' }}>⏱ {hm(invested)} invertidos</span>}
+              {t.status !== 'Terminada' && diasCon >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon} {diasCon === 1 ? 'día' : 'días'} en esto</span>}
+              {diasTrab >= 2 && <span title="Días distintos en que le has metido mano" style={{ fontSize: 11, fontWeight: 700, color: '#7A6FB0' }}>⧗ trabajada en {diasTrab} días</span>}
+              {t.repeat && <span style={{ fontSize: 11, fontWeight: 700, color: '#7A6FB0', background: 'rgba(122,111,176,0.10)', border: '1px solid rgba(122,111,176,0.28)', borderRadius: 99, padding: '2px 9px' }}>↻ Se repite{t.repeat.unit === 'dia' ? ' cada día' : t.repeat.unit === 'semana' ? ' cada semana' : t.repeat.unit === 'mes' ? ' cada mes' : ''}{(t.repeatDone?.length ?? 0) > 0 ? ` · ${t.repeatDone!.length} ${t.repeatDone!.length === 1 ? 'ciclo' : 'ciclos'}` : ''}</span>}
+            </div>
+          )}
+
+          {/* Enlaces de la épica (conexiones: Personas, Dashboard, etc.) — igual que en Épicas */}
+          {!creating && epLinks.length > 0 && (
+            <div style={{ marginBottom: 14, borderRadius: 12, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden' }}>
+              <button onClick={() => setEpLinksOpen(o => !o)} aria-expanded={epLinksOpen} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: '#FBFAF6', padding: '10px 12px' }}>
+                <span style={{ width: 7, height: 7, borderRadius: 99, background: epColor, flexShrink: 0 }} />
+                <span style={{ font: '700 10px/1 var(--tiempo-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.6)' }}>Enlaces de {epObj?.name || info.epicaName}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{epLinks.length}</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)', transform: epLinksOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+              </button>
+              {epLinksOpen && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                  {epLinks.map((l, li) => (
+                    <a key={li} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 99, background: typeColor(l.type), flexShrink: 0 }} />{l.l}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <NLbl>Estado</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -1942,6 +1980,11 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
               <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                 <button onClick={() => setSubs(a => a.map((x, j) => j === i ? { ...x, done: !x.done } : x))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#3E8E8E' : 'rgba(15,35,64,0.25)'), background: s.done ? '#3E8E8E' : '#fff', cursor: 'pointer', flexShrink: 0 }} />
                 <input value={s.t} onChange={e => setSubs(a => a.map((x, j) => j === i ? { ...x, t: e.target.value } : x))} style={{ ...nf, flex: 1, textDecoration: s.done ? 'line-through' : 'none' }} />
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  {typeof s.progress === 'number' && s.progress > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}
+                  {s.note && <span title="Tiene nota" style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>✎</span>}
+                  {(s.links?.length ?? 0) > 0 && <a href={safeUrl(s.links![0].url)} target="_blank" rel="noreferrer" title={`${s.links!.length} link(s)`} style={{ fontSize: 10, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>🔗{s.links!.length}</a>}
+                </span>
                 <button onClick={() => setSubs(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
               </div>
             ))}
@@ -1951,19 +1994,21 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 6 }}>
-            <span style={eb}>Links</span>
-            <button onClick={() => setLinks(a => [...a, { label: '', url: '' }])} style={smallBtn}>+ Link</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {(t.links || []).map((l, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <input value={l.label} placeholder="Etiqueta" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={{ ...nf, flex: '0 0 110px', width: 110 }} />
-                <input value={l.url} placeholder="https://…" onChange={e => setLinks(a => a.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} style={{ ...nf, flex: 1, minWidth: 0 }} />
-                {l.url && <a href={safeUrl(l.url)} target="_blank" rel="noreferrer" style={{ color: '#A87A2C', fontSize: 14, textDecoration: 'none', flexShrink: 0 }}>↗</a>}
-                <button onClick={() => setLinks(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
-              </div>
-            ))}
+          <div style={{ marginTop: 14, marginBottom: 6 }}><span style={eb}>Links</span></div>
+          {(t.links || []).length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 8 }}>
+              {(t.links || []).map((l, i) => (
+                <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 6px 6px 12px' }}>
+                  <a href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>🔗 {l.label || l.url}</a>
+                  <button onClick={() => setLinks(a => a.filter((_, j) => j !== i))} aria-label="Quitar link" style={{ border: 'none', background: 'transparent', color: 'rgba(168,122,44,0.75)', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '0 2px' }}>✕</button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+            <input value={nlLabel} placeholder="Etiqueta" onChange={e => setNlLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} style={{ ...nf, flex: '0 0 120px', width: 120 }} />
+            <input value={nlUrl} placeholder="https://…" onChange={e => setNlUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} style={{ ...nf, flex: 1, minWidth: 0 }} />
+            <button onClick={addLink} style={smallBtn}>+ Link</button>
           </div>
 
           <NLbl>Comentarios</NLbl>
