@@ -701,34 +701,30 @@ export default function TiempoClient() {
                   {selTask && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a trabajar en <b>{selTask.task.t}</b> · {selTask.epicaName}. Al terminar se marca hecha en Épicas.</span>}
                   {selMeeting && <span style={{ fontSize: 13.5, color: '#8a4b28', lineHeight: 1.5 }}>Vas a registrar <b>{selMeeting.name}</b> ({hm(selMeeting.dur)}). Al terminar queda en tu día y en el historial.</span>}
 
-                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-                    <span style={{ fontFamily: SERIF, fontSize: 44, lineHeight: .9 }}>{V.durLabel}</span>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'right' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: SERIF, fontSize: 32, lineHeight: .9 }}>{V.durLabel}</span>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                       <span style={{ ...LBL, letterSpacing: '.1em' }}>terminarías</span>
-                      <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
+                      <span style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{V.endLabel}</span>
                     </div>
                   </div>
-                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 26, accentColor: '#b4653a' }} />
-                  <div style={{ borderRadius: 18, padding: 16, display: 'flex', flexDirection: 'column', gap: 7, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
-                    <span style={{ ...LBL, color: V.verdictFg }}>{V.verdictKicker}</span>
-                    <span style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.2 }}>{V.verdictTitle}</span>
-                    <span style={{ fontSize: 14, lineHeight: 1.5, color: '#4c4741' }}>{V.verdictText}</span>
+                  <input type="range" min={15} max={420} step={15} value={dur} onChange={e => setDur(Number(e.target.value))} style={{ width: '100%', height: 22, accentColor: '#b4653a' }} />
+                  <div style={{ borderRadius: 14, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 5, background: V.verdictBg, border: `1px solid ${V.verdictBorder}` }}>
+                    <span style={{ ...LBL, color: V.verdictFg, fontSize: 11 }}>{V.verdictKicker}</span>
+                    <span style={{ fontFamily: SERIF, fontSize: 17, lineHeight: 1.2 }}>{V.verdictTitle}</span>
+                    <span style={{ fontSize: 13, lineHeight: 1.45, color: '#4c4741' }}>{V.verdictText}</span>
                   </div>
                   {V.hitAny && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <span style={{ ...LBL, letterSpacing: '.1em', paddingBottom: 6 }}>sacrificarías</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      <span style={{ ...LBL, letterSpacing: '.1em' }}>sacrificarías</span>
                       {V.afectados.map((a, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: '1px solid #eee6da' }}>
-                          <span style={{ width: 7, height: 7, borderRadius: 999, background: '#8a3c2a', display: 'block' }} />
-                          <span style={{ fontSize: 16, flex: 1 }}>{a.name}</span>
-                          <span style={{ fontSize: 14, color: '#8a3c2a', fontWeight: 500 }}>{a.detail}</span>
-                        </div>
+                        <span key={i} style={{ fontSize: 13, color: '#8a3c2a', fontWeight: 500 }}>{a.name} {a.detail}{i < V.afectados.length - 1 ? ' ·' : ''}</span>
                       ))}
                     </div>
                   )}
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
-                    <div onClick={start} style={{ flex: 1, minWidth: 170, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 17, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}><span>Empezar</span><span>{V.durLabel}</span></div>
-                    <div onClick={() => setDur(V.safeMax)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '17px 22px', fontSize: 15, cursor: 'pointer' }}>{V.altLabel}</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                    <div onClick={start} style={{ flex: 1, minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: 13, fontSize: 14, fontWeight: 500, cursor: 'pointer' }}><span>Empezar</span><span>{V.durLabel}</span></div>
+                    <div onClick={() => setDur(V.safeMax)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>{V.altLabel}</div>
                   </div>
                 </div>
               )}
@@ -798,7 +794,7 @@ export default function TiempoClient() {
                       <input type="time" value={clock(b.start + b.dur)} onChange={e => { let end = parse(e.target.value); if (end <= b.start) end += 1440; patchBlock(b.id, { dur: Math.max(5, end - b.start) }) }} style={{ background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }} />
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 72, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
-                        <span style={{ fontSize: 14, color: '#a49b90' }}>min</span>
+                        <span style={{ fontSize: 14, color: '#a49b90' }}>min{b.dur >= 60 ? ` · ${hm(b.dur)}` : ''}</span>
                       </div>
                       <div onClick={() => save({ blocks: data.blocks.filter(x => x.id !== b.id) })} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
                     </div>
@@ -995,7 +991,7 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onPick, onEdi
         <span style={{ ...LBL, letterSpacing: '.1em' }}>tus tareas del día</span>
         <span style={{ fontSize: 12, color: '#a49b90' }}>{display.length}{draggable ? ' · arrastra ⠿' : ' · toca una'}</span>
       </button>
-      {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 380, overflowY: 'auto' }}>
+      {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {display.map(t => {
         const on = t.task.id === selId
         const ts = taskStyle(t.task.status)
@@ -1328,7 +1324,7 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onClo
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => { const s = parse(e.target.value); setR(p => { const end = p.start + p.dur; let nd = end - s; if (nd < 1) nd += 1440; return { ...p, start: s, dur: Math.max(1, nd) } }) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>terminó</span><input type="time" value={clock(r.start + r.dur)} onChange={e => { let end = parse(e.target.value); if (end <= r.start) end += 1440; setR(p => ({ ...p, dur: Math.max(1, end - p.start) })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración (min)</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 92 }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración · {hm(r.dur)}</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 92 }} /></label>
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14, cursor: 'pointer' }}>
           <input type="checkbox" checked={r.done !== false} onChange={e => setR({ ...r, done: e.target.checked })} />
