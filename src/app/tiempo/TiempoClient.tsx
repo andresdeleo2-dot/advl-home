@@ -344,6 +344,9 @@ export default function TiempoClient() {
     if (fc < bed) freeWindows.push({ s: fc, e: bed })
     let cutoff: number | null = null
     for (const w of freeWindows) if (w.e - w.s >= dur) cutoff = Math.max(cutoff ?? -1, w.e - dur)
+    // Huecos libres futuros (para sugerir dónde cabe una tarea al agendarla).
+    const freeGaps = freeWindows.map(w => ({ s: w.s, e: w.e, len: w.e - w.s }))
+    const nextGap = freeGaps.find(g => g.len >= 15 && g.e > now)
 
     const simStart = now, simEnd = simStart + dur
     const overlap = (aS: number, aE: number, bS: number, bE: number) => Math.max(0, Math.min(aE, bE) - Math.max(aS, bS))
@@ -389,6 +392,17 @@ export default function TiempoClient() {
     const dayISO = iso(new Date())
     const scheduled = (data.scheduled || []).slice().sort((a, b) => a.start - b.start)
     const maxSchedEnd = scheduled.reduce((m, s) => Math.max(m, s.start + s.dur), 0)
+    // Minutos ya COMPROMETIDOS por lo agendado que caen en tiempo libre (no en rutina protegida):
+    // el tiempo útil "de verdad" descuenta esto, para que el número no mienta.
+    let committed = 0
+    for (const w of freeWindows) {
+      let cvr = w.s
+      for (const s of scheduled) {
+        const a = Math.max(s.start, w.s, cvr), b = Math.min(s.start + s.dur, w.e)
+        if (b > a) { committed += b - a; cvr = Math.max(cvr, b) }
+      }
+    }
+    const freeUncommitted = Math.max(0, free - committed)
     const doneToday = data.history.filter(h => h.date === dayISO && h.start < now).sort((a, b) => a.start - b.start)
     const scaleEnd = Math.max(bed + 30, simEnd + 15, maxSchedEnd + 15)
     const barStart = doneToday.length ? Math.min(now, doneToday[0].start) : now
@@ -575,6 +589,8 @@ export default function TiempoClient() {
       nowLabel: clock(now),
       dateLabel: new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }),
       free, freeLabel: hm(free),
+      committed, committedLabel: hm(committed), freeUncommitted, freeUncommittedLabel: hm(freeUncommitted),
+      freeGaps, nextGapLabel: nextGap ? clock(nextGap.s) + '–' + clock(nextGap.e) + ' · ' + hm(nextGap.len) : null,
       freeExplain: 'Es lo que queda entre ahora y las ' + clock(bed) + ', descontando todo lo que decidiste proteger.',
       windowLabel: nextBlock ? hm(windowMins) + ' (hasta ' + clock(nextBlock.start) + ')' : hm(windowMins),
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
@@ -807,8 +823,23 @@ export default function TiempoClient() {
   // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
   const addActivityAt = (startMin: number) => { setSchedulePreset(null); setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15))) }
   // Agendar una tarea concreta (desde su fila o su detalle): abre el selector ya con ella elegida,
-  // por default en el próximo cuarto de hora.
-  const scheduleTaskAt = (taskId: string) => { setSchedulePreset(taskId); setScheduleAt(Math.min(1425, Math.ceil(now / 15) * 15)) }
+  // sugiriendo el PRÓXIMO HUECO donde cabe (por su dificultad); si no hay, el próximo cuarto de hora.
+  const scheduleTaskAt = (taskId: string) => {
+    setSchedulePreset(taskId)
+    const t = (tasks || []).find(x => x.task.id === taskId)
+    const d = durByDiff(t?.task)
+    const q = Math.min(1425, Math.ceil(now / 15) * 15)
+    const gap = V.freeGaps.find(g => g.len >= d && g.e > now)
+    setScheduleAt(gap ? Math.min(1425, Math.max(q, Math.round(gap.s / 15) * 15)) : q)
+  }
+  // "Lo más importante hoy" (MIT): hasta 3 tareas foco del día (persiste en el estado).
+  const todayISO = iso(new Date())
+  const mitIds = (data.mit && data.mit.date === todayISO) ? data.mit.ids : []
+  const toggleMit = (taskId: string) => {
+    const cur = mitIds
+    const ids = cur.includes(taskId) ? cur.filter(x => x !== taskId) : (cur.length >= 3 ? cur : [...cur, taskId])
+    save({ mit: { date: todayISO, ids } })
+  }
   const scheduleActivity = (b: ScheduledBlock) => { save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null) }
   const removeScheduled = (id: string) => save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) })
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
@@ -881,6 +912,7 @@ export default function TiempoClient() {
                   <span style={LBL}>tiempo útil restante hoy</span>
                   <span style={{ fontFamily: SERIF, fontSize: 84, lineHeight: .88, letterSpacing: '-.02em' }}>{V.freeLabel}</span>
                   <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
+                  {V.committed > 0 && <span style={{ fontSize: 13.5, color: '#8a4b28', display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 999, padding: '5px 12px', alignSelf: 'flex-start' }}>De eso ya agendaste <b style={{ fontWeight: 600 }}>{V.committedLabel}</b> → quedan <b style={{ fontWeight: 600 }}>{V.freeUncommittedLabel}</b> sin comprometer.</span>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
@@ -989,7 +1021,8 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
@@ -1009,7 +1042,7 @@ export default function TiempoClient() {
                 </div>
               </div>
               <div style={{ position: 'relative', paddingTop: 20 }}>
-                <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} title="Doble clic para agendar una actividad en ese punto" style={{ display: 'flex', height: 56, gap: 2, alignItems: 'stretch' }}>
+                <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }} onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData('text/taskid'); if (!id) return; const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); setSchedulePreset(id); setScheduleAt(Math.min(1425, Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15)) }} title="Doble clic para agendar aquí · o arrastra una tarea a este punto" style={{ display: 'flex', height: 56, gap: 2, alignItems: 'stretch' }}>
                   {V.segs.map((s, i) => {
                     const past = s.e <= now && s.kind !== 'done' && s.kind !== 'sim'
                     const showLabel = s.w > 6.5 && s.kind !== 'free'
@@ -1474,7 +1507,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onSchedule, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -1525,10 +1558,12 @@ function TaskPicker({ tasks, selId, draggable, onReorder, onQuick, onSchedule, o
         const on = t.task.id === selId
         const ts = taskStyle(t.task.status)
         const dragging = dragId.current === t.task.id
+        const isMit = mitIds.includes(t.task.id!)
         return (
-          <div key={t.task.id} data-taskid={t.task.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : on ? '#f7ece2' : 'transparent' }}>
+          <div key={t.task.id} data-taskid={t.task.id} draggable onDragStart={e => { e.dataTransfer.setData('text/taskid', t.task.id!); e.dataTransfer.effectAllowed = 'copy' }} title="Arrástrala a la cinta “el día” para agendarla" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, borderLeft: isMit ? '3px solid #c2933a' : undefined, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : isMit ? '#f8efdc' : on ? '#f7ece2' : 'transparent' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {draggable && <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', flexShrink: 0, padding: '0 2px' }}>⠿</span>}
+              <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
               <span onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
                 <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>

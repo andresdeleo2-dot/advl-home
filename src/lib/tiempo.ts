@@ -38,6 +38,7 @@ export type AppData = {
   session: Session
   history: HistoryRow[]
   scheduled?: ScheduledBlock[]   // tareas/actividades agendadas a una hora hoy
+  mit?: { date: string; ids: string[] }   // "lo más importante hoy": hasta 3 tareas foco del día
 }
 
 export const KEY = 'margen.v1'
