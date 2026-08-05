@@ -23,6 +23,9 @@ const TS_KEY = KEY + '.ts'
 // Minutos transcurridos de una sesión, tolerando cruce de medianoche (now se reinicia
 // a minutos-del-día). Si la resta es fuertemente negativa (cruzó medianoche), +1440.
 const elapsedMin = (start: number, nowMin: number) => { let d = nowMin - start; if (d < -1) d += 1440; return d }
+// Minutos transcurridos de una sesión contando pausas: acumulado + segmento en curso (0 si está en pausa).
+const sessionElapsed = (s: { start: number; pausedAccum?: number; pausedAt?: number }, nowMin: number) =>
+  (s.pausedAccum || 0) + (s.pausedAt != null ? 0 : Math.max(0, elapsedMin(s.start, nowMin)))
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
 // Luminancia de un color hex → elige texto claro/oscuro para etiquetas dentro de la barra.
 const lum = (hex: string) => { const h = hex.replace('#', ''); if (h.length < 6) return 1; const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16); return (0.299 * r + 0.587 * g + 0.114 * b) / 255 }
@@ -98,6 +101,8 @@ export default function TiempoClient() {
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [notifOn, setNotifOn] = useState(false)              // permiso de notificaciones del navegador
   const [saveErr, setSaveErr] = useState(false)              // último guardado falló (sin red / error)
+  const [undo, setUndo] = useState<{ msg: string; fn: () => void } | null>(null)  // toast "deshacer"
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
   const dueNotifiedRef = useRef<string | null>(null)         // id de agendado ya notificado (llegó la hora)
@@ -181,7 +186,7 @@ export default function TiempoClient() {
   useEffect(() => {
     const s = data.session
     if (!s || !s.dur) return
-    if (elapsedMin(s.start, now) >= s.dur && endNotifiedFor.current !== s.start) {
+    if (s.pausedAt == null && sessionElapsed(s, now) >= s.dur && endNotifiedFor.current !== s.start) {
       endNotifiedFor.current = s.start
       beep(); notify('Terminó tu bloque', `${s.name}: ya se cumplieron los ${hm(s.dur)} que planeaste.`)
     }
@@ -513,9 +518,10 @@ export default function TiempoClient() {
     })
 
     // sesión
-    const elapsed = session ? Math.max(0, elapsedMin(session.start, now)) : 0
+    const elapsed = session ? Math.max(0, sessionElapsed(session, now)) : 0
     const planned = session ? session.dur : 0
-    const sEnd = session ? session.start + planned : 0
+    const paused = !!(session && session.pausedAt != null)
+    const sEnd = session ? Math.round(now) + Math.max(0, planned - elapsed) : 0
 
     // semana
     const today = iso(new Date())
@@ -637,15 +643,17 @@ export default function TiempoClient() {
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
       workedTodayLabel: workedToday ? hm(workedToday) : '—',
       energy: eBars, energyNote, energyNow: nowPct, energyLearnedActive: useLearned, energyLearnAvail: learnAvail,
-      hasSession: !!session, sessionOpen: !!session && !planned, sessionName: session ? session.name : '',
+      hasSession: !!session, sessionOpen: !!session && !planned, sessionPaused: paused, sessionName: session ? session.name : '',
       sessionStartLabel: session ? clock(session.start) : '',
       sessionElapsedLabel: session ? hm(elapsed) : '',
       sessionPct: session && planned ? Math.min(100, (elapsed / planned) * 100) : 0,
-      sessionNote: session ? (!planned
-        ? 'Llevas ' + hm(elapsed) + '. Termina cuando quieras.'
-        : elapsed >= planned
-          ? 'Ya pasaste los ' + hm(planned) + ' que planeaste. Cada minuto extra sale de lo que viene.'
-          : 'Quedan ' + hm(planned - elapsed) + '. Terminarías a las ' + clock(sEnd) + '.') : '',
+      sessionNote: session ? (paused
+        ? 'En pausa · llevas ' + hm(elapsed) + '. Reanuda cuando sigas.'
+        : !planned
+          ? 'Llevas ' + hm(elapsed) + '. Termina cuando quieras.'
+          : elapsed >= planned
+            ? 'Ya pasaste los ' + hm(planned) + ' que planeaste. Cada minuto extra sale de lo que viene.'
+            : 'Quedan ' + hm(planned - elapsed) + '. Terminarías a las ' + clock(sEnd) + '.') : '',
       durLabel: hm(dur), endLabel: clock(simEnd),
       verdictKicker, verdictTitle, verdictText, verdictBg, verdictBorder, verdictFg,
       hitAny, afectados, safeMax, altLabel: hitAny ? (safeMax >= 1 ? 'Reducir a ' + hm(safeMax) : 'Sin margen ahora') : 'Otra duración',
@@ -739,7 +747,7 @@ export default function TiempoClient() {
   const beginSession = (ns: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
     const s = data.session
     if (s) {
-      const el = Math.max(1, Math.round(elapsedMin(s.start, now)))
+      const el = Math.max(1, Math.round(sessionElapsed(s, now)))
       if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
       const today0 = iso(new Date())
       const hist = { date: today0, name: s.name, area: s.area, start: Math.round(s.start), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
@@ -772,7 +780,14 @@ export default function TiempoClient() {
   const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
     save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) })
   }
-  const delHist = (idx: number) => { save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null) }
+  // Toast "deshacer": guarda una acción de restauración por ~6s.
+  const showUndo = (msg: string, fn: () => void) => {
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    setUndo({ msg, fn })
+    undoTimer.current = setTimeout(() => setUndo(null), 6000)
+  }
+  const delHist = (idx: number) => { const before = data.history; save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null); showUndo('Registro borrado', () => save({ history: before })) }
+  const deleteBlock = (id: string) => { const before = data.blocks; save({ blocks: before.filter(x => x.id !== id) }); showUndo('Bloque borrado', () => save({ blocks: before })) }
   // Reabre una tarea en Épicas (En curso, sin doneAt) SIN clobber: usa el objeto completo.
   const reopenByTask = (epicaId: string, taskId: string) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
@@ -830,7 +845,7 @@ export default function TiempoClient() {
   // le SUMA el tiempo invertido (entra a la bitácora de avances). markDone la cierra.
   const finish = (markDone = false) => {
     const s = data.session; if (!s) return
-    const elapsed = Math.max(1, Math.round(elapsedMin(s.start, now)))
+    const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     const today = iso(new Date())
     save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
     if (s.taskId && s.epicaId) {
@@ -904,6 +919,9 @@ export default function TiempoClient() {
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
   const cancel = () => save({ session: null })
+  // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
+  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, Math.round(elapsedMin(s.start, now))), pausedAt: Math.round(now) } }) }
+  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), pausedAt: undefined } }) }
   // Volver a trabajar una actividad YA registrada hoy (la hiciste a las 11 y la retomas a las 3):
   // arranca una NUEVA sesión con el mismo nombre/área (y su tarea de Épicas si venía de una),
   // contador libre. Se ACUMULA: al terminar genera otro bloque en el día y otra entrada de tiempo.
@@ -942,7 +960,7 @@ export default function TiempoClient() {
     save({ mit: { date: todayISO, ids } })
   }
   const scheduleActivity = (b: ScheduledBlock) => { save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null) }
-  const removeScheduled = (id: string) => save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) })
+  const removeScheduled = (id: string) => { const before = data.scheduled || []; save({ scheduled: before.filter(s => s.id !== id) }); showUndo('Agendado quitado', () => save({ scheduled: before })) }
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
   const startScheduled = (s: ScheduledBlock) => {
     if (beginSession({ name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, { scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })) {
@@ -1299,7 +1317,7 @@ export default function TiempoClient() {
                         <input type="number" min={5} max={600} step={5} value={b.dur} onChange={e => patchBlock(b.id, { dur: Math.max(5, Number(e.target.value) || 5) })} style={{ width: 72, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 999, padding: '8px 12px', fontSize: 14 }} />
                         <span style={{ fontSize: 14, color: '#a49b90' }}>min{b.dur >= 60 ? ` · ${hm(b.dur)}` : ''}</span>
                       </div>
-                      <div onClick={() => save({ blocks: data.blocks.filter(x => x.id !== b.id) })} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
+                      <div onClick={() => deleteBlock(b.id)} style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 999, color: '#a49b90', cursor: 'pointer', fontSize: 18 }}>×</div>
                     </div>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                       {DOW_CHIPS.map(c => { const on = !b.days || b.days[c.i]; return (
@@ -1487,21 +1505,22 @@ export default function TiempoClient() {
       {V.hasSession && (
         <div style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, width: 'min(340px, calc(100vw - 40px))', background: '#1c1a17', color: '#faf7f1', borderRadius: 22, padding: 20, boxShadow: '0 22px 55px -15px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ ...LBL, color: '#a49b90' }}>en curso</span>
+            <span style={{ ...LBL, color: V.sessionPaused ? '#d98a55' : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : 'en curso'}</span>
             <span style={{ fontSize: 12.5, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
-            <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9 }}>{V.sessionElapsedLabel}</span>
+            <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9, opacity: V.sessionPaused ? 0.55 : 1 }}>{V.sessionElapsedLabel}</span>
             <span style={{ fontSize: 12.5, color: '#cdc4b8', lineHeight: 1.45 }}>{V.sessionNote}</span>
           </div>
           {!V.sessionOpen && (
             <div style={{ height: 5, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
-              <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999 }} />
+              <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999, transition: 'width .3s' }} />
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 110, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
+            <div onClick={V.sessionPaused ? resumeSession : pauseSession} style={{ flex: 1, minWidth: 110, textAlign: 'center', background: V.sessionPaused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: V.sessionPaused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>{V.sessionPaused ? '▶ Reanudar' : '⏸ Pausar'}</div>
+            <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 100, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
             {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>✓ y hecha</div>}
             {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>+15m</div>}
             <div onClick={cancel} title="Descartar" style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
@@ -1525,6 +1544,14 @@ export default function TiempoClient() {
               <div onClick={() => { removeScheduled(dueSched.id); dismissSched(dueSched.id) }} title="Quitar de agendados" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '14px 16px', fontSize: 14, color: '#a49b90', cursor: 'pointer', whiteSpace: 'nowrap' }}>Quitar</div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Toast "deshacer" tras borrar (registro / bloque / agendado) */}
+      {undo && (
+        <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 121, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 16px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 14, fontSize: 13, maxWidth: 'calc(100vw - 32px)' }}>
+          <span>{undo.msg}</span>
+          <button onClick={() => { undo.fn(); setUndo(null); if (undoTimer.current) clearTimeout(undoTimer.current) }} style={{ border: 'none', background: 'transparent', color: '#E7C56B', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>Deshacer</button>
         </div>
       )}
 
