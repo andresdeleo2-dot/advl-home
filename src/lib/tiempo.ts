@@ -42,6 +42,7 @@ export type AppData = {
   scheduled?: ScheduledBlock[]   // tareas/actividades agendadas a una hora hoy
   mit?: { date: string; ids: string[] }   // "lo más importante hoy": hasta 3 tareas foco del día
   backToTasks?: string[]   // claves `${fecha}·${taskId}` que el usuario devolvió a la lista pese a tener tiempo
+  focusGoal?: number       // meta diaria de trabajo profundo en minutos (área Trabajo); 0/ausente = sin meta
 }
 
 export const KEY = 'margen.v1'
@@ -103,6 +104,7 @@ export function defaults(): AppData {
     session: null,
     history: seed(),
     scheduled: [],
+    focusGoal: 180,
   }
 }
 

@@ -242,25 +242,9 @@ export default function TiempoClient() {
     }).catch(() => { setTasksError(true); setAllTasks(a => a || []) }).finally(() => setRefreshing(false))
   }, [])
   useEffect(() => { refreshTasks() }, [refreshTasks])
-  // Mientras un editor (tarea/registro/agendar) está abierto NO refrescamos: si no, un poll en
-  // vuelo podría revertir una edición recién guardada (auto-guardado optimista).
-  const editorOpenRef = useRef(false)
-  useEffect(() => { editorOpenRef.current = editTask !== null || histIdx !== null || scheduleAt !== null }, [editTask, histIdx, scheduleAt])
-  // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
-  useEffect(() => {
-    const canRefresh = () => document.visibilityState === 'visible' && !editorOpenRef.current
-    const onVis = () => { if (canRefresh()) refreshTasks() }
-    const onFocus = () => { if (canRefresh()) refreshTasks() }
-    document.addEventListener('visibilitychange', onVis)
-    window.addEventListener('focus', onFocus)
-    // Poll "en vivo": cada 25s (salvo con un editor abierto) refleja cambios de Épicas sin recargar.
-    const id = setInterval(() => { if (canRefresh()) refreshTasks() }, 25000)
-    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus) }
-  }, [refreshTasks])
-
   // Reuniones del calendario de Google (eventos con hora), de TODOS los días de la ventana,
   // con su fecha local — así el selector de día muestra las juntas del día que ves, no sólo hoy.
-  useEffect(() => {
+  const loadMeetings = useCallback(() => {
     fetch('/api/calendar').then(r => r.json()).then((evs: { id: string; title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; htmlLink?: string; hangoutLink?: string }[]) => {
       if (!Array.isArray(evs)) return
       const mins = (s: string) => { const d = new Date(s); return d.getHours() * 60 + d.getMinutes() }
@@ -275,6 +259,22 @@ export default function TiempoClient() {
       setMeetings(out)
     }).catch(() => {})
   }, [])
+  useEffect(() => { loadMeetings() }, [loadMeetings])
+  // Mientras un editor (tarea/registro/agendar) está abierto NO refrescamos: si no, un poll en
+  // vuelo podría revertir una edición recién guardada (auto-guardado optimista).
+  const editorOpenRef = useRef(false)
+  useEffect(() => { editorOpenRef.current = editTask !== null || histIdx !== null || scheduleAt !== null }, [editTask, histIdx, scheduleAt])
+  // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
+  useEffect(() => {
+    const canRefresh = () => document.visibilityState === 'visible' && !editorOpenRef.current
+    const onVis = () => { if (canRefresh()) { refreshTasks(); loadMeetings() } }
+    const onFocus = () => { if (canRefresh()) { refreshTasks(); loadMeetings() } }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onFocus)
+    // Poll "en vivo": cada 25s (salvo con un editor abierto) refleja cambios de Épicas sin recargar.
+    const id = setInterval(() => { if (canRefresh()) refreshTasks() }, 25000)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus) }
+  }, [refreshTasks, loadMeetings])
 
   // Tareas del día visible (plan === día, o recurrente que aplica ese día).
   const tasks = useMemo<TodayTask[] | null>(() => {
@@ -1214,6 +1214,21 @@ export default function TiempoClient() {
                     {dayWorkedMin > 0 && <span style={{ fontSize: 13, color: '#4f6238', background: '#eef1e7', border: '1px solid #cfe0c4', borderRadius: 999, padding: '6px 13px' }}>✓ {hm(dayWorkedMin)} ya trabajado</span>}
                     {insights.streak > 1 && <span style={{ fontSize: 13, color: '#8a4b28', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 999, padding: '6px 13px' }}>🔥 racha de {insights.streak} días</span>}
                   </div>
+                  {(data.focusGoal ?? 0) > 0 && (() => {
+                    const goal = data.focusGoal!, pct = Math.min(100, Math.round((dayWorkedMin / goal) * 100)), met = dayWorkedMin >= goal
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                          <span style={LBL}>meta de trabajo profundo</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: met ? '#4f6238' : '#8a4b28' }}>{met ? '✓ cumplida' : `${hm(dayWorkedMin)} / ${hm(goal)}`}</span>
+                        </div>
+                        <div style={{ height: 8, background: '#efe7d9', borderRadius: 999, overflow: 'hidden' }}>
+                          <div style={{ width: `${pct}%`, height: '100%', background: met ? 'linear-gradient(90deg,#6f8256,#8fae74)' : 'linear-gradient(90deg,#b4653a,#d98a55)', borderRadius: 999, transition: 'width .4s' }} />
+                        </div>
+                        {!met && <span style={{ fontSize: 12.5, color: '#8b8379' }}>Te faltan {hm(goal - dayWorkedMin)} para tu meta de hoy.</span>}
+                      </div>
+                    )
+                  })()}
                   {mitTasks.length > 0 && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 7, borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
                       <span style={LBL}>lo más importante hoy</span>
@@ -1653,6 +1668,11 @@ export default function TiempoClient() {
                   <span style={{ ...LBL, letterSpacing: '.1em' }}>te despertarías</span>
                   <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{clock(bed + sleepGoal)}</span>
                 </div>
+              </div>
+              <div style={{ borderTop: '1px solid #eee6da', paddingTop: 24, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460 }}>
+                <span style={{ ...LBL, letterSpacing: '.1em' }}>meta de trabajo profundo · {(data.focusGoal ?? 0) > 0 ? hm(data.focusGoal!) + ' al día' : 'sin meta'}</span>
+                <input type="range" min={0} max={480} step={15} value={data.focusGoal ?? 0} onChange={e => save({ focusGoal: Number(e.target.value) })} style={{ width: '100%', height: 26, accentColor: '#8a4b28' }} />
+                <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Cuánto trabajo (área Trabajo) quieres registrar cada día. El Brief de Hoy te muestra el avance. Ponlo en 0 para no fijar meta.</span>
               </div>
               <div onClick={() => { if (window.confirm('¿Restaurar la rutina de ejemplo? Se reemplazan tus bloques y el historial.')) save(defaults()) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#a49b90', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>Restaurar la rutina de ejemplo</div>
             </div>
