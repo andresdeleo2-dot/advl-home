@@ -5830,6 +5830,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <label style={lbl}>Tarea</label>
                 <input autoFocus value={taskDraft.t} onChange={e => setTaskDraft(d => ({ ...d, t: e.target.value }))} placeholder="¿Qué hay que hacer?" style={inpBig} />
 
+                <label style={lbl}>Resumen</label>
+                {resumenReady.current
+                  ? <textarea value={taskDraft.resumen || ''} onChange={e => setTaskDraft(d => ({ ...d, resumen: e.target.value }))} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...inpSmall, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} />
+                  : <div style={{ ...inpSmall, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
+
                 <label style={lbl}>Estado</label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {PICK_STATUSES.map(s => {
@@ -5979,11 +5984,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   ))}
                 </div>
-
-                <label style={lbl}>Resumen</label>
-                {resumenReady.current
-                  ? <textarea value={taskDraft.resumen || ''} onChange={e => setTaskDraft(d => ({ ...d, resumen: e.target.value }))} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...inpSmall, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} />
-                  : <div style={{ ...inpSmall, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
 
                 <label style={lbl}>Nota</label>
                 <RichText value={taskDraft.note || ''} onChange={v => setTaskDraft(d => ({ ...d, note: v }))} placeholder="Negritas (B), cursiva (I) y viñetas (• Lista)…" minHeight={170} />

@@ -2388,6 +2388,15 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
           {creating && (<><NLbl>Épica</NLbl><select value={epId} onChange={e => setEpId(e.target.value)} style={{ ...nf, width: '100%' }}>{epicas.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></>)}
 
           <input autoFocus value={t.t} placeholder="¿Qué hay que hacer?" onChange={e => setT({ ...t, t: e.target.value })} style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 24, lineHeight: 1.1, color: '#10233F', border: 'none', outline: 'none', background: 'transparent', margin: '8px 0 4px', padding: 0, width: '100%' }} />
+
+          {/* Resumen de la actividad (qué es y qué se quiere lograr) — distinto de la nota */}
+          <div style={{ margin: '8px 0 14px' }}>
+            <NLbl>Resumen</NLbl>
+            {resumenReady
+              ? <textarea value={t.resumen || ''} onChange={e => setT({ ...t, resumen: e.target.value })} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...nf, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, marginTop: 4 }} />
+              : <div style={{ ...nf, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12, marginTop: 4 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
+          </div>
+
           {!creating && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '2px 0 10px' }}>
               {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
@@ -2397,14 +2406,6 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
               {t.repeat && <span style={{ fontSize: 11, fontWeight: 700, color: '#7A6FB0', background: 'rgba(122,111,176,0.10)', border: '1px solid rgba(122,111,176,0.28)', borderRadius: 99, padding: '2px 9px' }}>↻ Se repite{t.repeat.unit === 'dia' ? ' cada día' : t.repeat.unit === 'semana' ? ' cada semana' : t.repeat.unit === 'mes' ? ' cada mes' : ''}{(t.repeatDone?.length ?? 0) > 0 ? ` · ${t.repeatDone!.length} ${t.repeatDone!.length === 1 ? 'ciclo' : 'ciclos'}` : ''}</span>}
             </div>
           )}
-
-          {/* Resumen de la actividad (qué es y qué se quiere lograr) — distinto de la nota */}
-          <div style={{ marginBottom: 14 }}>
-            <NLbl>Resumen</NLbl>
-            {resumenReady
-              ? <textarea value={t.resumen || ''} onChange={e => setT({ ...t, resumen: e.target.value })} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...nf, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, marginTop: 4 }} />
-              : <div style={{ ...nf, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12, marginTop: 4 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
-          </div>
 
           {/* Enlaces de la épica (conexiones: Personas, Dashboard, etc.) — igual que en Épicas */}
           {!creating && epLinks.length > 0 && (
