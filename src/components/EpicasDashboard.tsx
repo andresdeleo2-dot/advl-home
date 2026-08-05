@@ -1818,6 +1818,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )}
             </div>
           )}
+          {subs.some(s => s.done) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+              {subs.filter(s => s.done).slice(0, 5).map((s, si) => (
+                <span key={si} title={s.t} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 600, color: '#2E6E6E', background: 'rgba(62,142,142,0.09)', border: '1px solid rgba(62,142,142,0.22)', borderRadius: 99, padding: '1px 8px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>✓ {s.t || 'subtarea'}</span>
+              ))}
+              {subsDone > 5 && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>+{subsDone - 5}</span>}
+            </div>
+          )}
           {t.note && <div className="ep-note" style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 3, maxHeight: 32, overflow: 'hidden', WebkitMaskImage: 'linear-gradient(180deg,#000 60%,transparent)' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} />}
           {t.links && t.links.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
