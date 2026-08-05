@@ -1051,7 +1051,7 @@ export default function TiempoClient() {
                 {(V.todayLog.length > 0 || epicDoneToday.length > 0) && (
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <span style={LBL}>lo que hiciste hoy</span>
-                    {V.todayLog.map(l => (
+                    {[...V.todayLog].reverse().map(l => (
                       <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block', flexShrink: 0 }} />
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
@@ -1182,7 +1182,7 @@ export default function TiempoClient() {
                     <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
                   </div>
                 ))}
-                {V.todayLog.map(l => (
+                {[...V.todayLog].reverse().map(l => (
                   <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
