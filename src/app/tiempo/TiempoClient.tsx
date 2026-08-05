@@ -113,6 +113,13 @@ export default function TiempoClient() {
   const pendingPush = useRef<AppData | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = allTasks || [] }, [allTasks])
+  // Espejo siempre-fresco de `data`: save() mezcla sobre ESTE (no sobre el `data` capturado por
+  // closure), para que un "deshacer" diferido (toast 6s) restaure sólo su slice sin revertir
+  // otros cambios hechos entre tanto.
+  const dataRef = useRef<AppData>(data)
+  useEffect(() => { dataRef.current = data }, [data])
+  // Reintentos de sincronización de tarea que fallaron (para el botón "Reintentar").
+  const pendingSync = useRef<Map<string, { epicaId: string; task: EpicaTask }>>(new Map())
 
   useEffect(() => {
     let d = defaults()
@@ -186,8 +193,9 @@ export default function TiempoClient() {
   useEffect(() => {
     const s = data.session
     if (!s || !s.dur) return
-    if (s.pausedAt == null && sessionElapsed(s, now) >= s.dur && endNotifiedFor.current !== s.start) {
-      endNotifiedFor.current = s.start
+    const key = s.origStart ?? s.start   // llave estable que NO cambia al reanudar (evita re-avisar)
+    if (s.pausedAt == null && sessionElapsed(s, now) >= s.dur && endNotifiedFor.current !== key) {
+      endNotifiedFor.current = key
       beep(); notify('Terminó tu bloque', `${s.name}: ya se cumplieron los ${hm(s.dur)} que planeaste.`)
     }
   }, [now, data.session])
@@ -313,7 +321,8 @@ export default function TiempoClient() {
   }, [tasks, filters, sortBy])
 
   function save(patch: Partial<AppData>) {
-    const nd = { ...data, ...patch }
+    const nd = { ...dataRef.current, ...patch }
+    dataRef.current = nd
     // Poda: conserva ~12 semanas de historial (Historial sólo usa la última semana); evita que
     // el blob de estado crezca sin fin. Sólo se poda cuando ya hay muchas entradas.
     if (nd.history && nd.history.length > 500) {
@@ -330,7 +339,7 @@ export default function TiempoClient() {
       const body = pendingPush.current; pendingPush.current = null
       fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }) })
         .then(r => { if (!r.ok) throw new Error('http'); return r.json() })
-        .then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} ; setSaveErr(false) })
+        .then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} ; setSaveErr(pendingSync.current.size > 0) })
         .catch(() => setSaveErr(true))
     }, 900)
   }
@@ -738,19 +747,22 @@ export default function TiempoClient() {
     // Se omite `updatedAt` para FORZAR la escritura: si no, la API detecta "choque"
     // (updatedAt viejo tras varias operaciones) y descarta el cambio.
     const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
+    if (task.id) pendingSync.current.set(task.id, { epicaId, task })   // pendiente hasta confirmar
     return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) })
-      .then(r => { if (!r.ok) throw new Error('http'); setSaveErr(false) }).catch(() => setSaveErr(true))
+      .then(r => { if (!r.ok) throw new Error('http'); if (task.id) pendingSync.current.delete(task.id); setSaveErr(pendingSync.current.size > 0) })
+      .catch(() => setSaveErr(true))   // se queda en pendingSync para reintentar
   }
   // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
   // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
   // sacar un bloque de agendados). Devuelve true si arrancó (false si el usuario canceló).
-  const beginSession = (ns: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
+  const beginSession = (nsIn: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
+    const ns = { ...nsIn, origStart: nsIn.start }   // recuerda el inicio REAL (no cambia al reanudar)
     const s = data.session
     if (s) {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
       if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
       const today0 = iso(new Date())
-      const hist = { date: today0, name: s.name, area: s.area, start: Math.round(s.start), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+      const hist = { date: today0, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
       save({ session: ns, history: data.history.concat([hist]), ...extraPatch })
       if (s.taskId && s.epicaId) {
         const tt = tasksRef.current.find(x => x.task.id === s.taskId)
@@ -847,7 +859,7 @@ export default function TiempoClient() {
     const s = data.session; if (!s) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     const today = iso(new Date())
-    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
+    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
@@ -1567,7 +1579,7 @@ export default function TiempoClient() {
       {saveErr && (
         <div style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 120, maxWidth: 'min(360px, calc(100vw - 32px))', background: '#8a3c2a', color: '#faf7f1', borderRadius: 14, padding: '12px 14px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
           <span style={{ flex: 1, lineHeight: 1.4 }}>⚠ No se pudo guardar el último cambio. Revisa tu conexión.</span>
-          <button onClick={() => { setSaveErr(false); save({}); refreshTasks() }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
+          <button onClick={() => { const items = [...pendingSync.current.values()]; items.forEach(v => syncTask(v.epicaId, v.task)); save({}) }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
         </div>
       )}
     </div>
@@ -1889,7 +1901,7 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
   // La nota es contentEditable NO controlado: se fija una sola vez al abrir; así el
   // re-render del reloj (cada segundo) no reescribe ni borra lo que estás tecleando.
   useEffect(() => { if (noteRef.current) noteRef.current.innerHTML = sanitizeHtml(info.task.note || '') }, [])
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { flushRef.current(); onClose() } }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (subPop !== null) { setSubPop(null); return } flushRef.current(); onClose() } }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose, subPop])
   // Diseño navy idéntico al editor de Épicas.
   const nf: CSSProperties = { background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#14233D', boxSizing: 'border-box' }
   const eb: CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }
@@ -1983,7 +1995,11 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
 
           <NLbl>Estado</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT(p => ({ ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || doneDayFor(p, iso(new Date()))) : undefined }))} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
+            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT(p => {
+              // Terminar una RECURRENTE marca el día en repeatDone (sigue repitiéndose), no la cierra.
+              if (s === 'Terminada' && p.repeat) { const day = doneDayFor(p, iso(new Date())); return { ...p, repeatDone: (p.repeatDone || []).includes(day) ? p.repeatDone : [...(p.repeatDone || []), day] } }
+              return { ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || doneDayFor(p, iso(new Date()))) : undefined }
+            })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
           </div>
 
           {objetivos.length > 0 && (<><NLbl>Contribuye a</NLbl>
@@ -2006,7 +2022,12 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <input type="range" min={0} max={100} step={5} value={t.progress || 0} onChange={e => setT({ ...t, progress: Number(e.target.value) })} style={{ flex: 1, accentColor: '#3E8E8E' }} />
-            <button onClick={() => setT({ ...t, progress: 100, status: 'Terminada' })} style={{ border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>100%</button>
+            <button onClick={() => setT(p => {
+              const day = doneDayFor(p, iso(new Date()))
+              return p.repeat
+                ? { ...p, progress: 100, repeatDone: (p.repeatDone || []).includes(day) ? p.repeatDone : [...(p.repeatDone || []), day] }
+                : { ...p, progress: 100, status: 'Terminada', doneAt: p.doneAt || day }
+            })} style={{ border: '1px solid rgba(62,142,142,0.35)', background: 'rgba(62,142,142,0.10)', color: '#2E6E6E', borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>100%</button>
           </div>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 14, marginBottom: 6 }}>
@@ -2122,7 +2143,7 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
         const upd = (patch: Partial<NonNullable<EpicaTask['subtasks']>[number]>) => setSubs(a => a.map((x, j) => j === subPop ? { ...x, ...patch } : x))
         const addSl = () => { const url = slUrl.trim(), label = slLabel.trim(); if (!url && !label) return; upd({ links: [...(s.links || []), { label, url }] }); setSlLabel(''); setSlUrl('') }
         return (
-          <div onClick={() => setSubPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 96, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflow: 'auto' }}>
+          <div onClick={e => { e.stopPropagation(); setSubPop(null) }} style={{ position: 'fixed', inset: 0, zIndex: 96, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflow: 'auto' }}>
             <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Subtarea" style={{ width: '100%', maxWidth: 460, background: '#fff', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 12, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
                 <input value={s.t} onChange={e => upd({ t: e.target.value })} placeholder="Subtarea" style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 20, color: '#10233F', border: 'none', outline: 'none', background: 'transparent', flex: 1, minWidth: 0, padding: 0 }} />

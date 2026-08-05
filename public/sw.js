@@ -21,7 +21,11 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(req)
       .then((res) => {
-        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)) }
+        // Sólo cachea 200 completo (206 Partial Content NO es cacheable → Cache.put lanza).
+        if (res && res.status === 200 && res.type === 'basic') {
+          const copy = res.clone()
+          caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {})
+        }
         return res
       })
       .catch(() => caches.match(req))

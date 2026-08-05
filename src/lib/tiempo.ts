@@ -11,7 +11,7 @@ export type Block = { id: string; name: string; area: Area; start: number; dur: 
  *  marcarla como Terminada al cerrar el bloque. */
 /** `start` = inicio del segmento en curso. `pausedAccum` = minutos ya acumulados de segmentos
  *  anteriores; si `pausedAt` está presente, la sesión está EN PAUSA (el reloj no corre). */
-export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; pausedAccum?: number; pausedAt?: number } | null
+export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; pausedAccum?: number; pausedAt?: number; origStart?: number } | null
 export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean }
 
 /** Tarea de Épicas (o actividad libre) agendada para HOY a una hora concreta. Al llegar

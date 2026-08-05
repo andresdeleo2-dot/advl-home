@@ -30,7 +30,7 @@ export default function SectionNav({ current }: { current: 'accesos' | 'epicas' 
       {items.map(it => {
         const on = it.id === current
         return (
-          <Link key={it.id} href={it.href} prefetch aria-current={on ? 'page' : undefined} data-on={on ? 'true' : 'false'}
+          <Link key={it.id} href={it.href} prefetch aria-label={it.label} aria-current={on ? 'page' : undefined} data-on={on ? 'true' : 'false'}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 15px', borderRadius: 999,
               fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', lineHeight: 1,
@@ -38,7 +38,7 @@ export default function SectionNav({ current }: { current: 'accesos' | 'epicas' 
               background: on ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : 'transparent',
               boxShadow: on ? '0 6px 14px -6px rgba(194,147,58,.95)' : 'none',
             }}>
-            <span style={{ display: 'inline-flex', opacity: on ? 1 : 0.85 }}>{ICONS[it.id]}</span>
+            <span aria-hidden="true" style={{ display: 'inline-flex', opacity: on ? 1 : 0.85 }}>{ICONS[it.id]}</span>
             <span className="sn-label">{it.label}</span>
           </Link>
         )
