@@ -106,6 +106,9 @@ export default function TiempoClient() {
   const [undo, setUndo] = useState<{ msg: string; fn: () => void } | null>(null)  // toast "deshacer"
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
+  const [focusOpen, setFocusOpen] = useState(false)          // Modo foco: overlay a pantalla completa de la sesión
+  const [pomoOn, setPomoOn] = useState(false)                // Pomodoro dentro del modo foco (25 trabajo / 5 descanso)
+  const pomoNotified = useRef<Set<string>>(new Set())        // transiciones de pomodoro ya avisadas (una vez c/u)
   const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
   const dueNotifiedRef = useRef<string | null>(null)         // id de agendado ya notificado (llegó la hora)
   const remindNotified = useRef<Set<string>>(new Set())      // recordatorios (remindAt) ya avisados
@@ -738,6 +741,41 @@ export default function TiempoClient() {
     return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
   }, [data.blocks, data.bed, data.sleep, data.scheduled, data.history, allTasks, meetings, taskDay])
 
+  // Insights de la semana vista: promedios y patrones a partir del historial real. Sin números
+  // inventados: si un día no tiene registro, no cuenta para su promedio.
+  const insights = useMemo(() => {
+    const week = weekOfISO(taskDay)
+    const dowOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getDay() }
+    const dowName = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
+    const workByDay = week.map(d => ({ date: d, work: (data.history || []).filter(h => h.date === d && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0) }))
+    const sleepByDay = week.map(d => (data.history || []).filter(h => h.date === d && h.area === 'sueno').reduce((s, h) => s + h.dur, 0)).filter(m => m > 0)
+    const workedDays = workByDay.filter(d => d.work > 0)
+    const avgWork = workedDays.length ? Math.round(workedDays.reduce((s, d) => s + d.work, 0) / workedDays.length) : 0
+    const best = workByDay.reduce((m, d) => d.work > m.work ? d : m, { date: '', work: 0 })
+    const avgSleep = sleepByDay.length ? Math.round(sleepByDay.reduce((s, m) => s + m, 0) / sleepByDay.length) : 0
+    // Reparto por área en la semana (sin sueño): para saber en qué se te va el tiempo.
+    const byArea: Record<string, number> = {}
+    for (const h of (data.history || [])) { if (week.includes(h.date) && h.area !== 'sueno') byArea[h.area] = (byArea[h.area] || 0) + h.dur }
+    const areaRank = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1])
+    const totalNonSleep = areaRank.reduce((s, [, m]) => s + m, 0)
+    const doneCount = (data.history || []).filter(h => week.includes(h.date) && h.done).length
+    // Racha: días consecutivos HASTA HOY con algo de trabajo registrado (mira hacia atrás desde hoy).
+    let streak = 0
+    for (let i = 0; i < 60; i++) {
+      const d = addDaysISO(iso(new Date()), -i)
+      const hasWork = (data.history || []).some(h => h.date === d && h.area === 'trabajo' && h.dur > 0)
+      if (hasWork) streak++
+      else if (i === 0) continue   // hoy aún puede no tener trabajo; no rompe la racha de ayer
+      else break
+    }
+    return {
+      avgWork, avgSleep, doneCount, totalNonSleep,
+      bestDay: best.work > 0 ? { name: dowName[dowOf(best.date)], label: hm(best.work) } : null,
+      areaRank: areaRank.slice(0, 4).map(([a, m]) => ({ area: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379', pct: totalNonSleep ? Math.round((m / totalNonSleep) * 100) : 0, min: m })),
+      streak, workedDays: workedDays.length,
+    }
+  }, [data.history, taskDay])
+
   // Tareas TERMINADAS en Épicas el DÍA VISTO (doneAt, o recurrente con repeatDone) que NO tienen
   // un registro con tiempo ese día: se muestran igual como "hecho" en el día.
   const epicDoneToday = useMemo(() => {
@@ -1092,6 +1130,26 @@ export default function TiempoClient() {
     }
   }, [now, meetings])
 
+  // Si la sesión termina, sal del modo foco (el overlay no tiene sentido sin sesión).
+  useEffect(() => { if (!V.hasSession) setFocusOpen(false) }, [V.hasSession])
+  useEffect(() => { if (!focusOpen) return; const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setFocusOpen(false) }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [focusOpen])
+
+  // Pomodoro: mientras la sesión corre y el Pomodoro está activo, avisa al entrar en descanso
+  // (a los 25 min de cada ciclo de 30) y al retomar el trabajo (inicio del siguiente ciclo).
+  useEffect(() => {
+    const s = data.session
+    if (!pomoOn || !s || s.pausedAt != null) return
+    const el = sessionElapsed(s, now)
+    const cycle = Math.floor(el / 30), pos = el % 30
+    if (pos >= 25 && pos < 25.7) {
+      const key = `${s.start}·${cycle}·break`
+      if (!pomoNotified.current.has(key)) { pomoNotified.current.add(key); beep(); notify('Descanso 🌿', 'Llevas 25 min de foco. Tómate 5 para respirar.') }
+    } else if (cycle >= 1 && pos < 0.7) {
+      const key = `${s.start}·${cycle}·work`
+      if (!pomoNotified.current.has(key)) { pomoNotified.current.add(key); beep(); notify('De vuelta al foco 🎯', 'Se acabó el descanso. Otro bloque de 25 min.') }
+    }
+  }, [now, pomoOn, data.session])
+
   // Al llegar la hora de un agendado: suena + notifica del navegador (una vez por id),
   // útil sobre todo si la pestaña de Tiempo está en segundo plano.
   useEffect(() => {
@@ -1130,6 +1188,54 @@ export default function TiempoClient() {
         {!loaded ? <div style={{ height: 320 }} /> : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {isTodayView && !data.session && (() => {
+              const gHr = Math.floor(now / 60)
+              const greeting = gHr < 12 ? 'Buenos días' : gHr < 19 ? 'Buenas tardes' : 'Buenas noches'
+              const mitTasks = mitIds.map(id => (allTasks || []).find(t => t.task.id === id)).filter(Boolean) as NonNullable<typeof allTasks>
+              const nTasksToday = (tasks || []).length
+              const next = (meetInfo.next && meetInfo.next.start > now)
+                ? { name: meetInfo.next.name, at: meetInfo.next.start, kind: 'junta' as const }
+                : (() => { const r = V.routineNext.find(x => !x.past && x.when !== 'en curso'); return r ? { name: r.name, at: null as number | null, kind: 'rutina' as const, when: r.when } : null })()
+              return (
+                <div style={{ ...card(24), background: 'linear-gradient(135deg,#faf7f1,#f4ece0)', gap: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.05, color: '#1c1a17' }}>{greeting}, Andrés.</span>
+                      <span style={{ fontSize: 13.5, color: '#8b8379', textTransform: 'capitalize' }}>{longDayOf(today)}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                      <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: .9, color: '#8a4b28' }}>{V.freeLabel}</span>
+                      <span style={{ fontSize: 11.5, color: '#a49b90', textTransform: 'uppercase', letterSpacing: '.06em' }}>de tiempo útil</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <span style={{ fontSize: 13, color: '#4c4741', background: '#fff', border: '1px solid #ece3d5', borderRadius: 999, padding: '6px 13px' }}>📋 {nTasksToday} {nTasksToday === 1 ? 'tarea' : 'tareas'} para hoy</span>
+                    {meetInfo.count > 0 && <span style={{ fontSize: 13, color: '#2E5A9E', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.2)', borderRadius: 999, padding: '6px 13px' }}>🗓 {meetInfo.count} {meetInfo.count === 1 ? 'junta' : 'juntas'} · {hm(meetInfo.totalMin)}</span>}
+                    {dayWorkedMin > 0 && <span style={{ fontSize: 13, color: '#4f6238', background: '#eef1e7', border: '1px solid #cfe0c4', borderRadius: 999, padding: '6px 13px' }}>✓ {hm(dayWorkedMin)} ya trabajado</span>}
+                    {insights.streak > 1 && <span style={{ fontSize: 13, color: '#8a4b28', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 999, padding: '6px 13px' }}>🔥 racha de {insights.streak} días</span>}
+                  </div>
+                  {mitTasks.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7, borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
+                      <span style={LBL}>lo más importante hoy</span>
+                      {mitTasks.map(t => (
+                        <div key={t!.task.id} onClick={() => setEditTask({ epicaId: t!.epicaId, epicaName: t!.epicaName, color: t!.color, task: { ...t!.task } })} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5, cursor: 'pointer' }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 999, background: t!.color, display: 'block', flexShrink: 0 }} />
+                          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t!.task.t || 'Tarea'}</span>
+                          <button onClick={e => { e.stopPropagation(); startTask({ epicaId: t!.epicaId, task: t!.task }, durByDiff(t!.task)) }} style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '4px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶ Empezar</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {next && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, color: '#6b645b', borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
+                      <span style={{ color: '#a49b90' }}>Lo siguiente:</span>
+                      <b style={{ fontWeight: 600, color: '#1c1a17' }}>{next.name}</b>
+                      <span style={{ color: '#a49b90' }}>{next.kind === 'junta' && next.at != null ? `· ${clock(next.at)} · en ${hm(next.at - now)}` : next.kind === 'rutina' ? `· ${next.when}` : ''}</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
             <div className="hoy-grid">
 
               {/* Tarjeta A — Tiempo útil */}
@@ -1455,6 +1561,44 @@ export default function TiempoClient() {
               </div>
               <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.55 }}>En <b>sólido</b> ves lo que realmente hiciste cada día (tu registro); en <b>tenue</b>, la rutina que tienes planeada según “Mi rutina”. Reuniones y agendado sólo aparecen en hoy.</span>
             </div>
+
+            {/* Insights de la semana — patrones a partir de tu historial real */}
+            <div className="t-card" style={card(22)}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>Cómo va tu semana</span>
+                <span style={{ fontSize: 13.5, color: '#8b8379' }}>Todo sale de lo que registraste; los días sin registro no cuentan.</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+                {[
+                  { lbl: 'Trabajo profundo / día', val: insights.avgWork ? hm(insights.avgWork) : '—', sub: insights.workedDays ? `en ${insights.workedDays} ${insights.workedDays === 1 ? 'día' : 'días'} activos` : 'sin registro aún', c: '#8a4b28' },
+                  { lbl: 'Tu mejor día', val: insights.bestDay ? insights.bestDay.label : '—', sub: insights.bestDay ? insights.bestDay.name : 'sin datos', c: '#b4653a' },
+                  { lbl: 'Sueño promedio', val: insights.avgSleep ? hm(insights.avgSleep) : '—', sub: insights.avgSleep >= data.sleep ? 'llegas a tu meta' : insights.avgSleep ? `meta ${hm(data.sleep)}` : 'sin registro', c: '#1c1a17' },
+                  { lbl: 'Tareas terminadas', val: String(insights.doneCount), sub: 'esta semana', c: '#4f6238' },
+                ].map((k, i) => (
+                  <div key={i} style={{ background: '#f7f2e8', border: '1px solid #ece3d5', borderRadius: 16, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ fontSize: 11, color: '#a49b90', textTransform: 'uppercase', letterSpacing: '.05em' }}>{k.lbl}</span>
+                    <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, color: k.c }}>{k.val}</span>
+                    <span style={{ fontSize: 12, color: '#8b8379' }}>{k.sub}</span>
+                  </div>
+                ))}
+              </div>
+              {insights.areaRank.length > 0 && insights.totalNonSleep > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid #eee6da', paddingTop: 16 }}>
+                  <span style={LBL}>en qué se te fue el tiempo · {hm(insights.totalNonSleep)} registrados</span>
+                  <div style={{ display: 'flex', height: 16, borderRadius: 8, overflow: 'hidden', background: '#efe7d9' }}>
+                    {insights.areaRank.map(a => <div key={a.area} title={`${a.label} · ${hm(a.min)} · ${a.pct}%`} style={{ width: `${a.pct}%`, background: a.color }} />)}
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    {insights.areaRank.map(a => (
+                      <span key={a.area} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: '#6b645b' }}>
+                        <span style={{ width: 9, height: 9, borderRadius: 3, background: a.color, display: 'block' }} />{a.label} · <b style={{ fontWeight: 600 }}>{a.pct}%</b>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {insights.streak > 0 && <span style={{ fontSize: 13.5, color: '#8a4b28', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 12, padding: '10px 14px' }}>🔥 Llevas una racha de <b style={{ fontWeight: 700 }}>{insights.streak} {insights.streak === 1 ? 'día' : 'días'}</b> seguidos con trabajo registrado. {insights.streak >= 3 ? 'No la rompas.' : 'Vas empezando — sostenla.'}</span>}
+            </div>
           </div>
         ) : view === 'rutina' ? (
           /* ── MI RUTINA ────────────────────────────────────────────── */
@@ -1684,6 +1828,7 @@ export default function TiempoClient() {
             <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9, opacity: V.sessionPaused ? 0.55 : 1 }}>{V.sessionElapsedLabel}</span>
             <span style={{ fontSize: 12.5, color: '#cdc4b8', lineHeight: 1.45 }}>{V.sessionNote}</span>
           </div>
+          <button onClick={() => setFocusOpen(true)} style={{ border: '1px solid #4a443c', background: 'rgba(231,197,107,0.10)', color: '#E7C56B', borderRadius: 999, padding: '9px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>🎯 Modo foco</button>
           {!V.sessionOpen && (
             <div style={{ height: 5, background: '#35302a', borderRadius: 999, overflow: 'hidden' }}>
               <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999, transition: 'width .3s' }} />
@@ -1698,6 +1843,46 @@ export default function TiempoClient() {
           </div>
         </div>
       )}
+
+      {/* Modo foco: overlay a pantalla completa con temporizador grande y Pomodoro opcional */}
+      {focusOpen && V.hasSession && (() => {
+        const s = data.session!
+        const el = sessionElapsed(s, now)
+        const cycle = Math.floor(el / 30) + 1
+        const pos = el % 30
+        const inBreak = pos >= 25
+        const phaseRemain = Math.max(0, inBreak ? 30 - pos : 25 - pos)
+        const phasePct = inBreak ? ((pos - 25) / 5) * 100 : (pos / 25) * 100
+        return (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'radial-gradient(120% 120% at 50% 0%, #26221d 0%, #17140f 60%, #0f0d0a 100%)', color: '#faf7f1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 22 }}>
+            <button onClick={() => setFocusOpen(false)} title="Salir del modo foco (Esc)" style={{ position: 'absolute', top: 20, right: 22, border: '1px solid #3a352e', background: 'transparent', color: '#a49b90', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, cursor: 'pointer' }}>✕ Salir</button>
+            <span style={{ fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: pomoOn ? (inBreak ? '#8fae74' : '#E7C56B') : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : pomoOn ? (inBreak ? '🌿 descanso' : '🎯 foco') : 'en curso'}</span>
+            <span style={{ fontSize: 'clamp(18px,3vw,26px)', fontWeight: 500, textAlign: 'center', maxWidth: 700, lineHeight: 1.2 }}>{V.sessionName}</span>
+            <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: V.sessionPaused ? 0.5 : 1 }}>{V.sessionElapsedLabel || '0m'}</span>
+            {pomoOn && !V.sessionPaused && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, width: 'min(460px,90vw)' }}>
+                <span style={{ fontSize: 15, color: inBreak ? '#8fae74' : '#E7C56B' }}>{inBreak ? `Descanso · quedan ${hm(phaseRemain)}` : `Bloque ${cycle} · quedan ${hm(phaseRemain)} de foco`}</span>
+                <div style={{ width: '100%', height: 8, background: '#2a251f', borderRadius: 999, overflow: 'hidden' }}>
+                  <div style={{ width: `${phasePct}%`, height: '100%', background: inBreak ? 'linear-gradient(90deg,#6f8256,#8fae74)' : 'linear-gradient(90deg,#C2933A,#E7C56B)', borderRadius: 999, transition: 'width .5s' }} />
+                </div>
+                <span style={{ fontSize: 12.5, color: '#8b8379' }}>Ciclos de 25 min de foco · 5 de descanso · te aviso en cada cambio</span>
+              </div>
+            )}
+            {!pomoOn && !V.sessionOpen && (
+              <div style={{ width: 'min(460px,90vw)', height: 6, background: '#2a251f', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ width: `${V.sessionPct}%`, height: '100%', background: '#d98a55', borderRadius: 999, transition: 'width .3s' }} />
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center', marginTop: 8 }}>
+              <button onClick={() => setPomoOn(v => !v)} style={{ border: `1px solid ${pomoOn ? '#C2933A' : '#3a352e'}`, background: pomoOn ? 'rgba(231,197,107,0.12)' : 'transparent', color: pomoOn ? '#E7C56B' : '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>🍅 Pomodoro {pomoOn ? 'activado' : 'apagado'}</button>
+              <button onClick={V.sessionPaused ? resumeSession : pauseSession} style={{ border: 'none', background: V.sessionPaused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: V.sessionPaused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>{V.sessionPaused ? '▶ Reanudar' : '⏸ Pausar'}</button>
+              {!V.sessionOpen && <button onClick={extend} style={{ border: '1px solid #3a352e', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>+15m</button>}
+              <button onClick={() => finish(false)} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Terminar</button>
+              {data.session?.taskId && <button onClick={() => finish(true)} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Selector para agendar una tarea (de Épicas) o actividad libre a una hora del día */}
       {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null) }} />}
