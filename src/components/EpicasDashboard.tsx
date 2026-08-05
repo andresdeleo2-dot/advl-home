@@ -3824,12 +3824,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ fontSize: 13, color: '#2E6E6E', fontWeight: 600, padding: '10px 6px' }}>{isToday ? 'Todo hecho por hoy ✦' : 'Todo hecho este día ✦'}</div>
               )}
 
-              {/* TRABAJADAS — tareas con avance registrado este día que NO están en el plan del día */}
+              {/* TRABAJADAS — TODAS las tareas con avance/tiempo registrado este día (incl. las del plan) */}
               {(() => {
-                const inPlanKeys = new Set(planItems.map(x => planKey(x.e.id, x.t)))
                 const worked: { e: Epica; t: EpicaTask; i: number }[] = []
                 activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
-                  if ((t.progressLog || []).some(x => x.d === viewDate) && !inPlanKeys.has(planKey(e.id, t))) worked.push({ e, t, i })
+                  if ((t.progressLog || []).some(x => x.d === viewDate)) worked.push({ e, t, i })
                 }))
                 if (worked.length === 0) return null
                 return (
@@ -3839,7 +3838,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#A87A2C' }}>{isToday ? 'Trabajadas hoy' : 'Trabajadas ese día'}</span>
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{worked.length}</span>
                       <span style={{ flex: 1 }} />
-                      <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}>avanzaste, aunque estén en otro día</span>
+                      <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}>a lo que le pusiste avance o tiempo</span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                       {worked.map(({ e, t, i }) => {
@@ -3861,6 +3860,40 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           </div>
                         )
                       })}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* SUBTAREAS COMPLETADAS este día (con su hora) — de cualquier tarea/épica */}
+              {(() => {
+                const rows: { e: Epica; t: EpicaTask; sub: string; at: number }[] = []
+                activeEpics.forEach(e => (e.tasks || []).forEach(t => (t.subtasks || []).forEach(s => {
+                  if (!s.done || !s.doneAt) return
+                  const d = new Date(s.doneAt); const ld = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                  if (ld === viewDate) rows.push({ e, t, sub: s.t, at: d.getHours() * 60 + d.getMinutes() })
+                })))
+                if (!rows.length) return null
+                rows.sort((a, b) => a.at - b.at)
+                const clk = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+                return (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
+                      <span style={{ height: 7, width: 7, borderRadius: 99, background: '#2E6E6E' }} />
+                      <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#2E6E6E' }}>{isToday ? 'Subtareas completadas hoy' : 'Subtareas completadas ese día'}</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{rows.length}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      {rows.map(({ e, t, sub, at }, ri) => (
+                        <div key={ri} onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 6px', borderBottom: '1px solid rgba(15,35,64,0.05)', cursor: 'pointer' }}>
+                          <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(62,142,142,0.14)', color: '#2E6E6E', fontSize: 11 }}>✓</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub || 'subtarea'}</div>
+                            <div style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 99, background: e.color, marginRight: 5 }} />subtarea de {t.t} · {e.name}</div>
+                          </div>
+                          <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)', fontVariantNumeric: 'tabular-nums' }}>{clk(at)}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )
