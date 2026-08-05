@@ -281,10 +281,15 @@ export default function TiempoClient() {
     // quitan de la lista de tareas del día (sólo en la vista de hoy) para no duplicar.
     const worked = new Set(data.history.filter(h => h.date === t0 && h.taskId).map(h => h.taskId))
     const back = new Set(data.backToTasks || [])   // devueltas a la lista pese a tener tiempo
-    return allTasks.filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada'
-      && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay))
-      && !(taskDay === t0 && worked.has(t.task.id) && !back.has(`${t0}·${t.task.id}`)))
-      .map(t => ({ ...t, recurring: recurringDueToday(t.task, taskDay) }))
+    return allTasks.filter(t => {
+      if (t.task.status === 'Terminada' || t.task.status === 'Archivada') return false
+      const backed = taskDay === t0 && back.has(`${t0}·${t.task.id}`)
+      // Aparece si está planeada ese día, o es recurrente hoy, O la devolviste con "↩ A tareas".
+      if (!(t.task.plan === taskDay || recurringDueToday(t.task, taskDay) || backed)) return false
+      // Se oculta si ya tiene tiempo hoy y NO la devolviste.
+      if (taskDay === t0 && worked.has(t.task.id) && !backed) return false
+      return true
+    }).map(t => ({ ...t, recurring: recurringDueToday(t.task, taskDay) }))
   }, [allTasks, taskDay, data.history, data.backToTasks])
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
@@ -333,6 +338,12 @@ export default function TiempoClient() {
       const cutoff = addDaysISO(iso(new Date()), -84)
       nd.history = nd.history.filter(h => h.date >= cutoff)
     }
+    // Los agendados son de un día concreto: descarta los de días pasados para que no se
+    // acumulen (ni reaparezcan en la cinta). Los sin fecha (legado) se tratan como de hoy.
+    const t0 = iso(new Date())
+    if (nd.scheduled && nd.scheduled.length) nd.scheduled = nd.scheduled.filter(s => (s.date || t0) >= t0)
+    // backToTasks son claves `fecha·id`: conserva sólo las de hoy (la lista de tareas es del día).
+    if (nd.backToTasks && nd.backToTasks.length) nd.backToTasks = nd.backToTasks.filter(k => k.split('·')[0] === t0)
     setData(nd)
     try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(Date.now())) } catch {}
     // Push durable a Supabase (debounce): localStorage es el instantáneo/offline. El ts lo
@@ -450,7 +461,7 @@ export default function TiempoClient() {
 
     // barra del día: lo YA HECHO (pasado, por su hora) + protegido/agendado/libre (futuro)
     const dayISO = iso(new Date())
-    const scheduled = (data.scheduled || []).slice().sort((a, b) => a.start - b.start)
+    const scheduled = (data.scheduled || []).filter(s => (s.date || dayISO) === dayISO).slice().sort((a, b) => a.start - b.start)
     const maxSchedEnd = scheduled.reduce((m, s) => Math.max(m, s.start + s.dur), 0)
     // Minutos ya COMPROMETIDOS por lo agendado que caen en tiempo libre (no en rutina protegida):
     // el tiempo útil "de verdad" descuenta esto, para que el número no mienta.
@@ -700,11 +711,9 @@ export default function TiempoClient() {
       const ev: Ev[] = []
       // 1 · rutina protegida planeada (tenue)
       for (const b of data.blocks.filter(b => blockActiveOn(b, dow))) ev.push({ start: b.start, end: b.start + b.dur, color: AREAS[b.area]?.color || '#8b8379', name: b.name, prio: 1, faded: true })
-      // 2 · reuniones del calendario de ESE día (cualquier día); agendado sólo hoy (es del día en curso)
+      // 2 · reuniones del calendario de ESE día (cualquier día); agendado del día correspondiente
       for (const m of meetings.filter(x => x.date === date)) ev.push({ start: m.start, end: m.start + m.dur, color: AREAS.personas.color, name: m.name, prio: 2, faded: false })
-      if (date === todayISO) {
-        for (const s of (data.scheduled || [])) ev.push({ start: s.start, end: s.start + s.dur, color: '#c2933a', name: s.name, prio: 2, faded: false })
-      }
+      for (const s of (data.scheduled || []).filter(s => (s.date || todayISO) === date)) ev.push({ start: s.start, end: s.start + s.dur, color: '#c2933a', name: s.name, prio: 2, faded: false })
       // 3 · lo que hiciste ese día (historial real, sólido) — lo que pidió Andrés que se viera
       for (const h of data.history.filter(h => h.date === date && h.area !== 'sueno')) ev.push({ start: h.start, end: h.start + h.dur, color: AREAS[h.area]?.color || '#8b8379', name: h.name, prio: 3, faded: false })
 
@@ -842,8 +851,10 @@ export default function TiempoClient() {
     setUndo({ msg, fn })
     undoTimer.current = setTimeout(() => setUndo(null), 6000)
   }
-  const delHist = (idx: number) => { const before = data.history; save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null); showUndo('Registro borrado', () => save({ history: before })) }
-  const deleteBlock = (id: string) => { const before = data.blocks; save({ blocks: before.filter(x => x.id !== id) }); showUndo('Bloque borrado', () => save({ blocks: before })) }
+  // Deshacer re-agrega el ELEMENTO borrado sobre el estado actual (dataRef), no restaura un
+  // snapshot completo del arreglo (que pisaría cualquier cambio hecho mientras el toast estaba visible).
+  const delHist = (idx: number) => { const row = data.history[idx]; if (!row) return; save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null); showUndo('Registro borrado', () => save({ history: [...dataRef.current.history, row] })) }
+  const deleteBlock = (id: string) => { const blk = data.blocks.find(x => x.id === id); if (!blk) return; save({ blocks: data.blocks.filter(x => x.id !== id) }); showUndo('Bloque borrado', () => save({ blocks: [...dataRef.current.blocks, blk] })) }
   // Reabre una tarea en Épicas (En curso, sin doneAt) SIN clobber: usa el objeto completo.
   const reopenByTask = (epicaId: string, taskId: string) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
@@ -1033,7 +1044,7 @@ export default function TiempoClient() {
     save({ mit: { date: todayISO, ids } })
   }
   const scheduleActivity = (b: ScheduledBlock, createInCal = false) => {
-    save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null); setSchedulePreset(null)
+    save({ scheduled: [...(data.scheduled || []), { ...b, date: iso(new Date()) }] }); setScheduleAt(null); setSchedulePreset(null)
     if (createInCal) {
       const [y, mo, d] = taskDay.split('-').map(Number)
       const startISO = new Date(y, mo - 1, d, Math.floor(b.start / 60), b.start % 60).toISOString()
@@ -1043,7 +1054,7 @@ export default function TiempoClient() {
         .catch(() => window.alert('No se pudo crear el evento en Google Calendar (revisa tu conexión).'))
     }
   }
-  const removeScheduled = (id: string) => { const before = data.scheduled || []; save({ scheduled: before.filter(s => s.id !== id) }); showUndo('Agendado quitado', () => save({ scheduled: before })) }
+  const removeScheduled = (id: string) => { const blk = (data.scheduled || []).find(s => s.id === id); if (!blk) return; save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) }); showUndo('Agendado quitado', () => save({ scheduled: [...(dataRef.current.scheduled || []), blk] })) }
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
   const startScheduled = (s: ScheduledBlock) => {
     if (beginSession({ name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, { scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })) {
@@ -1066,7 +1077,7 @@ export default function TiempoClient() {
   // Agendado cuya hora ya llegó y aún no preguntamos (y no hay sesión corriendo): dispara
   // el aviso "¿iniciar ahora?". La ventana termina en start+dur para no avisar de algo ya vencido.
   const dueSched = !data.session
-    ? (data.scheduled || []).find(s => !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
+    ? (data.scheduled || []).find(s => (s.date || iso(new Date())) === iso(new Date()) && !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
     : undefined
 
   // Aviso de juntas del calendario: ~10 min antes y al empezar (una vez cada uno, con la pestaña abierta).
@@ -1764,29 +1775,24 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
 
 /** Descripción de una junta con sus LINKS clicables (soporta <a href> y URLs sueltas). */
 function MeetingDescription({ raw }: { raw: string }) {
-  const links: { url: string; label: string }[] = []
+  // Normaliza saltos y quita etiquetas EXCEPTO <a>…</a>; luego tokeniza links (anchors o URLs sueltas).
   const s = raw
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|li)>/gi, '\n')
-    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, url, label) => { const i = links.length; links.push({ url, label: String(label).replace(/<[^>]*>/g, '').trim() || url }); return `${i}` })
-    .replace(/<[^>]+>/g, '')
+    .replace(/<(?!\/?a\b)[^>]+>/gi, '')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
   const linkStyle: CSSProperties = { color: '#2E5A9E', fontWeight: 600, textDecoration: 'underline', wordBreak: 'break-all' }
-  const urlRe = /(https?:\/\/[^\s<]+)/g
+  const tokenRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>|(https?:\/\/[^\s<]+)/gi
   const parts: React.ReactNode[] = []
-  let key = 0
-  s.split(/(\d+)/).forEach(chunk => {
-    const mm = chunk.match(/^(\d+)$/)
-    if (mm) { const l = links[Number(mm[1])]; parts.push(<a key={key++} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={linkStyle}>{l.label}</a>); return }
-    let last = 0, m2: RegExpExecArray | null
-    urlRe.lastIndex = 0
-    while ((m2 = urlRe.exec(chunk))) {
-      if (m2.index > last) parts.push(<span key={key++}>{chunk.slice(last, m2.index)}</span>)
-      parts.push(<a key={key++} href={safeUrl(m2[1])} target="_blank" rel="noopener noreferrer" style={linkStyle}>{m2[1]}</a>)
-      last = m2.index + m2[1].length
-    }
-    if (last < chunk.length) parts.push(<span key={key++}>{chunk.slice(last)}</span>)
-  })
+  let last = 0, m: RegExpExecArray | null, key = 0
+  while ((m = tokenRe.exec(s))) {
+    if (m.index > last) parts.push(<span key={key++}>{s.slice(last, m.index)}</span>)
+    const url = m[1] || m[3]
+    const label = m[1] ? (m[2].replace(/<[^>]*>/g, '').trim() || m[1]) : m[3]
+    parts.push(<a key={key++} href={safeUrl(url)} target="_blank" rel="noopener noreferrer" style={linkStyle}>{label}</a>)
+    last = m.index + m[0].length
+  }
+  if (last < s.length) parts.push(<span key={key++}>{s.slice(last)}</span>)
   return <div style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', borderTop: '1px solid #eee6da', paddingTop: 10, maxHeight: 220, overflowY: 'auto' }}>{parts}</div>
 }
 

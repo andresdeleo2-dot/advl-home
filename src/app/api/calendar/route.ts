@@ -32,6 +32,10 @@ export async function GET() {
     )
   )
 
+  // Registra fallas de Google (llave inválida, cuota, calendario dejó de compartirse): antes
+  // se tragaban y el endpoint devolvía [] indistinguible de "sin eventos".
+  results.forEach((r, i) => { const err = (r as { error?: { message?: string } })?.error; if (err) console.error('[calendar] error en', CALENDAR_IDS[i], '·', err.message || JSON.stringify(err)) })
+
   const events = results
     .flatMap(r => (r.items ?? []).map((e: Record<string, unknown>) => ({
       id: e.id,

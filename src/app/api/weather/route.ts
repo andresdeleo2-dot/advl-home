@@ -40,7 +40,7 @@ export async function GET() {
     fetchCity(37.7749, -122.4194), // San Francisco
   ])
 
-  if (!nau?.current) return NextResponse.json({ error: 'weather fetch failed' }, { status: 500 })
+  if (!nau?.current || !nau?.daily) return NextResponse.json({ error: 'weather fetch failed' }, { status: 500 })
 
   const code = nau.current.weathercode
   const meta = wmoMeta(code)

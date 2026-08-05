@@ -3828,7 +3828,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {(() => {
                 const worked: { e: Epica; t: EpicaTask; i: number }[] = []
                 activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
-                  if ((t.progressLog || []).some(x => x.d === viewDate)) worked.push({ e, t, i })
+                  if (t.status !== ARCHIVED && (t.progressLog || []).some(x => x.d === viewDate)) worked.push({ e, t, i })
                 }))
                 if (worked.length === 0) return null
                 return (
@@ -3868,11 +3868,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {/* SUBTAREAS COMPLETADAS este día (con su hora) — de cualquier tarea/épica */}
               {(() => {
                 const rows: { e: Epica; t: EpicaTask; sub: string; at: number }[] = []
-                activeEpics.forEach(e => (e.tasks || []).forEach(t => (t.subtasks || []).forEach(s => {
+                activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.status === ARCHIVED) return; (t.subtasks || []).forEach(s => {
                   if (!s.done || !s.doneAt) return
                   const d = new Date(s.doneAt); const ld = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
                   if (ld === viewDate) rows.push({ e, t, sub: s.t, at: d.getHours() * 60 + d.getMinutes() })
-                })))
+                }) }))
                 if (!rows.length) return null
                 rows.sort((a, b) => a.at - b.at)
                 const clk = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
