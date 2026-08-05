@@ -14,11 +14,18 @@ export async function GET() {
 export async function PUT(req: Request) {
   try {
     const body = await req.json()
-    // El ts lo asigna el SERVIDOR de forma atómica y monótona (ver función SQL). Así no hay
-    // carrera TOCTOU ni pérdida por reloj de cliente desfasado. Devuelve el ts asignado.
-    const { data: ts, error } = await supabase.rpc('tiempo_estado_put', { p_data: body.data ?? {} })
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-    return NextResponse.json({ ok: true, ts: Number(ts) || 0 })
+    const p = body.data ?? {}
+    // 1) Preferir la función RPC: el ts lo asigna el SERVIDOR de forma atómica y monótona
+    //    (evita carrera TOCTOU y reloj de cliente desfasado). Devuelve el ts asignado.
+    const rpc = await supabase.rpc('tiempo_estado_put', { p_data: p })
+    if (!rpc.error) return NextResponse.json({ ok: true, ts: Number(rpc.data) || 0 })
+    // 2) Fallback si la función no existe (falta correr sql/tiempo-02-estado.sql): upsert directo.
+    //    App de un usuario → la carrera read-then-write es despreciable.
+    const { data: cur } = await supabase.from('tiempo_estado').select('ts').eq('id', 'main').maybeSingle()
+    const ts = Math.max((Number(cur?.ts) || 0) + 1, Date.now())
+    const up = await supabase.from('tiempo_estado').upsert({ id: 'main', data: p, ts, updated_at: new Date().toISOString() })
+    if (up.error) return NextResponse.json({ ok: false, error: `${up.error.message} · corre sql/tiempo-02-estado.sql en Supabase` }, { status: 500 })
+    return NextResponse.json({ ok: true, ts })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e) }, { status: 400 })
   }
