@@ -60,8 +60,8 @@ function recurringDueToday(t: EpicaTask, today: string): boolean {
   if (t.repeatUntil && today > t.repeatUntil) return false
   return t.repeat.unit === 'dia'
 }
-/** Reunión del calendario de hoy, ya en minutos desde medianoche. */
-type Meeting = { id: string; name: string; start: number; dur: number }
+/** Reunión del calendario, en minutos desde medianoche + fecha local 'YYYY-MM-DD'. */
+type Meeting = { id: string; name: string; start: number; dur: number; date: string }
 
 const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
 const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
@@ -252,20 +252,19 @@ export default function TiempoClient() {
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus) }
   }, [refreshTasks])
 
-  // Reuniones de HOY desde el calendario de Google (eventos con hora).
+  // Reuniones del calendario de Google (eventos con hora), de TODOS los días de la ventana,
+  // con su fecha local — así el selector de día muestra las juntas del día que ves, no sólo hoy.
   useEffect(() => {
-    const today = iso(new Date())
     fetch('/api/calendar').then(r => r.json()).then((evs: { id: string; title: string; start: string; end: string; allDay: boolean }[]) => {
       if (!Array.isArray(evs)) return
       const mins = (s: string) => { const d = new Date(s); return d.getHours() * 60 + d.getMinutes() }
       const out: Meeting[] = []
       for (const e of evs) {
-        // Fecha LOCAL del evento (robusto a que Google lo devuelva en UTC o con offset).
-        if (e.allDay || !e.start || iso(new Date(e.start)) !== today) continue
+        if (e.allDay || !e.start) continue
         const start = mins(e.start)
         // Duración desde los timestamps completos (no minutos-del-día): soporta cruce de medianoche.
         const dur = e.end ? Math.max(15, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60000)) : 30
-        out.push({ id: e.id, name: e.title || 'Reunión', start, dur })
+        out.push({ id: e.id, name: e.title || 'Reunión', start, dur, date: iso(new Date(e.start)) })
       }
       setMeetings(out)
     }).catch(() => {})
@@ -361,7 +360,8 @@ export default function TiempoClient() {
     // Sólo los bloques protegidos que aplican HOY (según sus días) + reuniones del calendario.
     const dow = new Date().getDay()
     const todayBlocks = data.blocks.filter(b => blockActiveOn(b, dow))
-    const meetingBlocks = meetings.map(m => ({ id: 'cal:' + m.id, name: m.name, area: 'personas' as Area, start: m.start, dur: m.dur, cal: true }))
+    const todayStr = iso(new Date())
+    const meetingBlocks = meetings.filter(m => m.date === todayStr).map(m => ({ id: 'cal:' + m.id, name: m.name, area: 'personas' as Area, start: m.start, dur: m.dur, cal: true }))
     const blocks = todayBlocks.concat(meetingBlocks).sort((a, b) => a.start - b.start)
     const sleepBlock = { id: '__sleep', name: 'Dormir', area: 'sueno' as Area, start: bed, dur: sleepGoal }
     const timeline = blocks.concat([sleepBlock])
@@ -696,9 +696,9 @@ export default function TiempoClient() {
       const ev: Ev[] = []
       // 1 · rutina protegida planeada (tenue)
       for (const b of data.blocks.filter(b => blockActiveOn(b, dow))) ev.push({ start: b.start, end: b.start + b.dur, color: AREAS[b.area]?.color || '#8b8379', name: b.name, prio: 1, faded: true })
-      // 2 · reuniones + agendado (sólo hoy: son datos del día en curso)
+      // 2 · reuniones del calendario de ESE día (cualquier día); agendado sólo hoy (es del día en curso)
+      for (const m of meetings.filter(x => x.date === date)) ev.push({ start: m.start, end: m.start + m.dur, color: AREAS.personas.color, name: m.name, prio: 2, faded: false })
       if (date === todayISO) {
-        for (const m of meetings) ev.push({ start: m.start, end: m.start + m.dur, color: AREAS.personas.color, name: m.name, prio: 2, faded: false })
         for (const s of (data.scheduled || [])) ev.push({ start: s.start, end: s.start + s.dur, color: '#c2933a', name: s.name, prio: 2, faded: false })
       }
       // 3 · lo que hiciste ese día (historial real, sólido) — lo que pidió Andrés que se viera
@@ -1174,26 +1174,30 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    {isTodayView && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid #eee6da', paddingTop: 10 }}>
-                        <span style={{ ...LBL, letterSpacing: '.1em' }}>reuniones de hoy · de tu calendario 🗓</span>
-                        {meetings.length === 0 && <span style={{ fontSize: 13, color: '#a49b90', padding: '2px 0' }}>No hay juntas en tu calendario para hoy.</span>}
-                        {meetings.slice().sort((a, b) => a.start - b.start).map(m => (
-                          <div key={m.id} onClick={() => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} title="Ver costo y empezar la reunión" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.18)' }}>
-                            <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#2E5A9E', fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>🗓 junta</span>
-                            <span style={{ fontSize: 13, color: '#6b6f7a', width: 96, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
-                            <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
-                            <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{hm(m.dur)}</span>
-                            <button onClick={e => { e.stopPropagation(); if (beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur })) setView('hoy') }} title="Empezar ahora con su duración" style={{ border: '1px solid rgba(46,90,158,0.3)', background: '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#2E5A9E', cursor: 'pointer', flexShrink: 0 }}>▶</button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {(() => {
+                      const dayMeetings = meetings.filter(m => m.date === taskDay).sort((a, b) => a.start - b.start)
+                      if (!isTodayView && dayMeetings.length === 0) return null
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid #eee6da', paddingTop: 10 }}>
+                          <span style={{ ...LBL, letterSpacing: '.1em' }}>reuniones {isTodayView ? 'de hoy' : `· ${longDayOf(taskDay)}`} · de tu calendario 🗓</span>
+                          {dayMeetings.length === 0 && <span style={{ fontSize: 13, color: '#a49b90', padding: '2px 0' }}>No hay juntas en tu calendario para {dayLabel}.</span>}
+                          {dayMeetings.map(m => (
+                            <div key={m.id} onClick={isTodayView ? () => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) } : undefined} title={isTodayView ? 'Ver costo y empezar la reunión' : 'Reunión de tu calendario'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: isTodayView ? 'pointer' : 'default', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.18)' }}>
+                              <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#2E5A9E', fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>🗓 junta</span>
+                              <span style={{ fontSize: 13, color: '#6b6f7a', width: 96, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
+                              <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                              <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{hm(m.dur)}</span>
+                              {isTodayView && <button onClick={e => { e.stopPropagation(); if (beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur })) setView('hoy') }} title="Empezar ahora con su duración" style={{ border: '1px solid rgba(46,90,158,0.3)', background: '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#2E5A9E', cursor: 'pointer', flexShrink: 0 }}>▶</button>}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })()}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
                     <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
-                  {act === 'Reuniones' && <MeetingsList meetings={meetings} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
+                  {act === 'Reuniones' && <MeetingsList meetings={meetings.filter(m => m.date === taskDay)} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {(act === 'Trámites' || act === 'Aprendizaje') && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 18px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>Ver costo y empezar {act} →</div>}
                   {act === 'Trabajo profundo' && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#8a4b28', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>o empezar un bloque de foco sin tarea →</div>}
               </div>

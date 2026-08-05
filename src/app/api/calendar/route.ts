@@ -18,13 +18,15 @@ export async function GET() {
   const startOfWeek = new Date(now)
   startOfWeek.setDate(now.getDate() - daysFromMonday)
   startOfWeek.setHours(0, 0, 0, 0)
-  const timeMin = startOfWeek.toISOString()
-  const timeMax = new Date(startOfWeek.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString()
+  // Ventana amplia: 3 semanas atrás y 3 adelante, para que el selector de día/semana
+  // muestre juntas de días pasados y futuros (no sólo hoy).
+  const timeMin = new Date(startOfWeek.getTime() - 21 * 24 * 60 * 60 * 1000).toISOString()
+  const timeMax = new Date(startOfWeek.getTime() + 21 * 24 * 60 * 60 * 1000).toISOString()
 
   const results = await Promise.all(
     CALENDAR_IDS.map(id =>
       fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events?singleEvents=true&orderBy=startTime&timeMin=${timeMin}&timeMax=${timeMax}&maxResults=50&key=${key}`,
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events?singleEvents=true&orderBy=startTime&timeMin=${timeMin}&timeMax=${timeMax}&maxResults=250&key=${key}`,
         { next: { revalidate: 900 } }
       ).then(r => r.json())
     )
