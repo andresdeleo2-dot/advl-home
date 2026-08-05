@@ -724,17 +724,26 @@ export default function TiempoClient() {
     return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
   }, [data.blocks, data.bed, data.sleep, data.scheduled, data.history, allTasks, meetings, taskDay])
 
-  // Tareas TERMINADAS hoy en Épicas (doneAt hoy, o recurrente con repeatDone hoy) que NO tienen
-  // un registro con tiempo en el día: se muestran igual como "hecho" en el día, aunque no las
-  // hayas cronometrado desde Tiempo (Andrés: "marco terminada en Épicas → verse terminada en el día").
+  // Tareas TERMINADAS en Épicas el DÍA VISTO (doneAt, o recurrente con repeatDone) que NO tienen
+  // un registro con tiempo ese día: se muestran igual como "hecho" en el día.
   const epicDoneToday = useMemo(() => {
-    const t0 = iso(new Date())
-    const histIds = new Set((data.history || []).filter(h => h.date === t0 && h.taskId).map(h => h.taskId))
+    const histIds = new Set((data.history || []).filter(h => h.date === taskDay && h.taskId).map(h => h.taskId))
     return (allTasks || []).filter(x => {
-      const done = x.task.doneAt === t0 || (x.task.repeatDone || []).includes(t0)
+      const done = x.task.doneAt === taskDay || (x.task.repeatDone || []).includes(taskDay)
       return done && !histIds.has(x.task.id)
     })
-  }, [allTasks, data.history])
+  }, [allTasks, data.history, taskDay])
+
+  // Registro del DÍA QUE SE ESTÁ VIENDO (taskDay): "lo que hiciste ese día" + trabajo del día.
+  // Cuando taskDay === hoy es idéntico a lo de siempre; en otro día muestra lo de ESE día.
+  const isTodayView = taskDay === iso(new Date())
+  const dayLog = useMemo(() =>
+    data.history.map((h, idx) => ({ h, idx })).filter(x => x.h.date === taskDay).sort((a, b) => a.h.start - b.h.start).map(x => ({
+      idx: x.idx, range: clock(x.h.start) + '–' + clock(x.h.start + x.h.dur), name: x.h.name, dur: hm(x.h.dur),
+      dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false, taskId: x.h.taskId,
+    })), [data.history, taskDay])
+  const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
+  const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
 
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
@@ -1077,7 +1086,7 @@ export default function TiempoClient() {
                 <div style={{ borderTop: '1px solid #eee6da', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
                   <Row label="Hora de dormir" value={V.bedLabel} />
-                  <Row label="Trabajo registrado hoy" value={V.workedTodayLabel} />
+                  <Row label={`Trabajo registrado ${dayLabel}`} value={dayWorkedMin ? hm(dayWorkedMin) : '—'} />
                 </div>
                 {V.routineNext.length > 0 && (
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1093,10 +1102,10 @@ export default function TiempoClient() {
                     ))}
                   </div>
                 )}
-                {(V.todayLog.length > 0 || epicDoneToday.length > 0) && (
+                {(dayLog.length > 0 || epicDoneToday.length > 0) && (
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <span style={LBL}>lo que hiciste hoy</span>
-                    {[...V.todayLog].reverse().map(l => (
+                    <span style={LBL}>lo que hiciste {dayLabel}</span>
+                    {[...dayLog].reverse().map(l => (
                       <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block', flexShrink: 0 }} />
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
@@ -1178,33 +1187,41 @@ export default function TiempoClient() {
             {/* Tarjeta C — el resto del día */}
             <div className="t-card" style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
-                <span style={LBL}>el día</span>
+                <span style={LBL}>el día{!isTodayView ? ` · ${longDayOf(taskDay)}` : ''}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 13, color: '#a49b90' }}>de {V.barStartLabel} a {V.scaleEndLabel}</span>
-                  <button onClick={() => addActivityAt(Math.round(now / 15) * 15)} title="Agregar una actividad al día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>
+                  {!isTodayView && <button onClick={() => setTaskDay(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>Hoy</button>}
+                  <span style={{ fontSize: 13, color: '#a49b90' }}>de {isTodayView ? V.barStartLabel : WEEK.winStartLabel} a {isTodayView ? V.scaleEndLabel : WEEK.winEndLabel}</span>
+                  {isTodayView && <button onClick={() => addActivityAt(Math.round(now / 15) * 15)} title="Agregar una actividad al día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>}
                 </div>
               </div>
-              <div style={{ position: 'relative', paddingTop: 20 }}>
-                <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }} onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData('text/taskid'); if (!id) return; const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); setSchedulePreset(id); setScheduleAt(Math.min(1425, Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15)) }} title="Doble clic para agendar aquí · o arrastra una tarea a este punto" style={{ display: 'flex', height: 56, gap: 2, alignItems: 'stretch' }}>
-                  {V.segs.map((s, i) => {
-                    const past = s.e <= now && s.kind !== 'done' && s.kind !== 'sim'
-                    const showLabel = s.w > 6.5 && s.kind !== 'free'
-                    return (
-                      <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 6, minWidth: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', overflow: 'hidden', opacity: past ? 0.55 : 1, outline: s.kind === 'sched' ? '1.5px dashed rgba(255,255,255,.55)' : 'none', outlineOffset: -3 }}>
-                        {showLabel && <span style={{ fontSize: 11, fontWeight: 600, color: textOn(s.bg), padding: '0 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{s.name}{s.w > 13 ? ` · ${hm(s.e - s.s)}` : ''}</span>}
-                      </div>
-                    )
-                  })}
+              {isTodayView ? (<>
+                <div style={{ position: 'relative', paddingTop: 20 }}>
+                  <div onDoubleClick={e => { const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); addActivityAt(Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15) }} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }} onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData('text/taskid'); if (!id) return; const r = e.currentTarget.getBoundingClientRect(); const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); setSchedulePreset(id); setScheduleAt(Math.min(1425, Math.round((V.barStart + frac * (V.scaleEnd - V.barStart)) / 15) * 15)) }} title="Doble clic para agendar aquí · o arrastra una tarea a este punto" style={{ display: 'flex', height: 56, gap: 2, alignItems: 'stretch' }}>
+                    {V.segs.map((s, i) => {
+                      const past = s.e <= now && s.kind !== 'done' && s.kind !== 'sim'
+                      const showLabel = s.w > 6.5 && s.kind !== 'free'
+                      return (
+                        <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, borderRadius: 6, minWidth: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', overflow: 'hidden', opacity: past ? 0.55 : 1, outline: s.kind === 'sched' ? '1.5px dashed rgba(255,255,255,.55)' : 'none', outlineOffset: -3 }}>
+                          {showLabel && <span style={{ fontSize: 11, fontWeight: 600, color: textOn(s.bg), padding: '0 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.15 }}>{s.name}{s.w > 13 ? ` · ${hm(s.e - s.s)}` : ''}</span>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {(() => { const nl = Math.max(0, Math.min(100, ((now - V.barStart) / Math.max(1, V.scaleEnd - V.barStart)) * 100)); return (<>
+                    <div style={{ position: 'absolute', top: 20, bottom: 0, left: `${nl}%`, width: 2, background: '#1c1a17', borderRadius: 2, pointerEvents: 'none', boxShadow: '0 0 0 1.5px rgba(242,236,226,.75)' }} />
+                    <div style={{ position: 'absolute', top: 0, left: `${nl}%`, transform: `translateX(${nl > 90 ? '-100%' : nl < 6 ? '0' : '-50%'})`, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', color: '#faf7f1', background: '#1c1a17', padding: '2px 8px', borderRadius: 999, pointerEvents: 'none', whiteSpace: 'nowrap' }}>ahora {V.nowLabel}</div>
+                  </>) })()}
                 </div>
-                {(() => { const nl = Math.max(0, Math.min(100, ((now - V.barStart) / Math.max(1, V.scaleEnd - V.barStart)) * 100)); return (<>
-                  <div style={{ position: 'absolute', top: 20, bottom: 0, left: `${nl}%`, width: 2, background: '#1c1a17', borderRadius: 2, pointerEvents: 'none', boxShadow: '0 0 0 1.5px rgba(242,236,226,.75)' }} />
-                  <div style={{ position: 'absolute', top: 0, left: `${nl}%`, transform: `translateX(${nl > 90 ? '-100%' : nl < 6 ? '0' : '-50%'})`, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', color: '#faf7f1', background: '#1c1a17', padding: '2px 8px', borderRadius: 999, pointerEvents: 'none', whiteSpace: 'nowrap' }}>ahora {V.nowLabel}</div>
-                </>) })()}
-              </div>
-              <div style={{ position: 'relative', height: 14, marginTop: 8 }}>
-                {V.barTicks.map((tk, i) => <span key={i} style={{ position: 'absolute', left: `${tk.left}%`, transform: 'translateX(-50%)', fontSize: 10.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{tk.label}</span>)}
-              </div>
-              <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'La línea marca “ahora”. Toca un bloque para ver el detalle · doble clic para agendar algo en ese punto.'}</div>
+                <div style={{ position: 'relative', height: 14, marginTop: 8 }}>
+                  {V.barTicks.map((tk, i) => <span key={i} style={{ position: 'absolute', left: `${tk.left}%`, transform: 'translateX(-50%)', fontSize: 10.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{tk.label}</span>)}
+                </div>
+                <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || 'La línea marca “ahora”. Toca un bloque para ver el detalle · doble clic para agendar algo en ese punto.'}</div>
+              </>) : (<>
+                <div style={{ display: 'flex', height: 56, gap: 2, borderRadius: 7, overflow: 'hidden', background: '#efe7d9' }}>
+                  {(WEEK.days.find(d => d.date === taskDay)?.segs || []).map((s, i) => <div key={i} onClick={() => setBarPick(s.label)} title={s.label} style={{ width: `${s.w}%`, background: s.bg, opacity: s.faded ? 0.4 : 1, cursor: 'pointer' }} />)}
+                </div>
+                <div style={{ fontSize: 13.5, color: barPick ? '#4c4741' : '#a49b90', minHeight: 20 }}>{barPick || `Lo que hiciste el ${longDayOf(taskDay)}: en sólido lo real, tenue tu rutina planeada.`}</div>
+              </>)}
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#6b645b' }}>
                 <Legend c="#8b8379">lo que ya hiciste</Legend>
                 <Legend c="#b4653a">el bloque que estás evaluando</Legend>
@@ -1214,7 +1231,7 @@ export default function TiempoClient() {
                 <Legend c="#eee6da">libre</Legend>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {V.scheduledUpcoming.map(s => (
+                {isTodayView && V.scheduledUpcoming.map(s => (
                   <div key={'sch' + s.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{s.range}</span>
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2933a', display: 'block' }} />
@@ -1227,7 +1244,7 @@ export default function TiempoClient() {
                     <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
                   </div>
                 ))}
-                {[...V.todayLog].reverse().map(l => (
+                {[...dayLog].reverse().map(l => (
                   <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
@@ -1251,7 +1268,7 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 90, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
                   </div>
                 ))}
-                {V.upcoming.map((b, i) => (
+                {isTodayView && V.upcoming.map((b, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: b.dot, display: 'block' }} />
