@@ -1173,6 +1173,20 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
+                    {isTodayView && meetings.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid #eee6da', paddingTop: 10 }}>
+                        <span style={{ ...LBL, letterSpacing: '.1em' }}>reuniones de hoy · de tu calendario</span>
+                        {meetings.slice().sort((a, b) => a.start - b.start).map(m => (
+                          <div key={m.id} onClick={() => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} title="Ver costo y empezar la reunión" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.18)' }}>
+                            <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#2E5A9E', fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>🗓 junta</span>
+                            <span style={{ fontSize: 13, color: '#6b6f7a', width: 96, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                            <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{hm(m.dur)}</span>
+                            <button onClick={e => { e.stopPropagation(); if (beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur })) setView('hoy') }} title="Empezar ahora con su duración" style={{ border: '1px solid rgba(46,90,158,0.3)', background: '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#2E5A9E', cursor: 'pointer', flexShrink: 0 }}>▶</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
                     <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
