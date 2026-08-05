@@ -999,7 +999,17 @@ export default function TiempoClient() {
     const ids = cur.includes(taskId) ? cur.filter(x => x !== taskId) : (cur.length >= 3 ? cur : [...cur, taskId])
     save({ mit: { date: todayISO, ids } })
   }
-  const scheduleActivity = (b: ScheduledBlock) => { save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null) }
+  const scheduleActivity = (b: ScheduledBlock, createInCal = false) => {
+    save({ scheduled: [...(data.scheduled || []), b] }); setScheduleAt(null); setSchedulePreset(null)
+    if (createInCal) {
+      const [y, mo, d] = taskDay.split('-').map(Number)
+      const startISO = new Date(y, mo - 1, d, Math.floor(b.start / 60), b.start % 60).toISOString()
+      const endISO = new Date(y, mo - 1, d, Math.floor((b.start + b.dur) / 60), (b.start + b.dur) % 60).toISOString()
+      fetch('/api/calendar/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: b.name, startISO, endISO }) })
+        .then(r => r.json()).then(j => { if (!j.ok) window.alert('No se creó el evento en Google Calendar:\n' + (j.hint || j.error || 'error')) })
+        .catch(() => window.alert('No se pudo crear el evento en Google Calendar (revisa tu conexión).'))
+    }
+  }
   const removeScheduled = (id: string) => { const before = data.scheduled || []; save({ scheduled: before.filter(s => s.id !== id) }); showUndo('Agendado quitado', () => save({ scheduled: before })) }
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
   const startScheduled = (s: ScheduledBlock) => {
@@ -1676,8 +1686,9 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
 function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose }: {
   tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null
-  onSchedule: (b: ScheduledBlock) => void; onClose: () => void
+  onSchedule: (b: ScheduledBlock, createInCal: boolean) => void; onClose: () => void
 }) {
+  const [inCal, setInCal] = useState(false)   // también crear el evento en Google Calendar
   const list = (tasks || [])
   const presetTask = presetTaskId ? list.find(t => t.task.id === presetTaskId) : undefined
   const [mode, setMode] = useState<'task' | 'free'>(presetTask || list.length ? 'task' : 'free')
@@ -1694,9 +1705,9 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
     if (!canSave) return
     if (mode === 'task') {
       const t = list.find(x => x.task.id === sel); if (!t) return
-      onSchedule({ id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start: startMin, dur, epicaId: t.epicaId, taskId: t.task.id })
+      onSchedule({ id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start: startMin, dur, epicaId: t.epicaId, taskId: t.task.id }, inCal)
     } else {
-      onSchedule({ id: uid(), name: name.trim() || 'Actividad', area, start: startMin, dur })
+      onSchedule({ id: uid(), name: name.trim() || 'Actividad', area, start: startMin, dur }, inCal)
     }
   }
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }
@@ -1754,6 +1765,11 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
           </div>
         </div>
         <input type="range" min={15} max={300} step={15} value={Math.min(300, dur)} onChange={e => setDur(Number(e.target.value))} aria-label="Duración" style={{ width: '100%', height: 24, accentColor: '#c2933a' }} />
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: '#2E5A9E', cursor: 'pointer' }}>
+          <input type="checkbox" checked={inCal} onChange={e => setInCal(e.target.checked)} />
+          🗓 Crear también el evento en Google Calendar
+        </label>
 
         <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
           <button disabled={!canSave} onClick={confirm} style={{ flex: 1, textAlign: 'center', background: canSave ? '#1c1a17' : '#c9c0b3', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: canSave ? 'pointer' : 'default' }}>Agendar a las {clock(startMin)}</button>
