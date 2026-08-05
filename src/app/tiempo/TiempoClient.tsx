@@ -61,7 +61,7 @@ function recurringDueToday(t: EpicaTask, today: string): boolean {
   return t.repeat.unit === 'dia'
 }
 /** Reunión del calendario, en minutos desde medianoche + fecha local 'YYYY-MM-DD'. */
-type Meeting = { id: string; name: string; start: number; dur: number; date: string }
+type Meeting = { id: string; name: string; start: number; dur: number; date: string; location?: string; description?: string; htmlLink?: string; hangoutLink?: string }
 
 const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
 const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
@@ -96,6 +96,7 @@ export default function TiempoClient() {
   const [barPick, setBarPick] = useState<string>('')
   const [energyLearned, setEnergyLearned] = useState(true)   // curva aprendida vs. típica
   const [costOpen, setCostOpen] = useState(false)            // popup "el costo de empezar ahora"
+  const [meetView, setMeetView] = useState<Meeting | null>(null)   // popup con el detalle de una junta
   const [scheduleAt, setScheduleAt] = useState<number | null>(null)   // hora (min) para agendar una tarea; abre el selector
   const [schedulePreset, setSchedulePreset] = useState<string | null>(null)  // tarea preseleccionada al agendar desde su fila
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
@@ -256,7 +257,7 @@ export default function TiempoClient() {
   // Reuniones del calendario de Google (eventos con hora), de TODOS los días de la ventana,
   // con su fecha local — así el selector de día muestra las juntas del día que ves, no sólo hoy.
   useEffect(() => {
-    fetch('/api/calendar').then(r => r.json()).then((evs: { id: string; title: string; start: string; end: string; allDay: boolean }[]) => {
+    fetch('/api/calendar').then(r => r.json()).then((evs: { id: string; title: string; start: string; end: string; allDay: boolean; location?: string; description?: string; htmlLink?: string; hangoutLink?: string }[]) => {
       if (!Array.isArray(evs)) return
       const mins = (s: string) => { const d = new Date(s); return d.getHours() * 60 + d.getMinutes() }
       const out: Meeting[] = []
@@ -265,7 +266,7 @@ export default function TiempoClient() {
         const start = mins(e.start)
         // Duración desde los timestamps completos (no minutos-del-día): soporta cruce de medianoche.
         const dur = e.end ? Math.max(15, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60000)) : 30
-        out.push({ id: e.id, name: e.title || 'Reunión', start, dur, date: iso(new Date(e.start)) })
+        out.push({ id: e.id, name: e.title || 'Reunión', start, dur, date: iso(new Date(e.start)), location: e.location, description: e.description, htmlLink: e.htmlLink, hangoutLink: e.hangoutLink })
       }
       setMeetings(out)
     }).catch(() => {})
@@ -1229,7 +1230,7 @@ export default function TiempoClient() {
                           <span style={{ ...LBL, letterSpacing: '.1em' }}>reuniones {isTodayView ? 'de hoy' : `· ${longDayOf(taskDay)}`} · de tu calendario 🗓</span>
                           {dayMeetings.length === 0 && <span style={{ fontSize: 13, color: '#a49b90', padding: '2px 0' }}>No hay juntas en tu calendario para {dayLabel}.</span>}
                           {dayMeetings.map(m => (
-                            <div key={m.id} onClick={isTodayView ? () => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) } : undefined} title={isTodayView ? 'Ver costo y empezar la reunión' : 'Reunión de tu calendario'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: isTodayView ? 'pointer' : 'default', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.18)' }}>
+                            <div key={m.id} onClick={() => setMeetView(m)} title="Ver detalle de la junta" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.18)' }}>
                               <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#2E5A9E', fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>🗓 junta</span>
                               <span style={{ fontSize: 13, color: '#6b6f7a', width: 96, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
                               <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
@@ -1634,6 +1635,30 @@ export default function TiempoClient() {
 
       {/* Selector para agendar una tarea (de Épicas) o actividad libre a una hora del día */}
       {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null) }} />}
+
+      {/* Detalle de una junta del calendario */}
+      {meetView && (
+        <div onClick={() => setMeetView(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 92 }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Detalle de la junta" style={{ width: 'min(460px,100%)', maxHeight: '90vh', overflowY: 'auto', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#2E5A9E', fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', borderRadius: 999, padding: '3px 9px' }}>🗓 junta · calendario</span>
+              <button onClick={() => setMeetView(null)} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1.15, color: '#1c1a17' }}>{meetView.name}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14, color: '#4c4741' }}>
+              <span style={{ textTransform: 'capitalize' }}>🗓 {longDayOf(meetView.date)}</span>
+              <span>🕐 {clock(meetView.start)}–{clock(meetView.start + meetView.dur)} · {hm(meetView.dur)}</span>
+              {meetView.location && <span>📍 {meetView.location}</span>}
+            </div>
+            {meetView.description && <div style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', borderTop: '1px solid #eee6da', paddingTop: 10, maxHeight: 200, overflowY: 'auto' }}>{meetView.description.replace(/<[^>]*>/g, '').trim()}</div>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              {meetView.hangoutLink && <a href={meetView.hangoutLink} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 500 }}>Unirse a Meet ↗</a>}
+              {meetView.htmlLink && <a href={meetView.htmlLink} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', border: '1px solid #e2d9cb', color: '#2E5A9E', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 500 }}>Abrir en Google Calendar ↗</a>}
+              {isTodayView && meetView.date === today && <button onClick={() => { const m = meetView; setMeetView(null); if (beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur })) setView('hoy') }} style={{ border: '1px solid rgba(46,90,158,0.35)', background: 'rgba(46,90,158,0.08)', color: '#2E5A9E', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>▶ Empezar</button>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Aviso: llegó la hora de algo que agendaste. ¿Iniciar ahora? */}
       {dueSched && !V.hasSession && (

@@ -40,6 +40,10 @@ export async function GET() {
       end: (e.end as Record<string, string>)?.dateTime ?? (e.end as Record<string, string>)?.date,
       allDay: !(e.start as Record<string, string>)?.dateTime,
       color: (e as Record<string, unknown>).colorId,
+      location: e.location,
+      description: e.description,
+      htmlLink: e.htmlLink,
+      hangoutLink: e.hangoutLink,
     })))
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 
