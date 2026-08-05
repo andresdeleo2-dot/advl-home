@@ -279,11 +279,12 @@ export default function TiempoClient() {
     // Tareas a las que YA les pusiste tiempo hoy: salen de "lo que hiciste hoy", así que se
     // quitan de la lista de tareas del día (sólo en la vista de hoy) para no duplicar.
     const worked = new Set(data.history.filter(h => h.date === t0 && h.taskId).map(h => h.taskId))
+    const back = new Set(data.backToTasks || [])   // devueltas a la lista pese a tener tiempo
     return allTasks.filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada'
       && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay))
-      && !(taskDay === t0 && worked.has(t.task.id)))
+      && !(taskDay === t0 && worked.has(t.task.id) && !back.has(`${t0}·${t.task.id}`)))
       .map(t => ({ ...t, recurring: recurringDueToday(t.task, taskDay) }))
-  }, [allTasks, taskDay, data.history])
+  }, [allTasks, taskDay, data.history, data.backToTasks])
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
 
@@ -760,6 +761,7 @@ export default function TiempoClient() {
     }
     return out.sort((a, b) => a.at - b.at)
   }, [allTasks, taskDay])
+  const visibleTaskIds = useMemo(() => new Set((tasks || []).map(t => t.task.id)), [tasks])   // tareas que ya se ven en la lista del día
 
   // Resumen de las juntas de HOY: cuántas, cuánto ocupan, la próxima, y conflictos con tu rutina.
   const meetInfo = useMemo(() => {
@@ -982,6 +984,12 @@ export default function TiempoClient() {
   const resumeActivity = (row: AppData['history'][number]) => {
     if (beginSession({ name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) })) { setHistIdx(null); setView('hoy') }
   }
+  // Devolver una tarea (a la que ya le pusiste tiempo hoy) a "tus tareas del día".
+  const sendBackToTasks = (taskId: string) => {
+    const key = `${today}·${taskId}`
+    if ((data.backToTasks || []).includes(key)) return
+    save({ backToTasks: [...(data.backToTasks || []), key] })
+  }
   // Ver el detalle COMPLETO de una entrada del día: si vino de una tarea de Épicas, abre el
   // editor completo (avance, subtareas, bitácora, links…, incl. tareas ya Terminadas). Si es
   // actividad libre (sin tarea), abre el editor del registro.
@@ -1181,6 +1189,7 @@ export default function TiempoClient() {
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                         <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                         {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
+                        {l.taskId && isTodayView && !visibleTaskIds.has(l.taskId) && <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩</button>}
                         <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
                         <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                       </div>
@@ -1340,6 +1349,7 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                     <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                     {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa (avance, subtareas, bitácora…)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
+                    {l.taskId && isTodayView && !visibleTaskIds.has(l.taskId) && <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩ A tareas</button>}
                     <button onClick={e => { e.stopPropagation(); setHistIdx(l.idx) }} title="Editar el registro: cambiar hora/duración, marcar si se terminó, o borrarlo" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
                     <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>

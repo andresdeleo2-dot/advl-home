@@ -41,6 +41,7 @@ export type AppData = {
   history: HistoryRow[]
   scheduled?: ScheduledBlock[]   // tareas/actividades agendadas a una hora hoy
   mit?: { date: string; ids: string[] }   // "lo más importante hoy": hasta 3 tareas foco del día
+  backToTasks?: string[]   // claves `${fecha}·${taskId}` que el usuario devolvió a la lista pese a tener tiempo
 }
 
 export const KEY = 'margen.v1'
