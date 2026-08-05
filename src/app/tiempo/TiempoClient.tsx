@@ -107,6 +107,7 @@ export default function TiempoClient() {
   const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
   const dueNotifiedRef = useRef<string | null>(null)         // id de agendado ya notificado (llegó la hora)
   const remindNotified = useRef<Set<string>>(new Set())      // recordatorios (remindAt) ya avisados
+  const meetNotified = useRef<Set<string>>(new Set())        // juntas ya avisadas (10 min antes / al empezar)
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
   const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -746,6 +747,23 @@ export default function TiempoClient() {
   const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
   const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
 
+  // Resumen de las juntas de HOY: cuántas, cuánto ocupan, la próxima, y conflictos con tu rutina.
+  const meetInfo = useMemo(() => {
+    const t0 = iso(new Date())
+    const todayM = meetings.filter(m => m.date === t0).sort((a, b) => a.start - b.start)
+    const totalMin = todayM.reduce((s, m) => s + m.dur, 0)
+    const next = todayM.find(m => m.start + m.dur > now) || null   // en curso o la siguiente
+    const dow = new Date().getDay()
+    const prot = data.blocks.filter(b => blockActiveOn(b, dow))
+    const ov = (aS: number, aE: number, bS: number, bE: number) => Math.max(0, Math.min(aE, bE) - Math.max(aS, bS))
+    const conflicts: { meet: string; block: string; mins: number }[] = []
+    for (const m of todayM) {
+      for (const b of prot) { const o = ov(m.start, m.start + m.dur, b.start, b.start + b.dur); if (o >= 5) conflicts.push({ meet: m.name, block: b.name, mins: o }) }
+      const os = ov(m.start, m.start + m.dur, data.bed, data.bed + data.sleep); if (os >= 5) conflicts.push({ meet: m.name, block: 'tu hora de dormir', mins: os })
+    }
+    return { count: todayM.length, totalMin, next, conflicts }
+  }, [meetings, now, data.blocks, data.bed, data.sleep])
+
   /* ── Acciones ──────────────────────────────────────────────────────────── */
   const start = () => {
     if (selMeeting) beginSession({ name: selMeeting.name, area: 'personas', start: Math.round(now), dur })
@@ -1008,6 +1026,18 @@ export default function TiempoClient() {
     ? (data.scheduled || []).find(s => !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
     : undefined
 
+  // Aviso de juntas del calendario: ~10 min antes y al empezar (una vez cada uno, con la pestaña abierta).
+  useEffect(() => {
+    const t0 = iso(new Date())
+    for (const m of meetings) {
+      if (m.date !== t0) continue
+      const toStart = m.start - now
+      const k10 = m.id + ':10', k0 = m.id + ':0'
+      if (toStart <= 10 && toStart > 1 && !meetNotified.current.has(k10)) { meetNotified.current.add(k10); beep(); notify('Junta en ' + Math.round(toStart) + ' min', `${m.name} · ${clock(m.start)}`) }
+      if (toStart <= 1 && toStart > -3 && !meetNotified.current.has(k0)) { meetNotified.current.add(k0); beep(); notify('Empieza tu junta', `${m.name} · ${clock(m.start)}–${clock(m.start + m.dur)}`) }
+    }
+  }, [now, meetings])
+
   // Al llegar la hora de un agendado: suena + notifica del navegador (una vez por id),
   // útil sobre todo si la pestaña de Tiempo está en segundo plano.
   useEffect(() => {
@@ -1055,6 +1085,13 @@ export default function TiempoClient() {
                   <span className="t-hero" style={{ fontFamily: SERIF, fontSize: 84, lineHeight: .88, letterSpacing: '-.02em' }}>{V.freeLabel}</span>
                   <span style={{ fontSize: 15, lineHeight: 1.55, color: '#6b645b', maxWidth: 380 }}>{V.freeExplain}</span>
                   {V.committed > 0 && <span style={{ fontSize: 13.5, color: '#8a4b28', display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 999, padding: '5px 12px', alignSelf: 'flex-start' }}>De eso ya agendaste <b style={{ fontWeight: 600 }}>{V.committedLabel}</b> → quedan <b style={{ fontWeight: 600 }}>{V.freeUncommittedLabel}</b> sin comprometer.</span>}
+                  {isTodayView && meetInfo.count > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'rgba(46,90,158,0.05)', border: '1px solid rgba(46,90,158,0.18)', borderRadius: 14, padding: '10px 13px' }}>
+                      <span style={{ fontSize: 13, color: '#2E5A9E', fontWeight: 600 }}>🗓 {meetInfo.count} {meetInfo.count === 1 ? 'junta hoy' : 'juntas hoy'} · {hm(meetInfo.totalMin)} ocupadas</span>
+                      {meetInfo.next && <span style={{ fontSize: 13.5, color: '#1c1a17' }}>Próxima: <b style={{ fontWeight: 600 }}>{meetInfo.next.name}</b> · {clock(meetInfo.next.start)} {meetInfo.next.start <= now ? '· en curso' : `· en ${hm(meetInfo.next.start - now)}`}</span>}
+                      {meetInfo.conflicts.map((c, i) => <span key={i} style={{ fontSize: 12.5, color: '#8a3c2a' }}>⚠ <b style={{ fontWeight: 600 }}>{c.meet}</b> se encima con {c.block}.</span>)}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
