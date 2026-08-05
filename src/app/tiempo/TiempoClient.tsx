@@ -97,6 +97,7 @@ export default function TiempoClient() {
   const [schedulePreset, setSchedulePreset] = useState<string | null>(null)  // tarea preseleccionada al agendar desde su fila
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [notifOn, setNotifOn] = useState(false)              // permiso de notificaciones del navegador
+  const [saveErr, setSaveErr] = useState(false)              // último guardado falló (sin red / error)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
   const dueNotifiedRef = useRef<string | null>(null)         // id de agendado ya notificado (llegó la hora)
@@ -222,15 +223,20 @@ export default function TiempoClient() {
     }).catch(() => { setTasksError(true); setAllTasks(a => a || []) }).finally(() => setRefreshing(false))
   }, [])
   useEffect(() => { refreshTasks() }, [refreshTasks])
+  // Mientras un editor (tarea/registro/agendar) está abierto NO refrescamos: si no, un poll en
+  // vuelo podría revertir una edición recién guardada (auto-guardado optimista).
+  const editorOpenRef = useRef(false)
+  useEffect(() => { editorOpenRef.current = editTask !== null || histIdx !== null || scheduleAt !== null }, [editTask, histIdx, scheduleAt])
   // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
   useEffect(() => {
-    const onVis = () => { if (document.visibilityState === 'visible') refreshTasks() }
+    const canRefresh = () => document.visibilityState === 'visible' && !editorOpenRef.current
+    const onVis = () => { if (canRefresh()) refreshTasks() }
+    const onFocus = () => { if (canRefresh()) refreshTasks() }
     document.addEventListener('visibilitychange', onVis)
-    window.addEventListener('focus', refreshTasks)
-    // Poll "en vivo": mientras la pestaña esté visible, refresca cada 25s para reflejar
-    // cambios hechos en Épicas (marcar hecho, editar) sin tener que recargar.
-    const id = setInterval(() => { if (document.visibilityState === 'visible') refreshTasks() }, 25000)
-    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', refreshTasks) }
+    window.addEventListener('focus', onFocus)
+    // Poll "en vivo": cada 25s (salvo con un editor abierto) refleja cambios de Épicas sin recargar.
+    const id = setInterval(() => { if (canRefresh()) refreshTasks() }, 25000)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus) }
   }, [refreshTasks])
 
   // Reuniones de HOY desde el calendario de Google (eventos con hora).
@@ -303,6 +309,12 @@ export default function TiempoClient() {
 
   function save(patch: Partial<AppData>) {
     const nd = { ...data, ...patch }
+    // Poda: conserva ~12 semanas de historial (Historial sólo usa la última semana); evita que
+    // el blob de estado crezca sin fin. Sólo se poda cuando ya hay muchas entradas.
+    if (nd.history && nd.history.length > 500) {
+      const cutoff = addDaysISO(iso(new Date()), -84)
+      nd.history = nd.history.filter(h => h.date >= cutoff)
+    }
     setData(nd)
     try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(Date.now())) } catch {}
     // Push durable a Supabase (debounce): localStorage es el instantáneo/offline. El ts lo
@@ -312,7 +324,9 @@ export default function TiempoClient() {
     pushTimer.current = setTimeout(() => {
       const body = pendingPush.current; pendingPush.current = null
       fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }) })
-        .then(r => r.json()).then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} }).catch(() => {})
+        .then(r => { if (!r.ok) throw new Error('http'); return r.json() })
+        .then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} ; setSaveErr(false) })
+        .catch(() => setSaveErr(true))
     }, 900)
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
@@ -716,7 +730,8 @@ export default function TiempoClient() {
     // Se omite `updatedAt` para FORZAR la escritura: si no, la API detecta "choque"
     // (updatedAt viejo tras varias operaciones) y descarta el cambio.
     const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
-    return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) }).catch(() => {})
+    return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) })
+      .then(r => { if (!r.ok) throw new Error('http'); setSaveErr(false) }).catch(() => setSaveErr(true))
   }
   // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
   // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
@@ -1510,6 +1525,14 @@ export default function TiempoClient() {
               <div onClick={() => { removeScheduled(dueSched.id); dismissSched(dueSched.id) }} title="Quitar de agendados" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #ddd4c6', borderRadius: 999, padding: '14px 16px', fontSize: 14, color: '#a49b90', cursor: 'pointer', whiteSpace: 'nowrap' }}>Quitar</div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Aviso de guardado fallido (sin red / error): nada se pierde en localStorage, pero avisa. */}
+      {saveErr && (
+        <div style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 120, maxWidth: 'min(360px, calc(100vw - 32px))', background: '#8a3c2a', color: '#faf7f1', borderRadius: 14, padding: '12px 14px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
+          <span style={{ flex: 1, lineHeight: 1.4 }}>⚠ No se pudo guardar el último cambio. Revisa tu conexión.</span>
+          <button onClick={() => { setSaveErr(false); save({}); refreshTasks() }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
         </div>
       )}
     </div>

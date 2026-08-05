@@ -38,11 +38,13 @@ export default function SiteHeader({
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <HeaderStats />
-            <CumplesWidget />
-            <ExcepcionalesWidget />
-            <WidgetsDropdown />
-            <SpecialsDropdown />
+            <span className="hdr-extra">
+              <HeaderStats />
+              <CumplesWidget />
+              <ExcepcionalesWidget />
+              <WidgetsDropdown />
+              <SpecialsDropdown />
+            </span>
             {extra}
             <Link href={backHref} className="band-glass" style={{ borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{backLabel}</Link>
           </div>

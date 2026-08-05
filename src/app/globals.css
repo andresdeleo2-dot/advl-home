@@ -293,3 +293,13 @@ body {
   header.band { padding: 12px 13px !important; }
   header.band img { height: 32px !important; }
 }
+/* Header móvil: los widgets anchos (relojes/clima/cumples/especiales) se ocultan en pantallas
+   chicas para que la banda quede limpia = logo + navegación + acción principal. */
+.hdr-extra { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 900px) {
+  .hdr-extra { display: none !important; }
+  header.band .section-nav { order: -1; }         /* la navegación primero en la fila derecha */
+}
+@media (max-width: 640px) {
+  header.band > div { gap: 10px !important; row-gap: 10px !important; }
+}

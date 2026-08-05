@@ -323,9 +323,11 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <HeaderStats />
-            <CumplesWidget />
-            <ExcepcionalesWidget />
+            <span className="hdr-extra">
+              <HeaderStats />
+              <CumplesWidget />
+              <ExcepcionalesWidget />
+            </span>
             <SectionNav current="accesos" />
             <div className="hidden items-center gap-1.5 lg:flex">
               <a href={CONFIG.quickLinks.excel} target="_blank" rel="noopener noreferrer"
