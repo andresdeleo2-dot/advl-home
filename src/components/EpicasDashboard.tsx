@@ -5474,6 +5474,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <button aria-label="Cerrar detalle de tarea" onClick={() => setTaskView(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
 
+                {/* RESUMEN — justo debajo del título (qué es la actividad y qué se quiere lograr) */}
+                {t.resumen && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={eb}>Resumen</div>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>
+                  </div>
+                )}
+
                 {/* ENLACES DE LA ÉPICA — dropdown plegado por defecto con las conexiones de la épica */}
                 {(() => {
                   const links = (ep.links || []).filter(l => l.url && l.url !== '#')
@@ -5696,13 +5704,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   )
                 })()}
-
-                {t.resumen && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Resumen</div>
-                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>
-                  </div>
-                )}
 
                 {t.note && (
                   <div style={{ marginBottom: 16 }}>
