@@ -107,6 +107,7 @@ export default function TiempoClient() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const [focusOpen, setFocusOpen] = useState(false)          // Modo foco: overlay a pantalla completa de la sesión
+  const [sessionMin, setSessionMin] = useState(false)        // popup de sesión minimizado a pastilla (clic para reabrir)
   const [pomoOn, setPomoOn] = useState(false)                // Pomodoro dentro del modo foco (25 trabajo / 5 descanso)
   const pomoNotified = useRef<Set<string>>(new Set())        // transiciones de pomodoro ya avisadas (una vez c/u)
   const endNotifiedFor = useRef<number | null>(null)         // session.start ya avisado por "fin de bloque"
@@ -1188,7 +1189,7 @@ export default function TiempoClient() {
         {!loaded ? <div style={{ height: 320 }} /> : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {isTodayView && !data.session && (() => {
+            {isTodayView && (() => {
               const gHr = Math.floor(now / 60)
               const greeting = gHr < 12 ? 'Buenos días' : gHr < 19 ? 'Buenas tardes' : 'Buenas noches'
               const mitTasks = mitIds.map(id => (allTasks || []).find(t => t.task.id === id)).filter(Boolean) as NonNullable<typeof allTasks>
@@ -1836,12 +1837,25 @@ export default function TiempoClient() {
         </div>
       )}
 
+      {/* Sesión minimizada: pastilla compacta abajo-derecha (clic para reabrir el popup) */}
+      {V.hasSession && sessionMin && (
+        <button onClick={() => setSessionMin(false)} title="Abrir la sesión en curso" style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, display: 'flex', alignItems: 'center', gap: 10, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: '11px 16px 11px 14px', boxShadow: '0 14px 34px -12px rgba(0,0,0,.55)', cursor: 'pointer' }}>
+          <span style={{ width: 9, height: 9, borderRadius: 999, background: V.sessionPaused ? '#d98a55' : '#6f8256', display: 'block', flexShrink: 0, boxShadow: V.sessionPaused ? 'none' : '0 0 0 3px rgba(111,130,86,.25)' }} />
+          <span style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1 }}>{V.sessionElapsedLabel}</span>
+          <span style={{ fontSize: 13, color: '#cdc4b8', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
+          <span style={{ fontSize: 15, color: '#a49b90', marginLeft: 2 }}>▴</span>
+        </button>
+      )}
+
       {/* Popup flotante de la sesión en curso (siempre visible mientras corre) */}
-      {V.hasSession && (
+      {V.hasSession && !sessionMin && (
         <div style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, width: 'min(340px, calc(100vw - 40px))', background: '#1c1a17', color: '#faf7f1', borderRadius: 22, padding: 20, boxShadow: '0 22px 55px -15px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
             <span style={{ ...LBL, color: V.sessionPaused ? '#d98a55' : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : 'en curso'}</span>
-            <span style={{ fontSize: 12.5, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 12.5, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
+              <button onClick={() => setSessionMin(true)} title="Minimizar (queda como pastilla)" aria-label="Minimizar la sesión" style={{ border: '1px solid #4a443c', background: 'transparent', color: '#cdc4b8', borderRadius: 999, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, lineHeight: 1, cursor: 'pointer', flexShrink: 0 }}>–</button>
+            </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
