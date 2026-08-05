@@ -260,7 +260,8 @@ export default function TiempoClient() {
       const mins = (s: string) => { const d = new Date(s); return d.getHours() * 60 + d.getMinutes() }
       const out: Meeting[] = []
       for (const e of evs) {
-        if (e.allDay || !e.start || e.start.slice(0, 10) !== today) continue
+        // Fecha LOCAL del evento (robusto a que Google lo devuelva en UTC o con offset).
+        if (e.allDay || !e.start || iso(new Date(e.start)) !== today) continue
         const start = mins(e.start)
         // Duración desde los timestamps completos (no minutos-del-día): soporta cruce de medianoche.
         const dur = e.end ? Math.max(15, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60000)) : 30
@@ -1173,9 +1174,10 @@ export default function TiempoClient() {
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
-                    {isTodayView && meetings.length > 0 && (
+                    {isTodayView && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid #eee6da', paddingTop: 10 }}>
-                        <span style={{ ...LBL, letterSpacing: '.1em' }}>reuniones de hoy · de tu calendario</span>
+                        <span style={{ ...LBL, letterSpacing: '.1em' }}>reuniones de hoy · de tu calendario 🗓</span>
+                        {meetings.length === 0 && <span style={{ fontSize: 13, color: '#a49b90', padding: '2px 0' }}>No hay juntas en tu calendario para hoy.</span>}
                         {meetings.slice().sort((a, b) => a.start - b.start).map(m => (
                           <div key={m.id} onClick={() => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} title="Ver costo y empezar la reunión" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.18)' }}>
                             <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#2E5A9E', fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', borderRadius: 999, padding: '2px 8px', flexShrink: 0 }}>🗓 junta</span>
