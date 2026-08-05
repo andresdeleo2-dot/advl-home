@@ -62,6 +62,7 @@ export type EpicaRepeat = { every: number; unit: 'dia' | 'semana' | 'mes' }
 export type EpicaTask = {
   id?: string                          // identidad estable (los índices se recorren al borrar/mover)
   t: string; status: string; due: string; note: string
+  resumen?: string                     // resumen/objetivo de la actividad (qué es y qué se quiere lograr); distinto de `note`
   links?: EpicaTaskLink[]; doneAt?: string
   plan?: string                        // 'YYYY-MM-DD' del día para el que se planeó (vista "Plan de hoy")
   priority?: 'alta' | 'media' | 'baja' // prioridad dentro del plan

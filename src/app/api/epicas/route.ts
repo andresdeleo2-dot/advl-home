@@ -48,8 +48,9 @@ export async function GET() {
   const ordenReady = tareas.length ? ('orden' in (tareas[0] as object)) : false
   const remindReady = tareas.length ? ('remind_at' in (tareas[0] as object)) : false
   const comentariosReady = tareas.length ? ('comentarios' in (tareas[0] as object)) : false
+  const resumenReady = tareas.length ? ('resumen' in (tareas[0] as object)) : false
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady })
 }
 
 export async function POST(req: Request) {

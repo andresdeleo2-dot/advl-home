@@ -225,10 +225,12 @@ export default function TiempoClient() {
   // Carga (o recarga) tareas y épicas desde Épicas. NO toca día/filtros (van en su propio estado).
   const [refreshing, setRefreshing] = useState(false)
   const [tasksError, setTasksError] = useState(false)
+  const [resumenReady, setResumenReady] = useState(false)   // true si existe la columna `resumen` (tras la migración)
   const refreshTasks = useCallback(() => {
     setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
+      setResumenReady(!!j.resumenReady)
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[] = []
       for (const e of j.data as Epica[]) {
@@ -1790,7 +1792,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} resumenReady={resumenReady} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -2296,9 +2298,10 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
+function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[] }[]
+  resumenReady: boolean
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
@@ -2394,6 +2397,14 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
               {t.repeat && <span style={{ fontSize: 11, fontWeight: 700, color: '#7A6FB0', background: 'rgba(122,111,176,0.10)', border: '1px solid rgba(122,111,176,0.28)', borderRadius: 99, padding: '2px 9px' }}>↻ Se repite{t.repeat.unit === 'dia' ? ' cada día' : t.repeat.unit === 'semana' ? ' cada semana' : t.repeat.unit === 'mes' ? ' cada mes' : ''}{(t.repeatDone?.length ?? 0) > 0 ? ` · ${t.repeatDone!.length} ${t.repeatDone!.length === 1 ? 'ciclo' : 'ciclos'}` : ''}</span>}
             </div>
           )}
+
+          {/* Resumen de la actividad (qué es y qué se quiere lograr) — distinto de la nota */}
+          <div style={{ marginBottom: 14 }}>
+            <NLbl>Resumen</NLbl>
+            {resumenReady
+              ? <textarea value={t.resumen || ''} onChange={e => setT({ ...t, resumen: e.target.value })} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...nf, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, marginTop: 4 }} />
+              : <div style={{ ...nf, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12, marginTop: 4 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
+          </div>
 
           {/* Enlaces de la épica (conexiones: Personas, Dashboard, etc.) — igual que en Épicas */}
           {!creating && epLinks.length > 0 && (

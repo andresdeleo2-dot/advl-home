@@ -216,6 +216,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const ordenReady = useRef(false)       // true si la columna `orden` existe (lo dice el API); mismo patrón que plan_hist
   const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
   const comentariosReady = useRef(false) // true si la columna comentarios existe
+  const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -239,6 +240,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       ordenReady.current = !!j.ordenReady
       remindReady.current = !!j.remindReady
       comentariosReady.current = !!j.comentariosReady
+      resumenReady.current = !!j.resumenReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -1530,6 +1532,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const t: EpicaTask = { ...orig, t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: sanitizeHtml(taskDraft.note), links }
     if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
     else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
+    // Resumen (sólo si la columna existe): se toma del borrador; '' limpia el campo (→ null).
+    if (resumenReady.current) t.resumen = (taskDraft.resumen || '').trim()
     if (!t.t) { closeTaskEdit(); return }
     // Prioridad, dificultad y día del plan editados desde el modal
     if (taskDraft.priority) t.priority = taskDraft.priority; else delete t.priority
@@ -5693,6 +5697,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
+                {t.resumen && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={eb}>Resumen</div>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>
+                  </div>
+                )}
+
                 {t.note && (
                   <div style={{ marginBottom: 16 }}>
                     <div style={eb}>Nota</div>
@@ -5968,6 +5979,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   ))}
                 </div>
+
+                <label style={lbl}>Resumen</label>
+                {resumenReady.current
+                  ? <textarea value={taskDraft.resumen || ''} onChange={e => setTaskDraft(d => ({ ...d, resumen: e.target.value }))} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...inpSmall, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} />
+                  : <div style={{ ...inpSmall, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
 
                 <label style={lbl}>Nota</label>
                 <RichText value={taskDraft.note || ''} onChange={v => setTaskDraft(d => ({ ...d, note: v }))} placeholder="Negritas (B), cursiva (I) y viñetas (• Lista)…" minHeight={170} />
