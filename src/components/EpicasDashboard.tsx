@@ -2064,6 +2064,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: MULTIDIA_TONE.c, background: MULTIDIA_TONE.bg, border: `1px solid ${MULTIDIA_TONE.border}`, borderRadius: 99, padding: '1px 8px' }}>⧗ {diasTrabajados(t)} días de trabajo</span>
             )}
             {(t.progressLog || []).some(x => x.d === viewDate) && <span title="Avanzaste en esta tarea este día" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '1px 7px' }}>✎ avancé</span>}
+            {(() => { const m = (t.progressLog || []).filter(x => x.d === viewDate).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0); if (m <= 0) return null; const hh = Math.floor(m / 60), mm = m % 60; return <span title="Tiempo que le pusiste este día (desde la sección Tiempo)" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 800, color: '#2E6E6E', background: 'rgba(62,142,142,0.12)', border: '1px solid rgba(62,142,142,0.3)', borderRadius: 99, padding: '1px 8px' }}>⏱ {hh ? hh + 'h ' : ''}{mm}m</span> })()}
             {t.subtasks && t.subtasks.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: t.subtasks.every(s => s.done) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {t.subtasks.filter(s => s.done).length}/{t.subtasks.length} · {Math.round((t.subtasks.filter(s => s.done).length / t.subtasks.length) * 100)}%</span>}
             {typeof t.progress === 'number' && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, width: 80 }}>
@@ -2072,6 +2073,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </span>
             )}
           </div>
+          {t.subtasks && t.subtasks.some(s => s.done) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5 }}>
+              {t.subtasks.filter(s => s.done).slice(0, 6).map((s, si) => (
+                <span key={si} title={s.t} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 600, color: '#2E6E6E', background: 'rgba(62,142,142,0.09)', border: '1px solid rgba(62,142,142,0.22)', borderRadius: 99, padding: '1px 8px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>✓ {s.t || 'subtarea'}</span>
+              ))}
+              {t.subtasks.filter(s => s.done).length > 6 && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>+{t.subtasks.filter(s => s.done).length - 6}</span>}
+            </div>
+          )}
           {t.links && t.links.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
               {t.links.map((l, li) => (
@@ -3844,6 +3853,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                                 <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />
                                 <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>{e.name}</span>
                                 <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 99, background: st.bg, color: st.c }}>{st.label}</span>
+                                {(() => { const m = (t.progressLog || []).filter(x => x.d === viewDate).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0); if (m <= 0) return null; const hh = Math.floor(m / 60), mm = m % 60; return <span title="Tiempo puesto este día" style={{ fontSize: 10, fontWeight: 800, color: '#2E6E6E', background: 'rgba(62,142,142,0.12)', border: '1px solid rgba(62,142,142,0.3)', borderRadius: 99, padding: '1px 7px' }}>⏱ {hh ? hh + 'h ' : ''}{mm}m</span> })()}
                                 {t.plan && <span style={{ fontSize: 10, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>· para {relShort(t.plan)}</span>}
                               </div>
                             </div>
