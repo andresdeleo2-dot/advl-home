@@ -102,6 +102,7 @@ export default function TiempoClient() {
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [notifOn, setNotifOn] = useState(false)              // permiso de notificaciones del navegador
   const [saveErr, setSaveErr] = useState(false)              // último guardado falló (sin red / error)
+  const [saveErrMsg, setSaveErrMsg] = useState('')           // mensaje exacto del error (diagnóstico)
   const [undo, setUndo] = useState<{ msg: string; fn: () => void } | null>(null)  // toast "deshacer"
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
@@ -341,9 +342,9 @@ export default function TiempoClient() {
     pushTimer.current = setTimeout(() => {
       const body = pendingPush.current; pendingPush.current = null
       fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }) })
-        .then(r => { if (!r.ok) throw new Error('http'); return r.json() })
-        .then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} ; setSaveErr(pendingSync.current.size > 0) })
-        .catch(() => setSaveErr(true))
+        .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('estado ' + r.status + ' ' + t.slice(0, 160)) } return r.json() })
+        .then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} ; setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('') })
+        .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] guardado de estado falló:', e) })
     }, 900)
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
@@ -792,8 +793,8 @@ export default function TiempoClient() {
     // (updatedAt viejo tras varias operaciones) y descarta el cambio.
     const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
     return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) })
-      .then(r => { if (!r.ok) throw new Error('http'); if (task.id) pendingSync.current.delete(task.id); setSaveErr(pendingSync.current.size > 0) })
-      .catch(() => { if (task.id) pendingSync.current.set(task.id, { epicaId, task }); setSaveErr(true) })   // SOLO al fallar entra a la cola de reintento
+      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('tarea ' + r.status + ' ' + t.slice(0, 160)) } if (task.id) pendingSync.current.delete(task.id); setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('') })
+      .catch(e => { if (task.id) pendingSync.current.set(task.id, { epicaId, task }); setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] sync de tarea falló:', e) })
   }
   // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
   // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
@@ -993,6 +994,12 @@ export default function TiempoClient() {
   const removeBackToTasks = (taskId: string) => {
     const key = `${today}·${taskId}`
     save({ backToTasks: (data.backToTasks || []).filter(k => k !== key) })
+  }
+  // Quitar una tarea de "tus tareas del día" desde la lista misma. Si la habías devuelto
+  // (backToTasks), la vuelve a ocultar; si no, le quita el plan de hoy (con confirmación).
+  const removeFromDayList = (t: TodayTask) => {
+    if ((data.backToTasks || []).includes(`${today}·${t.task.id}`)) { removeBackToTasks(t.task.id!); return }
+    if (window.confirm(`¿Quitar «${t.task.t || 'tarea'}» de tus tareas de hoy? (le quita el plan de hoy en Épicas)`)) unplanTask(t.epicaId, t.task)
   }
   // Ver el detalle COMPLETO de una entrada del día: si vino de una tarea de Épicas, abre el
   // editor completo (avance, subtareas, bitácora, links…, incl. tareas ya Terminadas). Si es
@@ -1278,7 +1285,7 @@ export default function TiempoClient() {
                       )
                     })()}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings.filter(m => m.date === taskDay)} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
@@ -1735,7 +1742,7 @@ export default function TiempoClient() {
       {/* Aviso de guardado fallido (sin red / error): nada se pierde en localStorage, pero avisa. */}
       {saveErr && (
         <div style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 120, maxWidth: 'min(360px, calc(100vw - 32px))', background: '#8a3c2a', color: '#faf7f1', borderRadius: 14, padding: '12px 14px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
-          <span style={{ flex: 1, lineHeight: 1.4 }}>⚠ No se pudo guardar el último cambio. Revisa tu conexión.</span>
+          <span style={{ flex: 1, lineHeight: 1.4 }}>⚠ No se pudo guardar el último cambio. Revisa tu conexión.{saveErrMsg && <><br /><span style={{ fontSize: 11.5, opacity: .85, fontFamily: 'monospace' }}>{saveErrMsg}</span></>}</span>
           <button onClick={() => { const items = [...pendingSync.current.values()]; items.forEach(v => syncTask(v.epicaId, v.task)); save({}) }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
         </div>
       )}
@@ -1882,7 +1889,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -1947,6 +1954,7 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
               <button onClick={() => onQuick(t)} title="Empezar ahora (contador libre)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶</button>
               <button onClick={() => onSchedule(t)} title="Agendar a una hora del día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>⏰</button>
               <button onClick={() => onEdit(t)} title="Ver / trabajar la tarea" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
+              <button onClick={() => onRemove(t)} title="Quitar de tus tareas de hoy" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, width: 28, height: 28, fontSize: 15, color: '#a49b90', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
               <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
