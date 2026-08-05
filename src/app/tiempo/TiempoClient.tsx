@@ -1353,6 +1353,14 @@ export default function TiempoClient() {
         ) : (
           /* ── HISTORIAL ────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 20, alignItems: 'start' }}>
+            <div style={{ ...card(12), gridColumn: '1 / -1', background: '#1c1a17', border: '1px solid #1c1a17' }}>
+              <span style={{ ...LBL, color: '#a49b90' }}>tu semana en una línea</span>
+              <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.35, color: '#faf7f1' }}>
+                Registraste {V.weekTotalLabel}{V.areaStats[0] ? <>, sobre todo en <span style={{ color: '#e7c56b' }}>{V.areaStats[0].label.toLowerCase()}</span> ({V.areaStats[0].share})</> : ''}.{' '}
+                {V.weekSleepDebt > 0 ? <>Llevas <span style={{ color: '#e0a58a' }}>{V.weekSleepDebtLabel}</span> de deuda de sueño.</> : <>Sueño <span style={{ color: '#9fc08a' }}>al día</span>.</>}{' '}
+                {V.streakLabel}.
+              </span>
+            </div>
             <div style={card(26)}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Cómo se repartió tu semana</span>
@@ -1872,6 +1880,9 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
   const [epLinksOpen, setEpLinksOpen] = useState(false)   // dropdown "Enlaces de {épica}"
   const [nlLabel, setNlLabel] = useState('')              // nuevo link: etiqueta
   const [nlUrl, setNlUrl] = useState('')                  // nuevo link: url
+  const [subPop, setSubPop] = useState<number | null>(null)  // subtarea abierta (editar nota/links/%)
+  const [slLabel, setSlLabel] = useState('')             // nuevo link de subtarea: etiqueta
+  const [slUrl, setSlUrl] = useState('')                 // nuevo link de subtarea: url
   const noteRef = useRef<HTMLDivElement>(null)
   const saveT = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flushRef = useRef<() => void>(() => {})   // guarda pendiente lo último (usado al cerrar)
@@ -2022,6 +2033,15 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
           </div>
           <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%' }} /></label>
 
+          <NLbl>Repetición</NLbl>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {([['', 'No se repite'], ['dia', 'Cada día'], ['semana', 'Cada semana'], ['mes', 'Cada mes']] as const).map(([u, lbl]) => {
+              const on = u ? t.repeat?.unit === u : !t.repeat
+              return <button key={u || 'no'} onClick={() => setT({ ...t, repeat: u ? { every: 1, unit: u } : undefined, ...(u ? {} : { repeatUntil: undefined }) })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? '1px solid #7A6FB0' : '1px solid rgba(15,35,64,0.14)', background: on ? 'rgba(122,111,176,0.12)' : '#fff', color: on ? '#5E5490' : 'rgba(20,35,61,0.55)' }}>{lbl}</button>
+            })}
+            {t.repeat && <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}>hasta<input type="date" value={t.repeatUntil || ''} onChange={e => setT({ ...t, repeatUntil: e.target.value || undefined })} style={{ ...nf, padding: '6px 8px' }} /></label>}
+          </div>
+
           <NLbl>Nota</NLbl>
           <div ref={noteRef} className="ep-note" contentEditable suppressContentEditableWarning onBlur={() => { if (!creating) onAutoSave(epId, withNote()) }} style={{ ...nf, minHeight: 60, maxHeight: 200, overflowY: 'auto', lineHeight: 1.55, width: '100%', display: 'block' }} />
 
@@ -2034,8 +2054,9 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                   {typeof s.progress === 'number' && s.progress > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}
                   {s.note && <span title="Tiene nota" style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>✎</span>}
-                  {(s.links?.length ?? 0) > 0 && <a href={safeUrl(s.links![0].url)} target="_blank" rel="noreferrer" title={`${s.links!.length} link(s)`} style={{ fontSize: 10, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>🔗{s.links!.length}</a>}
+                  {(s.links?.length ?? 0) > 0 && <span title={`${s.links!.length} link(s)`} style={{ fontSize: 10, fontWeight: 700, color: '#A87A2C' }}>🔗{s.links!.length}</span>}
                 </span>
+                <button onClick={() => { setSlLabel(''); setSlUrl(''); setSubPop(i) }} title="Nota, links y % de la subtarea" style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', cursor: 'pointer', flexShrink: 0, fontSize: 14 }}>⋯</button>
                 <button onClick={() => setSubs(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
               </div>
             ))}
@@ -2094,6 +2115,45 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
           {!creating && <a href={`/epicas?v=dia&d=${t.plan || iso(new Date())}&e=${epId}&t=${t.id}`} target="_blank" rel="noopener noreferrer" style={{ textAlign: 'center', fontSize: 12, color: 'rgba(20,35,61,0.45)', marginTop: 10 }}>También abrir en Épicas ↗</a>}
         </div>
       </div>
+
+      {/* Popup de subtarea: nota, links y % (como en Épicas) */}
+      {subPop !== null && (t.subtasks || [])[subPop] && (() => {
+        const s = (t.subtasks || [])[subPop!]
+        const upd = (patch: Partial<NonNullable<EpicaTask['subtasks']>[number]>) => setSubs(a => a.map((x, j) => j === subPop ? { ...x, ...patch } : x))
+        const addSl = () => { const url = slUrl.trim(), label = slLabel.trim(); if (!url && !label) return; upd({ links: [...(s.links || []), { label, url }] }); setSlLabel(''); setSlUrl('') }
+        return (
+          <div onClick={() => setSubPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 96, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflow: 'auto' }}>
+            <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Subtarea" style={{ width: '100%', maxWidth: 460, background: '#fff', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 12, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                <input value={s.t} onChange={e => upd({ t: e.target.value })} placeholder="Subtarea" style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 20, color: '#10233F', border: 'none', outline: 'none', background: 'transparent', flex: 1, minWidth: 0, padding: 0 }} />
+                <button onClick={() => setSubPop(null)} style={{ flexShrink: 0, border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', cursor: 'pointer', fontSize: 14 }}>✕</button>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!s.done} onChange={e => upd({ done: e.target.checked })} /> Completada
+              </label>
+              <div><NLbl>Avance · {s.progress || 0}%</NLbl><input type="range" min={0} max={100} step={5} value={s.progress || 0} onChange={e => upd({ progress: Number(e.target.value) })} style={{ width: '100%', accentColor: '#3E8E8E' }} /></div>
+              <div><NLbl>Nota</NLbl><textarea value={s.note || ''} onChange={e => upd({ note: e.target.value })} rows={3} placeholder="Nota de la subtarea…" style={{ ...nf, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} /></div>
+              <NLbl>Links</NLbl>
+              {(s.links || []).length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                  {(s.links || []).map((l, li) => (
+                    <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 6px 6px 12px' }}>
+                      <a href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>🔗 {l.label || l.url}</a>
+                      <button onClick={() => upd({ links: (s.links || []).filter((_, j) => j !== li) })} style={{ border: 'none', background: 'transparent', color: 'rgba(168,122,44,0.75)', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '0 2px' }}>✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+                <input value={slLabel} onChange={e => setSlLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addSl() }} placeholder="Etiqueta" style={{ ...nf, flex: '0 0 120px', width: 120 }} />
+                <input value={slUrl} onChange={e => setSlUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addSl() }} placeholder="https://…" style={{ ...nf, flex: 1, minWidth: 0 }} />
+                <button onClick={addSl} style={smallBtn}>+ Link</button>
+              </div>
+              <button onClick={() => setSubPop(null)} style={{ marginTop: 4, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 11, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Listo</button>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

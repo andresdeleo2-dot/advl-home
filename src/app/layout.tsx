@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Hanken_Grotesk, Cormorant_Garamond } from 'next/font/google'
 import "./globals.css";
+import PWARegister from '@/components/PWARegister'
 
 const ui = Hanken_Grotesk({
   subsets: ['latin'],
@@ -21,6 +22,7 @@ export const metadata: Metadata = {
   title: "Panel Andres",
   description: "Home dashboard",
   manifest: "/manifest.json",
+  icons: { icon: "/icon-32.png", apple: "/icon-180.png" },
   appleWebApp: { capable: true, title: "ADVL", statusBarStyle: "default" },
 };
 
@@ -31,7 +33,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es" className={`h-full ${ui.variable} ${serif.variable}`}>
-      <body className="min-h-full antialiased">{children}</body>
+      <body className="min-h-full antialiased">{children}<PWARegister /></body>
     </html>
   );
 }
