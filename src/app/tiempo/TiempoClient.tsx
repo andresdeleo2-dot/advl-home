@@ -791,10 +791,9 @@ export default function TiempoClient() {
     // Se omite `updatedAt` para FORZAR la escritura: si no, la API detecta "choque"
     // (updatedAt viejo tras varias operaciones) y descarta el cambio.
     const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
-    if (task.id) pendingSync.current.set(task.id, { epicaId, task })   // pendiente hasta confirmar
     return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) })
       .then(r => { if (!r.ok) throw new Error('http'); if (task.id) pendingSync.current.delete(task.id); setSaveErr(pendingSync.current.size > 0) })
-      .catch(() => setSaveErr(true))   // se queda en pendingSync para reintentar
+      .catch(() => { if (task.id) pendingSync.current.set(task.id, { epicaId, task }); setSaveErr(true) })   // SOLO al fallar entra a la cola de reintento
   }
   // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
   // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
@@ -989,6 +988,11 @@ export default function TiempoClient() {
     const key = `${today}·${taskId}`
     if ((data.backToTasks || []).includes(key)) return
     save({ backToTasks: [...(data.backToTasks || []), key] })
+  }
+  // Quitarla de nuevo de la lista (deshace "↩ A tareas"): se vuelve a ocultar por tener tiempo.
+  const removeBackToTasks = (taskId: string) => {
+    const key = `${today}·${taskId}`
+    save({ backToTasks: (data.backToTasks || []).filter(k => k !== key) })
   }
   // Ver el detalle COMPLETO de una entrada del día: si vino de una tarea de Épicas, abre el
   // editor completo (avance, subtareas, bitácora, links…, incl. tareas ya Terminadas). Si es
@@ -1189,7 +1193,9 @@ export default function TiempoClient() {
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                         <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                         {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
-                        {l.taskId && isTodayView && !visibleTaskIds.has(l.taskId) && <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩</button>}
+                        {l.taskId && isTodayView && (visibleTaskIds.has(l.taskId)
+                          ? (data.backToTasks || []).includes(`${today}·${l.taskId}`) && <button onClick={e => { e.stopPropagation(); removeBackToTasks(l.taskId!) }} title="Quitarla de tus tareas del día" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>✕tarea</button>
+                          : <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a tus tareas del día" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩</button>)}
                         <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
                         <span style={{ fontWeight: 600, color: l.done ? '#4f6238' : '#8a4b28', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
                       </div>
@@ -1349,7 +1355,9 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                     <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                     {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa (avance, subtareas, bitácora…)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
-                    {l.taskId && isTodayView && !visibleTaskIds.has(l.taskId) && <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩ A tareas</button>}
+                    {l.taskId && isTodayView && (visibleTaskIds.has(l.taskId)
+                      ? (data.backToTasks || []).includes(`${today}·${l.taskId}`) && <button onClick={e => { e.stopPropagation(); removeBackToTasks(l.taskId!) }} title="Quitarla de 'tus tareas del día'" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>Quitar de tareas</button>
+                      : <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩ A tareas</button>)}
                     <button onClick={e => { e.stopPropagation(); setHistIdx(l.idx) }} title="Editar el registro: cambiar hora/duración, marcar si se terminó, o borrarlo" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
                     <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
@@ -2333,7 +2341,7 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
                 <button onClick={() => setSubPop(null)} style={{ flexShrink: 0, border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', cursor: 'pointer', fontSize: 14 }}>✕</button>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
-                <input type="checkbox" checked={!!s.done} onChange={e => upd({ done: e.target.checked })} /> Completada
+                <input type="checkbox" checked={!!s.done} onChange={e => upd({ done: e.target.checked, doneAt: e.target.checked ? new Date().toISOString() : undefined })} /> Completada
               </label>
               <div><NLbl>Avance · {s.progress || 0}%</NLbl><input type="range" min={0} max={100} step={5} value={s.progress || 0} onChange={e => upd({ progress: Number(e.target.value) })} style={{ width: '100%', accentColor: '#3E8E8E' }} /></div>
               <div><NLbl>Nota</NLbl><textarea value={s.note || ''} onChange={e => upd({ note: e.target.value })} rows={3} placeholder="Nota de la subtarea…" style={{ ...nf, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} /></div>
