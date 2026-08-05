@@ -51,6 +51,7 @@ export type EpicaSubtask = {
   id?: string            // identidad estable (para reordenar sin que se recorran los índices)
   t: string
   done: boolean
+  doneAt?: string        // fecha+hora ISO en que se completó (para el registro del día)
   progress?: number      // % de avance manual (0-100)
   note?: string          // nota (HTML de contentEditable, se sanitiza)
   links?: EpicaTaskLink[]

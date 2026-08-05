@@ -748,6 +748,19 @@ export default function TiempoClient() {
   const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
   const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
 
+  // Subtareas COMPLETADAS el día visto (con su hora) — para verlas en el registro del día.
+  const daySubtasksDone = useMemo(() => {
+    const out: { key: string; taskId?: string; epicaId: string; epicaName: string; color: string; taskName: string; sub: string; at: number }[] = []
+    for (const t of allTasks || []) for (const s of t.task.subtasks || []) {
+      const da = s.doneAt
+      if (s.done && da && iso(new Date(da)) === taskDay) {
+        const d = new Date(da)
+        out.push({ key: (t.task.id || '') + '·' + (s.id || s.t), taskId: t.task.id, epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, taskName: t.task.t || 'Tarea', sub: s.t, at: d.getHours() * 60 + d.getMinutes() })
+      }
+    }
+    return out.sort((a, b) => a.at - b.at)
+  }, [allTasks, taskDay])
+
   // Resumen de las juntas de HOY: cuántas, cuánto ocupan, la próxima, y conflictos con tu rutina.
   const meetInfo = useMemo(() => {
     const t0 = iso(new Date())
@@ -1151,9 +1164,17 @@ export default function TiempoClient() {
                     ))}
                   </div>
                 )}
-                {(dayLog.length > 0 || epicDoneToday.length > 0) && (
+                {(dayLog.length > 0 || epicDoneToday.length > 0 || daySubtasksDone.length > 0) && (
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <span style={LBL}>lo que hiciste {dayLabel}</span>
+                    {daySubtasksDone.map(st => (
+                      <div key={'st' + st.key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                        <span style={{ color: '#2E6E6E', flexShrink: 0, fontSize: 13 }}>✓</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ color: '#a49b90', fontSize: 12 }}>· subtarea de {st.taskName}</span></span>
+                        <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(st.at)}</span>
+                        <span style={{ fontWeight: 600, color: '#2E6E6E', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>subtarea ✓</span>
+                      </div>
+                    ))}
                     {[...dayLog].reverse().map(l => (
                       <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block', flexShrink: 0 }} />
@@ -1334,6 +1355,15 @@ export default function TiempoClient() {
                     <button onClick={() => unmarkEpicDone(t)} title="No se trabajó / me equivoqué: quitarla del día (la reabre en Épicas)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer', flexShrink: 0 }}>Quitar</button>
                     <button onClick={() => resumeActivity({ date: today, name: t.task.t || 'Tarea', area: 'trabajo', start: 0, dur: 0, epicaId: t.epicaId, taskId: t.task.id })} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
                     <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 90, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
+                  </div>
+                ))}
+                {daySubtasksDone.map(st => (
+                  <div key={'std' + st.key} onClick={() => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
+                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{clock(st.at)}</span>
+                    <span style={{ color: '#2E6E6E', fontSize: 15, flexShrink: 0 }}>✓</span>
+                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ fontSize: 13, color: '#a49b90' }}>· subtarea de {st.taskName}</span></span>
+                    <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{st.epicaName}</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: '#2E6E6E', width: 90, textAlign: 'right', flexShrink: 0 }}>subtarea ✓</span>
                   </div>
                 ))}
                 {isTodayView && V.upcoming.map((b, i) => (
@@ -1650,7 +1680,7 @@ export default function TiempoClient() {
               <span>🕐 {clock(meetView.start)}–{clock(meetView.start + meetView.dur)} · {hm(meetView.dur)}</span>
               {meetView.location && <span>📍 {meetView.location}</span>}
             </div>
-            {meetView.description && <div style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', borderTop: '1px solid #eee6da', paddingTop: 10, maxHeight: 200, overflowY: 'auto' }}>{meetView.description.replace(/<[^>]*>/g, '').trim()}</div>}
+            {meetView.description && meetView.description.trim() && <MeetingDescription raw={meetView.description} />}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
               {meetView.hangoutLink && <a href={meetView.hangoutLink} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 500 }}>Unirse a Meet ↗</a>}
               {meetView.htmlLink && <a href={meetView.htmlLink} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', border: '1px solid #e2d9cb', color: '#2E5A9E', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 500 }}>Abrir en Google Calendar ↗</a>}
@@ -1705,6 +1735,34 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
+}
+
+/** Descripción de una junta con sus LINKS clicables (soporta <a href> y URLs sueltas). */
+function MeetingDescription({ raw }: { raw: string }) {
+  const links: { url: string; label: string }[] = []
+  const s = raw
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, url, label) => { const i = links.length; links.push({ url, label: String(label).replace(/<[^>]*>/g, '').trim() || url }); return `${i}` })
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  const linkStyle: CSSProperties = { color: '#2E5A9E', fontWeight: 600, textDecoration: 'underline', wordBreak: 'break-all' }
+  const urlRe = /(https?:\/\/[^\s<]+)/g
+  const parts: React.ReactNode[] = []
+  let key = 0
+  s.split(/(\d+)/).forEach(chunk => {
+    const mm = chunk.match(/^(\d+)$/)
+    if (mm) { const l = links[Number(mm[1])]; parts.push(<a key={key++} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer" style={linkStyle}>{l.label}</a>); return }
+    let last = 0, m2: RegExpExecArray | null
+    urlRe.lastIndex = 0
+    while ((m2 = urlRe.exec(chunk))) {
+      if (m2.index > last) parts.push(<span key={key++}>{chunk.slice(last, m2.index)}</span>)
+      parts.push(<a key={key++} href={safeUrl(m2[1])} target="_blank" rel="noopener noreferrer" style={linkStyle}>{m2[1]}</a>)
+      last = m2.index + m2[1].length
+    }
+    if (last < chunk.length) parts.push(<span key={key++}>{chunk.slice(last)}</span>)
+  })
+  return <div style={{ fontSize: 13.5, color: '#4c4741', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', borderTop: '1px solid #eee6da', paddingTop: 10, maxHeight: 220, overflowY: 'auto' }}>{parts}</div>
 }
 
 /** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
@@ -2185,7 +2243,7 @@ function TaskDetail({ info, epicas, onAutoSave, onUnplan, onCreate, onStart, onL
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {(t.subtasks || []).map((s, i) => (
               <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                <button onClick={() => setSubs(a => a.map((x, j) => j === i ? { ...x, done: !x.done } : x))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#3E8E8E' : 'rgba(15,35,64,0.25)'), background: s.done ? '#3E8E8E' : '#fff', cursor: 'pointer', flexShrink: 0 }} />
+                <button onClick={() => setSubs(a => a.map((x, j) => { if (j !== i) return x; const nd = !x.done; return { ...x, done: nd, doneAt: nd ? new Date().toISOString() : undefined } }))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#3E8E8E' : 'rgba(15,35,64,0.25)'), background: s.done ? '#3E8E8E' : '#fff', cursor: 'pointer', flexShrink: 0 }} />
                 <input value={s.t} onChange={e => setSubs(a => a.map((x, j) => j === i ? { ...x, t: e.target.value } : x))} style={{ ...nf, flex: 1, textDecoration: s.done ? 'line-through' : 'none' }} />
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                   {typeof s.progress === 'number' && s.progress > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}

@@ -1284,6 +1284,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); const st = tasks[ti].subtasks
     if (!st || !st[si]) return
     st[si].done = !st[si].done
+    if (st[si].done) st[si].doneAt = new Date().toISOString(); else delete st[si].doneAt   // registra día+hora al completar
     patchEpic(e.id, { tasks })
   }
   /* ─── Subtareas editables sin abrir el editor ─────────────── */
