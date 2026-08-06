@@ -2178,10 +2178,9 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
             <div className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {draggable && <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', flexShrink: 0, padding: '0 2px' }}>⠿</span>}
               <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
-              <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
-                <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
-                <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
+              <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0, marginTop: 5 }} />
+                <span style={{ fontSize: 15, fontWeight: 500, lineHeight: 1.3, color: '#1c1a17', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }}>{t.task.t || 'Sin título'}</span>
               </span>
               <button onClick={() => onQuick(t)} title="Empezar ahora (contador libre)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶</button>
               <button onClick={() => onSchedule(t)} title="Agendar a una hora del día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>⏰</button>
@@ -2189,6 +2188,7 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
               <button onClick={() => onRemove(t)} title="Quitar de tus tareas de hoy" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, width: 28, height: 28, fontSize: 15, color: '#a49b90', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
+              <Tag c={t.color} bg={t.color + '22'}>{t.epicaName}</Tag>
               <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
               {t.recurring && <Tag c="#7A6FB0" bg="rgba(122,111,176,0.14)">diaria</Tag>}
               {t.task.priority && <Tag c={PRIO_TONE[t.task.priority]} bg={PRIO_TONE[t.task.priority] + '22'}>{t.task.priority}</Tag>}
