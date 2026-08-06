@@ -862,7 +862,8 @@ export default function TiempoClient() {
       if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
       const today0 = iso(new Date())
       const hist = { date: today0, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
-      save({ session: ns, history: data.history.concat([hist]), ...extraPatch })
+      save({ session: ns, history: dataRef.current.history.concat([hist]), ...extraPatch })
+      showUndo(`✓ Guardé ${hm(el)} de «${s.name}» y empecé «${ns.name}»`, () => save({ history: dataRef.current.history.filter(h => h !== hist) }))
       if (s.taskId && s.epicaId) {
         const tt = tasksRef.current.find(x => x.task.id === s.taskId)
         if (tt) {
@@ -960,7 +961,9 @@ export default function TiempoClient() {
     const s = data.session; if (!s) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     const today = iso(new Date())
-    save({ session: null, history: data.history.concat([{ date: today, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }]) })
+    const entry = { date: today, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+    save({ session: null, history: dataRef.current.history.concat([entry]) })
+    showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
