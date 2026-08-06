@@ -373,9 +373,9 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
                 <span className="flex items-center gap-1.5 rounded-full bg-[rgba(62,142,142,0.12)] px-2.5 py-1 text-[11px] font-semibold text-[#2E6E6E]">
                   <span className="h-1.5 w-1.5 rounded-full bg-[#3E8E8E]" /> Supabase conectado
                 </span>
-                <span className="text-[12px] text-[rgba(20,35,61,0.46)]">{items.length} accesos · {categories.length} categorías</span>
+                <span className="text-[12px] text-[rgba(20,35,61,0.6)]">{items.length} accesos · {categories.length} categorías</span>
               </div>
-              <span className="flex items-center gap-1.5 text-[11px] text-[rgba(20,35,61,0.36)]">
+              <span className="hidden items-center gap-1.5 text-[11px] text-[rgba(20,35,61,0.45)] sm:flex">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                 Pasa el cursor sobre una tarjeta para editar
               </span>
@@ -388,7 +388,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               </svg>
               <input ref={searchRef} value={rawQuery} onChange={e => setRawQuery(e.target.value)}
                 placeholder="Buscar por nombre, url, categoría, descripción…"
-                className="w-full rounded-[12px] border border-[rgba(15,35,64,0.13)] bg-[#FBFAF6] py-3 pl-10 pr-24 text-[14px] text-[#10233F] outline-none placeholder:text-[rgba(15,35,64,0.35)] transition"
+                className="w-full rounded-[12px] border border-[rgba(15,35,64,0.13)] bg-[#FBFAF6] py-3 pl-10 pr-4 text-[14px] text-[#10233F] outline-none transition placeholder:text-[rgba(15,35,64,0.35)] sm:pr-24"
                 style={{ fontWeight: 500 }}
                 onFocus={e => { e.target.style.borderColor = 'rgba(194,147,58,.6)'; e.target.style.background = '#fff'; e.target.style.boxShadow = '0 0 0 3px rgba(194,147,58,.14)' }}
                 onBlur={e => { e.target.style.borderColor = ''; e.target.style.background = ''; e.target.style.boxShadow = '' }} />
@@ -406,9 +406,9 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               ))}
             </div>
 
-            <p className="mt-3 text-[11px] text-[rgba(20,35,61,0.42)]">
+            <p className="mt-3 text-[11px] text-[rgba(20,35,61,0.55)]">
               {resultCount} {resultCount === 1 ? 'resultado' : 'resultados'}
-              {query && ' · Enter abre el primero'}
+              {query && <span className="hidden sm:inline"> · Enter abre el primero</span>}
             </p>
           </div>
 

@@ -25,7 +25,23 @@ export default function SectionNav({ current }: { current: 'accesos' | 'epicas' 
         .section-nav a { transition: background .15s ease, color .15s ease; text-decoration: none; }
         .section-nav a[data-on="false"]:hover { background: rgba(255,255,255,0.12); color: #fff !important; }
         .section-nav a:focus-visible { outline: 2px solid #E7C56B; outline-offset: 2px; }
-        @media (max-width: 560px) { .section-nav .sn-label { display: none; } .section-nav a { padding: 8px 10px !important; } }
+        /* En celular el nav se ancla ABAJO como barra fija: siempre en el mismo lugar en las 3
+           secciones (no salta al cambiar). En escritorio sigue arriba en el header. */
+        @media (max-width: 700px) {
+          .section-nav {
+            position: fixed !important; left: 10px; right: 10px; bottom: 10px; z-index: 90 !important;
+            display: flex !important; justify-content: space-around !important; gap: 4px !important;
+            padding: 6px !important; padding-bottom: calc(6px + env(safe-area-inset-bottom)) !important;
+            background: rgba(16,35,64,0.94) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.16) !important; border-radius: 20px !important;
+            box-shadow: 0 14px 34px -10px rgba(0,0,0,.55) !important;
+          }
+          .section-nav a { flex: 1; flex-direction: column; gap: 4px !important; padding: 9px 4px !important; justify-content: center; min-height: 52px; }
+          .section-nav .sn-label { display: inline !important; font-size: 11px; font-weight: 700; }
+          .section-nav a svg { width: 19px; height: 19px; }
+          /* Deja aire abajo para que la barra no tape el último contenido (sólo donde existe el nav). */
+          body { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+        }
       `}</style>
       {items.map(it => {
         const on = it.id === current

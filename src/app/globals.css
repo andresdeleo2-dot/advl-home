@@ -119,6 +119,8 @@ body {
 /* Card action buttons: invisible until the card group is hovered */
 .advl-card .advl-act { opacity: 0; transition: opacity .15s; }
 .advl-card:hover .advl-act { opacity: 1; }
+/* En táctil no hay hover: mostrar siempre las acciones (editar/copiar) para no dejarlas inaccesibles. */
+@media (hover: none) { .advl-card .advl-act { opacity: 1; } }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .animate-fade { animation: fadeIn 0.25s ease both; }
@@ -299,6 +301,10 @@ body {
 @media (max-width: 900px) {
   .hdr-extra { display: none !important; }
   header.band .section-nav { order: -1; }         /* la navegación primero en la fila derecha */
+}
+/* Con el nav como barra fija abajo (≤700px), los toasts/avisos anclados abajo suben para no taparse. */
+@media (max-width: 700px) {
+  .ep-abovenav { bottom: 92px !important; }
 }
 @media (max-width: 640px) {
   header.band > div { gap: 10px !important; row-gap: 10px !important; }

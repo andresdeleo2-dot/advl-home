@@ -1180,9 +1180,9 @@ export default function TiempoClient() {
             <button onClick={refreshTasks} title="Actualizar tareas de Épicas (mantiene día y filtros)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', transition: 'transform .6s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>↻</span>{refreshing ? 'Actualizando…' : 'Actualizar'}</button>
             <button onClick={requestNotif} title={notifOn ? 'Avisos del navegador activados' : 'Activar avisos del navegador (agendados, recordatorios y fin de bloque)'} style={{ border: '1px solid ' + (notifOn ? '#cfe0c4' : '#e2d9cb'), background: notifOn ? '#eef1e7' : '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: notifOn ? '#4f6238' : '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{notifOn ? '🔔 Avisos on' : '🔔 Activar avisos'}</button>
             <span className="t-clock" style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
-            <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
+            <div className="t-tabs" style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
-                <div key={id} onClick={() => setView(id)} style={{ padding: '9px 20px', borderRadius: 999, fontSize: 14, fontWeight: 500, cursor: 'pointer', background: view === id ? '#faf7f1' : 'transparent', color: view === id ? '#1c1a17' : '#6b645b' }}>{label}</div>
+                <div key={id} onClick={() => setView(id)} style={{ padding: '9px 20px', borderRadius: 999, fontSize: 14, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap', background: view === id ? '#faf7f1' : 'transparent', color: view === id ? '#1c1a17' : '#6b645b' }}>{label}</div>
               ))}
             </div>
           </div>
@@ -1841,7 +1841,7 @@ export default function TiempoClient() {
 
       {/* Sesión minimizada: pastilla compacta abajo-derecha (clic para reabrir el popup) */}
       {V.hasSession && sessionMin && (
-        <button onClick={() => setSessionMin(false)} title="Abrir la sesión en curso" style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, display: 'flex', alignItems: 'center', gap: 10, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: '11px 16px 11px 14px', boxShadow: '0 14px 34px -12px rgba(0,0,0,.55)', cursor: 'pointer' }}>
+        <button onClick={() => setSessionMin(false)} title="Abrir la sesión en curso" className="t-abovenav" style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, display: 'flex', alignItems: 'center', gap: 10, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: '11px 16px 11px 14px', boxShadow: '0 14px 34px -12px rgba(0,0,0,.55)', cursor: 'pointer' }}>
           <span style={{ width: 9, height: 9, borderRadius: 999, background: V.sessionPaused ? '#d98a55' : '#6f8256', display: 'block', flexShrink: 0, boxShadow: V.sessionPaused ? 'none' : '0 0 0 3px rgba(111,130,86,.25)' }} />
           <span style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1 }}>{V.sessionElapsedLabel}</span>
           <span style={{ fontSize: 13, color: '#cdc4b8', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
@@ -1851,7 +1851,7 @@ export default function TiempoClient() {
 
       {/* Popup flotante de la sesión en curso (siempre visible mientras corre) */}
       {V.hasSession && !sessionMin && (
-        <div style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, width: 'min(340px, calc(100vw - 40px))', background: '#1c1a17', color: '#faf7f1', borderRadius: 22, padding: 20, boxShadow: '0 22px 55px -15px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="t-abovenav" style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 80, width: 'min(340px, calc(100vw - 40px))', background: '#1c1a17', color: '#faf7f1', borderRadius: 22, padding: 20, boxShadow: '0 22px 55px -15px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
             <span style={{ ...LBL, color: V.sessionPaused ? '#d98a55' : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : 'en curso'}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1965,7 +1965,7 @@ export default function TiempoClient() {
 
       {/* Toast "deshacer" tras borrar (registro / bloque / agendado) */}
       {undo && (
-        <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 121, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 16px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 14, fontSize: 13, maxWidth: 'calc(100vw - 32px)' }}>
+        <div className="t-abovenav" style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 121, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 16px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 14, fontSize: 13, maxWidth: 'calc(100vw - 32px)' }}>
           <span>{undo.msg}</span>
           <button onClick={() => { undo.fn(); setUndo(null); if (undoTimer.current) clearTimeout(undoTimer.current) }} style={{ border: 'none', background: 'transparent', color: '#E7C56B', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>Deshacer</button>
         </div>
@@ -1973,7 +1973,7 @@ export default function TiempoClient() {
 
       {/* Aviso de guardado fallido (sin red / error): nada se pierde en localStorage, pero avisa. */}
       {saveErr && (
-        <div style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 120, maxWidth: 'min(360px, calc(100vw - 32px))', background: '#8a3c2a', color: '#faf7f1', borderRadius: 14, padding: '12px 14px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
+        <div className="t-abovenav" style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 120, maxWidth: 'min(360px, calc(100vw - 32px))', background: '#8a3c2a', color: '#faf7f1', borderRadius: 14, padding: '12px 14px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
           <span style={{ flex: 1, lineHeight: 1.4 }}>⚠ No se pudo guardar el último cambio. Revisa tu conexión.{saveErrMsg && <><br /><span style={{ fontSize: 11.5, opacity: .85, fontFamily: 'monospace' }}>{saveErrMsg}</span></>}</span>
           <button onClick={() => { const items = [...pendingSync.current.values()]; items.forEach(v => syncTask(v.epicaId, v.task)); save({}) }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
         </div>
@@ -2679,7 +2679,7 @@ function SleepLogger({ onLog }: { onLog: (date: string, mins: number) => void })
 }
 
 const MARGEN_CSS = `
-.hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; align-items: start; }
+.hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 20px; align-items: start; }
 .hoy-grid > * { min-width: 0; }
 .margen-root a:hover { color: #b4653a; }
 .margen-root input, .margen-root select { font-family: inherit; font-size: inherit; color: inherit; }
@@ -2691,8 +2691,15 @@ const MARGEN_CSS = `
 .margen-root input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 999px; background: #faf7f1; border: 1.5px solid #1c1a17; }
 .margen-root input[type=text]:hover { border-bottom-color: #ddd4c6 !important; }
 .margen-root ::selection { background: #ecd9cb; }
+/* Con el nav como barra fija abajo (≤700px), los elementos anclados abajo suben para no taparse. */
+@media (max-width: 700px) {
+  .t-abovenav { bottom: calc(92px + env(safe-area-inset-bottom)) !important; }
+  .t-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; max-width: 100%; }
+  .t-tabs::-webkit-scrollbar { display: none; }
+  .t-tabs > div { padding: 8px 14px !important; font-size: 13px !important; }
+}
 @media (max-width: 640px) {
-  .tiempo-body { padding: 14px 12px 56px !important; }
+  .tiempo-body { padding: 14px 12px 24px !important; }
   .tiempo-sub { gap: 10px !important; }
   .hoy-grid { gap: 12px !important; }
   .hoy-grid > *, .t-card { padding: 18px !important; border-radius: 20px !important; }

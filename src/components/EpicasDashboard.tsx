@@ -6060,7 +6060,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       })()}
 
       {toast && (
-        <div style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div className="ep-abovenav" style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)', display: 'flex', alignItems: 'center', gap: 14 }}>
           <span>{toast.msg}</span>
           {toast.action && (
             <button onClick={() => { toast.action!.fn(); setToast(null) }} style={{ border: 'none', background: 'transparent', color: '#E7C56B', fontWeight: 800, fontSize: 13, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>{toast.action.label}</button>
