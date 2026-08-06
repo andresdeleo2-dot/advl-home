@@ -669,7 +669,12 @@ export default function TiempoClient() {
       free, freeLabel: hm(free),
       committed, committedLabel: hm(committed), freeUncommitted, freeUncommittedLabel: hm(freeUncommitted),
       freeGaps, nextGapLabel: nextGap ? clock(nextGap.s) + '–' + clock(nextGap.e) + ' · ' + hm(nextGap.len) : null,
-      freeExplain: 'Es lo que queda entre ahora y las ' + clock(bed) + ', descontando todo lo que decidiste proteger.',
+      freeExplain: (() => {
+        const gross = Math.max(0, bed - now), prot = Math.max(0, gross - free)
+        return prot > 0
+          ? 'De aquí a las ' + clock(bed) + ' hay ' + hm(gross) + ', pero tu rutina y juntas ocupan ' + hm(prot) + ' → quedan ' + hm(free) + ' libres para lo que tú decidas.'
+          : 'Es lo que queda entre ahora y las ' + clock(bed) + '. No tienes rutina ni juntas de por medio.'
+      })(),
       windowLabel: nextBlock ? hm(windowMins) + ' (hasta ' + clock(nextBlock.start) + ')' : hm(windowMins),
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
       workedTodayLabel: workedToday ? hm(workedToday) : '—',
