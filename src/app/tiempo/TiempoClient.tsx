@@ -172,6 +172,17 @@ export default function TiempoClient() {
     return () => clearInterval(id)
   }, [sessionActive])
 
+  // Rollover de medianoche: si la pestaña queda abierta y cambia el día, avanza `taskDay`
+  // (solo si venía siguiendo a "hoy"), para que lo que hagas hoy no caiga en el día de ayer.
+  const prevTodayRef = useRef(iso(new Date()))
+  useEffect(() => {
+    const rt = iso(new Date())
+    if (rt !== prevTodayRef.current) {
+      if (taskDay === prevTodayRef.current) setTaskDay(rt)
+      prevTodayRef.current = rt
+    }
+  }, [now, taskDay])
+
   // Estado inicial del permiso de notificaciones.
   useEffect(() => { try { if (typeof Notification !== 'undefined') setNotifOn(Notification.permission === 'granted') } catch {} }, [])
 
@@ -876,6 +887,9 @@ export default function TiempoClient() {
     } else {
       save({ session: ns, ...extraPatch })
     }
+    // El registro caerá en el día REAL de hoy; salta la vista a hoy para que se vea (si estabas
+    // viendo otro día del selector, o la pestaña quedó abierta desde ayer, si no parecería perdido).
+    setTaskDay(iso(new Date()))
     return true
   }
   // Auto-guardado del editor de tarea: escribe a Épicas y refresca la copia local SIN cerrar.
@@ -890,7 +904,7 @@ export default function TiempoClient() {
   }
   // Registro de hoy (localStorage): editar entradas (auto-guardado, NO cierra el editor).
   const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
-    save({ history: data.history.map((h, i) => i === idx ? { ...h, ...patch } : h) })
+    save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, ...patch } : h) })
   }
   // Toast "deshacer": guarda una acción de restauración por ~6s.
   const showUndo = (msg: string, fn: () => void) => {
@@ -963,6 +977,7 @@ export default function TiempoClient() {
     const today = iso(new Date())
     const entry = { date: today, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
     save({ session: null, history: dataRef.current.history.concat([entry]) })
+    setTaskDay(today)   // el registro cae en hoy: asegura que la vista lo muestre
     showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
@@ -1001,7 +1016,9 @@ export default function TiempoClient() {
       return { ...r, weeks }
     })
     setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, routines } : e))
-    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines }) }).catch(() => {})
+    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines }) })
+      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('rutina ' + r.status + ' ' + t.slice(0, 140)) } })
+      .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] marcar rutina falló:', e) })
   }
   const startRoutine = (name: string) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0 })) setView('hoy') }
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
@@ -1029,7 +1046,9 @@ export default function TiempoClient() {
   const createTask = (epicaId: string, task: EpicaTask) => {
     if (!epicaId) return
     const ep = epicasList.find(e => e.id === epicaId)
-    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [task] }) }).catch(() => {})
+    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [task] }) })
+      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('crear ' + r.status + ' ' + t.slice(0, 140)) } })
+      .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] crear tarea falló:', e) })
     setAllTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task }])
     setEditTask(null)
   }
@@ -1093,7 +1112,7 @@ export default function TiempoClient() {
     save({ mit: { date: todayISO, ids } })
   }
   const scheduleActivity = (b: ScheduledBlock, createInCal = false) => {
-    save({ scheduled: [...(data.scheduled || []), { ...b, date: iso(new Date()) }] }); setScheduleAt(null); setSchedulePreset(null)
+    save({ scheduled: [...(data.scheduled || []), { ...b, date: taskDay }] }); setScheduleAt(null); setSchedulePreset(null)
     if (createInCal) {
       const [y, mo, d] = taskDay.split('-').map(Number)
       const startISO = new Date(y, mo - 1, d, Math.floor(b.start / 60), b.start % 60).toISOString()
@@ -1113,7 +1132,7 @@ export default function TiempoClient() {
   const dismissSched = (id: string) => setPromptedSched(p => { const n = new Set(p); n.add(id); return n })
   // Registrar (o reemplazar) el sueño de un día: alimenta la racha y la deuda de sueño.
   const logSleep = (date: string, mins: number) => {
-    const rest = data.history.filter(h => !(h.date === date && h.area === 'sueno'))
+    const rest = dataRef.current.history.filter(h => !(h.date === date && h.area === 'sueno'))
     // Siempre inserta (incluso 0h): registrar 0 significa "dormí 0", no borrar la noche.
     save({ history: [...rest, { date, name: 'Dormir', area: 'sueno' as Area, start: data.bed, dur: Math.max(0, Math.round(mins)) }] })
   }

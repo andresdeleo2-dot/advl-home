@@ -217,6 +217,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
   const comentariosReady = useRef(false) // true si la columna comentarios existe
   const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
+  const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -268,6 +269,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }).finally(() => setLoading(false))
   }, [])
   useEffect(() => { loadEpics() }, [loadEpics])
+  // Al volver a la pestaña de Épicas (tras editar en Tiempo u otra pestaña) se refresca solo,
+  // salvo que haya un modal/editor abierto (para no pisar lo que estás editando). Mismo patrón que Tiempo.
+  useEffect(() => {
+    const can = () => document.visibilityState === 'visible' && !modalOpenRef.current
+    const onVis = () => { if (can()) loadEpics() }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onVis)
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis) }
+  }, [loadEpics])
 
   // Recordatorios: cada minuto (y al abrir la app) revisa las tareas con remindAt
   // vencido; dispara notificación del navegador (si hay permiso) + aviso in-app y
@@ -382,6 +392,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // atrapado dentro; al cerrarlo, vuelve al elemento que lo abrió. Antes el foco se
   // quedaba detrás del backdrop y con Tab se navegaba el contenido tapado.
   const anyModal = !!(editing || taskEdit || taskView || routineStat || pickerOpen)
+  useEffect(() => { modalOpenRef.current = anyModal }, [anyModal])
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!anyModal) {
