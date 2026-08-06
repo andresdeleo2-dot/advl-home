@@ -323,8 +323,8 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <HeaderStats />
             <span className="hdr-extra">
-              <HeaderStats />
               <CumplesWidget />
               <ExcepcionalesWidget />
             </span>
@@ -342,12 +342,12 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               <span className="hidden sm:inline">Nuevo</span>
             </button>
             <button onClick={refresh} title="Refrescar"
-              className="flex h-[33px] w-[33px] items-center justify-center rounded-[10px] band-glass band-glass-hover text-white/80">
+              className="flex h-10 w-10 items-center justify-center rounded-[10px] band-glass band-glass-hover text-white/80 sm:h-[33px] sm:w-[33px]">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             </button>
             {!!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && (
               <button onClick={logout} title="Cerrar sesión"
-                className="flex h-[33px] w-[33px] items-center justify-center rounded-[10px] band-glass band-glass-hover text-white/80">
+                className="flex h-10 w-10 items-center justify-center rounded-[10px] band-glass band-glass-hover text-white/80 sm:h-[33px] sm:w-[33px]">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
               </button>
             )}

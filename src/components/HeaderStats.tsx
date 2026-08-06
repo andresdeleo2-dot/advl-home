@@ -49,7 +49,7 @@ export default function HeaderStats() {
   return (
     <div className="flex items-center gap-2">
       {weather && (
-        <div className="hidden sm:flex items-center gap-1.5 rounded-[10px] band-glass px-2.5 py-1.5 text-white">
+        <div className="flex items-center gap-1.5 rounded-[10px] band-glass px-2.5 py-1.5 text-white">
           <span className="text-base leading-none">{weather.icon}</span>
           <span className="text-[13px] font-semibold">{weather.temp}°</span>
         </div>

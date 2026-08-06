@@ -1292,7 +1292,7 @@ export default function TiempoClient() {
                     {V.energy.map((e, i) => <div key={i} style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>{e.worked && <span style={{ width: 5, height: 5, borderRadius: 999, background: '#6f8256', display: 'block' }} />}</div>)}
                   </div>
                   <div style={{ display: 'flex', gap: 4, fontSize: 9.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>
-                    {V.energy.map((_, i) => <span key={i} style={{ flex: 1, textAlign: 'center' }}>{String(7 + i).padStart(2, '0')}</span>)}
+                    {V.energy.map((_, i) => <span key={i} className={(7 + i) % 3 === 1 ? undefined : 'nrg-lbl-min'} style={{ flex: 1, textAlign: 'center' }}>{String(7 + i).padStart(2, '0')}</span>)}
                   </div>
                   <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote} <span style={{ color: '#6f8256' }}>● marca las horas en que trabajaste hoy</span></span>
                   <span style={{ fontSize: 12, color: '#a49b90', lineHeight: 1.45 }}>{V.energyLearnedActive
@@ -1322,17 +1322,17 @@ export default function TiempoClient() {
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <span style={LBL}>lo que hiciste {dayLabel}</span>
                     {daySubtasksDone.map(st => (
-                      <div key={'st' + st.key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                      <div key={'st' + st.key} className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
                         <span style={{ color: '#2E6E6E', flexShrink: 0, fontSize: 13 }}>✓</span>
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ color: '#a49b90', fontSize: 12 }}>· subtarea de {st.taskName}</span></span>
+                        <span className="t-dayrow-name" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ color: '#a49b90', fontSize: 12 }}>· subtarea de {st.taskName}</span></span>
                         <span style={{ color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(st.at)}</span>
                         <span style={{ fontWeight: 600, color: '#2E6E6E', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>subtarea ✓</span>
                       </div>
                     ))}
                     {[...dayLog].reverse().map(l => (
-                      <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
+                      <div key={l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block', flexShrink: 0 }} />
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                        <span className="t-dayrow-name" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
                         <span style={{ color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
                         {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
                         {l.taskId && isTodayView && (visibleTaskIds.has(l.taskId)
@@ -1343,9 +1343,9 @@ export default function TiempoClient() {
                       </div>
                     ))}
                     {epicDoneToday.map(t => (
-                      <div key={'epc' + t.task.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                      <div key={'epc' + t.task.id} className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
+                        <span className="t-dayrow-name" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
                         <span style={{ fontSize: 11, color: '#c2b9ab', flexShrink: 0 }}>en Épicas</span>
                         <button onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
                         <span style={{ fontWeight: 600, color: '#4f6238', width: 62, textAlign: 'right', fontSize: 12.5, flexShrink: 0 }}>hecho ✓</span>
@@ -2170,10 +2170,10 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
         const isMit = mitIds.includes(t.task.id!)
         return (
           <div key={t.task.id} data-taskid={t.task.id} draggable onDragStart={e => { e.dataTransfer.setData('text/taskid', t.task.id!); e.dataTransfer.effectAllowed = 'copy' }} title="Arrástrala a la cinta “el día” para agendarla" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, borderLeft: isMit ? '3px solid #c2933a' : undefined, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : isMit ? '#f8efdc' : on ? '#f7ece2' : 'transparent' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {draggable && <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', flexShrink: 0, padding: '0 2px' }}>⠿</span>}
               <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
-              <span onClick={() => onPick(t)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+              <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, cursor: 'pointer', minWidth: 0 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
                 <span style={{ fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Sin título'}</span>
                 <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
@@ -2706,6 +2706,12 @@ const MARGEN_CSS = `
   .t-hero { font-size: 56px !important; line-height: .9 !important; }
   .t-clock { font-size: 24px !important; }
   .t-daychip { min-width: 0 !important; }
+  /* Filas del día / de tareas: el nombre ocupa la 1ª línea; hora y botones bajan a la 2ª (no se aplasta el título). */
+  .t-dayrow { flex-wrap: wrap !important; row-gap: 7px !important; }
+  .t-dayrow-name { flex-basis: 62% !important; white-space: normal !important; }
+  .t-dayrow > button { min-height: 32px; }
+  /* Etiquetas de energía: sólo cada 3 horas en móvil (no se enciman). */
+  .nrg-lbl-min { visibility: hidden; }
 }
 @media (max-width: 400px) {
   .t-hero { font-size: 46px !important; }

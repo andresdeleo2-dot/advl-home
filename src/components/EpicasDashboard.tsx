@@ -3531,7 +3531,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
-              <div role="group" aria-label="Vista del enfoque" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
+              <div role="group" aria-label="Vista del enfoque" className="ep-modes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
                 {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
@@ -5449,11 +5449,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }
         const openEditFromView = () => { setTaskView(null); openTaskEdit(taskView.eId, t.id!) }
         return (
-          <div onClick={() => setTaskView(null)} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
-              <div style={{ height: 4, background: ep.color }} />
-              <div style={{ padding: '20px 26px 24px' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+          <div onClick={() => setTaskView(null)} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 40px)' }}>
+              <div style={{ height: 4, background: ep.color, flexShrink: 0 }} />
+              <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
                     <div className="serif" style={{ fontWeight: 600, fontSize: 27, lineHeight: 1.05, color: '#10233F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</div>
@@ -5473,6 +5472,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                   <button aria-label="Cerrar detalle de tarea" onClick={() => setTaskView(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
+
+                <div className="ep-modal-body" style={{ padding: '16px 26px 8px', overflowY: 'auto', flex: 1 }}>
 
                 {/* RESUMEN — justo debajo del título (qué es la actividad y qué se quiere lograr) */}
                 {t.resumen && (
@@ -5749,7 +5750,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap', flexShrink: 0, background: '#fff' }}>
                   <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
                   <span style={{ flex: 1 }} />
                   {/* Comenzar ahora: abre Tiempo, la agrega al día y arranca el cronómetro ligado a esta tarea */}
@@ -5775,7 +5778,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <button onClick={() => setTaskView(null)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cerrar</button>
                   <button onClick={openEditFromView} style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
                 </div>
-              </div>
             </div>
           </div>
         )
@@ -5788,11 +5790,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const willMove = !isNew && !!target && !!ep && target.id !== ep.id
         const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
         return (
-          <div onClick={closeTaskEdit} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 620, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
-              <div style={{ height: 4, background: target?.color || ep?.color || '#2E5A9E' }} />
-              <div style={{ padding: '20px 26px 22px' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 }}>
+          <div onClick={closeTaskEdit} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 620, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 40px)' }}>
+              <div style={{ height: 4, background: target?.color || ep?.color || '#2E5A9E', flexShrink: 0 }} />
+              <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '16px 26px 12px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>{isNew ? 'Nueva tarea' : 'Editar tarea'}</div>
                     {/* La épica es editable en ambos casos: al crear porque el enfoque cruza
@@ -5827,6 +5828,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                   <button aria-label="Cerrar editor de tarea" onClick={closeTaskEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
+
+                <div className="ep-modal-body" style={{ padding: '14px 26px 8px', overflowY: 'auto', flex: 1 }}>
 
                 <label style={lbl}>Tarea</label>
                 <input autoFocus value={taskDraft.t} onChange={e => setTaskDraft(d => ({ ...d, t: e.target.value }))} placeholder="¿Qué hay que hacer?" style={inpBig} />
@@ -5989,13 +5992,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <label style={lbl}>Nota</label>
                 <RichText value={taskDraft.note || ''} onChange={v => setTaskDraft(d => ({ ...d, note: v }))} placeholder="Negritas (B), cursiva (I) y viñetas (• Lista)…" minHeight={170} />
 
-                <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexShrink: 0, background: '#fff', flexWrap: 'wrap' }}>
                   {!isNew && <button onClick={deleteTask} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '11px 14px', fontSize: 12.5, fontWeight: 700 }}>Eliminar</button>}
                   <span style={{ flex: 1 }} />
                   <button onClick={closeTaskEdit} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 10, padding: '11px 16px', fontSize: 12.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
                   <button onClick={saveTask} style={{ ...goldBtn, padding: '11px 20px', fontSize: 12.5 }}>Guardar</button>
                 </div>
-              </div>
             </div>
           </div>
         )

@@ -57,18 +57,18 @@ export default function ItemCard({
       <div className="absolute right-2 top-2 flex items-center gap-1">
         {/* Copy — reveals on hover */}
         <button onClick={(e) => { e.preventDefault(); onCopy?.(item) }} title="Copiar URL"
-          className="advl-act flex h-6 w-6 items-center justify-center rounded-[7px] bg-[rgba(15,35,64,0.06)] text-[rgba(20,35,61,0.55)] transition hover:bg-[rgba(15,35,64,0.13)] hover:text-[#16365F]">
+          className="advl-act flex h-8 w-8 sm:h-6 sm:w-6 items-center justify-center rounded-[7px] bg-[rgba(15,35,64,0.06)] text-[rgba(20,35,61,0.55)] transition hover:bg-[rgba(15,35,64,0.13)] hover:text-[#16365F]">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         </button>
         {/* Edit — reveals on hover */}
         <button onClick={(e) => { e.preventDefault(); onEdit?.(item) }} title="Editar"
-          className="advl-act flex h-6 w-6 items-center justify-center rounded-[7px] bg-[rgba(194,147,58,0.14)] text-[#A87A2C] transition hover:bg-[rgba(194,147,58,0.24)]">
+          className="advl-act flex h-8 w-8 sm:h-6 sm:w-6 items-center justify-center rounded-[7px] bg-[rgba(194,147,58,0.14)] text-[#A87A2C] transition hover:bg-[rgba(194,147,58,0.24)]">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
         {/* Fav — always visible */}
         <button onClick={(e) => { e.preventDefault(); onToggleFav?.(item) }}
           title={item.featured ? 'Quitar de favoritos' : 'Marcar favorito'}
-          className="flex h-6 w-6 items-center justify-center rounded-[7px]">
+          className="flex h-8 w-8 sm:h-6 sm:w-6 items-center justify-center rounded-[7px]">
           <svg width="14" height="14" viewBox="0 0 24 24"
             fill={item.featured ? '#C2933A' : 'none'}
             stroke={item.featured ? '#C2933A' : 'rgba(20,35,61,0.26)'}
