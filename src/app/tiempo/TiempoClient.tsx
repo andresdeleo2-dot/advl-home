@@ -853,13 +853,24 @@ export default function TiempoClient() {
     else if (selTask) beginSession({ name: selTask.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur, epicaId: selTask.epicaId, taskId: selTask.task.id })
     else { const a = ACTIVITIES.find(x => x.id === act) || ACTIVITIES[0]; beginSession({ name: a.id, area: a.area, start: Math.round(now), dur }) }
   }
-  // Escribe cambios de una tarea de vuelta a Épicas (mismo canal que el resto).
-  const syncTask = (epicaId: string, task: EpicaTask) => {
-    // Se omite `updatedAt` para FORZAR la escritura: si no, la API detecta "choque"
-    // (updatedAt viejo tras varias operaciones) y descarta el cambio.
-    const rest: EpicaTask = { ...task }; delete (rest as { updatedAt?: string }).updatedAt
+  // Escribe cambios de una tarea de vuelta a Épicas con CONTROL DE CHOQUE (mismo estándar que
+  // Épicas): manda el `updatedAt` real; el server rechaza si otra pestaña/Épicas ganó (conflicts)
+  // y devuelve `stamps` (updated_at fresco) para no chocar consigo mismo en la siguiente edición.
+  // `force` sólo para el auto-guardado del editor (escribe cada tecla y no puede re-sellar por tecla).
+  const syncTask = (epicaId: string, task: EpicaTask, force = false) => {
+    const rest: EpicaTask = { ...task }
+    if (force) delete (rest as { updatedAt?: string }).updatedAt
     return fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [rest] }) })
-      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('tarea ' + r.status + ' ' + t.slice(0, 160)) } if (task.id) pendingSync.current.delete(task.id); setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('') })
+      .then(async r => {
+        if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('tarea ' + r.status + ' ' + t.slice(0, 160)) }
+        const j = await r.json().catch(() => null) as { conflicts?: string[]; stamps?: Record<string, string> } | null
+        // Sella el updated_at fresco en la copia local (evita falso choque en la próxima escritura).
+        const stamp = task.id ? j?.stamps?.[task.id] : undefined
+        if (stamp && task.id) { const st = stamp; setAllTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task: { ...x.task, updatedAt: st } } : x)) }
+        // Choque real: NO forzamos encima; recargamos lo último de la BD y avisamos (respeta el otro cambio).
+        if (task.id && j?.conflicts?.includes(task.id)) { setSaveErr(true); setSaveErrMsg('«' + (task.t || 'tarea') + '» cambió en otra pestaña; recargué la última versión.'); refreshTasks(); return }
+        if (task.id) pendingSync.current.delete(task.id); setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('')
+      })
       .catch(e => { if (task.id) pendingSync.current.set(task.id, { epicaId, task }); setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] sync de tarea falló:', e) })
   }
   // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
@@ -894,7 +905,7 @@ export default function TiempoClient() {
   }
   // Auto-guardado del editor de tarea: escribe a Épicas y refresca la copia local SIN cerrar.
   const autoSaveTask = (epicaId: string, task: EpicaTask) => {
-    syncTask(epicaId, task)
+    syncTask(epicaId, task, true)   // editor: fuerza (guarda cada tecla; el que edita en Tiempo manda)
     setAllTasks(prev => (prev || []).map(x => x.task.id === task.id ? { ...x, task } : x))
   }
   const unplanTask = (epicaId: string, task: EpicaTask) => {
