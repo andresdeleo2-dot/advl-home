@@ -136,7 +136,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'>('todas')
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
-  const [epicDay, setEpicDay] = useState<string>('')                   // filtro por día (fecha "Hacer") dentro de la épica
+  const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
+  const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
   const [backlogSort, setBacklogSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'due', dir: 'asc' })
   const [backlogDone, setBacklogDone] = useState(false)
@@ -471,7 +472,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
   // El filtro por objetivo pertenece a una épica: al cambiar de destacada, se limpia
-  useEffect(() => { setEpicObjFilter('todas'); setEpicDay('') }, [featuredId])
+  useEffect(() => { setEpicObjFilter('todas') }, [featuredId])   // el filtro por día es GLOBAL: NO se limpia al cambiar de épica
 
   // Objetivos que se cumplen solos (los medidos con tareas) quedan sellados con
   // su fecha, para poder celebrarlos en el resumen de la semana.
@@ -1759,6 +1760,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return { key: s, color: ts.c, label: ts.group, items: indexed.filter(t => t.status === s) }
   }).filter(g => g.items.length > 0)
 
+  // ── Filtro GLOBAL por fecha "Hacer" (día o semana), a nivel de TODA la sección ──
+  // Afecta la épica destacada, los conteos de los chips de arriba y la lista de épicas.
+  const scopeRange: readonly [string, string] | null = !epicDay
+    ? null
+    : epicSpan === 'semana' ? [mondayISO(epicDay), addDays(mondayISO(epicDay), 6)] : [epicDay, epicDay]
+  const inScope = (t: EpicaTask) => !scopeRange || (!!t.plan && t.plan >= scopeRange[0] && t.plan <= scopeRange[1])
+  // Pendientes de una épica dentro del alcance (para los conteos cuando el filtro está activo)
+  const scopedPend = (e: Epica) => (e.tasks || []).filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && inScope(t)).length
+
   // Filtro + orden de tareas de la épica destacada
   // Filtro por "chip" (plan/vencidas/alta) y por objetivo — se combinan (AND)
   const passEpicChip = (t: (typeof indexed)[number]) => {
@@ -1774,8 +1784,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicObjFilter === 'sin') return !objOfTask(t.id)
     return (featured.kpis.find(m => m.id === epicObjFilter)?.taskIds || []).includes(t.id || '')
   }
-  const passEpicDay = (t: (typeof indexed)[number]) => !epicDay || t.plan === epicDay   // sólo tareas del día "Hacer" elegido
-  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && passEpicDay(t)
+  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && inScope(t)
   // Objetivos que aún tienen tareas bajo el filtro de chip activo (cascada)
   const objOptions = featured.kpis.filter(m => indexed.some(t => t.status !== ARCHIVED && (m.taskIds || []).includes(t.id || '') && passEpicChip(t)))
   const hasSinObj = indexed.some(t => t.status !== ARCHIVED && !objOfTask(t.id) && passEpicChip(t))
@@ -4403,7 +4412,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </thead>
           <tbody>
             {rows.map((e, idx) => {
-              const pct = pctOf(e); const pend = pendCount(e); const st = statusStyle(e.status)
+              const pct = pctOf(e); const pend = epicDay ? scopedPend(e) : pendCount(e); const st = statusStyle(e.status)
               return (
                 <tr key={e.id} className="backlog-row" style={{ borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
                   <td style={{ padding: '4px 6px 4px 12px', whiteSpace: 'nowrap' }}>
@@ -4765,12 +4774,47 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Elige una épica</div>
             <button onClick={openNew} style={{ cursor: 'pointer', border: '1px dashed rgba(15,35,64,0.22)', background: 'transparent', borderRadius: 10, padding: '6px 12px', fontSize: 11.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>+ Nueva épica</button>
           </div>
+
+          {/* FILTRO GLOBAL POR FECHA — filtra TODAS las épicas por día o semana (por fecha "Hacer") */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', margin: '0 0 12px' }}>
+            <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>📅 Ver</span>
+            {(() => {
+              const m0 = mondayISO(today)
+              const chip = (label: string, active: boolean, onClick: () => void) => (
+                <button onClick={onClick} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: active ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: active ? '#10233F' : '#fff', color: active ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}</button>
+              )
+              return (
+                <>
+                  {chip('Todas', !epicDay, () => setEpicDay(''))}
+                  {chip('Hoy', epicDay === today && epicSpan === 'dia', () => { setEpicDay(today); setEpicSpan('dia') })}
+                  {chip('Mañana', epicDay === addDays(today, 1) && epicSpan === 'dia', () => { setEpicDay(addDays(today, 1)); setEpicSpan('dia') })}
+                  {chip('Esta semana', !!epicDay && epicSpan === 'semana' && mondayISO(epicDay) === m0, () => { setEpicDay(today); setEpicSpan('semana') })}
+                  <input type="date" value={epicDay} onChange={e => setEpicDay(e.target.value)} title="Elegir un día"
+                    style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 7px', fontSize: 11.5, fontWeight: 600, color: epicDay ? '#A87A2C' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }} />
+                  {epicDay && (
+                    <span role="group" aria-label="Alcance" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 8, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+                      {(['dia', 'semana'] as const).map(s => (
+                        <button key={s} onClick={() => setEpicSpan(s)} style={{ cursor: 'pointer', border: 'none', borderRadius: 6, padding: '4px 9px', font: '700 10.5px var(--font-ui)', background: epicSpan === s ? '#C2933A' : 'transparent', color: epicSpan === s ? '#fff' : 'rgba(20,35,61,0.55)' }}>{s === 'dia' ? 'Día' : 'Semana'}</button>
+                      ))}
+                    </span>
+                  )}
+                  {epicDay && (() => {
+                    const total = activeEpics.reduce((n, e) => n + scopedPend(e), 0)
+                    const lbl = epicSpan === 'semana' ? weekRangeLabel(mondayISO(epicDay)) : cap(new Date(epicDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, ''))
+                    return <span style={{ fontSize: 11.5, fontWeight: 700, color: '#A87A2C' }}>{lbl} · {total} {total === 1 ? 'tarea' : 'tareas'}</span>
+                  })()}
+                  {epicDay && <button onClick={() => setEpicDay('')} title="Quitar filtro" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 12, fontWeight: 800 }}>✕</button>}
+                </>
+              )
+            })()}
+          </div>
+
           <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
             {visibleEpics.map(e => {
               const on = !!featured && e.id === featured.id
-              const pend = pendCount(e)
+              const pend = epicDay ? scopedPend(e) : pendCount(e)   // conteo dentro del alcance cuando el filtro está activo
               return (
-                <button key={e.id} onClick={() => setFeaturedId(e.id)} title={e.name} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', border: on ? `1.5px solid ${e.color}` : '1px solid rgba(15,35,64,0.12)', background: on ? '#fff' : 'rgba(255,255,255,0.55)', color: on ? '#10233F' : 'rgba(20,35,61,0.6)', boxShadow: on ? '0 6px 16px -10px rgba(15,35,64,0.5)' : 'none' }}>
+                <button key={e.id} onClick={() => setFeaturedId(e.id)} title={epicDay ? `${e.name} · ${pend} en el rango` : e.name} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', borderRadius: 12, padding: '9px 14px', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', border: on ? `1.5px solid ${e.color}` : '1px solid rgba(15,35,64,0.12)', background: on ? '#fff' : 'rgba(255,255,255,0.55)', color: on ? '#10233F' : 'rgba(20,35,61,0.6)', boxShadow: on ? '0 6px 16px -10px rgba(15,35,64,0.5)' : 'none', opacity: epicDay && pend === 0 && !on ? 0.45 : 1 }}>
                   <span style={{ width: 9, height: 9, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                   {e.name}
                   {pend > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: on ? e.color : 'rgba(20,35,61,0.4)' }}>{pend}</span>}
@@ -4980,35 +5024,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const on = epicFilter === k
                     return <button key={k} onClick={() => setEpicFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                   })}
-                  {/* Filtro por DÍA (fecha "Hacer"): SIEMPRE visible. Chips para los días que
-                      tienen tareas + un selector para cualquier día. Si ninguna tarea tiene
-                      fecha "Hacer", igual se muestra el selector (con una pista). */}
-                  {(() => {
-                    const withPlan = indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && t.plan)
-                    const dayOpts = Array.from(new Set(withPlan.map(t => t.plan!))).sort().slice(0, 8)
-                    const dayLbl = (d: string) => cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, ''))
-                    return (
-                      <>
-                        <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
-                        <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.4)' }}>📅 Día</span>
-                        {dayOpts.map(d => {
-                          const on = epicDay === d
-                          const n = withPlan.filter(t => t.plan === d).length
-                          return (
-                            <button key={d} onClick={() => setEpicDay(on ? '' : d)} title={`Sólo tareas del ${dayLbl(d)}`}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 9px', fontSize: 11, fontWeight: 700, border: on ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.14)' : '#fff', color: on ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>
-                              {dayLbl(d)} <span style={{ fontSize: 9.5, fontWeight: 800, opacity: 0.65 }}>{n}</span>
-                            </button>
-                          )
-                        })}
-                        <input type="date" value={epicDay} onChange={e => setEpicDay(e.target.value)} title="Filtrar por un día (fecha Hacer)"
-                          style={{ cursor: 'pointer', border: epicDay && !dayOpts.includes(epicDay) ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 6px', fontSize: 11, fontWeight: 600, color: epicDay ? '#A87A2C' : 'rgba(20,35,61,0.5)', background: epicDay && !dayOpts.includes(epicDay) ? 'rgba(194,147,58,0.10)' : '#fff', outline: 'none' }} />
-                        {epicDay
-                          ? <button onClick={() => setEpicDay('')} title="Quitar filtro de día" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 12, fontWeight: 800 }}>✕</button>
-                          : dayOpts.length === 0 && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)' }}>ninguna tarea con fecha “Hacer”</span>}
-                      </>
-                    )
-                  })()}
+                  {/* (El filtro por día/semana ahora es GLOBAL: vive arriba, sobre "Elige una épica") */}
                   {/* Filtro por objetivo — sólo lista objetivos con tareas bajo el chip activo (cascada) */}
                   {(objOptions.length > 0 || (epicObjFilter !== 'todas')) && (
                     <select value={objOptions.some(m => m.id === epicObjFilter) || epicObjFilter === 'sin' ? epicObjFilter : 'todas'} onChange={e => setEpicObjFilter(e.target.value)}
@@ -5171,7 +5187,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 8 : 10 }}>
           {rest.map(e => {
-            const st = statusStyle(e.status); const pct = pctOf(e); const pend = pendCount(e)
+            const st = statusStyle(e.status); const pct = pctOf(e); const pend = epicDay ? scopedPend(e) : pendCount(e)
             const k0 = e.kpis[0]
             return (
               <div key={e.id} {...clickable(() => setFeaturedId(e.id), `Ver épica ${e.name}`)} className="glass glass-hover ep-row" style={{ display: 'flex', alignItems: 'center', gap: 14, borderRadius: 14, padding: compact ? '11px 16px' : '15px 18px', cursor: 'pointer' }}>
@@ -5184,7 +5200,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {e.archived && <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'rgba(20,35,61,0.08)', color: 'rgba(20,35,61,0.5)' }}>Archivada</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{pend > 0 ? `${pend} tareas activas` : 'Al corriente'}</span>
+                    <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{pend > 0 ? `${pend} ${epicDay ? 'en el rango' : 'tareas activas'}` : (epicDay ? 'nada en el rango' : 'Al corriente')}</span>
                     {e.routines.length > 0 && <span style={{ fontSize: 10.5, color: '#2E6E6E', fontWeight: 600 }}>↻ {e.routines.length} rutinas</span>}
                     {e.source_table && <><span style={{ height: 5, width: 5, borderRadius: 99, background: '#3E8E8E' }} /><span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}>{e.source_table}</span></>}
                   </div>
