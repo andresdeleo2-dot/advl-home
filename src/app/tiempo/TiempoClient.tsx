@@ -1787,114 +1787,8 @@ export default function TiempoClient() {
             </div>
           </div>
         ) : (
-          /* ── HISTORIAL ────────────────────────────────────────────── */
-          <div style={{ width: '100%', maxWidth: 1180, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: 20, alignItems: 'start' }}>
-            <div style={{ ...card(12), gridColumn: '1 / -1', background: '#1c1a17', border: '1px solid #1c1a17' }}>
-              <span style={{ ...LBL, color: '#a49b90' }}>tu semana en una línea</span>
-              <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.35, color: '#faf7f1' }}>
-                Registraste {V.weekTotalLabel}{V.areaStats[0] ? <>, sobre todo en <span style={{ color: '#e7c56b' }}>{V.areaStats[0].label.toLowerCase()}</span> ({V.areaStats[0].share})</> : ''}.{' '}
-                {V.weekSleepDebt > 0 ? <>Llevas <span style={{ color: '#e0a58a' }}>{V.weekSleepDebtLabel}</span> de deuda de sueño.</> : <>Sueño <span style={{ color: '#9fc08a' }}>al día</span>.</>}{' '}
-                {V.streakLabel}.
-              </span>
-            </div>
-            <div style={card(26)}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Cómo se repartió tu semana</span>
-                <span style={{ fontSize: 13, color: '#a49b90' }}>{V.weekRange} · {V.weekTotalLabel} registradas</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                {V.areaStats.map((s, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                      <span style={{ fontSize: 15 }}>{s.label}</span>
-                      <span style={{ fontSize: 14, color: '#6b645b' }}>{s.hours} · {s.share}</span>
-                    </div>
-                    <div style={{ height: 8, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${s.pct}%`, height: '100%', background: s.bg, borderRadius: 999 }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <div style={{ background: '#f5efe4', border: '1px solid #ebe3d6', borderRadius: 28, padding: 32, display: 'flex', flexDirection: 'column', gap: 20 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={LBL}>racha</span>
-                  <span style={{ fontFamily: SERIF, fontSize: 28, lineHeight: 1.15 }}>{V.streakLabel}</span>
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {V.days.map((d, i) => (
-                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'center' }}>
-                      <span style={{ width: '100%', height: 38, borderRadius: 10, background: d.bg, display: 'block' }} />
-                      <span style={{ fontSize: 11, color: '#a49b90' }}>{d.label}</span>
-                    </div>
-                  ))}
-                </div>
-                <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.55 }}>{V.streakNote}</span>
-                <div style={{ borderTop: '1px solid #ebe3d6', paddingTop: 14, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-                  <span style={{ ...LBL }}>deuda de sueño · semana</span>
-                  <span style={{ fontFamily: SERIF, fontSize: 22, color: V.weekSleepDebt > 0 ? '#8a3c2a' : '#4f6238' }}>{V.weekSleepDebt > 0 ? V.weekSleepDebtLabel : 'al día ✓'}</span>
-                </div>
-                {V.weekSleepDebt > 0 && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Llevas {V.weekSleepDebtLabel} tomadas del sueño en {V.sleptDays} {V.sleptDays === 1 ? 'noche' : 'noches'} registradas. Eso no se recupera con ocio: se paga con mañana.</span>}
-                <SleepLogger onLog={logSleep} />
-              </div>
-
-              <div style={card(16)}>
-                <span style={LBL}>registro de hoy</span>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {V.todayLog.map((l, i) => (
-                    <div key={i} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
-                      <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
-                      <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
-                      <span style={{ fontSize: 16, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
-                      <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
-                      {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 11px', fontSize: 12, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
-                      <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 10px', fontSize: 12, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
-                    </div>
-                  ))}
-                </div>
-                {V.logEmpty && <span style={{ fontSize: 14, color: '#a49b90', lineHeight: 1.5 }}>{V.logEmpty}</span>}
-              </div>
-            </div>
-
-            {V.taskSummary.length > 0 && (
-              <div style={card(20)}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>Tus tareas trabajadas</span>
-                  <span style={{ fontSize: 12.5, color: '#a49b90' }}>tiempo invertido y si se completaron</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {V.taskSummary.map((a, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: '1px solid #eee6da' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 999, background: a.dot, display: 'block' }} />
-                      <span style={{ fontSize: 15, flex: 1 }}>{a.name}</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: a.done ? '#4f6238' : '#8a4b28' }}>{a.done ? 'completada' : 'solo tiempo'}</span>
-                      <span style={{ fontSize: 14, fontWeight: 600, width: 70, textAlign: 'right' }}>{a.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {V.allTotals.length > 0 && (
-              <div style={card(20)}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>En qué has trabajado</span>
-                  <span style={{ fontSize: 12.5, color: '#a49b90' }}>todo lo registrado, por actividad</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {V.allTotals.map((a, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderBottom: '1px solid #eee6da' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 999, background: a.dot, display: 'block' }} />
-                      <span style={{ fontSize: 15, flex: 1 }}>{a.name}</span>
-                      <span style={{ fontSize: 12.5, color: '#a49b90' }}>{a.n}×</span>
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          /* ── HISTORIAL (analítica por periodo) ─────────────────────── */
+          <HistorialView history={data.history} sleepGoal={data.sleep} onLogSleep={logSleep} />
         )}
       </div>
 
@@ -2374,6 +2268,172 @@ function PeriodSummary({ history }: { history: AppData['history'] }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/* HISTORIAL rediseñado: analítica por PERIODO (Semana o Mes, navegable) con banner-resumen,
+   reparto por área, por actividad, por tarea (completada/solo tiempo) y racha + sueño. Un solo
+   selector de periodo manda todo. Reemplaza el historial disperso y de periodo fijo. */
+function HistorialView({ history, sleepGoal, onLogSleep }: { history: AppData['history']; sleepGoal: number; onLogSleep: (date: string, mins: number) => void }) {
+  const [mode, setMode] = useState<'semana' | 'mes'>('semana')
+  const [anchor, setAnchor] = useState(() => iso(new Date()))
+  const today = iso(new Date())
+  const D = useMemo(() => {
+    const [ay, am] = anchor.split('-').map(Number); const pad = (n: number) => String(n).padStart(2, '0')
+    let start: string, end: string, days: string[], label: string, isCurrent: boolean
+    if (mode === 'semana') {
+      const wk = weekOfISO(anchor); start = wk[0]; end = wk[6]; days = wk
+      const [sy, sm, sd] = start.split('-').map(Number); const [ey, em, ed] = end.split('-').map(Number)
+      const yr = new Date().getFullYear(); const yrTag = (ey !== yr || sy !== yr) ? ` ${ey}` : ''
+      label = (sm === em ? `${sd}–${ed} ${MON_ABBR[em - 1]}` : `${sd} ${MON_ABBR[sm - 1]}–${ed} ${MON_ABBR[em - 1]}`) + yrTag
+      isCurrent = wk.includes(today)
+    } else {
+      const lastD = new Date(ay, am, 0).getDate(); start = `${ay}-${pad(am)}-01`; end = `${ay}-${pad(am)}-${pad(lastD)}`
+      days = Array.from({ length: lastD }, (_, i) => `${ay}-${pad(am)}-${pad(i + 1)}`)
+      label = `${MON_FULL[am - 1]} ${ay}`; isCurrent = today.slice(0, 7) === `${ay}-${pad(am)}`
+    }
+    const entries = history.filter(h => h.date >= start && h.date <= end)
+    const prod = entries.filter(h => h.area !== 'sueno')
+    const total = entries.reduce((s, h) => s + h.dur, 0)
+    const byArea: Partial<Record<Area, number>> = {}; entries.forEach(h => { byArea[h.area] = (byArea[h.area] || 0) + h.dur })
+    const areaStats = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1]).map(([a, m]) => ({ area: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379', min: m, pct: total ? Math.round((m / total) * 100) : 0 }))
+    // por actividad (nombre), color del área dominante
+    const nameG: Record<string, { total: number; n: number; areaMin: Partial<Record<Area, number>> }> = {}
+    entries.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { total: 0, n: 0, areaMin: {} }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur })
+    const byActivity = Object.entries(nameG).map(([name, g]) => { const dom = (Object.entries(g.areaMin) as [Area, number][]).sort((a, b) => b[1] - a[1])[0]?.[0]; return { name, total: g.total, n: g.n, color: (dom && AREAS[dom]?.color) || '#8b8379' } }).sort((a, b) => b.total - a.total)
+    // por tarea (sólo entradas con taskId), completada si alguna quedó done
+    const taskG: Record<string, { name: string; total: number; done: boolean; area: Area }> = {}
+    prod.forEach(h => { if (!h.taskId) return; const g = taskG[h.taskId] || (taskG[h.taskId] = { name: h.name, total: 0, done: false, area: h.area }); g.total += h.dur; g.done = g.done || h.done === true })
+    const byTask = Object.values(taskG).map(g => ({ name: g.name, total: g.total, done: g.done, color: AREAS[g.area]?.color || '#8b8379' })).sort((a, b) => b.total - a.total)
+    const dominant = areaStats[0]
+    const activeDays = days.filter(d => prod.some(h => h.date === d && h.dur > 0)).length
+    // racha global de trabajo hasta hoy
+    let streak = 0
+    for (let i = 0; i < 120; i++) { const d = addDaysISO(today, -i); const has = history.some(h => h.date === d && h.area === 'trabajo' && h.dur > 0); if (has) streak++; else if (i === 0) continue; else break }
+    let sleepDebt = 0, sleptNights = 0
+    days.forEach(d => { const sl = history.filter(h => h.date === d && h.area === 'sueno').reduce((s, h) => s + h.dur, 0); if (sl > 0) { sleepDebt += Math.max(0, sleepGoal - sl); sleptNights++ } })
+    const maxAct = byActivity.length ? byActivity[0].total : 1
+    const maxTask = byTask.length ? byTask[0].total : 1
+    return { start, end, label, isCurrent, total, areaStats, byActivity, byTask, dominant, activeDays, nDays: days.length, streak, sleepDebt, sleptNights, maxAct, maxTask }
+  }, [history, mode, anchor, sleepGoal])
+
+  const move = (dir: 1 | -1) => {
+    const [ay, am] = anchor.split('-').map(Number)
+    if (mode === 'semana') setAnchor(a => addDaysISO(a, dir * 7))
+    else { let y = ay, m = am + dir; if (m < 1) { m = 12; y-- } if (m > 12) { m = 1; y++ } setAnchor(`${y}-${String(m).padStart(2, '0')}-01`) }
+  }
+  const periodWord = mode === 'semana' ? 'la semana' : 'el mes'
+  const card2: CSSProperties = { background: '#fff', border: '1px solid #ece3d5', borderRadius: 24, padding: 22, display: 'flex', flexDirection: 'column', gap: 16 }
+  const modeBtn = (on: boolean): CSSProperties => ({ cursor: 'pointer', border: 'none', background: on ? '#faf7f1' : 'transparent', color: on ? '#1c1a17' : '#6b645b', borderRadius: 999, padding: '7px 15px', fontSize: 13, fontWeight: 600 })
+  const navBtn: CSSProperties = { width: 36, height: 36, border: '1px solid #e2d9cb', background: '#fff', borderRadius: 10, color: '#a49b90', cursor: 'pointer', fontSize: 16 }
+
+  return (
+    <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* Banner resumen del periodo */}
+      <div style={{ background: '#1c1a17', borderRadius: 24, padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <span style={{ ...LBL, color: '#a49b90' }}>{periodWord} en una línea</span>
+        <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.4, color: '#faf7f1' }}>
+          {D.total ? <>Registraste {hm(D.total)} en {D.label}{D.dominant ? <>, sobre todo en <span style={{ color: '#e7c56b' }}>{D.dominant.label.toLowerCase()}</span> ({D.dominant.pct}%)</> : ''}. </> : <>Sin actividad registrada en {D.label}. </>}
+          {D.sleepDebt > 0 ? <>Llevas <span style={{ color: '#e0a58a' }}>{hm(D.sleepDebt)}</span> de deuda de sueño. </> : D.sleptNights > 0 ? <>Sueño <span style={{ color: '#9fc08a' }}>al día</span>. </> : ''}
+          {D.streak > 0 ? <><span style={{ color: '#e7c56b' }}>{D.streak}</span> {D.streak === 1 ? 'día' : 'días'} seguidos trabajando.</> : 'Aún sin racha.'}
+        </span>
+      </div>
+
+      {/* Selector de periodo */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
+          {(['semana', 'mes'] as const).map(m => <button key={m} onClick={() => setMode(m)} style={modeBtn(mode === m)}>{m === 'semana' ? 'Semana' : 'Mes'}</button>)}
+        </div>
+        <button onClick={() => move(-1)} style={navBtn}>‹</button>
+        <span style={{ fontFamily: SERIF, fontSize: 22, textTransform: 'capitalize', minWidth: 130, textAlign: 'center' }}>{D.label}</span>
+        <button onClick={() => move(1)} style={navBtn}>›</button>
+        {!D.isCurrent && <button onClick={() => setAnchor(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer' }}>{mode === 'semana' ? 'Esta semana' : 'Este mes'}</button>}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 13.5, color: '#6b645b' }}>{D.activeDays} de {D.nDays} días con actividad</span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 18, alignItems: 'start' }}>
+        {/* Reparto por área */}
+        <div style={card2}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={{ fontFamily: SERIF, fontSize: 22 }}>Reparto por área</span>
+            <span style={{ fontSize: 12.5, color: '#a49b90' }}>{hm(D.total)}</span>
+          </div>
+          {D.areaStats.length ? D.areaStats.map((s, i) => (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 14.5 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: s.color, display: 'block' }} />{s.label}</span>
+                <span style={{ color: '#6b645b' }}>{hm(s.min)} · {s.pct}%</span>
+              </div>
+              <div style={{ height: 8, background: '#f0e8da', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${s.pct}%`, height: '100%', background: s.color, borderRadius: 999 }} /></div>
+            </div>
+          )) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin datos en {periodWord}.</span>}
+        </div>
+
+        {/* Racha y sueño */}
+        <div style={card2}>
+          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Racha y sueño</span>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, color: D.streak > 0 ? '#8a4b28' : '#a49b90' }}>{D.streak || '—'}</span>
+              <span style={{ fontSize: 12, color: '#a49b90' }}>{D.streak === 1 ? 'día seguido' : 'días seguidos'} trabajando</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, color: D.sleepDebt > 0 ? '#8a3c2a' : '#4f6238' }}>{D.sleepDebt > 0 ? hm(D.sleepDebt) : 'al día'}</span>
+              <span style={{ fontSize: 12, color: '#a49b90' }}>deuda de sueño · {periodWord}</span>
+            </div>
+          </div>
+          {D.sleepDebt > 0 && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Tomado del sueño en {D.sleptNights} {D.sleptNights === 1 ? 'noche' : 'noches'}. Eso no se recupera con ocio: se paga con mañana.</span>}
+          <div style={{ borderTop: '1px solid #eee6da', paddingTop: 14 }}><SleepLogger onLog={onLogSleep} /></div>
+        </div>
+
+        {/* Por tarea */}
+        {D.byTask.length > 0 && (
+          <div style={card2}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontFamily: SERIF, fontSize: 22 }}>Por tarea</span>
+              <span style={{ fontSize: 12.5, color: '#a49b90' }}>tiempo invertido y si se completó</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {D.byTask.map((a, i) => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0 }} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: a.done ? '#4f6238' : '#8a4b28', flexShrink: 0 }}>{a.done ? 'completada' : 'solo tiempo'}</span>
+                    <span style={{ fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums', minWidth: 58, textAlign: 'right' }}>{hm(a.total)}</span>
+                  </div>
+                  <div style={{ height: 6, background: '#f0e8da', borderRadius: 999, overflow: 'hidden', marginLeft: 19 }}><div style={{ width: `${Math.max(2, (a.total / D.maxTask) * 100)}%`, height: '100%', background: a.color, borderRadius: 999 }} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Por actividad */}
+        {D.byActivity.length > 0 && (
+          <div style={card2}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontFamily: SERIF, fontSize: 22 }}>Por actividad</span>
+              <span style={{ fontSize: 12.5, color: '#a49b90' }}>todo lo registrado, por nombre</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {D.byActivity.map((a, i) => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0 }} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                    <span style={{ fontSize: 11.5, color: '#a49b90', flexShrink: 0 }}>{a.n}×</span>
+                    <span style={{ fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums', minWidth: 58, textAlign: 'right' }}>{hm(a.total)}</span>
+                  </div>
+                  <div style={{ height: 6, background: '#f0e8da', borderRadius: 999, overflow: 'hidden', marginLeft: 19 }}><div style={{ width: `${Math.max(2, (a.total / D.maxAct) * 100)}%`, height: '100%', background: a.color, borderRadius: 999 }} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
