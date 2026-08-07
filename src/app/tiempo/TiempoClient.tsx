@@ -795,6 +795,32 @@ export default function TiempoClient() {
     }
   }, [data.history, taskDay])
 
+  // Datos para las gráficas de ritmo (vista Semana): desempeño por día (semana) y cómo se
+  // desarrolló el día visto (acumulado por hora). Todo desde el historial real.
+  const ritmo = useMemo(() => {
+    const week = weekOfISO(taskDay)
+    const rt = iso(new Date())
+    const dowOf = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getDay() }
+    const weekly = week.map(d => {
+      const work = (data.history || []).filter(h => h.date === d && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+      const total = (data.history || []).filter(h => h.date === d && h.area !== 'sueno').reduce((s, h) => s + h.dur, 0)
+      return { date: d, work, total, isToday: d === rt, future: d > rt, num: Number(d.slice(8)), letter: DAY_NAMES[dowOf(d)] }
+    })
+    const goal = data.focusGoal ?? 0
+    const maxWork = Math.max(60, goal, ...weekly.map(w => w.work))
+    // Cómo se desarrolló el día visto: curva acumulada de minutos productivos por hora.
+    const dayEntries = (data.history || []).filter(h => h.date === taskDay && h.area !== 'sueno').slice().sort((a, b) => a.start - b.start)
+    const firstStart = dayEntries.length ? Math.min(...dayEntries.map(e => e.start)) : 420
+    const lastEnd = dayEntries.length ? Math.max(...dayEntries.map(e => e.start + e.dur)) : data.bed
+    const winStart = Math.min(420, firstStart)
+    const winEnd = Math.max(data.bed, lastEnd)
+    let cum = 0
+    const curve: { t: number; cum: number }[] = [{ t: winStart, cum: 0 }]
+    for (const e of dayEntries) { curve.push({ t: Math.max(winStart, e.start), cum }); cum += e.dur; curve.push({ t: e.start + e.dur, cum }) }
+    curve.push({ t: winEnd, cum })
+    return { weekly, maxWork, goal, dayCurve: { curve, total: cum, winStart, winEnd, n: dayEntries.length } }
+  }, [data.history, taskDay, data.focusGoal, data.bed])
+
   // Tareas TERMINADAS en Épicas el DÍA VISTO (doneAt, o recurrente con repeatDone) que NO tienen
   // un registro con tiempo ese día: se muestran igual como "hecho" en el día.
   const epicDoneToday = useMemo(() => {
@@ -1655,6 +1681,11 @@ export default function TiempoClient() {
               )}
               {insights.streak > 0 && <span style={{ fontSize: 13.5, color: '#8a4b28', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 12, padding: '10px 14px' }}>🔥 Llevas una racha de <b style={{ fontWeight: 700 }}>{insights.streak} {insights.streak === 1 ? 'día' : 'días'}</b> seguidos con trabajo registrado. {insights.streak >= 3 ? 'No la rompas.' : 'Vas empezando — sostenla.'}</span>}
             </div>
+
+            {/* Ritmo: curva de desempeño por día + cómo se desarrolló el día visto */}
+            <div className="t-card" style={card(22)}>
+              <RitmoCharts weekly={ritmo.weekly} maxWork={ritmo.maxWork} goal={ritmo.goal} dayCurve={ritmo.dayCurve} dayLabel={dayLabel} />
+            </div>
           </div>
         ) : view === 'rutina' ? (
           /* ── MI RUTINA ────────────────────────────────────────────── */
@@ -2030,6 +2061,123 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
+}
+
+// Curva suave (Catmull-Rom → Bézier) para una serie de puntos {x,y}.
+function smoothPath(pts: { x: number; y: number }[]): string {
+  if (pts.length < 2) return pts.length ? `M ${pts[0].x} ${pts[0].y}` : ''
+  let d = `M ${pts[0].x} ${pts[0].y}`
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2
+    d += ` C ${p1.x + (p2.x - p0.x) / 6} ${p1.y + (p2.y - p0.y) / 6}, ${p2.x - (p3.x - p1.x) / 6} ${p2.y - (p3.y - p1.y) / 6}, ${p2.x} ${p2.y}`
+  }
+  return d
+}
+
+type RWeek = { date: string; work: number; total: number; isToday: boolean; future: boolean; num: number; letter: string }
+type RDay = { curve: { t: number; cum: number }[]; total: number; winStart: number; winEnd: number; n: number }
+
+/* Gráficas de "ritmo": desempeño de trabajo por día (semana) + cómo se desarrolló el día
+   (acumulado por hora). Serie única → sin leyenda; el título la nombra. Hover con crosshair. */
+function RitmoCharts({ weekly, maxWork, goal, dayCurve, dayLabel }: { weekly: RWeek[]; maxWork: number; goal: number; dayCurve: RDay; dayLabel: string }) {
+  const [hw, setHw] = useState<number | null>(null)
+  const [hd, setHd] = useState<{ vx: number; t: number; cum: number } | null>(null)
+  const VBW = 700, VBH = 188, padL = 12, padR = 12, padT = 20, padB = 28
+  const innerW = VBW - padL - padR, innerH = VBH - padT - padB, baseY = padT + innerH
+  const INK = '#1c1a17', MUT = '#8b8379', FAINT = '#a49b90', GRID = '#eee6da', LINE = '#b4653a', GOALC = '#6f8256'
+
+  // ── Semana: desempeño (trabajo) por día ──────────────────────────────
+  const wx = (i: number) => padL + (weekly.length > 1 ? i * (innerW / (weekly.length - 1)) : innerW / 2)
+  const wy = (v: number) => baseY - (v / maxWork) * innerH
+  const wpts = weekly.map((w, i) => ({ x: wx(i), y: wy(w.work), ...w }))
+  const worked = weekly.filter(w => !w.future && w.work > 0)
+  const avg = worked.length ? Math.round(worked.reduce((s, w) => s + w.work, 0) / worked.length) : 0
+  const onWeekMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect(); const vx = ((e.clientX - r.left) / r.width) * VBW
+    const i = Math.max(0, Math.min(weekly.length - 1, Math.round((vx - padL) / (innerW / (weekly.length - 1)))))
+    setHw(i)
+  }
+
+  // ── Día: cómo se desarrolló (acumulado por hora) ──────────────────────
+  const { curve, total, winStart, winEnd, n } = dayCurve
+  const span = Math.max(1, winEnd - winStart)
+  const dyMax = Math.max(30, total)
+  const dx = (t: number) => padL + ((t - winStart) / span) * innerW
+  const dy = (c: number) => baseY - (c / dyMax) * innerH
+  const dpts = curve.map(p => ({ x: dx(p.t), y: dy(p.cum) }))
+  const hourTicks: number[] = []
+  for (let h = Math.ceil(winStart / 60) ; h * 60 <= winEnd; h += 3) hourTicks.push(h * 60)
+  const onDayMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!n) return
+    const r = e.currentTarget.getBoundingClientRect(); let vx = ((e.clientX - r.left) / r.width) * VBW
+    vx = Math.max(padL, Math.min(padL + innerW, vx))
+    const t = winStart + ((vx - padL) / innerW) * span
+    let cum = 0
+    for (let i = 0; i < curve.length - 1; i++) { const a = curve[i], b = curve[i + 1]; if (t >= a.t && t <= b.t) { cum = b.t === a.t ? b.cum : a.cum + (b.cum - a.cum) * ((t - a.t) / (b.t - a.t)); break } if (t > b.t) cum = b.cum }
+    setHd({ vx, t, cum })
+  }
+
+  const axisLbl: CSSProperties = { fontSize: 10, fill: FAINT }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      {/* Desempeño por día */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+          <span style={{ fontFamily: SERIF, fontSize: 20, color: INK }}>Tu desempeño por día</span>
+          <span style={{ fontSize: 12.5, color: MUT }}>trabajo profundo · promedio {avg ? hm(avg) : '—'}{goal > 0 ? ` · meta ${hm(goal)}` : ''}</span>
+        </div>
+        <svg viewBox={`0 0 ${VBW} ${VBH}`} role="img" aria-label={`Trabajo por día esta semana; promedio ${hm(avg)}`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseMove={onWeekMove} onMouseLeave={() => setHw(null)}>
+          <defs><linearGradient id="rw-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={LINE} stopOpacity="0.22" /><stop offset="100%" stopColor={LINE} stopOpacity="0.02" /></linearGradient></defs>
+          {[0.5, 1].map((f, i) => <line key={i} x1={padL} x2={VBW - padR} y1={wy(maxWork * f)} y2={wy(maxWork * f)} stroke={GRID} strokeWidth="1" />)}
+          <line x1={padL} x2={VBW - padR} y1={baseY} y2={baseY} stroke={GRID} strokeWidth="1" />
+          {goal > 0 && goal <= maxWork && <line x1={padL} x2={VBW - padR} y1={wy(goal)} y2={wy(goal)} stroke={GOALC} strokeWidth="1.5" strokeDasharray="5 5" opacity="0.7" />}
+          <path d={`${smoothPath(wpts)} L ${wpts[wpts.length - 1].x} ${baseY} L ${wpts[0].x} ${baseY} Z`} fill="url(#rw-fill)" />
+          <path d={smoothPath(wpts)} fill="none" stroke={LINE} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          {wpts.map((p, i) => p.future ? null : (
+            <circle key={i} cx={p.x} cy={p.y} r={p.isToday ? 5 : 3.5} fill={p.isToday ? '#C2933A' : '#faf7f1'} stroke={p.isToday ? '#faf7f1' : LINE} strokeWidth={p.isToday ? 2 : 2} />
+          ))}
+          {wpts.map((p, i) => <text key={i} x={p.x} y={VBH - 9} textAnchor="middle" style={{ ...axisLbl, fill: p.isToday ? '#8a4b28' : FAINT, fontWeight: p.isToday ? 700 : 400 }}>{p.letter}{' '}{p.num}</text>)}
+          {hw != null && !wpts[hw].future && (() => { const p = wpts[hw]; const tw = 92, tx = Math.max(padL, Math.min(VBW - padR - tw, p.x - tw / 2)); const ty = Math.max(2, p.y - 42); return (
+            <g>
+              <line x1={p.x} x2={p.x} y1={padT} y2={baseY} stroke={FAINT} strokeWidth="1" strokeDasharray="3 3" />
+              <circle cx={p.x} cy={p.y} r={4.5} fill={LINE} stroke="#faf7f1" strokeWidth="2" />
+              <rect x={tx} y={ty} width={tw} height="34" rx="8" fill={INK} />
+              <text x={tx + tw / 2} y={ty + 14} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>{p.letter} {p.num}</text>
+              <text x={tx + tw / 2} y={ty + 27} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{p.work ? hm(p.work) : 'sin registro'}</text>
+            </g>
+          ) })()}
+        </svg>
+      </div>
+
+      {/* Cómo se desarrolló el día */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid #eee6da', paddingTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+          <span style={{ fontFamily: SERIF, fontSize: 20, color: INK }}>Cómo se desarrolló {dayLabel}</span>
+          <span style={{ fontSize: 12.5, color: MUT }}>{n ? `${hm(total)} en total · acumulado por hora` : 'sin actividad registrada'}</span>
+        </div>
+        {n ? (
+          <svg viewBox={`0 0 ${VBW} ${VBH}`} role="img" aria-label={`Acumulado del día; ${hm(total)} en total`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseMove={onDayMove} onMouseLeave={() => setHd(null)}>
+            <defs><linearGradient id="rd-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8a4b28" stopOpacity="0.20" /><stop offset="100%" stopColor="#8a4b28" stopOpacity="0.02" /></linearGradient></defs>
+            <line x1={padL} x2={VBW - padR} y1={baseY} y2={baseY} stroke={GRID} strokeWidth="1" />
+            <path d={`M ${dpts[0].x} ${baseY} ${dpts.map(p => `L ${p.x} ${p.y}`).join(' ')} L ${dpts[dpts.length - 1].x} ${baseY} Z`} fill="url(#rd-fill)" />
+            <path d={`M ${dpts.map(p => `${p.x} ${p.y}`).join(' L ')}`} fill="none" stroke="#8a4b28" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            {hourTicks.map((t, i) => <text key={i} x={dx(t)} y={VBH - 9} textAnchor="middle" style={axisLbl}>{clock(t)}</text>)}
+            {hd && (() => { const tw = 96, tx = Math.max(padL, Math.min(VBW - padR - tw, hd.vx - tw / 2)); const cy = dy(hd.cum); return (
+              <g>
+                <line x1={hd.vx} x2={hd.vx} y1={padT} y2={baseY} stroke={FAINT} strokeWidth="1" strokeDasharray="3 3" />
+                <circle cx={hd.vx} cy={cy} r={4.5} fill="#8a4b28" stroke="#faf7f1" strokeWidth="2" />
+                <rect x={tx} y={Math.max(2, cy - 42)} width={tw} height="34" rx="8" fill={INK} />
+                <text x={tx + tw / 2} y={Math.max(2, cy - 42) + 14} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>a las {clock(hd.t)}</text>
+                <text x={tx + tw / 2} y={Math.max(2, cy - 42) + 27} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{hm(hd.cum)} acumulado</text>
+              </g>
+            ) })()}
+          </svg>
+        ) : (
+          <div style={{ fontSize: 13.5, color: FAINT, padding: '20px 0', textAlign: 'center' }}>No registraste actividad {dayLabel}. Cuando cronometres algo, verás aquí la forma de tu día.</div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 /** Descripción de una junta con sus LINKS clicables (soporta <a href> y URLs sueltas). */
