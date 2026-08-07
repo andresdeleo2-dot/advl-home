@@ -275,10 +275,11 @@ export default function TiempoClient() {
     }).catch(() => {})
   }, [])
   useEffect(() => { loadMeetings() }, [loadMeetings])
-  // Mientras un editor (tarea/registro/agendar) está abierto NO refrescamos: si no, un poll en
-  // vuelo podría revertir una edición recién guardada (auto-guardado optimista).
+  // Mientras un editor (tarea/registro/agendar) o el MODO FOCO está abierto NO refrescamos: si no,
+  // un poll en vuelo podría revertir una edición recién guardada (subtareas/links/comentarios del
+  // foco) hasta que el server persista → "se ve tarde".
   const editorOpenRef = useRef(false)
-  useEffect(() => { editorOpenRef.current = editTask !== null || histIdx !== null || scheduleAt !== null }, [editTask, histIdx, scheduleAt])
+  useEffect(() => { editorOpenRef.current = editTask !== null || histIdx !== null || scheduleAt !== null || focusOpen }, [editTask, histIdx, scheduleAt, focusOpen])
   // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
   useEffect(() => {
     const canRefresh = () => document.visibilityState === 'visible' && !editorOpenRef.current
@@ -2237,9 +2238,9 @@ function FocusExtras({ links, comentarios, onAddLink, onAddComment }: { links: E
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 7 }}>
-          <input value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} placeholder="Escribe un comentario…" style={{ ...field, flex: 1 }} />
-          {comment.trim() && <button onClick={addComment} style={addBtn}>Comentar</button>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <textarea value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addComment() } }} placeholder="Escribe un comentario…  (⌘/Ctrl + Enter para enviar)" rows={3} style={{ ...field, width: '100%', minHeight: 76, resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
+          {comment.trim() && <button onClick={addComment} style={{ ...addBtn, alignSelf: 'flex-end' }}>Comentar</button>}
         </div>
       </div>
     </div>
