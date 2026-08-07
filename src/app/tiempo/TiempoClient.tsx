@@ -795,8 +795,8 @@ export default function TiempoClient() {
     }
   }, [data.history, taskDay])
 
-  // Datos para las gráficas de ritmo (vista Semana): desempeño por día (semana) y cómo se
-  // desarrolló el día visto (acumulado por hora). Todo desde el historial real.
+  // Datos de ritmo (vista Semana): curva de desempeño por día (semana, seleccionable) +
+  // DETALLE del día seleccionado (KPIs, histograma por hora, reparto por área, actividades).
   const ritmo = useMemo(() => {
     const week = weekOfISO(taskDay)
     const rt = iso(new Date())
@@ -804,22 +804,49 @@ export default function TiempoClient() {
     const weekly = week.map(d => {
       const work = (data.history || []).filter(h => h.date === d && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
       const total = (data.history || []).filter(h => h.date === d && h.area !== 'sueno').reduce((s, h) => s + h.dur, 0)
-      return { date: d, work, total, isToday: d === rt, future: d > rt, num: Number(d.slice(8)), letter: DAY_NAMES[dowOf(d)] }
+      return { date: d, work, total, isToday: d === rt, selected: d === taskDay, future: d > rt, num: Number(d.slice(8)), letter: DAY_NAMES[dowOf(d)] }
     })
     const goal = data.focusGoal ?? 0
     const maxWork = Math.max(60, goal, ...weekly.map(w => w.work))
-    // Cómo se desarrolló el día visto: curva acumulada de minutos productivos por hora.
-    const dayEntries = (data.history || []).filter(h => h.date === taskDay && h.area !== 'sueno').slice().sort((a, b) => a.start - b.start)
-    const firstStart = dayEntries.length ? Math.min(...dayEntries.map(e => e.start)) : 420
-    const lastEnd = dayEntries.length ? Math.max(...dayEntries.map(e => e.start + e.dur)) : data.bed
-    const winStart = Math.min(420, firstStart)
-    const winEnd = Math.max(data.bed, lastEnd)
-    let cum = 0
-    const curve: { t: number; cum: number }[] = [{ t: winStart, cum: 0 }]
-    for (const e of dayEntries) { curve.push({ t: Math.max(winStart, e.start), cum }); cum += e.dur; curve.push({ t: e.start + e.dur, cum }) }
-    curve.push({ t: winEnd, cum })
-    return { weekly, maxWork, goal, dayCurve: { curve, total: cum, winStart, winEnd, n: dayEntries.length } }
-  }, [data.history, taskDay, data.focusGoal, data.bed])
+
+    // ── DETALLE del día visto (taskDay) ────────────────────────────────
+    const day = taskDay
+    const entries = (data.history || []).filter(h => h.date === day)
+    const prod = entries.filter(h => h.area !== 'sueno').slice().sort((a, b) => a.start - b.start)
+    const sleep = entries.filter(h => h.area === 'sueno').reduce((s, h) => s + h.dur, 0)
+    const deep = prod.filter(h => h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+    const total = prod.reduce((s, h) => s + h.dur, 0)
+    // Tareas terminadas ese día (distinct), SIN doble conteo entre días: una tarea con día
+    // canónico de término (doneAt/repeatDone) se cuenta SOLO ese día; las cerradas por registro
+    // cronometrado sin día canónico, el día del registro. (`done !== false` incluye legacy sin campo).
+    const doneIds = new Set<string>()
+    const canonDone = new Set<string>()
+    ;(allTasks || []).forEach(t => { if (t.task.id && (t.task.doneAt || (t.task.repeatDone || []).length)) canonDone.add(t.task.id) })
+    prod.forEach(h => { if (h.done !== false && h.taskId && !canonDone.has(h.taskId)) doneIds.add(h.taskId) })
+    ;(allTasks || []).forEach(t => { if (t.task.id && (t.task.doneAt === day || (t.task.repeatDone || []).includes(day))) doneIds.add(t.task.id) })
+    // Subtareas completadas ese día (doneAt local).
+    let subDone = 0
+    ;(allTasks || []).forEach(t => (t.task.subtasks || []).forEach(s => { if (s.done && s.doneAt && iso(new Date(s.doneAt)) === day) subDone++ }))
+    // Reparto por área (minutos, sin sueño).
+    const byArea: Partial<Record<Area, number>> = {}
+    prod.forEach(h => { byArea[h.area] = (byArea[h.area] || 0) + h.dur })
+    const areaRank = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1])
+      .map(([a, m]) => ({ area: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379', min: m, pct: total ? Math.round((m / total) * 100) : 0 }))
+    // Histograma por hora = minutos de RELOJ ocupados en cada hora. Ocupación por minuto: dedup de
+    // bloques solapados (una hora nunca pasa de 60) y recorte a [0,1440] (bloques que cruzan
+    // medianoche no descuadran contra el total ni se salen del arreglo).
+    const occ = new Uint8Array(1440)
+    prod.forEach(h => { const s = Math.max(0, h.start), e = Math.min(1440, h.start + h.dur); for (let m = s; m < e; m++) occ[m] = 1 })
+    const hours: number[] = Array.from({ length: 24 }, (_, hr) => { let c = 0; for (let m = hr * 60; m < hr * 60 + 60; m++) c += occ[m]; return c })
+    const active = hours.map((m, i) => ({ m, i })).filter(x => x.m > 0).map(x => x.i)
+    const hasHours = active.length > 0
+    const hFrom = active.length ? Math.min(...active) : 7
+    const hTo = active.length ? Math.max(...active) : 22
+    const firstStart = prod.length ? prod[0].start : null
+    const lastEnd = prod.length ? Math.max(...prod.map(e => e.start + e.dur)) : null
+    const acts = prod.map((h, i) => ({ id: i, name: h.name, start: h.start, end: h.start + h.dur, dur: h.dur, area: h.area, color: AREAS[h.area]?.color || '#8b8379', done: h.done !== false, taskId: h.taskId }))
+    return { weekly, maxWork, goal, detail: { deep, total, sleep, tasksDone: doneIds.size, subDone, sessions: prod.length, areaRank, hours, hasHours, hFrom, hTo, firstStart, lastEnd, acts } }
+  }, [data.history, allTasks, taskDay, data.focusGoal])
 
   // Tareas TERMINADAS en Épicas el DÍA VISTO (doneAt, o recurrente con repeatDone) que NO tienen
   // un registro con tiempo ese día: se muestran igual como "hecho" en el día.
@@ -1682,9 +1709,10 @@ export default function TiempoClient() {
               {insights.streak > 0 && <span style={{ fontSize: 13.5, color: '#8a4b28', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 12, padding: '10px 14px' }}>🔥 Llevas una racha de <b style={{ fontWeight: 700 }}>{insights.streak} {insights.streak === 1 ? 'día' : 'días'}</b> seguidos con trabajo registrado. {insights.streak >= 3 ? 'No la rompas.' : 'Vas empezando — sostenla.'}</span>}
             </div>
 
-            {/* Ritmo: curva de desempeño por día + cómo se desarrolló el día visto */}
-            <div className="t-card" style={card(22)}>
-              <RitmoCharts weekly={ritmo.weekly} maxWork={ritmo.maxWork} goal={ritmo.goal} dayCurve={ritmo.dayCurve} dayLabel={dayLabel} />
+            {/* Ritmo: curva de desempeño por día (seleccionable) + detalle del día elegido */}
+            <div className="t-card" style={{ ...card(22), gap: 20 }}>
+              <WeekPerfChart weekly={ritmo.weekly} maxWork={ritmo.maxWork} goal={ritmo.goal} onPickDay={setTaskDay} />
+              <DayDetail d={ritmo.detail} dayLabel={dayLabel} />
             </div>
           </div>
         ) : view === 'rutina' ? (
@@ -2074,108 +2102,164 @@ function smoothPath(pts: { x: number; y: number }[]): string {
   return d
 }
 
-type RWeek = { date: string; work: number; total: number; isToday: boolean; future: boolean; num: number; letter: string }
-type RDay = { curve: { t: number; cum: number }[]; total: number; winStart: number; winEnd: number; n: number }
+type RWeek = { date: string; work: number; total: number; isToday: boolean; selected: boolean; future: boolean; num: number; letter: string }
+type RAct = { id: number; name: string; start: number; end: number; dur: number; area: Area; color: string; done: boolean; taskId?: string }
+type RDetail = { deep: number; total: number; sleep: number; tasksDone: number; subDone: number; sessions: number; areaRank: { area: Area; label: string; color: string; min: number; pct: number }[]; hours: number[]; hasHours: boolean; hFrom: number; hTo: number; firstStart: number | null; lastEnd: number | null; acts: RAct[] }
 
-/* Gráficas de "ritmo": desempeño de trabajo por día (semana) + cómo se desarrolló el día
-   (acumulado por hora). Serie única → sin leyenda; el título la nombra. Hover con crosshair. */
-function RitmoCharts({ weekly, maxWork, goal, dayCurve, dayLabel }: { weekly: RWeek[]; maxWork: number; goal: number; dayCurve: RDay; dayLabel: string }) {
+const CHART_INK = '#1c1a17', CHART_MUT = '#8b8379', CHART_FAINT = '#a49b90', CHART_GRID = '#eee6da', CHART_LINE = '#b4653a', CHART_GOAL = '#6f8256'
+
+/* Curva de desempeño (trabajo) por día de la semana. SELECCIONABLE: clic en un día lo elige y
+   el detalle de abajo se actualiza. Serie única → sin leyenda; el título la nombra. */
+function WeekPerfChart({ weekly, maxWork, goal, onPickDay }: { weekly: RWeek[]; maxWork: number; goal: number; onPickDay: (d: string) => void }) {
   const [hw, setHw] = useState<number | null>(null)
-  const [hd, setHd] = useState<{ vx: number; t: number; cum: number } | null>(null)
-  const VBW = 700, VBH = 188, padL = 12, padR = 12, padT = 20, padB = 28
+  const VBW = 700, VBH = 190, padL = 12, padR = 12, padT = 20, padB = 30
   const innerW = VBW - padL - padR, innerH = VBH - padT - padB, baseY = padT + innerH
-  const INK = '#1c1a17', MUT = '#8b8379', FAINT = '#a49b90', GRID = '#eee6da', LINE = '#b4653a', GOALC = '#6f8256'
-
-  // ── Semana: desempeño (trabajo) por día ──────────────────────────────
   const wx = (i: number) => padL + (weekly.length > 1 ? i * (innerW / (weekly.length - 1)) : innerW / 2)
   const wy = (v: number) => baseY - (v / maxWork) * innerH
   const wpts = weekly.map((w, i) => ({ x: wx(i), y: wy(w.work), ...w }))
   const worked = weekly.filter(w => !w.future && w.work > 0)
   const avg = worked.length ? Math.round(worked.reduce((s, w) => s + w.work, 0) / worked.length) : 0
-  const onWeekMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect(); const vx = ((e.clientX - r.left) / r.width) * VBW
-    const i = Math.max(0, Math.min(weekly.length - 1, Math.round((vx - padL) / (innerW / (weekly.length - 1)))))
-    setHw(i)
-  }
-
-  // ── Día: cómo se desarrolló (acumulado por hora) ──────────────────────
-  const { curve, total, winStart, winEnd, n } = dayCurve
-  const span = Math.max(1, winEnd - winStart)
-  const dyMax = Math.max(30, total)
-  const dx = (t: number) => padL + ((t - winStart) / span) * innerW
-  const dy = (c: number) => baseY - (c / dyMax) * innerH
-  const dpts = curve.map(p => ({ x: dx(p.t), y: dy(p.cum) }))
-  const hourTicks: number[] = []
-  for (let h = Math.ceil(winStart / 60) ; h * 60 <= winEnd; h += 3) hourTicks.push(h * 60)
-  const onDayMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!n) return
-    const r = e.currentTarget.getBoundingClientRect(); let vx = ((e.clientX - r.left) / r.width) * VBW
-    vx = Math.max(padL, Math.min(padL + innerW, vx))
-    const t = winStart + ((vx - padL) / innerW) * span
-    let cum = 0
-    for (let i = 0; i < curve.length - 1; i++) { const a = curve[i], b = curve[i + 1]; if (t >= a.t && t <= b.t) { cum = b.t === a.t ? b.cum : a.cum + (b.cum - a.cum) * ((t - a.t) / (b.t - a.t)); break } if (t > b.t) cum = b.cum }
-    setHd({ vx, t, cum })
-  }
-
-  const axisLbl: CSSProperties = { fontSize: 10, fill: FAINT }
+  const idxFromX = (e: React.MouseEvent<SVGSVGElement>) => { const r = e.currentTarget.getBoundingClientRect(); const vx = ((e.clientX - r.left) / r.width) * VBW; return Math.max(0, Math.min(weekly.length - 1, Math.round((vx - padL) / (innerW / (weekly.length - 1))))) }
+  const axisLbl: CSSProperties = { fontSize: 10, fill: CHART_FAINT }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-      {/* Desempeño por día */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
-          <span style={{ fontFamily: SERIF, fontSize: 20, color: INK }}>Tu desempeño por día</span>
-          <span style={{ fontSize: 12.5, color: MUT }}>trabajo profundo · promedio {avg ? hm(avg) : '—'}{goal > 0 ? ` · meta ${hm(goal)}` : ''}</span>
-        </div>
-        <svg viewBox={`0 0 ${VBW} ${VBH}`} role="img" aria-label={`Trabajo por día esta semana; promedio ${hm(avg)}`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseMove={onWeekMove} onMouseLeave={() => setHw(null)}>
-          <defs><linearGradient id="rw-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={LINE} stopOpacity="0.22" /><stop offset="100%" stopColor={LINE} stopOpacity="0.02" /></linearGradient></defs>
-          {[0.5, 1].map((f, i) => <line key={i} x1={padL} x2={VBW - padR} y1={wy(maxWork * f)} y2={wy(maxWork * f)} stroke={GRID} strokeWidth="1" />)}
-          <line x1={padL} x2={VBW - padR} y1={baseY} y2={baseY} stroke={GRID} strokeWidth="1" />
-          {goal > 0 && goal <= maxWork && <line x1={padL} x2={VBW - padR} y1={wy(goal)} y2={wy(goal)} stroke={GOALC} strokeWidth="1.5" strokeDasharray="5 5" opacity="0.7" />}
-          <path d={`${smoothPath(wpts)} L ${wpts[wpts.length - 1].x} ${baseY} L ${wpts[0].x} ${baseY} Z`} fill="url(#rw-fill)" />
-          <path d={smoothPath(wpts)} fill="none" stroke={LINE} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          {wpts.map((p, i) => p.future ? null : (
-            <circle key={i} cx={p.x} cy={p.y} r={p.isToday ? 5 : 3.5} fill={p.isToday ? '#C2933A' : '#faf7f1'} stroke={p.isToday ? '#faf7f1' : LINE} strokeWidth={p.isToday ? 2 : 2} />
-          ))}
-          {wpts.map((p, i) => <text key={i} x={p.x} y={VBH - 9} textAnchor="middle" style={{ ...axisLbl, fill: p.isToday ? '#8a4b28' : FAINT, fontWeight: p.isToday ? 700 : 400 }}>{p.letter}{' '}{p.num}</text>)}
-          {hw != null && !wpts[hw].future && (() => { const p = wpts[hw]; const tw = 92, tx = Math.max(padL, Math.min(VBW - padR - tw, p.x - tw / 2)); const ty = Math.max(2, p.y - 42); return (
-            <g>
-              <line x1={p.x} x2={p.x} y1={padT} y2={baseY} stroke={FAINT} strokeWidth="1" strokeDasharray="3 3" />
-              <circle cx={p.x} cy={p.y} r={4.5} fill={LINE} stroke="#faf7f1" strokeWidth="2" />
-              <rect x={tx} y={ty} width={tw} height="34" rx="8" fill={INK} />
-              <text x={tx + tw / 2} y={ty + 14} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>{p.letter} {p.num}</text>
-              <text x={tx + tw / 2} y={ty + 27} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{p.work ? hm(p.work) : 'sin registro'}</text>
-            </g>
-          ) })()}
-        </svg>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+        <span style={{ fontFamily: SERIF, fontSize: 20, color: CHART_INK }}>Tu desempeño por día</span>
+        <span style={{ fontSize: 12.5, color: CHART_MUT }}>trabajo profundo · promedio {avg ? hm(avg) : '—'}{goal > 0 ? ` · meta ${hm(goal)}` : ''} · toca un día</span>
+      </div>
+      <svg viewBox={`0 0 ${VBW} ${VBH}`} role="group" aria-label={`Trabajo por día esta semana; promedio ${hm(avg)}.`} style={{ width: '100%', height: 'auto', display: 'block', cursor: 'pointer' }} onMouseMove={e => setHw(idxFromX(e))} onMouseLeave={() => setHw(null)} onClick={e => { const i = idxFromX(e); if (!weekly[i].future) onPickDay(weekly[i].date) }}>
+        <defs><linearGradient id="rw-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CHART_LINE} stopOpacity="0.22" /><stop offset="100%" stopColor={CHART_LINE} stopOpacity="0.02" /></linearGradient></defs>
+        {[0.5, 1].map((f, i) => <line key={i} x1={padL} x2={VBW - padR} y1={wy(maxWork * f)} y2={wy(maxWork * f)} stroke={CHART_GRID} strokeWidth="1" />)}
+        <line x1={padL} x2={VBW - padR} y1={baseY} y2={baseY} stroke={CHART_GRID} strokeWidth="1" />
+        {goal > 0 && goal <= maxWork && <line x1={padL} x2={VBW - padR} y1={wy(goal)} y2={wy(goal)} stroke={CHART_GOAL} strokeWidth="1.5" strokeDasharray="5 5" opacity="0.7" />}
+        {(() => { const shown = wpts.filter(p => !p.future); if (shown.length < 2) return null; const line = smoothPath(shown); return (<>
+          <path d={`${line} L ${shown[shown.length - 1].x} ${baseY} L ${shown[0].x} ${baseY} Z`} fill="url(#rw-fill)" />
+          <path d={line} fill="none" stroke={CHART_LINE} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </>) })()}
+        {/* Guía vertical del día seleccionado */}
+        {wpts.filter(p => p.selected && !p.future).map((p, i) => <line key={'sel' + i} x1={p.x} x2={p.x} y1={padT - 4} y2={baseY} stroke="#C2933A" strokeWidth="1.5" opacity="0.55" />)}
+        {wpts.map((p, i) => p.future ? null : (
+          <circle key={i} cx={p.x} cy={p.y} r={p.selected ? 6 : 3.5} fill={p.selected ? '#C2933A' : '#faf7f1'} stroke={p.selected ? '#faf7f1' : CHART_LINE} strokeWidth="2" />
+        ))}
+        {wpts.map((p, i) => <text key={i} x={p.x} y={VBH - 10} textAnchor="middle" style={{ ...axisLbl, fill: p.selected ? '#8a4b28' : p.isToday ? '#b4653a' : CHART_FAINT, fontWeight: p.selected || p.isToday ? 700 : 400 }}>{p.letter}{' '}{p.num}{p.isToday && !p.selected ? ' •' : ''}</text>)}
+        {hw != null && !wpts[hw].future && (() => { const p = wpts[hw]; const tw = 92, tx = Math.max(padL, Math.min(VBW - padR - tw, p.x - tw / 2)); const ty = Math.max(2, p.y - 42); return (
+          <g>
+            <line x1={p.x} x2={p.x} y1={padT} y2={baseY} stroke={CHART_FAINT} strokeWidth="1" strokeDasharray="3 3" />
+            <circle cx={p.x} cy={p.y} r={4.5} fill={CHART_LINE} stroke="#faf7f1" strokeWidth="2" />
+            <rect x={tx} y={ty} width={tw} height="34" rx="8" fill={CHART_INK} />
+            <text x={tx + tw / 2} y={ty + 14} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>{p.letter} {p.num}</text>
+            <text x={tx + tw / 2} y={ty + 27} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{p.work ? hm(p.work) : 'sin registro'}</text>
+          </g>
+        ) })()}
+      </svg>
+      {/* Selector de día accesible por teclado (mismo que tocar la curva) */}
+      <div role="group" aria-label="Elegir un día" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {weekly.map(w => (
+          <button key={w.date} type="button" disabled={w.future} aria-pressed={w.selected} onClick={() => onPickDay(w.date)}
+            title={w.future ? `${w.letter} ${w.num}` : `${w.letter} ${w.num} · ${w.work ? hm(w.work) : 'sin registro'}`}
+            style={{ flex: '1 1 0', minWidth: 40, cursor: w.future ? 'default' : 'pointer', borderRadius: 10, padding: '6px 4px', fontSize: 12, fontWeight: 700,
+              border: `1px solid ${w.selected ? '#C2933A' : '#e2d9cb'}`, background: w.selected ? 'linear-gradient(135deg,#f2e2bf,#e8cf9c)' : '#faf7f1',
+              color: w.future ? '#c9c0b3' : w.selected ? '#8a4b28' : w.isToday ? '#b4653a' : '#6b645b', opacity: w.future ? 0.5 : 1 }}>
+            {w.letter} {w.num}{w.isToday && !w.selected ? ' •' : ''}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* Detalle del DÍA seleccionado: KPIs + histograma por hora + reparto por área + actividades. */
+function DayDetail({ d, dayLabel }: { d: RDetail; dayLabel: string }) {
+  const [hh, setHh] = useState<number | null>(null)
+  const empty = d.sessions === 0 && d.tasksDone === 0 && d.subDone === 0
+  const kpis = [
+    { lbl: 'Trabajo profundo', val: d.deep ? hm(d.deep) : '—', c: '#8a4b28' },
+    { lbl: 'Total activo', val: d.total ? hm(d.total) : '—', c: '#b4653a' },
+    { lbl: 'Tareas terminadas', val: String(d.tasksDone), c: '#4f6238' },
+    { lbl: 'Subtareas ✓', val: String(d.subDone), c: '#2E6E6E' },
+    { lbl: 'Bloques', val: String(d.sessions), c: '#7A6FB0' },
+    ...(d.sleep ? [{ lbl: 'Sueño', val: hm(d.sleep), c: '#1c1a17' }] : []),
+  ]
+  // Histograma por hora
+  const HW = 700, HH = 158, hpadL = 30, hpadR = 8, hpadT = 12, hpadB = 22
+  const hIW = HW - hpadL - hpadR, hIH = HH - hpadT - hpadB, hBase = hpadT + hIH
+  const hrs: number[] = []; for (let h = d.hFrom; h <= d.hTo; h++) hrs.push(h)
+  const bw = hIW / Math.max(1, hrs.length)
+  const capH = (m: number) => (Math.min(60, m) / 60) * hIH
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, borderTop: '1px solid #eee6da', paddingTop: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+        <span style={{ fontFamily: SERIF, fontSize: 22, color: CHART_INK }}>Detalle de {dayLabel}</span>
+        {!empty && d.firstStart != null && <span style={{ fontSize: 12.5, color: CHART_MUT }}>de {clock(d.firstStart)} a {clock(d.lastEnd!)}</span>}
       </div>
 
-      {/* Cómo se desarrolló el día */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid #eee6da', paddingTop: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
-          <span style={{ fontFamily: SERIF, fontSize: 20, color: INK }}>Cómo se desarrolló {dayLabel}</span>
-          <span style={{ fontSize: 12.5, color: MUT }}>{n ? `${hm(total)} en total · acumulado por hora` : 'sin actividad registrada'}</span>
-        </div>
-        {n ? (
-          <svg viewBox={`0 0 ${VBW} ${VBH}`} role="img" aria-label={`Acumulado del día; ${hm(total)} en total`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseMove={onDayMove} onMouseLeave={() => setHd(null)}>
-            <defs><linearGradient id="rd-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8a4b28" stopOpacity="0.20" /><stop offset="100%" stopColor="#8a4b28" stopOpacity="0.02" /></linearGradient></defs>
-            <line x1={padL} x2={VBW - padR} y1={baseY} y2={baseY} stroke={GRID} strokeWidth="1" />
-            <path d={`M ${dpts[0].x} ${baseY} ${dpts.map(p => `L ${p.x} ${p.y}`).join(' ')} L ${dpts[dpts.length - 1].x} ${baseY} Z`} fill="url(#rd-fill)" />
-            <path d={`M ${dpts.map(p => `${p.x} ${p.y}`).join(' L ')}`} fill="none" stroke="#8a4b28" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            {hourTicks.map((t, i) => <text key={i} x={dx(t)} y={VBH - 9} textAnchor="middle" style={axisLbl}>{clock(t)}</text>)}
-            {hd && (() => { const tw = 96, tx = Math.max(padL, Math.min(VBW - padR - tw, hd.vx - tw / 2)); const cy = dy(hd.cum); return (
-              <g>
-                <line x1={hd.vx} x2={hd.vx} y1={padT} y2={baseY} stroke={FAINT} strokeWidth="1" strokeDasharray="3 3" />
-                <circle cx={hd.vx} cy={cy} r={4.5} fill="#8a4b28" stroke="#faf7f1" strokeWidth="2" />
-                <rect x={tx} y={Math.max(2, cy - 42)} width={tw} height="34" rx="8" fill={INK} />
-                <text x={tx + tw / 2} y={Math.max(2, cy - 42) + 14} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>a las {clock(hd.t)}</text>
-                <text x={tx + tw / 2} y={Math.max(2, cy - 42) + 27} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{hm(hd.cum)} acumulado</text>
-              </g>
-            ) })()}
-          </svg>
-        ) : (
-          <div style={{ fontSize: 13.5, color: FAINT, padding: '20px 0', textAlign: 'center' }}>No registraste actividad {dayLabel}. Cuando cronometres algo, verás aquí la forma de tu día.</div>
-        )}
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(116px,1fr))', gap: 10 }}>
+        {kpis.map((k, i) => (
+          <div key={i} style={{ background: '#f7f2e8', border: '1px solid #ece3d5', borderRadius: 14, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontSize: 10.5, color: '#a49b90', textTransform: 'uppercase', letterSpacing: '.05em' }}>{k.lbl}</span>
+            <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, color: k.c }}>{k.val}</span>
+          </div>
+        ))}
       </div>
+
+      {empty ? (
+        <div style={{ fontSize: 13.5, color: CHART_FAINT, padding: '16px 0', textAlign: 'center' }}>No registraste actividad {dayLabel}. Cronometra algo o marca tareas y verás aquí el detalle por hora.</div>
+      ) : (
+        <>
+          {/* Histograma por hora (solo si hubo tiempo cronometrado ese día) */}
+          {d.hasHours && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={LBL}>en qué horas trabajaste · minutos activos por hora</span>
+            <svg viewBox={`0 0 ${HW} ${HH}`} role="img" aria-label="Minutos de actividad por hora" style={{ width: '100%', height: 'auto', display: 'block' }} onMouseLeave={() => setHh(null)}>
+              {[0, 0.5, 1].map((f, i) => <line key={i} x1={hpadL} x2={HW - hpadR} y1={hBase - f * hIH} y2={hBase - f * hIH} stroke={CHART_GRID} strokeWidth="1" />)}
+              {[[0, '0'], [0.5, '30m'], [1, '1h']].map(([f, lb], i) => <text key={i} x={hpadL - 6} y={hBase - (f as number) * hIH + 3} textAnchor="end" style={{ fontSize: 9.5, fill: CHART_FAINT }}>{lb}</text>)}
+              {hrs.map((hr, i) => { const m = d.hours[hr] || 0; const bh = capH(m); const x = hpadL + i * bw; return (
+                <g key={hr}>
+                  {m > 0 && <rect x={x + 2} y={hBase - bh} width={Math.max(2, bw - 4)} height={bh} rx="3" fill={hh === hr ? '#8a4b28' : CHART_LINE} />}
+                  <rect x={x} y={hpadT} width={bw} height={hIH} fill="transparent" onMouseEnter={() => setHh(hr)} />
+                  {hr % 2 === 0 && <text x={x + bw / 2} y={HH - 7} textAnchor="middle" style={{ fontSize: 9.5, fill: CHART_FAINT }}>{String(hr).padStart(2, '0')}</text>}
+                </g>
+              ) })}
+              {hh != null && (d.hours[hh] || 0) >= 0 && (() => { const i = hrs.indexOf(hh); if (i < 0) return null; const x = hpadL + i * bw + bw / 2; const m = d.hours[hh] || 0; const tw = 96, tx = Math.max(hpadL, Math.min(HW - hpadR - tw, x - tw / 2)); return (
+                <g>
+                  <rect x={tx} y={2} width={tw} height="32" rx="8" fill={CHART_INK} />
+                  <text x={tx + tw / 2} y={15} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>{clock(hh * 60)}–{clock(hh * 60 + 60)}</text>
+                  <text x={tx + tw / 2} y={28} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{m ? hm(m) : 'nada'}</text>
+                </g>
+              ) })()}
+            </svg>
+          </div>}
+
+          {/* Reparto por área */}
+          {d.areaRank.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              <span style={LBL}>en qué se te fue · {hm(d.total)}</span>
+              <div style={{ display: 'flex', height: 16, borderRadius: 8, overflow: 'hidden', gap: 2 }}>
+                {d.areaRank.map(a => <div key={a.area} title={`${a.label} · ${hm(a.min)} · ${a.pct}%`} style={{ width: `${a.pct}%`, background: a.color, minWidth: a.pct > 0 ? 4 : 0 }} />)}
+              </div>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                {d.areaRank.map(a => <span key={a.area} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#6b645b' }}><span style={{ width: 9, height: 9, borderRadius: 3, background: a.color, display: 'block' }} />{a.label} · <b style={{ fontWeight: 600 }}>{hm(a.min)}</b> · {a.pct}%</span>)}
+              </div>
+            </div>
+          )}
+
+          {/* Actividades del día */}
+          {d.acts.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <span style={LBL}>actividades · {d.acts.length} {d.acts.length === 1 ? 'bloque' : 'bloques'}</span>
+              {d.acts.map(a => (
+                <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+                  <span style={{ fontSize: 12.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', width: 96, flexShrink: 0 }}>{clock(a.start)}–{clock(a.end)}</span>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                  <span style={{ color: '#a49b90', flexShrink: 0 }}>{hm(a.dur)}</span>
+                  <span style={{ fontWeight: 600, color: a.done ? '#4f6238' : '#8a4b28', width: 62, textAlign: 'right', fontSize: 12, flexShrink: 0 }}>{a.done ? 'hecho ✓' : 'trabajado'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
