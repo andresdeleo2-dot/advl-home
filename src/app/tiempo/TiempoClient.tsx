@@ -9,7 +9,7 @@ import {
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area, type ScheduledBlock,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
+import type { Epica, EpicaTask, EpicaSubtask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
@@ -716,6 +716,27 @@ export default function TiempoClient() {
     }
   }, [data, now, dur, meetings, energyLearned, costOpen])
 
+  // Tiempo YA registrado por tarea (todas las sesiones previas, todos los días). Sirve para que,
+  // al RETOMAR una tarea, el contador muestre lo acumulado + lo nuevo, y planeado vs real.
+  const priorByTask = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const h of data.history) if (h.taskId) m[h.taskId] = (m[h.taskId] || 0) + h.dur
+    return m
+  }, [data.history])
+
+  // Metadatos para el Historial: cruza los registros (que sólo traen epicaId/taskId) con las tareas
+  // y épicas para poder filtrar/agrupar por ÉPICA y por DIFICULTAD, y mostrar el nombre/color de la épica.
+  const histMeta = useMemo<HistMeta>(() => {
+    const task: HistMeta['task'] = {}
+    const epica: HistMeta['epica'] = {}
+    for (const t of allTasks || []) {
+      if (t.task.id) task[t.task.id] = { epicaId: t.epicaId, difficulty: t.task.difficulty }
+      if (t.epicaId && !epica[t.epicaId]) epica[t.epicaId] = { name: t.epicaName, color: t.color }
+    }
+    for (const e of epicasList || []) if (e.id && !epica[e.id]) epica[e.id] = { name: e.name, color: e.color || '#b4653a' }
+    return { task, epica }
+  }, [allTasks, epicasList])
+
   /* ── Vista Semana: 7 mini-líneas de tiempo ──
      Por día combina, con prioridad: lo que HICISTE (historial real, sólido) > reuniones/agendado
      (sólo hoy) > tu rutina protegida planeada (tenue). Un barrido por fronteras resuelve traslapes. */
@@ -1122,6 +1143,15 @@ export default function TiempoClient() {
   const toggleSubtaskOf = (taskId: string, epicaId: string, subKey: string) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
     const subs = (tt.task.subtasks || []).map(s => ((s.id || s.t) === subKey ? { ...s, done: !s.done, doneAt: !s.done ? new Date().toISOString() : undefined } : s))
+    const upd: EpicaTask = { ...tt.task, subtasks: subs }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
+  // Crea una subtarea sobre la marcha desde el Modo foco (para que "elegir qué hacer" no obligue a ir a Épicas).
+  const addSubtaskOf = (taskId: string, epicaId: string, text: string) => {
+    const t = text.trim(); if (!t) return
+    const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
+    const subs = [...(tt.task.subtasks || []), { id: uid(), t, done: false }]
     const upd: EpicaTask = { ...tt.task, subtasks: subs }
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
@@ -1797,7 +1827,7 @@ export default function TiempoClient() {
           </div>
         ) : (
           /* ── HISTORIAL (analítica por periodo) ─────────────────────── */
-          <HistorialView history={data.history} sleepGoal={data.sleep} onLogSleep={logSleep} onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} />
+          <HistorialView history={data.history} meta={histMeta} onLogSleep={logSleep} onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} />
         )}
       </div>
 
@@ -1871,6 +1901,7 @@ export default function TiempoClient() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
             <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9, opacity: V.sessionPaused ? 0.55 : 1 }}>{V.sessionElapsedLabel}</span>
+            {(() => { const s = data.session!; const prior = s.taskId ? (priorByTask[s.taskId] || 0) : 0; if (prior <= 0) return null; const el = Math.max(0, sessionElapsed(s, now)); return <span style={{ fontSize: 12, color: '#E7C56B' }}>+{hm(prior)} de antes · {hm(prior + el)} en total en la tarea</span> })()}
             <span style={{ fontSize: 12.5, color: '#cdc4b8', lineHeight: 1.45 }}>{V.sessionNote}</span>
           </div>
           <button onClick={() => setFocusOpen(true)} style={{ border: '1px solid #4a443c', background: 'rgba(231,197,107,0.10)', color: '#E7C56B', borderRadius: 999, padding: '9px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>🎯 Modo foco</button>
@@ -1901,12 +1932,41 @@ export default function TiempoClient() {
         const focusTask = s.taskId ? (allTasks || []).find(x => x.task.id === s.taskId) : null
         const focusSubs = focusTask?.task.subtasks || []
         const subsDone = focusSubs.filter(x => x.done).length
+        // Acumulado de la tarea: lo YA registrado en sesiones previas + lo de esta sesión.
+        const prior = s.taskId ? (priorByTask[s.taskId] || 0) : 0
+        const totalTask = prior + Math.max(0, el)
+        // Planeado: sólo si la tarea trae dificultad (estimación por dificultad). "si estaba planeada".
+        const planned = focusTask?.task.difficulty ? durByDiff(focusTask.task) : 0
+        const plannedPct = planned ? Math.min(100, Math.round((totalTask / planned) * 100)) : 0
+        const overPlan = planned > 0 && totalTask > planned
         return (
           <div style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'radial-gradient(120% 120% at 50% 0%, #26221d 0%, #17140f 60%, #0f0d0a 100%)', color: '#faf7f1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 22 }}>
             <button onClick={() => setFocusOpen(false)} title="Salir del modo foco (Esc)" style={{ position: 'absolute', top: 20, right: 22, border: '1px solid #3a352e', background: 'transparent', color: '#a49b90', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, cursor: 'pointer' }}>✕ Salir</button>
             <span style={{ fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: pomoOn ? (inBreak ? '#8fae74' : '#E7C56B') : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : pomoOn ? (inBreak ? '🌿 descanso' : '🎯 foco') : 'en curso'}</span>
             <span style={{ fontSize: 'clamp(18px,3vw,26px)', fontWeight: 500, textAlign: 'center', maxWidth: 700, lineHeight: 1.2 }}>{V.sessionName}</span>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: V.sessionPaused ? 0.5 : 1 }}>{V.sessionElapsedLabel || '0m'}</span>
+            {/* Acumulado de la tarea (retomar) + planeado vs real */}
+            {(prior > 0 || planned > 0) && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, width: 'min(460px,90vw)', marginTop: -6 }}>
+                <span style={{ fontSize: 14.5, color: '#cdc4b8', textAlign: 'center' }}>
+                  {prior > 0
+                    ? <>En total <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(prior)} antes</span> + {hm(Math.max(0, el))} ahora</>
+                    : <>Llevas <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea</>}
+                </span>
+                {planned > 0 && (
+                  <>
+                    <div style={{ width: '100%', height: 7, background: '#2a251f', borderRadius: 999, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.max(3, plannedPct)}%`, height: '100%', background: overPlan ? 'linear-gradient(90deg,#C2933A,#d98a55)' : 'linear-gradient(90deg,#6f8256,#8fae74)', borderRadius: 999, transition: 'width .4s' }} />
+                    </div>
+                    <span style={{ fontSize: 12.5, color: overPlan ? '#d98a55' : '#8b8379' }}>
+                      {overPlan
+                        ? `Planeado ${hm(planned)} · te pasaste ${hm(totalTask - planned)}`
+                        : `Planeado ${hm(planned)} · quedan ${hm(planned - totalTask)} (${plannedPct}%)`}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
             {pomoOn && !V.sessionPaused && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, width: 'min(460px,90vw)' }}>
                 <span style={{ fontSize: 15, color: inBreak ? '#8fae74' : '#E7C56B' }}>{inBreak ? `Descanso · quedan ${hm(phaseRemain)}` : `Bloque ${cycle} · quedan ${hm(phaseRemain)} de foco`}</span>
@@ -1929,20 +1989,15 @@ export default function TiempoClient() {
               {data.session?.taskId && <button onClick={() => finish(true)} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
             </div>
 
-            {/* Subtareas de la tarea en foco: márcalas conforme las terminas (elige qué hacer ahora) */}
-            {focusTask && focusSubs.length > 0 && (
-              <div style={{ width: 'min(520px, 92vw)', maxHeight: '32vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }}>subtareas</span>
-                  <span style={{ fontSize: 12, color: subsDone === focusSubs.length ? '#a9c48c' : '#cdc4b8' }}>{subsDone}/{focusSubs.length} hechas</span>
-                </div>
-                {focusSubs.map((sub, i) => { const key = sub.id || sub.t; return (
-                  <button key={i} onClick={() => toggleSubtaskOf(focusTask.task.id!, focusTask.epicaId, key)} style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 4px', width: '100%' }}>
-                    <span style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</span>
-                    <span style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none' }}>{sub.t || 'Subtarea'}</span>
-                  </button>
-                ) })}
-              </div>
+            {/* Subtareas de la tarea en foco: márcalas conforme avanzas y agrega nuevas sin salir del foco.
+                Se muestra SIEMPRE que la sesión venga de una tarea de Épicas (aunque aún no tenga subtareas). */}
+            {focusTask && (
+              <FocusSubtasks
+                subs={focusSubs}
+                done={subsDone}
+                onToggle={key => toggleSubtaskOf(focusTask.task.id!, focusTask.epicaId, key)}
+                onAdd={text => addSubtaskOf(focusTask.task.id!, focusTask.epicaId, text)}
+              />
             )}
           </div>
         )
@@ -2022,6 +2077,32 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
 }
 
+/* Panel de subtareas del Modo foco: marca las hechas y agrega nuevas sin salir del foco.
+   Se muestra aunque la tarea aún no tenga subtareas (invita a dividirla en pasos). */
+function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; done: number; onToggle: (key: string) => void; onAdd: (text: string) => void }) {
+  const [txt, setTxt] = useState('')
+  const add = () => { const t = txt.trim(); if (!t) return; onAdd(t); setTxt('') }
+  return (
+    <div style={{ width: 'min(520px, 92vw)', maxHeight: '34vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <span style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }}>subtareas</span>
+        {subs.length > 0 && <span style={{ fontSize: 12, color: done === subs.length ? '#a9c48c' : '#cdc4b8' }}>{done}/{subs.length} hechas</span>}
+      </div>
+      {subs.length === 0 && <span style={{ fontSize: 13.5, color: '#8b8379', padding: '0 4px 8px', lineHeight: 1.4 }}>Divide esta tarea en pasos para ir marcando qué haces.</span>}
+      {subs.map((sub, i) => { const key = sub.id || sub.t; return (
+        <button key={i} onClick={() => onToggle(key)} style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 4px', width: '100%' }}>
+          <span style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</span>
+          <span style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none' }}>{sub.t || 'Subtarea'}</span>
+        </button>
+      ) })}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, borderTop: '1px solid #2a2620', paddingTop: 10 }}>
+        <input value={txt} onChange={e => setTxt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }} placeholder="+ agregar subtarea" style={{ flex: 1, minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }} />
+        {txt.trim() && <button onClick={add} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Agregar</button>}
+      </div>
+    </div>
+  )
+}
+
 // Curva suave (Catmull-Rom → Bézier) para una serie de puntos {x,y}.
 function smoothPath(pts: { x: number; y: number }[]): string {
   if (pts.length < 2) return pts.length ? `M ${pts[0].x} ${pts[0].y}` : ''
@@ -2036,6 +2117,15 @@ function smoothPath(pts: { x: number; y: number }[]): string {
 type RWeek = { date: string; work: number; total: number; isToday: boolean; selected: boolean; future: boolean; num: number; letter: string }
 type RAct = { id: number; name: string; start: number; end: number; dur: number; area: Area; color: string; done: boolean; taskId?: string }
 type RDetail = { deep: number; total: number; sleep: number; tasksDone: number; subDone: number; sessions: number; areaRank: { area: Area; label: string; color: string; min: number; pct: number }[]; hours: number[]; hasHours: boolean; hFrom: number; hTo: number; firstStart: number | null; lastEnd: number | null; acts: RAct[] }
+
+// Metadatos que cruzan los registros del historial (sólo traen epicaId/taskId) con las tareas/épicas.
+type HistMeta = {
+  task: Record<string, { epicaId?: string; difficulty?: 'facil' | 'media' | 'dificil' }>
+  epica: Record<string, { name: string; color: string }>
+}
+const DIFF_META: Record<string, { label: string; color: string }> = {
+  facil: { label: 'Fácil', color: '#5f8a52' }, media: { label: 'Media', color: '#A87A2C' }, dificil: { label: 'Difícil', color: '#B0522E' },
+}
 
 const CHART_INK = '#1c1a17', CHART_MUT = '#8b8379', CHART_FAINT = '#a49b90', CHART_GRID = '#eee6da', CHART_LINE = '#b4653a', CHART_GOAL = '#6f8256'
 
@@ -2303,11 +2393,14 @@ function PeriodSummary({ history }: { history: AppData['history'] }) {
 /* HISTORIAL rediseñado: analítica por PERIODO (Semana o Mes, navegable) con banner-resumen,
    reparto por área, por actividad, por tarea (completada/solo tiempo) y racha + sueño. Un solo
    selector de periodo manda todo. Reemplaza el historial disperso y de periodo fijo. */
-function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history: AppData['history']; sleepGoal: number; onLogSleep: (date: string, mins: number) => void; onOpenTask: (taskId: string) => void }) {
+function HistorialView({ history, meta, onLogSleep, onOpenTask }: { history: AppData['history']; meta: HistMeta; onLogSleep: (date: string, mins: number) => void; onOpenTask: (taskId: string) => void }) {
   const [mode, setMode] = useState<'dia' | 'semana' | 'mes'>('semana')
   const [anchor, setAnchor] = useState(() => iso(new Date()))
   const [areaFilter, setAreaFilter] = useState<Area | 'all'>('all')
+  const [epicaFilter, setEpicaFilter] = useState<string>('all')   // epicaId | '__free__' | 'all'
+  const [diffFilter, setDiffFilter] = useState<string>('all')     // 'facil' | 'media' | 'dificil' | 'all'
   const today = iso(new Date())
+  const diffOf = useCallback((h: AppData['history'][number]) => (h.taskId ? meta.task[h.taskId]?.difficulty : undefined), [meta])
   const D = useMemo(() => {
     const [ay, am] = anchor.split('-').map(Number); const pad = (n: number) => String(n).padStart(2, '0')
     let start: string, end: string, days: string[], label: string, isCurrent: boolean
@@ -2326,27 +2419,69 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
       days = Array.from({ length: lastD }, (_, i) => `${ay}-${pad(am)}-${pad(i + 1)}`)
       label = `${MON_FULL[am - 1]} ${ay}`; isCurrent = today.slice(0, 7) === `${ay}-${pad(am)}`
     }
-    const entries = history.filter(h => h.date >= start && h.date <= end)
-    const prod = entries.filter(h => h.area !== 'sueno')
-    const total = entries.reduce((s, h) => s + h.dur, 0)
-    const byArea: Partial<Record<Area, number>> = {}; entries.forEach(h => { byArea[h.area] = (byArea[h.area] || 0) + h.dur })
+    // Todo el análisis es sobre tiempo PRODUCTIVO (sin sueño; el sueño se registra aparte abajo).
+    const prodAll = history.filter(h => h.date >= start && h.date <= end && h.area !== 'sueno')
+
+    // Opciones de filtro (del periodo completo, para que los chips no desaparezcan al filtrar).
+    const areaAll: Partial<Record<Area, number>> = {}; const epMin: Record<string, number> = {}; const diffMin: Record<string, number> = {}; let freeMin = 0
+    prodAll.forEach(h => {
+      areaAll[h.area] = (areaAll[h.area] || 0) + h.dur
+      if (h.epicaId) epMin[h.epicaId] = (epMin[h.epicaId] || 0) + h.dur; else freeMin += h.dur
+      const df = diffOf(h); if (df) diffMin[df] = (diffMin[df] || 0) + h.dur
+    })
+    const areaOpts = (Object.entries(areaAll) as [Area, number][]).sort((a, b) => b[1] - a[1]).map(([a]) => ({ key: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379' }))
+    const epicaOpts = [
+      ...Object.entries(epMin).sort((a, b) => b[1] - a[1]).map(([id]) => ({ key: id, label: meta.epica[id]?.name || 'Épica', color: meta.epica[id]?.color || '#8b8379' })),
+      ...(freeMin > 0 ? [{ key: '__free__', label: 'Libre / sin épica', color: '#9a9187' }] : []),
+    ]
+    // Dificultad: siempre las tres (para que el filtro sea visible/pedible); las sin datos se grisan.
+    const diffOpts = (['facil', 'media', 'dificil'] as const).map(d => ({ key: d as string, label: DIFF_META[d].label, color: DIFF_META[d].color, min: diffMin[d] || 0 }))
+    const hasTaskActivity = Object.keys(epMin).length > 0   // hay tiempo ligado a tareas de Épicas
+
+    // Filtros combinados (AND): afectan TODO (banner, reparto, épica, actividades).
+    const match = (h: AppData['history'][number]) => {
+      if (areaFilter !== 'all' && h.area !== areaFilter) return false
+      if (epicaFilter !== 'all') { if (epicaFilter === '__free__') { if (h.epicaId) return false } else if (h.epicaId !== epicaFilter) return false }
+      if (diffFilter !== 'all' && diffOf(h) !== diffFilter) return false
+      return true
+    }
+    const fil = prodAll.filter(match)
+    const total = fil.reduce((s, h) => s + h.dur, 0)
+
+    // Reparto por ÁREA
+    const byArea: Partial<Record<Area, number>> = {}; fil.forEach(h => { byArea[h.area] = (byArea[h.area] || 0) + h.dur })
     const areaStats = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1]).map(([a, m]) => ({ area: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379', min: m, pct: total ? Math.round((m / total) * 100) : 0 }))
-    // Actividades UNIFICADO (por nombre, sin sueño; filtrable por área): junta "por tarea" y "por
-    // actividad". Marca las que son tareas de Épicas (taskId para abrirlas + estado completada/solo-tiempo).
-    const actEntries = areaFilter === 'all' ? prod : prod.filter(h => h.area === areaFilter)
+
+    // Reparto por ÉPICA (lo que pidió: tiempo por épica, no sólo por tarea)
+    const byEp: Record<string, { key: string; min: number; n: number }> = {}
+    fil.forEach(h => { const k = h.epicaId || '__free__'; const g = byEp[k] || (byEp[k] = { key: k, min: 0, n: 0 }); g.min += h.dur; g.n++ })
+    const epicaStats = Object.values(byEp).map(g => ({
+      key: g.key, min: g.min, n: g.n, pct: total ? Math.round((g.min / total) * 100) : 0,
+      label: g.key === '__free__' ? 'Libre / sin épica' : (meta.epica[g.key]?.name || 'Épica'),
+      color: g.key === '__free__' ? '#9a9187' : (meta.epica[g.key]?.color || '#8b8379'),
+    })).sort((a, b) => b.min - a.min)
+
+    // Actividades UNIFICADO (por nombre): junta "por tarea" y "por actividad". Marca las de Épicas
+    // (taskId para abrirlas + estado completada/solo-tiempo).
     const nameG: Record<string, { name: string; total: number; n: number; areaMin: Partial<Record<Area, number>>; taskId?: string; done: boolean }> = {}
-    actEntries.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { name: k, total: 0, n: 0, areaMin: {}, done: false }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur; if (h.taskId) { g.taskId = g.taskId || h.taskId; g.done = g.done || h.done === true } })
+    fil.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { name: k, total: 0, n: 0, areaMin: {}, done: false }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur; if (h.taskId) { g.taskId = g.taskId || h.taskId; g.done = g.done || h.done === true } })
     const activities = Object.values(nameG).map(g => { const dom = (Object.entries(g.areaMin) as [Area, number][]).sort((a, b) => b[1] - a[1])[0]?.[0]; return { name: g.name, total: g.total, n: g.n, color: (dom && AREAS[dom]?.color) || '#8b8379', taskId: g.taskId, done: g.done } }).sort((a, b) => b.total - a.total)
+
     const dominant = areaStats[0]
-    const activeDays = days.filter(d => prod.some(h => h.date === d && h.dur > 0)).length
-    // racha global de trabajo hasta hoy
+    const activeDays = days.filter(d => fil.some(h => h.date === d && h.dur > 0)).length
+    // Racha global de trabajo hasta hoy (independiente del periodo/filtros).
     let streak = 0
     for (let i = 0; i < 120; i++) { const d = addDaysISO(today, -i); const has = history.some(h => h.date === d && h.area === 'trabajo' && h.dur > 0); if (has) streak++; else if (i === 0) continue; else break }
-    let sleepDebt = 0, sleptNights = 0
-    days.forEach(d => { const sl = history.filter(h => h.date === d && h.area === 'sueno').reduce((s, h) => s + h.dur, 0); if (sl > 0) { sleepDebt += Math.max(0, sleepGoal - sl); sleptNights++ } })
     const maxAct = activities.length ? activities[0].total : 1
-    return { start, end, label, isCurrent, total, areaStats, activities, dominant, activeDays, nDays: days.length, streak, sleepDebt, sleptNights, maxAct }
-  }, [history, mode, anchor, sleepGoal, areaFilter])
+    const maxEp = epicaStats.length ? epicaStats[0].min : 1
+    const filtered = areaFilter !== 'all' || epicaFilter !== 'all' || diffFilter !== 'all'
+    const filterLabel = [
+      areaFilter !== 'all' ? (AREAS[areaFilter as Area]?.label || areaFilter) : null,
+      epicaFilter !== 'all' ? (epicaFilter === '__free__' ? 'libre' : (meta.epica[epicaFilter]?.name || 'épica')) : null,
+      diffFilter !== 'all' ? DIFF_META[diffFilter]?.label : null,
+    ].filter(Boolean).join(' · ')
+    return { label, isCurrent, total, areaStats, epicaStats, activities, dominant, activeDays, nDays: days.length, streak, maxAct, maxEp, areaOpts, epicaOpts, diffOpts, hasTaskActivity, filtered, filterLabel }
+  }, [history, mode, anchor, areaFilter, epicaFilter, diffFilter, meta, diffOf, today])
 
   const move = (dir: 1 | -1) => {
     const [ay, am] = anchor.split('-').map(Number)
@@ -2354,25 +2489,27 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
     else if (mode === 'semana') setAnchor(a => addDaysISO(a, dir * 7))
     else { let y = ay, m = am + dir; if (m < 1) { m = 12; y-- } if (m > 12) { m = 1; y++ } setAnchor(`${y}-${String(m).padStart(2, '0')}-01`) }
   }
+  const clearFilters = () => { setAreaFilter('all'); setEpicaFilter('all'); setDiffFilter('all') }
   const periodWord = mode === 'dia' ? 'el día' : mode === 'semana' ? 'la semana' : 'el mes'
   const resetWord = mode === 'dia' ? 'Hoy' : mode === 'semana' ? 'Esta semana' : 'Este mes'
   const card2: CSSProperties = { background: '#fff', border: '1px solid #ece3d5', borderRadius: 24, padding: 22, display: 'flex', flexDirection: 'column', gap: 16 }
   const modeBtn = (on: boolean): CSSProperties => ({ cursor: 'pointer', border: 'none', background: on ? '#faf7f1' : 'transparent', color: on ? '#1c1a17' : '#6b645b', borderRadius: 999, padding: '7px 15px', fontSize: 13, fontWeight: 600 })
   const navBtn: CSSProperties = { width: 36, height: 36, border: '1px solid #e2d9cb', background: '#fff', borderRadius: 10, color: '#a49b90', cursor: 'pointer', fontSize: 16 }
-  const filterChip = (on: boolean, color: string): CSSProperties => ({ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? color : '#e2d9cb'}`, background: on ? color + '1f' : '#faf7f1', color: on ? '#1c1a17' : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600 })
+  const filterChip = (on: boolean, color: string): CSSProperties => ({ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? color : '#e2d9cb'}`, background: on ? color + '22' : '#faf7f1', color: on ? '#1c1a17' : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600 })
+  const rowLbl: CSSProperties = { fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: '#a49b90', width: 62, flexShrink: 0, paddingTop: 7 }
 
   return (
     <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Banner resumen del periodo */}
       <div style={{ background: '#1c1a17', borderRadius: 24, padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <span style={{ ...LBL, color: '#a49b90' }}>{periodWord} en una línea</span>
+        <span style={{ ...LBL, color: '#a49b90' }}>{periodWord} en una línea{D.filtered ? <span style={{ color: '#e7c56b', textTransform: 'none', letterSpacing: 0 }}> · filtrado: {D.filterLabel}</span> : ''}</span>
         <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.4, color: '#faf7f1' }}>
-          {D.total ? <>Registraste {hm(D.total)} en {D.label}{D.dominant ? <>, sobre todo en <span style={{ color: '#e7c56b' }}>{D.dominant.label.toLowerCase()}</span> ({D.dominant.pct}%)</> : ''}. </> : <>Sin actividad registrada en {D.label}. </>}
+          {D.total ? <>Registraste {hm(D.total)} en {D.label}{D.dominant ? <>, sobre todo en <span style={{ color: '#e7c56b' }}>{D.dominant.label.toLowerCase()}</span> ({D.dominant.pct}%)</> : ''}. </> : <>Sin actividad{D.filtered ? ' con esos filtros' : ' registrada'} en {D.label}. </>}
           {D.streak > 0 ? <><span style={{ color: '#e7c56b' }}>{D.streak}</span> {D.streak === 1 ? 'día' : 'días'} seguidos trabajando.</> : 'Aún sin racha.'}
         </span>
       </div>
 
-      {/* Selector de periodo + filtro por área */}
+      {/* Selector de periodo + filtros (área · épica · dificultad) que afectan TODO el historial */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
@@ -2385,33 +2522,79 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
           <span style={{ flex: 1 }} />
           {mode !== 'dia' && <span style={{ fontSize: 13.5, color: '#6b645b' }}>{D.activeDays} de {D.nDays} días con actividad</span>}
         </div>
-        {/* Filtro por área (afecta la lista de Actividades) */}
-        {D.areaStats.length > 1 && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button onClick={() => setAreaFilter('all')} style={filterChip(areaFilter === 'all', '#1c1a17')}>Todas</button>
-            {D.areaStats.map(a => <button key={a.area} onClick={() => setAreaFilter(areaFilter === a.area ? 'all' : a.area)} style={filterChip(areaFilter === a.area, a.color)}><span style={{ width: 8, height: 8, borderRadius: 999, background: a.color, display: 'block' }} />{a.label}</button>)}
+        {/* Filas de filtros: cada una aparece sólo si hay más de una opción */}
+        {(D.areaOpts.length > 1 || D.epicaOpts.length > 1 || D.hasTaskActivity) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', border: '1px solid #ece3d5', borderRadius: 18, padding: '14px 16px' }}>
+            {D.areaOpts.length > 1 && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={rowLbl}>Área</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button onClick={() => setAreaFilter('all')} style={filterChip(areaFilter === 'all', '#1c1a17')}>Todas</button>
+                  {D.areaOpts.map(a => <button key={a.key} onClick={() => setAreaFilter(areaFilter === a.key ? 'all' : a.key)} style={filterChip(areaFilter === a.key, a.color)}><span style={{ width: 8, height: 8, borderRadius: 999, background: a.color, display: 'block' }} />{a.label}</button>)}
+                </div>
+              </div>
+            )}
+            {D.epicaOpts.length > 1 && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={rowLbl}>Épica</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button onClick={() => setEpicaFilter('all')} style={filterChip(epicaFilter === 'all', '#1c1a17')}>Todas</button>
+                  {D.epicaOpts.map(e => <button key={e.key} onClick={() => setEpicaFilter(epicaFilter === e.key ? 'all' : e.key)} style={filterChip(epicaFilter === e.key, e.color)}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.color, display: 'block' }} />{e.label}</button>)}
+                </div>
+              </div>
+            )}
+            {D.hasTaskActivity && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={rowLbl}>Dificultad</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button onClick={() => setDiffFilter('all')} style={filterChip(diffFilter === 'all', '#1c1a17')}>Todas</button>
+                  {D.diffOpts.map(d => d.min > 0
+                    ? <button key={d.key} onClick={() => setDiffFilter(diffFilter === d.key ? 'all' : d.key)} style={filterChip(diffFilter === d.key, d.color)}><span style={{ width: 8, height: 8, borderRadius: 999, background: d.color, display: 'block' }} />{d.label}</button>
+                    : <span key={d.key} title="Sin tareas de esta dificultad en el periodo" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px dashed #e2d9cb', background: 'transparent', color: '#c3bbae', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: '#e2d9cb', display: 'block' }} />{d.label}</span>)}
+                  {D.diffOpts.every(d => d.min === 0) && <span style={{ fontSize: 12, color: '#a49b90', marginLeft: 4 }}>· asigna dificultad en Épicas para usar este filtro</span>}
+                </div>
+              </div>
+            )}
+            {D.filtered && <button onClick={clearFilters} style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: '#8a4b28', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', padding: '2px 0' }}>✕ limpiar filtros</button>}
           </div>
         )}
       </div>
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        {/* Columna izquierda: reparto por área + racha y sueño (cards cortas apiladas) */}
+        {/* Columna izquierda: reparto por área + por épica + racha */}
         <div style={{ flex: '1 1 300px', minWidth: 280, display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {/* Reparto por área */}
+        {/* Reparto por área (toca una barra para filtrar por esa área) */}
         <div style={card2}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ fontFamily: SERIF, fontSize: 22 }}>Reparto por área</span>
+            <span style={{ fontFamily: SERIF, fontSize: 22 }}>Por área</span>
             <span style={{ fontSize: 12.5, color: '#a49b90' }}>{hm(D.total)}</span>
           </div>
           {D.areaStats.length ? D.areaStats.map((s, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div key={i} onClick={() => setAreaFilter(areaFilter === s.area ? 'all' : s.area)} title="Filtrar por esta área" style={{ display: 'flex', flexDirection: 'column', gap: 6, cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 14.5 }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: s.color, display: 'block' }} />{s.label}</span>
                 <span style={{ color: '#6b645b' }}>{hm(s.min)} · {s.pct}%</span>
               </div>
-              <div style={{ height: 8, background: '#f0e8da', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${s.pct}%`, height: '100%', background: s.color, borderRadius: 999 }} /></div>
+              <div style={{ height: 8, background: '#f0e8da', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${Math.max(2, s.pct)}%`, height: '100%', background: s.color, borderRadius: 999 }} /></div>
             </div>
           )) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin datos en {periodWord}.</span>}
+        </div>
+
+        {/* Reparto por ÉPICA (toca para filtrar por esa épica) */}
+        <div style={card2}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={{ fontFamily: SERIF, fontSize: 22 }}>Por épica</span>
+            <span style={{ fontSize: 12.5, color: '#a49b90' }}>tiempo dedicado a cada épica</span>
+          </div>
+          {D.epicaStats.length ? D.epicaStats.map((s, i) => (
+            <div key={i} onClick={() => setEpicaFilter(epicaFilter === s.key ? 'all' : s.key)} title="Filtrar por esta épica" style={{ display: 'flex', flexDirection: 'column', gap: 6, cursor: 'pointer' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, fontSize: 14.5 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}><span style={{ width: 9, height: 9, borderRadius: 999, background: s.color, display: 'block', flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</span></span>
+                <span style={{ color: '#6b645b', flexShrink: 0 }}>{hm(s.min)} · {s.pct}%</span>
+              </div>
+              <div style={{ height: 8, background: '#f0e8da', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${Math.max(2, (s.min / D.maxEp) * 100)}%`, height: '100%', background: s.color, borderRadius: 999 }} /></div>
+            </div>
+          )) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin actividad de épicas en {periodWord}.</span>}
         </div>
 
         {/* Racha */}
@@ -2456,7 +2639,7 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
                   </div>
                 ) })}
               </div>
-            ) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin actividad registrada en {periodWord}.</span>}
+            ) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin actividad{D.filtered ? ' con esos filtros' : ` registrada en ${periodWord}`}.</span>}
           </div>
         </div>
       </div>
