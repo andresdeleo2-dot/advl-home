@@ -1117,6 +1117,15 @@ export default function TiempoClient() {
     setEditTask(null)
   }
   const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
+  // Marca/desmarca una subtarea de la tarea en foco (desde el Modo foco): fija/limpia doneAt y
+  // sincroniza a Épicas para que se vea completada en todos lados (incl. "subtareas completadas hoy").
+  const toggleSubtaskOf = (taskId: string, epicaId: string, subKey: string) => {
+    const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
+    const subs = (tt.task.subtasks || []).map(s => ((s.id || s.t) === subKey ? { ...s, done: !s.done, doneAt: !s.done ? new Date().toISOString() : undefined } : s))
+    const upd: EpicaTask = { ...tt.task, subtasks: subs }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
   const cancel = () => save({ session: null })
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
   const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, Math.round(elapsedMin(s.start, now))), pausedAt: Math.round(now) } }) }
@@ -1889,6 +1898,9 @@ export default function TiempoClient() {
         const inBreak = pos >= 25
         const phaseRemain = Math.max(0, inBreak ? 30 - pos : 25 - pos)
         const phasePct = inBreak ? ((pos - 25) / 5) * 100 : (pos / 25) * 100
+        const focusTask = s.taskId ? (allTasks || []).find(x => x.task.id === s.taskId) : null
+        const focusSubs = focusTask?.task.subtasks || []
+        const subsDone = focusSubs.filter(x => x.done).length
         return (
           <div style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'radial-gradient(120% 120% at 50% 0%, #26221d 0%, #17140f 60%, #0f0d0a 100%)', color: '#faf7f1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 22 }}>
             <button onClick={() => setFocusOpen(false)} title="Salir del modo foco (Esc)" style={{ position: 'absolute', top: 20, right: 22, border: '1px solid #3a352e', background: 'transparent', color: '#a49b90', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, cursor: 'pointer' }}>✕ Salir</button>
@@ -1916,6 +1928,22 @@ export default function TiempoClient() {
               <button onClick={() => finish(false)} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Terminar</button>
               {data.session?.taskId && <button onClick={() => finish(true)} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
             </div>
+
+            {/* Subtareas de la tarea en foco: márcalas conforme las terminas (elige qué hacer ahora) */}
+            {focusTask && focusSubs.length > 0 && (
+              <div style={{ width: 'min(520px, 92vw)', maxHeight: '32vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }}>subtareas</span>
+                  <span style={{ fontSize: 12, color: subsDone === focusSubs.length ? '#a9c48c' : '#cdc4b8' }}>{subsDone}/{focusSubs.length} hechas</span>
+                </div>
+                {focusSubs.map((sub, i) => { const key = sub.id || sub.t; return (
+                  <button key={i} onClick={() => toggleSubtaskOf(focusTask.task.id!, focusTask.epicaId, key)} style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 4px', width: '100%' }}>
+                    <span style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</span>
+                    <span style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none' }}>{sub.t || 'Subtarea'}</span>
+                  </button>
+                ) })}
+              </div>
+            )}
           </div>
         )
       })()}
@@ -2276,13 +2304,18 @@ function PeriodSummary({ history }: { history: AppData['history'] }) {
    reparto por área, por actividad, por tarea (completada/solo tiempo) y racha + sueño. Un solo
    selector de periodo manda todo. Reemplaza el historial disperso y de periodo fijo. */
 function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history: AppData['history']; sleepGoal: number; onLogSleep: (date: string, mins: number) => void; onOpenTask: (taskId: string) => void }) {
-  const [mode, setMode] = useState<'semana' | 'mes'>('semana')
+  const [mode, setMode] = useState<'dia' | 'semana' | 'mes'>('semana')
   const [anchor, setAnchor] = useState(() => iso(new Date()))
+  const [areaFilter, setAreaFilter] = useState<Area | 'all'>('all')
   const today = iso(new Date())
   const D = useMemo(() => {
     const [ay, am] = anchor.split('-').map(Number); const pad = (n: number) => String(n).padStart(2, '0')
     let start: string, end: string, days: string[], label: string, isCurrent: boolean
-    if (mode === 'semana') {
+    if (mode === 'dia') {
+      start = end = anchor; days = [anchor]
+      label = anchor === today ? 'hoy' : longDayOf(anchor)
+      isCurrent = anchor === today
+    } else if (mode === 'semana') {
       const wk = weekOfISO(anchor); start = wk[0]; end = wk[6]; days = wk
       const [sy, sm, sd] = start.split('-').map(Number); const [ey, em, ed] = end.split('-').map(Number)
       const yr = new Date().getFullYear(); const yrTag = (ey !== yr || sy !== yr) ? ` ${ey}` : ''
@@ -2298,10 +2331,11 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
     const total = entries.reduce((s, h) => s + h.dur, 0)
     const byArea: Partial<Record<Area, number>> = {}; entries.forEach(h => { byArea[h.area] = (byArea[h.area] || 0) + h.dur })
     const areaStats = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1]).map(([a, m]) => ({ area: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379', min: m, pct: total ? Math.round((m / total) * 100) : 0 }))
-    // Actividades UNIFICADO (por nombre, sin sueño): junta "por tarea" y "por actividad". Marca
-    // las que son tareas de Épicas (guarda su taskId para abrirlas y su estado completada/solo-tiempo).
+    // Actividades UNIFICADO (por nombre, sin sueño; filtrable por área): junta "por tarea" y "por
+    // actividad". Marca las que son tareas de Épicas (taskId para abrirlas + estado completada/solo-tiempo).
+    const actEntries = areaFilter === 'all' ? prod : prod.filter(h => h.area === areaFilter)
     const nameG: Record<string, { name: string; total: number; n: number; areaMin: Partial<Record<Area, number>>; taskId?: string; done: boolean }> = {}
-    prod.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { name: k, total: 0, n: 0, areaMin: {}, done: false }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur; if (h.taskId) { g.taskId = g.taskId || h.taskId; g.done = g.done || h.done === true } })
+    actEntries.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { name: k, total: 0, n: 0, areaMin: {}, done: false }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur; if (h.taskId) { g.taskId = g.taskId || h.taskId; g.done = g.done || h.done === true } })
     const activities = Object.values(nameG).map(g => { const dom = (Object.entries(g.areaMin) as [Area, number][]).sort((a, b) => b[1] - a[1])[0]?.[0]; return { name: g.name, total: g.total, n: g.n, color: (dom && AREAS[dom]?.color) || '#8b8379', taskId: g.taskId, done: g.done } }).sort((a, b) => b.total - a.total)
     const dominant = areaStats[0]
     const activeDays = days.filter(d => prod.some(h => h.date === d && h.dur > 0)).length
@@ -2312,17 +2346,20 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
     days.forEach(d => { const sl = history.filter(h => h.date === d && h.area === 'sueno').reduce((s, h) => s + h.dur, 0); if (sl > 0) { sleepDebt += Math.max(0, sleepGoal - sl); sleptNights++ } })
     const maxAct = activities.length ? activities[0].total : 1
     return { start, end, label, isCurrent, total, areaStats, activities, dominant, activeDays, nDays: days.length, streak, sleepDebt, sleptNights, maxAct }
-  }, [history, mode, anchor, sleepGoal])
+  }, [history, mode, anchor, sleepGoal, areaFilter])
 
   const move = (dir: 1 | -1) => {
     const [ay, am] = anchor.split('-').map(Number)
-    if (mode === 'semana') setAnchor(a => addDaysISO(a, dir * 7))
+    if (mode === 'dia') setAnchor(a => addDaysISO(a, dir))
+    else if (mode === 'semana') setAnchor(a => addDaysISO(a, dir * 7))
     else { let y = ay, m = am + dir; if (m < 1) { m = 12; y-- } if (m > 12) { m = 1; y++ } setAnchor(`${y}-${String(m).padStart(2, '0')}-01`) }
   }
-  const periodWord = mode === 'semana' ? 'la semana' : 'el mes'
+  const periodWord = mode === 'dia' ? 'el día' : mode === 'semana' ? 'la semana' : 'el mes'
+  const resetWord = mode === 'dia' ? 'Hoy' : mode === 'semana' ? 'Esta semana' : 'Este mes'
   const card2: CSSProperties = { background: '#fff', border: '1px solid #ece3d5', borderRadius: 24, padding: 22, display: 'flex', flexDirection: 'column', gap: 16 }
   const modeBtn = (on: boolean): CSSProperties => ({ cursor: 'pointer', border: 'none', background: on ? '#faf7f1' : 'transparent', color: on ? '#1c1a17' : '#6b645b', borderRadius: 999, padding: '7px 15px', fontSize: 13, fontWeight: 600 })
   const navBtn: CSSProperties = { width: 36, height: 36, border: '1px solid #e2d9cb', background: '#fff', borderRadius: 10, color: '#a49b90', cursor: 'pointer', fontSize: 16 }
+  const filterChip = (on: boolean, color: string): CSSProperties => ({ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? color : '#e2d9cb'}`, background: on ? color + '1f' : '#faf7f1', color: on ? '#1c1a17' : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600 })
 
   return (
     <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -2331,22 +2368,30 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
         <span style={{ ...LBL, color: '#a49b90' }}>{periodWord} en una línea</span>
         <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.4, color: '#faf7f1' }}>
           {D.total ? <>Registraste {hm(D.total)} en {D.label}{D.dominant ? <>, sobre todo en <span style={{ color: '#e7c56b' }}>{D.dominant.label.toLowerCase()}</span> ({D.dominant.pct}%)</> : ''}. </> : <>Sin actividad registrada en {D.label}. </>}
-          {D.sleepDebt > 0 ? <>Llevas <span style={{ color: '#e0a58a' }}>{hm(D.sleepDebt)}</span> de deuda de sueño. </> : D.sleptNights > 0 ? <>Sueño <span style={{ color: '#9fc08a' }}>al día</span>. </> : ''}
           {D.streak > 0 ? <><span style={{ color: '#e7c56b' }}>{D.streak}</span> {D.streak === 1 ? 'día' : 'días'} seguidos trabajando.</> : 'Aún sin racha.'}
         </span>
       </div>
 
-      {/* Selector de periodo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
-          {(['semana', 'mes'] as const).map(m => <button key={m} onClick={() => setMode(m)} style={modeBtn(mode === m)}>{m === 'semana' ? 'Semana' : 'Mes'}</button>)}
+      {/* Selector de periodo + filtro por área */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
+            {(['dia', 'semana', 'mes'] as const).map(m => <button key={m} onClick={() => setMode(m)} style={modeBtn(mode === m)}>{m === 'dia' ? 'Día' : m === 'semana' ? 'Semana' : 'Mes'}</button>)}
+          </div>
+          <button onClick={() => move(-1)} title="Anterior" style={navBtn}>‹</button>
+          <span style={{ fontFamily: SERIF, fontSize: 22, textTransform: 'capitalize', minWidth: 130, textAlign: 'center' }}>{D.label}</span>
+          <button onClick={() => move(1)} title="Siguiente" style={navBtn}>›</button>
+          {!D.isCurrent && <button onClick={() => setAnchor(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer' }}>{resetWord}</button>}
+          <span style={{ flex: 1 }} />
+          {mode !== 'dia' && <span style={{ fontSize: 13.5, color: '#6b645b' }}>{D.activeDays} de {D.nDays} días con actividad</span>}
         </div>
-        <button onClick={() => move(-1)} style={navBtn}>‹</button>
-        <span style={{ fontFamily: SERIF, fontSize: 22, textTransform: 'capitalize', minWidth: 130, textAlign: 'center' }}>{D.label}</span>
-        <button onClick={() => move(1)} style={navBtn}>›</button>
-        {!D.isCurrent && <button onClick={() => setAnchor(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer' }}>{mode === 'semana' ? 'Esta semana' : 'Este mes'}</button>}
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 13.5, color: '#6b645b' }}>{D.activeDays} de {D.nDays} días con actividad</span>
+        {/* Filtro por área (afecta la lista de Actividades) */}
+        {D.areaStats.length > 1 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button onClick={() => setAreaFilter('all')} style={filterChip(areaFilter === 'all', '#1c1a17')}>Todas</button>
+            {D.areaStats.map(a => <button key={a.area} onClick={() => setAreaFilter(areaFilter === a.area ? 'all' : a.area)} style={filterChip(areaFilter === a.area, a.color)}><span style={{ width: 8, height: 8, borderRadius: 999, background: a.color, display: 'block' }} />{a.label}</button>)}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
@@ -2369,21 +2414,23 @@ function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history
           )) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin datos en {periodWord}.</span>}
         </div>
 
-        {/* Racha y sueño */}
+        {/* Racha */}
         <div style={card2}>
-          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Racha y sueño</span>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: SERIF, fontSize: 22 }}>Racha</span>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, color: D.streak > 0 ? '#8a4b28' : '#a49b90' }}>{D.streak || '—'}</span>
+              <span style={{ fontFamily: SERIF, fontSize: 36, lineHeight: 1, color: D.streak > 0 ? '#8a4b28' : '#a49b90' }}>{D.streak || '—'}</span>
               <span style={{ fontSize: 12, color: '#a49b90' }}>{D.streak === 1 ? 'día seguido' : 'días seguidos'} trabajando</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, color: D.sleepDebt > 0 ? '#8a3c2a' : '#4f6238' }}>{D.sleepDebt > 0 ? hm(D.sleepDebt) : 'al día'}</span>
-              <span style={{ fontSize: 12, color: '#a49b90' }}>deuda de sueño · {periodWord}</span>
+              <span style={{ fontFamily: SERIF, fontSize: 36, lineHeight: 1, color: '#1c1a17' }}>{D.activeDays}<span style={{ fontSize: 20, color: '#a49b90' }}>/{D.nDays}</span></span>
+              <span style={{ fontSize: 12, color: '#a49b90' }}>días con actividad</span>
             </div>
           </div>
-          {D.sleepDebt > 0 && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Tomado del sueño en {D.sleptNights} {D.sleptNights === 1 ? 'noche' : 'noches'}. Eso no se recupera con ocio: se paga con mañana.</span>}
-          <div style={{ borderTop: '1px solid #eee6da', paddingTop: 14 }}><SleepLogger onLog={onLogSleep} /></div>
+          <div style={{ borderTop: '1px solid #eee6da', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span style={{ ...LBL }}>registrar cuánto dormiste</span>
+            <SleepLogger onLog={onLogSleep} />
+          </div>
         </div>
         </div>
 
