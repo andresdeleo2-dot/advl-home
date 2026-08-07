@@ -1648,6 +1648,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       patchEpic(e.id, { tasks })
     }
     closeTaskEdit({ discard: true })
+    if (t.id) setTaskView({ eId: target.id, tid: t.id })   // tras guardar, abre el detalle de la tarea (no cierra en seco)
     if (moved) showToast(`Movida a ${target.name}`)
     if (newPlan && newPlan !== viewDate && orig.plan !== newPlan) {
       showToast(`Planeada para ${relLong(newPlan).toLowerCase()}`, false, { label: 'Ver', fn: () => setViewDate(newPlan) })
