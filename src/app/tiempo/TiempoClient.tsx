@@ -1788,7 +1788,7 @@ export default function TiempoClient() {
           </div>
         ) : (
           /* ── HISTORIAL (analítica por periodo) ─────────────────────── */
-          <HistorialView history={data.history} sleepGoal={data.sleep} onLogSleep={logSleep} />
+          <HistorialView history={data.history} sleepGoal={data.sleep} onLogSleep={logSleep} onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} />
         )}
       </div>
 
@@ -2275,7 +2275,7 @@ function PeriodSummary({ history }: { history: AppData['history'] }) {
 /* HISTORIAL rediseñado: analítica por PERIODO (Semana o Mes, navegable) con banner-resumen,
    reparto por área, por actividad, por tarea (completada/solo tiempo) y racha + sueño. Un solo
    selector de periodo manda todo. Reemplaza el historial disperso y de periodo fijo. */
-function HistorialView({ history, sleepGoal, onLogSleep }: { history: AppData['history']; sleepGoal: number; onLogSleep: (date: string, mins: number) => void }) {
+function HistorialView({ history, sleepGoal, onLogSleep, onOpenTask }: { history: AppData['history']; sleepGoal: number; onLogSleep: (date: string, mins: number) => void; onOpenTask: (taskId: string) => void }) {
   const [mode, setMode] = useState<'semana' | 'mes'>('semana')
   const [anchor, setAnchor] = useState(() => iso(new Date()))
   const today = iso(new Date())
@@ -2298,14 +2298,11 @@ function HistorialView({ history, sleepGoal, onLogSleep }: { history: AppData['h
     const total = entries.reduce((s, h) => s + h.dur, 0)
     const byArea: Partial<Record<Area, number>> = {}; entries.forEach(h => { byArea[h.area] = (byArea[h.area] || 0) + h.dur })
     const areaStats = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1]).map(([a, m]) => ({ area: a, label: AREAS[a]?.label || a, color: AREAS[a]?.color || '#8b8379', min: m, pct: total ? Math.round((m / total) * 100) : 0 }))
-    // por actividad (nombre), color del área dominante
-    const nameG: Record<string, { total: number; n: number; areaMin: Partial<Record<Area, number>> }> = {}
-    entries.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { total: 0, n: 0, areaMin: {} }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur })
-    const byActivity = Object.entries(nameG).map(([name, g]) => { const dom = (Object.entries(g.areaMin) as [Area, number][]).sort((a, b) => b[1] - a[1])[0]?.[0]; return { name, total: g.total, n: g.n, color: (dom && AREAS[dom]?.color) || '#8b8379' } }).sort((a, b) => b.total - a.total)
-    // por tarea (sólo entradas con taskId), completada si alguna quedó done
-    const taskG: Record<string, { name: string; total: number; done: boolean; area: Area }> = {}
-    prod.forEach(h => { if (!h.taskId) return; const g = taskG[h.taskId] || (taskG[h.taskId] = { name: h.name, total: 0, done: false, area: h.area }); g.total += h.dur; g.done = g.done || h.done === true })
-    const byTask = Object.values(taskG).map(g => ({ name: g.name, total: g.total, done: g.done, color: AREAS[g.area]?.color || '#8b8379' })).sort((a, b) => b.total - a.total)
+    // Actividades UNIFICADO (por nombre, sin sueño): junta "por tarea" y "por actividad". Marca
+    // las que son tareas de Épicas (guarda su taskId para abrirlas y su estado completada/solo-tiempo).
+    const nameG: Record<string, { name: string; total: number; n: number; areaMin: Partial<Record<Area, number>>; taskId?: string; done: boolean }> = {}
+    prod.forEach(h => { const k = h.name || '—'; const g = nameG[k] || (nameG[k] = { name: k, total: 0, n: 0, areaMin: {}, done: false }); g.total += h.dur; g.n++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur; if (h.taskId) { g.taskId = g.taskId || h.taskId; g.done = g.done || h.done === true } })
+    const activities = Object.values(nameG).map(g => { const dom = (Object.entries(g.areaMin) as [Area, number][]).sort((a, b) => b[1] - a[1])[0]?.[0]; return { name: g.name, total: g.total, n: g.n, color: (dom && AREAS[dom]?.color) || '#8b8379', taskId: g.taskId, done: g.done } }).sort((a, b) => b.total - a.total)
     const dominant = areaStats[0]
     const activeDays = days.filter(d => prod.some(h => h.date === d && h.dur > 0)).length
     // racha global de trabajo hasta hoy
@@ -2313,9 +2310,8 @@ function HistorialView({ history, sleepGoal, onLogSleep }: { history: AppData['h
     for (let i = 0; i < 120; i++) { const d = addDaysISO(today, -i); const has = history.some(h => h.date === d && h.area === 'trabajo' && h.dur > 0); if (has) streak++; else if (i === 0) continue; else break }
     let sleepDebt = 0, sleptNights = 0
     days.forEach(d => { const sl = history.filter(h => h.date === d && h.area === 'sueno').reduce((s, h) => s + h.dur, 0); if (sl > 0) { sleepDebt += Math.max(0, sleepGoal - sl); sleptNights++ } })
-    const maxAct = byActivity.length ? byActivity[0].total : 1
-    const maxTask = byTask.length ? byTask[0].total : 1
-    return { start, end, label, isCurrent, total, areaStats, byActivity, byTask, dominant, activeDays, nDays: days.length, streak, sleepDebt, sleptNights, maxAct, maxTask }
+    const maxAct = activities.length ? activities[0].total : 1
+    return { start, end, label, isCurrent, total, areaStats, activities, dominant, activeDays, nDays: days.length, streak, sleepDebt, sleptNights, maxAct }
   }, [history, mode, anchor, sleepGoal])
 
   const move = (dir: 1 | -1) => {
@@ -2353,7 +2349,9 @@ function HistorialView({ history, sleepGoal, onLogSleep }: { history: AppData['h
         <span style={{ fontSize: 13.5, color: '#6b645b' }}>{D.activeDays} de {D.nDays} días con actividad</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 18, alignItems: 'start' }}>
+      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {/* Columna izquierda: reparto por área + racha y sueño (cards cortas apiladas) */}
+        <div style={{ flex: '1 1 300px', minWidth: 280, display: 'flex', flexDirection: 'column', gap: 18 }}>
         {/* Reparto por área */}
         <div style={card2}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -2387,52 +2385,33 @@ function HistorialView({ history, sleepGoal, onLogSleep }: { history: AppData['h
           {D.sleepDebt > 0 && <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Tomado del sueño en {D.sleptNights} {D.sleptNights === 1 ? 'noche' : 'noches'}. Eso no se recupera con ocio: se paga con mañana.</span>}
           <div style={{ borderTop: '1px solid #eee6da', paddingTop: 14 }}><SleepLogger onLog={onLogSleep} /></div>
         </div>
+        </div>
 
-        {/* Por tarea */}
-        {D.byTask.length > 0 && (
+        {/* Columna derecha: Actividades (junta "por tarea" y "por actividad") */}
+        <div style={{ flex: '1.3 1 340px', minWidth: 300 }}>
           <div style={card2}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontFamily: SERIF, fontSize: 22 }}>Por tarea</span>
-              <span style={{ fontSize: 12.5, color: '#a49b90' }}>tiempo invertido y si se completó</span>
+              <span style={{ fontFamily: SERIF, fontSize: 22 }}>Actividades</span>
+              <span style={{ fontSize: 12.5, color: '#a49b90' }}>tiempo por actividad · toca una tarea de Épicas para abrirla</span>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {D.byTask.map((a, i) => (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5 }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0 }} />
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, color: a.done ? '#4f6238' : '#8a4b28', flexShrink: 0 }}>{a.done ? 'completada' : 'solo tiempo'}</span>
-                    <span style={{ fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums', minWidth: 58, textAlign: 'right' }}>{hm(a.total)}</span>
+            {D.activities.length ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {D.activities.map((a, i) => { const clickable = !!a.taskId; return (
+                  <div key={i} onClick={clickable ? () => onOpenTask(a.taskId!) : undefined} title={clickable ? 'Abrir la tarea' : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 5, cursor: clickable ? 'pointer' : 'default' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 14.5 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0, marginTop: 5 }} />
+                      <span style={{ flex: 1, minWidth: 0, lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }}>{a.name}</span>
+                      {a.taskId && <span style={{ fontSize: 11, fontWeight: 700, color: a.done ? '#4f6238' : '#8a4b28', flexShrink: 0, whiteSpace: 'nowrap' }}>{a.done ? 'completada' : 'solo tiempo'}</span>}
+                      <span style={{ fontSize: 11.5, color: '#a49b90', flexShrink: 0 }}>{a.n}×</span>
+                      <span style={{ fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums', minWidth: 58, textAlign: 'right' }}>{hm(a.total)}</span>
+                    </div>
+                    <div style={{ height: 6, background: '#f0e8da', borderRadius: 999, overflow: 'hidden', marginLeft: 19 }}><div style={{ width: `${Math.max(2, (a.total / D.maxAct) * 100)}%`, height: '100%', background: a.color, borderRadius: 999 }} /></div>
                   </div>
-                  <div style={{ height: 6, background: '#f0e8da', borderRadius: 999, overflow: 'hidden', marginLeft: 19 }}><div style={{ width: `${Math.max(2, (a.total / D.maxTask) * 100)}%`, height: '100%', background: a.color, borderRadius: 999 }} /></div>
-                </div>
-              ))}
-            </div>
+                ) })}
+              </div>
+            ) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>Sin actividad registrada en {periodWord}.</span>}
           </div>
-        )}
-
-        {/* Por actividad */}
-        {D.byActivity.length > 0 && (
-          <div style={card2}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontFamily: SERIF, fontSize: 22 }}>Por actividad</span>
-              <span style={{ fontSize: 12.5, color: '#a49b90' }}>todo lo registrado, por nombre</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {D.byActivity.map((a, i) => (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5 }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0 }} />
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-                    <span style={{ fontSize: 11.5, color: '#a49b90', flexShrink: 0 }}>{a.n}×</span>
-                    <span style={{ fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums', minWidth: 58, textAlign: 'right' }}>{hm(a.total)}</span>
-                  </div>
-                  <div style={{ height: 6, background: '#f0e8da', borderRadius: 999, overflow: 'hidden', marginLeft: 19 }}><div style={{ width: `${Math.max(2, (a.total / D.maxAct) * 100)}%`, height: '100%', background: a.color, borderRadius: 999 }} /></div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   )

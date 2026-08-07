@@ -1529,10 +1529,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Popup de edición por tarea ─────────────────────────── */
   /** `seed` prellena el borrador de una tarea nueva (p. ej. el día del plan
    *  desde el que se creó), para no tener que elegirlo a mano. */
+  // ── Borrador del editor: si cierras por error una edición SIN guardar, se conserva
+  // lo que estabas escribiendo (por tarea, en memoria + localStorage). Al reabrir
+  // "Editar" se restaura para no empezar de cero. Al guardar/eliminar se descarta. ──
+  const DRAFT_CACHE_KEY = 'advl_epicas_draftcache'
+  const draftCacheRef = useRef<Record<string, { draft: EpicaTask; target: string }>>({})
+  useEffect(() => { try { const r = localStorage.getItem(DRAFT_CACHE_KEY); if (r) draftCacheRef.current = JSON.parse(r) } catch { /* noop */ } }, [])
+  const persistDrafts = () => { try { localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(draftCacheRef.current)) } catch { /* noop */ } }
+  const baselineDraft = (epicId: string, tid: string): EpicaTask | null => {
+    const f = findTask(epicId, tid)
+    return f ? { ...clone(f.t), links: f.t.links || [] } : null
+  }
   const openTaskEdit = (epicId: string, tid: string | null, seed?: Partial<EpicaTask>) => {
     const found = tid ? findTask(epicId, tid) : null
-    if (found) setTaskDraft({ ...clone(found.t), links: found.t.links || [] })
-    else setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
+    if (found && tid) {
+      const base = { ...clone(found.t), links: found.t.links || [] }
+      const cached = draftCacheRef.current[`${epicId}:${tid}`]
+      // Hay un borrador sin guardar y distinto de la tarea → restaurarlo
+      if (cached && JSON.stringify(cached.draft) !== JSON.stringify(base)) {
+        setTaskDraft(cached.draft)
+        setTaskEditTarget(cached.target || epicId)
+        setTaskEdit({ epicId, tid })
+        showToast('Borrador restaurado ↩', false, { label: 'Descartar', fn: () => { delete draftCacheRef.current[`${epicId}:${tid}`]; persistDrafts(); setTaskDraft(base) } })
+        return
+      }
+      setTaskDraft(base)
+    } else {
+      setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
+    }
     setTaskEdit({ epicId, tid })
     setTaskEditTarget(epicId)
   }
@@ -1550,7 +1574,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!target) { showToast('Crea una épica primero', true); return }
     openTaskEdit(target, null, { plan: day })
   }
-  const closeTaskEdit = () => setTaskEdit(null)
+  const closeTaskEdit = (opts?: { discard?: boolean }) => {
+    const cur = taskEdit
+    if (cur && cur.tid) {
+      const key = `${cur.epicId}:${cur.tid}`
+      if (opts && opts.discard === true) {
+        delete draftCacheRef.current[key]   // se guardó/eliminó: descartar borrador
+      } else {
+        // Cierre "accidental": si hay cambios sin guardar, se conserva el borrador
+        const base = baselineDraft(cur.epicId, cur.tid)
+        if (base && JSON.stringify(taskDraft) !== JSON.stringify(base)) draftCacheRef.current[key] = { draft: taskDraft, target: taskEditTarget }
+        else delete draftCacheRef.current[key]
+      }
+      persistDrafts()
+    }
+    setTaskEdit(null)
+  }
   const saveTask = () => {
     if (!taskEdit) return
     const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
@@ -5923,7 +5962,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const willMove = !isNew && !!target && !!ep && target.id !== ep.id
         const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
         return (
-          <div onClick={closeTaskEdit} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+          <div onClick={() => closeTaskEdit()} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
             <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 620, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 40px)' }}>
               <div style={{ height: 4, background: target?.color || ep?.color || '#2E5A9E', flexShrink: 0 }} />
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '16px 26px 12px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
@@ -5959,7 +5998,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       )
                       : <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{ep?.name}</div>}
                   </div>
-                  <button aria-label="Cerrar editor de tarea" onClick={closeTaskEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                  <button aria-label="Cerrar editor de tarea" onClick={() => closeTaskEdit()} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
 
                 <div className="ep-modal-body" style={{ padding: '14px 26px 8px', overflowY: 'auto', flex: 1 }}>
@@ -6130,7 +6169,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexShrink: 0, background: '#fff', flexWrap: 'wrap' }}>
                   {!isNew && <button onClick={deleteTask} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '11px 14px', fontSize: 12.5, fontWeight: 700 }}>Eliminar</button>}
                   <span style={{ flex: 1 }} />
-                  <button onClick={closeTaskEdit} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 10, padding: '11px 16px', fontSize: 12.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
+                  <button onClick={() => closeTaskEdit()} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 10, padding: '11px 16px', fontSize: 12.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
                   <button onClick={saveTask} style={{ ...goldBtn, padding: '11px 20px', fontSize: 12.5 }}>Guardar</button>
                 </div>
             </div>
