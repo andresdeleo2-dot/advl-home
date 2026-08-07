@@ -1939,11 +1939,18 @@ export default function TiempoClient() {
         const planned = focusTask?.task.difficulty ? durByDiff(focusTask.task) : 0
         const plannedPct = planned ? Math.min(100, Math.round((totalTask / planned) * 100)) : 0
         const overPlan = planned > 0 && totalTask > planned
+        // Hora actual + (si la sesión tenía duración planeada) a qué hora terminaría.
+        const nowClock = clock(Math.round(now))
+        const sitPlan = s.dur   // duración planeada de ESTA sesión (0 = contador libre)
+        const sitRemain = Math.max(0, sitPlan - Math.max(0, el))
+        const endClock = clock(Math.round(now) + sitRemain)
+        const overSit = sitPlan > 0 && Math.max(0, el) >= sitPlan
         return (
           <div style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'radial-gradient(120% 120% at 50% 0%, #26221d 0%, #17140f 60%, #0f0d0a 100%)', color: '#faf7f1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 22 }}>
             <button onClick={() => setFocusOpen(false)} title="Salir del modo foco (Esc)" style={{ position: 'absolute', top: 20, right: 22, border: '1px solid #3a352e', background: 'transparent', color: '#a49b90', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, cursor: 'pointer' }}>✕ Salir</button>
             <span style={{ fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: pomoOn ? (inBreak ? '#8fae74' : '#E7C56B') : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : pomoOn ? (inBreak ? '🌿 descanso' : '🎯 foco') : 'en curso'}</span>
             <span style={{ fontSize: 'clamp(18px,3vw,26px)', fontWeight: 500, textAlign: 'center', maxWidth: 700, lineHeight: 1.2 }}>{V.sessionName}</span>
+            <span style={{ fontSize: 14, color: '#a49b90' }}>🕐 son las {nowClock}{sitPlan > 0 ? (overSit ? ` · pasaste tu plan de ${hm(sitPlan)}` : <> · terminarías a las <b style={{ color: '#cdc4b8' }}>{endClock}</b></>) : ' · contador libre'}</span>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: V.sessionPaused ? 0.5 : 1 }}>{V.sessionElapsedLabel || '0m'}</span>
             {/* Acumulado de la tarea (retomar) + planeado vs real */}
             {(prior > 0 || planned > 0) && (
@@ -2082,6 +2089,8 @@ function Legend({ c, children }: { c: string; children: React.ReactNode }) {
 function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; done: number; onToggle: (key: string) => void; onAdd: (text: string) => void }) {
   const [txt, setTxt] = useState('')
   const add = () => { const t = txt.trim(); if (!t) return; onAdd(t); setTxt('') }
+  // Las TERMINADAS van al fondo (orden estable dentro de cada grupo).
+  const ordered = [...subs].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0))
   return (
     <div style={{ width: 'min(520px, 92vw)', maxHeight: '34vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
@@ -2089,8 +2098,8 @@ function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; 
         {subs.length > 0 && <span style={{ fontSize: 12, color: done === subs.length ? '#a9c48c' : '#cdc4b8' }}>{done}/{subs.length} hechas</span>}
       </div>
       {subs.length === 0 && <span style={{ fontSize: 13.5, color: '#8b8379', padding: '0 4px 8px', lineHeight: 1.4 }}>Divide esta tarea en pasos para ir marcando qué haces.</span>}
-      {subs.map((sub, i) => { const key = sub.id || sub.t; return (
-        <button key={i} onClick={() => onToggle(key)} style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 4px', width: '100%' }}>
+      {ordered.map((sub, i) => { const key = sub.id || sub.t; return (
+        <button key={sub.id || sub.t || i} onClick={() => onToggle(key)} style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 4px', width: '100%' }}>
           <span style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</span>
           <span style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none' }}>{sub.t || 'Subtarea'}</span>
         </button>
