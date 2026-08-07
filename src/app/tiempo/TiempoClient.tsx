@@ -98,6 +98,7 @@ export default function TiempoClient() {
   const [costOpen, setCostOpen] = useState(false)            // popup "el costo de empezar ahora"
   const [meetView, setMeetView] = useState<Meeting | null>(null)   // popup con el detalle de una junta
   const [scheduleAt, setScheduleAt] = useState<number | null>(null)   // hora (min) para agendar una tarea; abre el selector
+  const [scheduleName, setScheduleName] = useState<string | null>(null)   // nombre preseleccionado (agendar una rutina como actividad libre)
   const [schedulePreset, setSchedulePreset] = useState<string | null>(null)  // tarea preseleccionada al agendar desde su fila
   const [promptedSched, setPromptedSched] = useState<Set<string>>(() => new Set())  // agendados ya preguntados esta sesión
   const [notifOn, setNotifOn] = useState(false)              // permiso de notificaciones del navegador
@@ -312,14 +313,16 @@ export default function TiempoClient() {
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
 
   // Rutinas diarias de Épicas que aplican el día visible (para marcarlas / iniciarlas aquí).
-  const todayRoutines = useMemo(() => {
-    const monday = mondayOfISO(taskDay), idx = dayIdxMon(taskDay)
-    const out: { epicaId: string; epicaName: string; color: string; rIdx: number; name: string; done: boolean }[] = []
-    for (const e of epicasList) (e.routines || []).forEach((r, rIdx) => {
-      if (r.days && r.days.length === 7 && !r.days[idx]) return
-      out.push({ epicaId: e.id, epicaName: e.name, color: e.color, rIdx, name: r.t, done: !!(r.weeks && r.weeks[monday] && r.weeks[monday][idx]) })
-    })
-    return out
+  // Rutinas diarias como TRACKER SEMANAL (7 chips L-D con progreso, como en Épicas): por cada
+  // rutina de cada épica, los 7 booleanos de la semana de `taskDay` + cuántos días lleva.
+  const weekRoutines = useMemo(() => {
+    const monday = mondayOfISO(taskDay)
+    const dates = Array.from({ length: 7 }, (_, i) => addDaysISO(monday, i))
+    const list = epicasList.flatMap(e => (e.routines || []).map((r, rIdx) => {
+      const week = (r.weeks && r.weeks[monday] && r.weeks[monday].length === 7) ? r.weeks[monday] : [false, false, false, false, false, false, false]
+      return { epicaId: e.id, epicaName: e.name, color: e.color, rIdx, name: r.t, week, done: week.filter(Boolean).length }
+    }))
+    return { monday, dates, list }
   }, [epicasList, taskDay])
 
   // Épicas presentes en las tareas de hoy (para el filtro por épica).
@@ -1105,7 +1108,26 @@ export default function TiempoClient() {
       .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('rutina ' + r.status + ' ' + t.slice(0, 140)) } })
       .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] marcar rutina falló:', e) })
   }
+  // Togglear un día CONCRETO de la semana de una rutina (tracker semanal, como en Épicas).
+  const toggleRoutineDay = (epicaId: string, rIdx: number, monday: string, dayIdx: number) => {
+    const ep = epicasList.find(e => e.id === epicaId); if (!ep) return
+    const routines = ep.routines.map((r, i) => {
+      if (i !== rIdx) return r
+      const weeks = { ...(r.weeks || {}) }
+      const arr = (weeks[monday] && weeks[monday].length === 7) ? [...weeks[monday]] : [false, false, false, false, false, false, false]
+      arr[dayIdx] = !arr[dayIdx]; weeks[monday] = arr
+      const out: EpicaRoutine = { ...r, weeks }
+      if (monday === mondayOfISO(iso(new Date()))) out.days = arr   // mantiene `days` (legado) sincronizado con la semana actual
+      return out
+    })
+    setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, routines } : e))
+    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines }) })
+      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('rutina ' + r.status + ' ' + t.slice(0, 140)) } })
+      .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] marcar rutina falló:', e) })
+  }
   const startRoutine = (name: string) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0 })) setView('hoy') }
+  // Agendar una rutina a una hora del día (como actividad libre con su nombre).
+  const scheduleRoutineAt = (name: string) => { setScheduleName(name); setSchedulePreset(null); setScheduleAt(nextChainStart()) }
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
   const reorderTasks = (ids: string[]) => {
     const byId = new Map((allTasks || []).map(t => [t.task.id!, t]))
@@ -1541,17 +1563,32 @@ export default function TiempoClient() {
                         <button onClick={() => setTaskDay(addDaysISO(taskDay, 7))} title="Semana siguiente" style={{ width: 28, height: 40, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer' }}>›</button>
                       </div>
                     </div>
-                    {todayRoutines.length > 0 && (
-                      <Collapsible title="rutinas diarias" count={`${todayRoutines.filter(r => r.done).length}/${todayRoutines.length}`} defaultOpen={true}>
-                        {todayRoutines.map(r => (
-                          <div key={r.epicaId + r.rIdx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px' }}>
-                            <button onClick={() => markRoutineDone(r.epicaId, r.rIdx)} title="Marcar hecha hoy" style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (r.done ? '#6f8256' : '#c2b9ab'), background: r.done ? '#6f8256' : 'transparent', cursor: 'pointer', flexShrink: 0 }} />
-                            <span style={{ width: 8, height: 8, borderRadius: 999, background: r.color, display: 'block', flexShrink: 0 }} />
-                            <span style={{ flex: 1, fontSize: 15, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: r.done ? 'line-through' : 'none', color: r.done ? '#a49b90' : '#1c1a17' }}>{r.name}</span>
-                            <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{r.epicaName}</span>
-                            <button onClick={() => startRoutine(r.name)} title="Empezar ahora" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶ Empezar</button>
-                          </div>
-                        ))}
+                    {weekRoutines.list.length > 0 && (
+                      <Collapsible title="rutinas diarias" count={`${weekRoutines.list.reduce((s, r) => s + r.done, 0)}/${weekRoutines.list.length * 7}`} defaultOpen={true}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          {weekRoutines.list.map(r => { const nc = r.done >= 5 ? '#4f6238' : r.done > 0 ? '#8a4b28' : '#a49b90'; return (
+                            <div key={r.epicaId + r.rIdx} style={{ border: '1px solid #eee6da', borderRadius: 14, padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 9, background: '#fff' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: 999, background: r.color, display: 'block', flexShrink: 0 }} />
+                                <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#1c1a17' }}>{r.name}</span>
+                                <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{r.epicaName}</span>
+                                <span style={{ fontSize: 12, fontWeight: 800, color: nc, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{r.done}/7</span>
+                              </div>
+                              <div style={{ display: 'flex', gap: 5 }}>
+                                {weekRoutines.dates.map((d, di) => { const on = r.week[di]; const isToday = d === today; return (
+                                  <button key={di} onClick={() => toggleRoutineDay(r.epicaId, r.rIdx, weekRoutines.monday, di)} title={`${['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'][di]} ${Number(d.slice(8))}${on ? ' · hecha' : ''}`} style={{ flex: 1, minWidth: 0, height: 42, borderRadius: 9, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, border: isToday ? '1.5px solid #c2933a' : '1px solid transparent', background: on ? r.color : '#f2ece0', color: on ? '#fff' : '#a49b90' }}>
+                                    <span style={{ fontSize: 11, fontWeight: 700 }}>{['L', 'M', 'X', 'J', 'V', 'S', 'D'][di]}</span>
+                                    <span style={{ fontSize: 11, opacity: .85, fontVariantNumeric: 'tabular-nums' }}>{Number(d.slice(8))}</span>
+                                  </button>
+                                ) })}
+                              </div>
+                              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+                                <button onClick={() => startRoutine(r.name)} title="Empezar ahora (contador libre)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>▶ Empezar</button>
+                                <button onClick={() => scheduleRoutineAt(r.name)} title="Agendar a una hora del día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>⏰ Agendar</button>
+                              </div>
+                            </div>
+                          ) })}
+                        </div>
                       </Collapsible>
                     )}
                     <FilterBar epicas={todayEpicas} filters={filters} setFilters={setFilters} sortBy={sortBy} setSortBy={setSortBy} />
@@ -2037,7 +2074,7 @@ export default function TiempoClient() {
       })()}
 
       {/* Selector para agendar una tarea (de Épicas) o actividad libre a una hora del día */}
-      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} existing={[...(data.scheduled || []).filter(s => (s.date || taskDay) === taskDay).map(s => ({ name: s.name, start: s.start, dur: s.dur })), ...meetings.filter(m => m.date === taskDay).map(m => ({ name: m.name, start: m.start, dur: m.dur }))]} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null) }} />}
+      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} presetName={scheduleName} existing={[...(data.scheduled || []).filter(s => (s.date || taskDay) === taskDay).map(s => ({ name: s.name, start: s.start, dur: s.dur })), ...meetings.filter(m => m.date === taskDay).map(m => ({ name: m.name, start: m.start, dur: m.dur }))]} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null); setScheduleName(null) }} />}
 
       {/* Detalle de una junta del calendario */}
       {meetView && (
@@ -2763,18 +2800,18 @@ function MeetingDescription({ raw }: { raw: string }) {
 
 /** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
-function ScheduleModal({ tasks, defaultStart, presetTaskId, existing = [], onSchedule, onClose }: {
-  tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null
+function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing = [], onSchedule, onClose }: {
+  tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null; presetName?: string | null
   existing?: { name: string; start: number; dur: number }[]
   onSchedule: (b: ScheduledBlock, createInCal: boolean) => void; onClose: () => void
 }) {
   const [inCal, setInCal] = useState(false)   // también crear el evento en Google Calendar
   const list = (tasks || [])
   const presetTask = presetTaskId ? list.find(t => t.task.id === presetTaskId) : undefined
-  const [mode, setMode] = useState<'task' | 'free'>(presetTask || list.length ? 'task' : 'free')
+  const [mode, setMode] = useState<'task' | 'free'>(presetTask ? 'task' : presetName ? 'free' : list.length ? 'task' : 'free')
   const [sel, setSel] = useState<string>(presetTask?.task.id || list[0]?.task.id || '')
-  const [name, setName] = useState('Actividad')
-  const [area, setArea] = useState<Area>('ocio')
+  const [name, setName] = useState(presetName || 'Actividad')
+  const [area, setArea] = useState<Area>(presetName ? 'trabajo' : 'ocio')
   const [startStr, setStartStr] = useState(clock(defaultStart))
   const [dur, setDur] = useState<number>(durByDiff((presetTask || list[0])?.task))
   // Campo de texto de duración independiente: permite BORRAR y teclear libremente (el número real
@@ -2921,12 +2958,22 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }
 
+  // Reordenar con botones ▲▼ (móvil: arrastrar el ⠿ es difícil al tocar).
+  const moveRow = (id: string, dir: 1 | -1) => {
+    const cur = (order && order.length ? order : tasks.map(t => t.task.id!))
+    const i = cur.indexOf(id); if (i < 0) return
+    const j = i + dir; if (j < 0 || j >= cur.length) return
+    const next = cur.slice();[next[i], next[j]] = [next[j], next[i]]
+    setOrder(next); onReorder(next)
+  }
+  const arrowBtn: CSSProperties = { border: 'none', background: 'transparent', color: '#a49b90', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '3px 4px' }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <button onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', padding: '0 0 4px', width: '100%' }}>
         <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s', color: '#a49b90', fontSize: 12 }}>▸</span>
         <span style={{ ...LBL, letterSpacing: '.1em' }}>tus tareas del día</span>
-        <span style={{ fontSize: 12, color: '#a49b90' }}>{display.length}{draggable ? ' · arrastra ⠿' : ' · toca una'}</span>
+        <span style={{ fontSize: 12, color: '#a49b90' }}>{display.length}{draggable ? ' · ▲▼ para reordenar' : ' · toca una'}</span>
       </button>
       {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {display.map(t => {
@@ -2934,10 +2981,19 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
         const ts = taskStyle(t.task.status)
         const dragging = dragId.current === t.task.id
         const isMit = mitIds.includes(t.task.id!)
+        const pos = display.findIndex(x => x.task.id === t.task.id); const n = display.length
         return (
           <div key={t.task.id} data-taskid={t.task.id} draggable onDragStart={e => { e.dataTransfer.setData('text/taskid', t.task.id!); e.dataTransfer.effectAllowed = 'copy' }} title="Arrástrala a la cinta “el día” para agendarla" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, borderLeft: isMit ? '3px solid #c2933a' : undefined, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : isMit ? '#f8efdc' : on ? '#f7ece2' : 'transparent' }}>
             <div className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {draggable && <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', flexShrink: 0, padding: '0 2px' }}>⠿</span>}
+              {draggable && (
+                <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                  <span style={{ display: 'flex', flexDirection: 'column' }}>
+                    <button onClick={() => moveRow(t.task.id!, -1)} disabled={pos === 0} aria-label="Subir" title="Subir" style={{ ...arrowBtn, opacity: pos === 0 ? 0.25 : 1, cursor: pos === 0 ? 'default' : 'pointer' }}>▲</button>
+                    <button onClick={() => moveRow(t.task.id!, 1)} disabled={pos === n - 1} aria-label="Bajar" title="Bajar" style={{ ...arrowBtn, opacity: pos === n - 1 ? 0.25 : 1, cursor: pos === n - 1 ? 'default' : 'pointer' }}>▼</button>
+                  </span>
+                  <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', padding: '0 2px' }}>⠿</span>
+                </span>
+              )}
               <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
               <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, cursor: 'pointer', minWidth: 0 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0, marginTop: 5 }} />
