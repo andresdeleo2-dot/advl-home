@@ -218,6 +218,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const comentariosReady = useRef(false) // true si la columna comentarios existe
   const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
+  const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -526,7 +527,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       changes = { ...changes, tasks: nextTasks }
     }
     setEpics(list => list.map(e => (e.id === id ? { ...e, ...changes } : e)))
-    try {
+    // Serializa la parte de RED por épica: la 2ª escritura espera a la 1ª (y a su sellado de
+    // updated_at). Así dos ediciones rapidísimas a la misma tarea no chocan entre sí ni se
+    // descartan; sin serializar, la 2ª mandaba un updated_at viejo y el server la rechazaba.
+    const prevChain = writeChain.current.get(id) || Promise.resolve()
+    const run = (async () => {
+      await prevChain.catch(() => {})
       // Campos de la épica (nombre, color, rutinas, links…)
       if (Object.keys(epicFields).length) {
         const r = await fetch(`/api/epicas/${id}`, {
@@ -542,8 +548,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const before = prevEpic?.tasks || []
         const beforeById = new Map(before.map(t => [t.id, t]))
         const afterById = new Map(nextTasks.map(t => [t.id, t]))
+        // Sella cada tarea a enviar con el updated_at MÁS fresco conocido (tras la escritura
+        // anterior ya encadenada), no el del snapshot del render → no choca consigo misma.
+        const freshById = new Map((epicsRef.current.find(e => e.id === id)?.tasks || []).map(t => [t.id, t]))
         const create = nextTasks.filter(t => t.id && !beforeById.has(t.id))
         const update = nextTasks.filter(t => { const b = t.id ? beforeById.get(t.id) : null; return b && !sameTask(b, t) })
+          .map(t => { const f = t.id ? freshById.get(t.id) : null; return f?.updatedAt ? { ...t, updatedAt: f.updatedAt } : t })
         const remove = before.filter(t => t.id && !afterById.has(t.id)).map(t => t.id!)
         if (create.length || update.length || remove.length) {
           const r = await fetch('/api/tareas/sync', {
@@ -552,9 +562,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           })
           const j = await r.json()
           if (!j.ok) throw new Error(j.error)
-          // Sella los updated_at frescos en memoria (evita chocar consigo mismo)
+          // Sella los updated_at frescos en memoria (estado + ref sincrónico para la próxima escritura)
           if (j.stamps && Object.keys(j.stamps).length) {
-            setEpics(list => list.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(t => (t.id && j.stamps[t.id]) ? { ...t, updatedAt: j.stamps[t.id] } : t) }))
+            const stamps = j.stamps as Record<string, string>
+            const restamp = (t: EpicaTask) => (t.id && stamps[t.id]) ? { ...t, updatedAt: stamps[t.id] } : t
+            setEpics(list => list.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(restamp) }))
+            epicsRef.current = epicsRef.current.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(restamp) })
           }
           // Choque con otra pestaña: avisa y recarga con lo más fresco de la BD
           if (j.conflicts && j.conflicts.length) {
@@ -563,6 +576,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           }
         }
       }
+    })()
+    writeChain.current.set(id, run.catch(() => {}))
+    try {
+      await run
       return true
     } catch {
       if (prevEpic) setEpics(list => list.map(e => (e.id === id ? prevEpic : e)))
