@@ -1592,7 +1592,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   const saveTask = () => {
     if (!taskEdit) return
-    const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit(); return }
+    const e = epics.find(x => x.id === taskEdit.epicId); if (!e) { closeTaskEdit({ discard: true }); return }
     // Índice actual resuelto por id: nunca apunta a otra tarea aunque el array haya cambiado
     const cur = taskEdit.tid ? findTask(taskEdit.epicId, taskEdit.tid) : null
     const curIdx = cur?.i ?? null
@@ -1647,16 +1647,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       tasks[curIdx] = t
       patchEpic(e.id, { tasks })
     }
-    closeTaskEdit()
+    closeTaskEdit({ discard: true })
     if (moved) showToast(`Movida a ${target.name}`)
     if (newPlan && newPlan !== viewDate && orig.plan !== newPlan) {
       showToast(`Planeada para ${relLong(newPlan).toLowerCase()}`, false, { label: 'Ver', fn: () => setViewDate(newPlan) })
     }
   }
   const deleteTask = () => {
-    if (!taskEdit?.tid) { closeTaskEdit(); return }
+    if (!taskEdit?.tid) { closeTaskEdit({ discard: true }); return }
     const found = findTask(taskEdit.epicId, taskEdit.tid)
-    if (!found) { closeTaskEdit(); return }
+    if (!found) { closeTaskEdit({ discard: true }); return }
     const { e, t, i: idx } = found
     if (!window.confirm(`¿Eliminar "${t.t}"? No se puede deshacer.`)) return
     const snap = clone(e.tasks)
@@ -1667,7 +1667,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const k = planKey(e.id, t)
     setBacklogSel(prev => { if (!prev.has(k)) return prev; const n = new Set(prev); n.delete(k); return n })
     setPlanSel(prev => { if (!prev.has(k)) return prev; const n = new Set(prev); n.delete(k); return n })
-    closeTaskEdit()
+    closeTaskEdit({ discard: true })
     showToast('Tarea eliminada', false, { label: 'Deshacer', fn: () => patchEpic(e.id, { tasks: snap }) })
   }
 
@@ -6136,13 +6136,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <button onClick={() => setTaskDraft(d => ({ ...d, links: [...(d.links || []), { label: '', url: '' }] }))} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 8, padding: '5px 10px', fontSize: 11, fontWeight: 700, marginTop: 16 }}>+ Link</button>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                  {(taskDraft.links || []).map((l, i) => (
+                  {(taskDraft.links || []).map((l, i) => {
+                    const nLinks = (taskDraft.links || []).length
+                    const arr: CSSProperties = { height: 26, width: 24, borderRadius: 6, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 11, lineHeight: 1 }
+                    return (
                     <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+                      {nLinks > 1 && (
+                        <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                          <button aria-label="Subir link" title="Subir" disabled={i === 0} onClick={() => setTaskDraft(d => { const links = [...(d.links || [])]; if (i <= 0) return d;[links[i - 1], links[i]] = [links[i], links[i - 1]]; return { ...d, links } })} style={{ ...arr, cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.35 : 1 }}>↑</button>
+                          <button aria-label="Bajar link" title="Bajar" disabled={i >= nLinks - 1} onClick={() => setTaskDraft(d => { const links = [...(d.links || [])]; if (i >= links.length - 1) return d;[links[i + 1], links[i]] = [links[i], links[i + 1]]; return { ...d, links } })} style={{ ...arr, cursor: i >= nLinks - 1 ? 'default' : 'pointer', opacity: i >= nLinks - 1 ? 0.35 : 1 }}>↓</button>
+                        </span>
+                      )}
                       <input value={l.label} onChange={e => setTaskDraft(d => { const links = [...(d.links || [])]; links[i] = { ...links[i], label: e.target.value }; return { ...d, links } })} placeholder="Nombre" style={{ ...inpSmall, flex: '0 0 120px' }} />
                       <input value={l.url} onChange={e => setTaskDraft(d => { const links = [...(d.links || [])]; links[i] = { ...links[i], url: e.target.value }; return { ...d, links } })} placeholder="https://…" style={{ ...inpSmall, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 12 }} />
                       <button aria-label="Eliminar enlace" onClick={() => setTaskDraft(d => ({ ...d, links: (d.links || []).filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
 
                 {(() => { const st = taskDraft.subtasks || []; const done = st.filter(s => s.done).length; return (
