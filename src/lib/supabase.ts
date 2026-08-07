@@ -55,6 +55,9 @@ export type EpicaSubtask = {
   progress?: number      // % de avance manual (0-100)
   note?: string          // nota (HTML de contentEditable, se sanitiza)
   links?: EpicaTaskLink[]
+  priority?: 'alta' | 'media' | 'baja'        // prioridad (como las tareas)
+  difficulty?: 'facil' | 'media' | 'dificil'  // dificultad (como las tareas)
+  plan?: string          // 'YYYY-MM-DD' del día en que se trabajará esta subtarea
 }
 /** Recurrencia de una tarea: "cada N días / semanas / meses".
  *  La tarea NO se duplica: al completarla se reprograma sola a la siguiente fecha. */

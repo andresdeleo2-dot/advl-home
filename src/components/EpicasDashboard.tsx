@@ -189,6 +189,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
+  const [subSort, setSubSort] = useState<'manual' | 'prioridad' | 'dificultad' | 'dia'>('manual') // orden de subtareas
   const subNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
@@ -5484,6 +5485,41 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <ProgressSlider value={s.progress ?? 0} color={ep.color} labelStyle={eb2}
                   onCommit={v => patch({ progress: v || undefined })} onHundred={() => patch({ progress: 100, done: true })} />
 
+                {/* Prioridad · Dificultad · Día (como en las tareas) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ ...eb2, marginBottom: 6 }}>Prioridad</div>
+                    <div style={{ display: 'flex', gap: 5 }}>
+                      {(['alta', 'media', 'baja'] as Prio[]).map(p => {
+                        const on = s.priority === p; const ps = prioStyle(p)
+                        return <button key={p} onClick={() => patch({ priority: on ? undefined : p })} title={ps.label} style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, cursor: 'pointer', borderRadius: 8, padding: '6px 4px', fontSize: 11, fontWeight: 700, border: on ? `1px solid ${ps.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? 'rgba(194,147,58,0.08)' : '#fff', color: on ? ps.c : 'rgba(20,35,61,0.55)' }}><PrioBars p={p} size={11} />{ps.label}</button>
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ ...eb2, marginBottom: 6 }}>Dificultad</div>
+                    <div style={{ display: 'flex', gap: 5 }}>
+                      {(['facil', 'media', 'dificil'] as Dif[]).map(d => {
+                        const on = s.difficulty === d; const ds = difStyle(d)
+                        return <button key={d} onClick={() => patch({ difficulty: on ? undefined : d })} title={ds.label} style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', borderRadius: 8, padding: '6px 4px', fontSize: 11, fontWeight: 700, border: on ? `1px solid ${ds.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ds.bg : '#fff', color: on ? ds.c : 'rgba(20,35,61,0.55)' }}><DifDots d={d} size={9} />{ds.label}</button>
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {/* Día en que se trabajará la subtarea */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ ...eb2, marginBottom: 6 }}>Trabajar el día</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                    {([['Hoy', today], ['Mañana', addDays(today, 1)]] as [string, string][]).map(([lbl, iso]) => {
+                      const on = s.plan === iso
+                      return <button key={lbl} onClick={() => patch({ plan: on ? undefined : iso })} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: on ? '1px solid #2E5A9E' : '1px solid rgba(15,35,64,0.14)', background: on ? 'rgba(46,90,158,0.10)' : '#fff', color: on ? '#2E5A9E' : 'rgba(20,35,61,0.6)' }}>{lbl}</button>
+                    })}
+                    <input type="date" value={s.plan || ''} onChange={ev => patch({ plan: ev.target.value || undefined })} title="Elegir un día"
+                      style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12, fontWeight: 600, color: s.plan ? '#2E5A9E' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }} />
+                    {s.plan && <button onClick={() => patch({ plan: undefined })} title="Quitar día" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 12, fontWeight: 800 }}>✕</button>}
+                  </div>
+                </div>
+
                 {/* Nota */}
                 <div style={{ ...eb2, marginBottom: 6 }}>Nota</div>
                 <div style={{ marginBottom: 16 }}>
@@ -5729,6 +5765,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   const hechas = subs.filter(s => s.done).length
                   const pend = subs.map((s, si) => ({ s, si })).filter(x => !x.s.done)
                   const done = subs.map((s, si) => ({ s, si })).filter(x => x.s.done)
+                  const difRank = (d?: string) => d === 'dificil' ? 3 : d === 'media' ? 2 : d === 'facil' ? 1 : 0
+                  const subCmp = (a: { s: EpicaSubtask }, b: { s: EpicaSubtask }) =>
+                    subSort === 'prioridad' ? PRIO_RANK[a.s.priority || 'media'] - PRIO_RANK[b.s.priority || 'media']
+                    : subSort === 'dificultad' ? difRank(b.s.difficulty) - difRank(a.s.difficulty)   // difícil primero
+                    : subSort === 'dia' ? (a.s.plan || '9999-99').localeCompare(b.s.plan || '9999-99')
+                    : 0
+                  const pendShown = subSort === 'manual' ? pend : [...pend].sort(subCmp)
                   const row = (s: EpicaSubtask, si: number, arrows?: { up?: number; down?: number }) => (
                     <div key={s.id || si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
                       <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
@@ -5740,8 +5783,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '4px 6px', fontSize: 13, color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.t || <span style={{ color: 'rgba(20,35,61,0.4)' }}>(sin título)</span>}
                       </button>
-                      {/* Indicadores: %, nota, links */}
+                      {/* Indicadores: día · prioridad · dificultad · %, nota, links */}
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {s.plan && (() => { const over = !s.done && s.plan < today; return <span title={`Trabajar el ${fmtDue(s.plan)}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 9.5px var(--font-ui)', color: over ? '#B0522E' : '#2E5A9E', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(46,90,158,0.08)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(46,90,158,0.2)'}`, borderRadius: 99, padding: '1px 7px' }}>📅 {cap(new Date(s.plan + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' }).replace('.', ''))}</span> })()}
+                        {s.priority && <span title={`Prioridad ${prioStyle(s.priority).label}`}><PrioBars p={s.priority} size={11} /></span>}
+                        {s.difficulty && <span title={`Dificultad ${difStyle(s.difficulty).label}`}><DifDots d={s.difficulty} size={9} /></span>}
                         {typeof s.progress === 'number' && s.progress > 0 && <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}
                         {s.note && <span title="Tiene nota" style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>✎</span>}
                         {(s.links?.length ?? 0) > 0 && <span title={`${s.links!.length} links`} style={{ font: '700 10px var(--font-ui)', color: '#A87A2C' }}>🔗{s.links!.length}</span>}
@@ -5758,9 +5804,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                   return (
                     <div style={{ marginBottom: 16 }}>
-                      <div style={eb}>Subtareas {subs.length > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{hechas}/{subs.length} · {Math.round((hechas / subs.length) * 100)}%</span>}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        <span style={eb}>Subtareas {subs.length > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{hechas}/{subs.length} · {Math.round((hechas / subs.length) * 100)}%</span>}</span>
+                        <span style={{ flex: 1 }} />
+                        {pend.length > 1 && (
+                          <select value={subSort} onChange={e => setSubSort(e.target.value as typeof subSort)} title="Ordenar subtareas" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 7, padding: '3px 6px', fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+                            <option value="manual">Orden manual</option>
+                            <option value="prioridad">Prioridad</option>
+                            <option value="dificultad">Dificultad</option>
+                            <option value="dia">Día</option>
+                          </select>
+                        )}
+                      </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {pend.map((x, k) => row(x.s, x.si, { up: k > 0 ? pend[k - 1].si : undefined, down: k < pend.length - 1 ? pend[k + 1].si : undefined }))}
+                        {pendShown.map((x, k) => row(x.s, x.si, subSort === 'manual' ? { up: k > 0 ? pend[k - 1].si : undefined, down: k < pend.length - 1 ? pend[k + 1].si : undefined } : undefined))}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 2 }}>
                           <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, border: '1.5px dashed rgba(15,35,64,0.22)' }} />
                           <input value={newSubtask} onChange={ev => setNewSubtask(ev.target.value)}
