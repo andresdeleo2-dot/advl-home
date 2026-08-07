@@ -9,7 +9,7 @@ import {
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area, type ScheduledBlock,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask, EpicaSubtask, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
+import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
@@ -1156,6 +1156,24 @@ export default function TiempoClient() {
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
+  // Agregar comentario a la tarea en foco (mismo patrón: sincroniza a Épicas).
+  const addCommentOf = (taskId: string, epicaId: string, text: string) => {
+    const t = text.trim(); if (!t) return
+    const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
+    const comentarios = [...(tt.task.comentarios || []), { at: new Date().toISOString(), text: t }]
+    const upd: EpicaTask = { ...tt.task, comentarios }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
+  // Agregar un link a la tarea en foco.
+  const addLinkOf = (taskId: string, epicaId: string, label: string, url: string) => {
+    const u = url.trim(), l = label.trim(); if (!u && !l) return
+    const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
+    const links = [...(tt.task.links || []), { label: l, url: u }]
+    const upd: EpicaTask = { ...tt.task, links }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
   const cancel = () => save({ session: null })
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
   const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, Math.round(elapsedMin(s.start, now))), pausedAt: Math.round(now) } }) }
@@ -2006,6 +2024,14 @@ export default function TiempoClient() {
                 onAdd={text => addSubtaskOf(focusTask.task.id!, focusTask.epicaId, text)}
               />
             )}
+            {focusTask && (
+              <FocusExtras
+                links={focusTask.task.links || []}
+                comentarios={focusTask.task.comentarios || []}
+                onAddLink={(label, url) => addLinkOf(focusTask.task.id!, focusTask.epicaId, label, url)}
+                onAddComment={text => addCommentOf(focusTask.task.id!, focusTask.epicaId, text)}
+              />
+            )}
           </div>
         )
       })()}
@@ -2107,6 +2133,62 @@ function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; 
       <div style={{ display: 'flex', gap: 8, marginTop: 8, borderTop: '1px solid #2a2620', paddingTop: 10 }}>
         <input value={txt} onChange={e => setTxt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }} placeholder="+ agregar subtarea" style={{ flex: 1, minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }} />
         {txt.trim() && <button onClick={add} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Agregar</button>}
+      </div>
+    </div>
+  )
+}
+
+/* Enlaces y comentarios de la tarea en foco: abrir links y dejar comentarios sin salir del foco. */
+function FocusExtras({ links, comentarios, onAddLink, onAddComment }: { links: EpicaTaskLink[]; comentarios: EpicaTaskComment[]; onAddLink: (label: string, url: string) => void; onAddComment: (text: string) => void }) {
+  const [showLinkAdd, setShowLinkAdd] = useState(false)
+  const [nlLabel, setNlLabel] = useState(''); const [nlUrl, setNlUrl] = useState('')
+  const [comment, setComment] = useState('')
+  const addLink = () => { if (!nlUrl.trim() && !nlLabel.trim()) return; onAddLink(nlLabel, nlUrl); setNlLabel(''); setNlUrl(''); setShowLinkAdd(false) }
+  const addComment = () => { const t = comment.trim(); if (!t) return; onAddComment(t); setComment('') }
+  const field: CSSProperties = { minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }
+  const addBtn: CSSProperties = { border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }
+  const secLbl: CSSProperties = { fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }
+  return (
+    <div style={{ width: 'min(520px, 92vw)', maxHeight: '38vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 14, marginTop: 4 }}>
+      {/* Enlaces */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={secLbl}>enlaces</span>
+          <button onClick={() => setShowLinkAdd(v => !v)} style={{ border: '1px solid #4a443c', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>{showLinkAdd ? 'cancelar' : '+ link'}</button>
+        </div>
+        {links.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {links.map((l, i) => (
+              <a key={i} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 13, fontWeight: 500, color: '#E7C56B', background: 'rgba(231,197,107,0.10)', border: '1px solid #4a443c', borderRadius: 999, padding: '6px 12px', maxWidth: '100%' }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>🔗 {l.label || l.url}</span>
+              </a>
+            ))}
+          </div>
+        )}
+        {links.length === 0 && !showLinkAdd && <span style={{ fontSize: 13, color: '#8b8379' }}>Sin enlaces. Agrega uno con “+ link”.</span>}
+        {showLinkAdd && (
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+            <input value={nlLabel} onChange={e => setNlLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} placeholder="Etiqueta" style={{ ...field, flex: '0 0 120px', width: 120 }} />
+            <input value={nlUrl} onChange={e => setNlUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} placeholder="https://…" style={{ ...field, flex: 1 }} />
+            <button onClick={addLink} style={addBtn}>Agregar</button>
+          </div>
+        )}
+      </div>
+
+      {/* Comentarios */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #2a2620', paddingTop: 12 }}>
+        <span style={secLbl}>comentarios</span>
+        {comentarios.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {comentarios.map((c, i) => (
+              <div key={i} style={{ fontSize: 13.5, color: '#e4ddd2', lineHeight: 1.5 }}><span style={{ color: '#8b8379' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · {new Date(c.at).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })} · </span>{c.text}</div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 7 }}>
+          <input value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} placeholder="Escribe un comentario…" style={{ ...field, flex: 1 }} />
+          {comment.trim() && <button onClick={addComment} style={addBtn}>Comentar</button>}
+        </div>
       </div>
     </div>
   )
