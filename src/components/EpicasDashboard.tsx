@@ -4789,6 +4789,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {chip('Hoy', epicDay === today && epicSpan === 'dia', () => { setEpicDay(today); setEpicSpan('dia') })}
                   {chip('Mañana', epicDay === addDays(today, 1) && epicSpan === 'dia', () => { setEpicDay(addDays(today, 1)); setEpicSpan('dia') })}
                   {chip('Esta semana', !!epicDay && epicSpan === 'semana' && mondayISO(epicDay) === m0, () => { setEpicDay(today); setEpicSpan('semana') })}
+                  {chip('Próxima semana', !!epicDay && epicSpan === 'semana' && mondayISO(epicDay) === addDays(m0, 7), () => { setEpicDay(addDays(today, 7)); setEpicSpan('semana') })}
                   <input type="date" value={epicDay} onChange={e => setEpicDay(e.target.value)} title="Elegir un día"
                     style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 7px', fontSize: 11.5, fontWeight: 600, color: epicDay ? '#A87A2C' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }} />
                   {epicDay && (
