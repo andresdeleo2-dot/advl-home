@@ -136,6 +136,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'>('todas')
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
+  const [epicDay, setEpicDay] = useState<string>('')                   // filtro por día (fecha "Hacer") dentro de la épica
   const [backlogOpen, setBacklogOpen] = useState(false)
   const [backlogSort, setBacklogSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'due', dir: 'asc' })
   const [backlogDone, setBacklogDone] = useState(false)
@@ -470,7 +471,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
   // El filtro por objetivo pertenece a una épica: al cambiar de destacada, se limpia
-  useEffect(() => { setEpicObjFilter('todas') }, [featuredId])
+  useEffect(() => { setEpicObjFilter('todas'); setEpicDay('') }, [featuredId])
 
   // Objetivos que se cumplen solos (los medidos con tareas) quedan sellados con
   // su fecha, para poder celebrarlos en el resumen de la semana.
@@ -1773,7 +1774,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicObjFilter === 'sin') return !objOfTask(t.id)
     return (featured.kpis.find(m => m.id === epicObjFilter)?.taskIds || []).includes(t.id || '')
   }
-  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t)
+  const passEpicDay = (t: (typeof indexed)[number]) => !epicDay || t.plan === epicDay   // sólo tareas del día "Hacer" elegido
+  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && passEpicDay(t)
   // Objetivos que aún tienen tareas bajo el filtro de chip activo (cascada)
   const objOptions = featured.kpis.filter(m => indexed.some(t => t.status !== ARCHIVED && (m.taskIds || []).includes(t.id || '') && passEpicChip(t)))
   const hasSinObj = indexed.some(t => t.status !== ARCHIVED && !objOfTask(t.id) && passEpicChip(t))
@@ -4978,6 +4980,31 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const on = epicFilter === k
                     return <button key={k} onClick={() => setEpicFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                   })}
+                  {/* Filtro por DÍA (fecha "Hacer"): chips de los días que tienen tareas + otro día */}
+                  {(() => {
+                    const dayOpts = Array.from(new Set(indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && t.plan).map(t => t.plan!))).sort().slice(0, 8)
+                    if (dayOpts.length === 0 && !epicDay) return null
+                    const dayLbl = (d: string) => cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, ''))
+                    return (
+                      <>
+                        <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
+                        <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.4)' }}>Día</span>
+                        {dayOpts.map(d => {
+                          const on = epicDay === d
+                          const n = indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && t.plan === d).length
+                          return (
+                            <button key={d} onClick={() => setEpicDay(on ? '' : d)} title={`Sólo tareas del ${dayLbl(d)}`}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 9px', fontSize: 11, fontWeight: 700, border: on ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.14)' : '#fff', color: on ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>
+                              {dayLbl(d)} <span style={{ fontSize: 9.5, fontWeight: 800, opacity: 0.65 }}>{n}</span>
+                            </button>
+                          )
+                        })}
+                        <input type="date" value={epicDay} onChange={e => setEpicDay(e.target.value)} title="Filtrar por otro día"
+                          style={{ cursor: 'pointer', border: epicDay && !dayOpts.includes(epicDay) ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 6px', fontSize: 11, fontWeight: 600, color: epicDay ? '#A87A2C' : 'rgba(20,35,61,0.5)', background: epicDay && !dayOpts.includes(epicDay) ? 'rgba(194,147,58,0.10)' : '#fff', outline: 'none' }} />
+                        {epicDay && <button onClick={() => setEpicDay('')} title="Quitar filtro de día" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 12, fontWeight: 800 }}>✕</button>}
+                      </>
+                    )
+                  })()}
                   {/* Filtro por objetivo — sólo lista objetivos con tareas bajo el chip activo (cascada) */}
                   {(objOptions.length > 0 || (epicObjFilter !== 'todas')) && (
                     <select value={objOptions.some(m => m.id === epicObjFilter) || epicObjFilter === 'sin' ? epicObjFilter : 'todas'} onChange={e => setEpicObjFilter(e.target.value)}
