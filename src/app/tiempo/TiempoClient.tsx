@@ -1080,6 +1080,8 @@ export default function TiempoClient() {
         if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
       }
     }
+    // Si la sesión venía de una RUTINA, marca su día como hecho (llena el chip de hoy).
+    if (s.routineRef) setRoutineDone(s.routineRef.epicaId, s.routineRef.rIdx, today)
   }
   // Vincular una tarea a un objetivo (KPI) de su épica ("Contribuye a"). Escribe a la épica.
   const linkObjetivo = (epicaId: string, taskId: string, milestoneId: string | null) => {
@@ -1125,7 +1127,17 @@ export default function TiempoClient() {
       .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('rutina ' + r.status + ' ' + t.slice(0, 140)) } })
       .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] marcar rutina falló:', e) })
   }
-  const startRoutine = (name: string) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0 })) setView('hoy') }
+  const startRoutine = (name: string, epicaId?: string, rIdx?: number) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0, ...(epicaId != null && rIdx != null ? { routineRef: { epicaId, rIdx } } : {}) })) setView('hoy') }
+  // Marca una rutina como HECHA en un día (idempotente: no la desmarca). Usado al Terminar una
+  // sesión de rutina y por el botón "✓ Terminada".
+  const setRoutineDone = (epicaId: string, rIdx: number, dayISO: string) => {
+    const ep = epicasList.find(e => e.id === epicaId); if (!ep) return
+    const monday = mondayOfISO(dayISO), idx = dayIdxMon(dayISO)
+    const r = ep.routines[rIdx]
+    const already = !!(r?.weeks && r.weeks[monday] && r.weeks[monday][idx])
+    if (already) return
+    toggleRoutineDay(epicaId, rIdx, monday, idx)
+  }
   // Agendar una rutina a una hora del día (como actividad libre con su nombre).
   const scheduleRoutineAt = (name: string) => { setScheduleName(name); setSchedulePreset(null); setScheduleAt(nextChainStart()) }
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
@@ -1583,7 +1595,10 @@ export default function TiempoClient() {
                                 ) })}
                               </div>
                               <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-                                <button onClick={() => startRoutine(r.name)} title="Empezar ahora (contador libre)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>▶ Empezar</button>
+                                {(() => { const doneToday = r.week[dayIdxMon(taskDay)]; return (
+                                  <button onClick={() => toggleRoutineDay(r.epicaId, r.rIdx, weekRoutines.monday, dayIdxMon(taskDay))} title={doneToday ? 'Marcada hecha hoy · clic para deshacer' : 'Marcar hecha hoy'} style={{ border: 'none', background: doneToday ? '#6f8256' : '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '6px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>{doneToday ? '✓ Hecha hoy' : '✓ Terminada'}</button>
+                                ) })()}
+                                <button onClick={() => startRoutine(r.name, r.epicaId, r.rIdx)} title="Empezar ahora (al terminar se marca hecha hoy)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>▶ Empezar</button>
                                 <button onClick={() => scheduleRoutineAt(r.name)} title="Agendar a una hora del día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>⏰ Agendar</button>
                               </div>
                             </div>
