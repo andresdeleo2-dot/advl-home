@@ -1157,6 +1157,13 @@ export default function TiempoClient() {
   // Agendar en la cinta: abre el selector para elegir una tarea de Épicas (o actividad libre)
   // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
   const addActivityAt = (startMin: number) => { setSchedulePreset(null); setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15))) }
+  // Default para "+ actividad": justo después del ÚLTIMO agendado de hoy (para encadenar), o ahora
+  // si no hay ninguno o ya pasó. Así una nueva empieza donde terminó la anterior.
+  const nextChainStart = () => {
+    const t0 = iso(new Date())
+    const ends = (data.scheduled || []).filter(s => (s.date || t0) === t0).map(s => s.start + s.dur)
+    return Math.max(Math.round(now / 15) * 15, ...(ends.length ? [Math.round(Math.max(...ends) / 15) * 15] : [0]))
+  }
   // Agendar una tarea concreta (desde su fila o su detalle): abre el selector ya con ella elegida,
   // sugiriendo el PRÓXIMO HUECO donde cabe (por su dificultad); si no hay, el próximo cuarto de hora.
   const scheduleTaskAt = (taskId: string) => {
@@ -1528,7 +1535,7 @@ export default function TiempoClient() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   {!isTodayView && <button onClick={() => setTaskDay(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>Hoy</button>}
                   <span style={{ fontSize: 13, color: '#a49b90' }}>de {isTodayView ? V.barStartLabel : WEEK.winStartLabel} a {isTodayView ? V.scaleEndLabel : WEEK.winEndLabel}</span>
-                  {isTodayView && <button onClick={() => addActivityAt(Math.round(now / 15) * 15)} title="Agregar una actividad al día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>}
+                  {isTodayView && <button onClick={() => addActivityAt(nextChainStart())} title="Agregar una actividad — empieza donde terminó la última agendada" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>}
                 </div>
               </div>
               {isTodayView ? (<>
@@ -1714,6 +1721,8 @@ export default function TiempoClient() {
               <WeekPerfChart weekly={ritmo.weekly} maxWork={ritmo.maxWork} goal={ritmo.goal} onPickDay={setTaskDay} />
               <DayDetail d={ritmo.detail} dayLabel={dayLabel} />
             </div>
+
+            <PeriodSummary history={data.history} />
           </div>
         ) : view === 'rutina' ? (
           /* ── MI RUTINA ────────────────────────────────────────────── */
@@ -2018,7 +2027,7 @@ export default function TiempoClient() {
       })()}
 
       {/* Selector para agendar una tarea (de Épicas) o actividad libre a una hora del día */}
-      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null) }} />}
+      {scheduleAt !== null && <ScheduleModal tasks={tasks} defaultStart={scheduleAt} presetTaskId={schedulePreset} existing={[...(data.scheduled || []).filter(s => (s.date || taskDay) === taskDay).map(s => ({ name: s.name, start: s.start, dur: s.dur })), ...meetings.filter(m => m.date === taskDay).map(m => ({ name: m.name, start: m.start, dur: m.dur }))]} onSchedule={scheduleActivity} onClose={() => { setScheduleAt(null); setSchedulePreset(null) }} />}
 
       {/* Detalle de una junta del calendario */}
       {meetView && (
@@ -2209,7 +2218,8 @@ function DayDetail({ d, dayLabel }: { d: RDetail; dayLabel: string }) {
         <>
           {/* Histograma por hora (solo si hubo tiempo cronometrado ese día) */}
           {d.hasHours && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={LBL}>en qué horas trabajaste · minutos activos por hora</span>
+            <span style={LBL}>en qué horas trabajaste · pasa el cursor para ver las actividades de esa hora</span>
+            <div style={{ position: 'relative' }}>
             <svg viewBox={`0 0 ${HW} ${HH}`} role="img" aria-label="Minutos de actividad por hora" style={{ width: '100%', height: 'auto', display: 'block' }} onMouseLeave={() => setHh(null)}>
               {[0, 0.5, 1].map((f, i) => <line key={i} x1={hpadL} x2={HW - hpadR} y1={hBase - f * hIH} y2={hBase - f * hIH} stroke={CHART_GRID} strokeWidth="1" />)}
               {[[0, '0'], [0.5, '30m'], [1, '1h']].map(([f, lb], i) => <text key={i} x={hpadL - 6} y={hBase - (f as number) * hIH + 3} textAnchor="end" style={{ fontSize: 9.5, fill: CHART_FAINT }}>{lb}</text>)}
@@ -2220,14 +2230,25 @@ function DayDetail({ d, dayLabel }: { d: RDetail; dayLabel: string }) {
                   {hr % 2 === 0 && <text x={x + bw / 2} y={HH - 7} textAnchor="middle" style={{ fontSize: 9.5, fill: CHART_FAINT }}>{String(hr).padStart(2, '0')}</text>}
                 </g>
               ) })}
-              {hh != null && (d.hours[hh] || 0) >= 0 && (() => { const i = hrs.indexOf(hh); if (i < 0) return null; const x = hpadL + i * bw + bw / 2; const m = d.hours[hh] || 0; const tw = 96, tx = Math.max(hpadL, Math.min(HW - hpadR - tw, x - tw / 2)); return (
-                <g>
-                  <rect x={tx} y={2} width={tw} height="32" rx="8" fill={CHART_INK} />
-                  <text x={tx + tw / 2} y={15} textAnchor="middle" style={{ fontSize: 10.5, fill: '#cdc4b8' }}>{clock(hh * 60)}–{clock(hh * 60 + 60)}</text>
-                  <text x={tx + tw / 2} y={28} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 700, fill: '#faf7f1' }}>{m ? hm(m) : 'nada'}</text>
-                </g>
-              ) })()}
             </svg>
+            {hh != null && (() => {
+              const acts = d.acts.map(a => ({ ...a, ov: Math.min(a.end, hh * 60 + 60) - Math.max(a.start, hh * 60) })).filter(a => a.ov > 0).sort((x, y) => y.ov - x.ov)
+              const i = hrs.indexOf(hh); if (i < 0) return null
+              const leftPct = Math.max(16, Math.min(84, ((hpadL + i * bw + bw / 2) / HW) * 100))
+              return (
+                <div style={{ position: 'absolute', top: 2, left: `${leftPct}%`, transform: 'translateX(-50%)', background: CHART_INK, color: '#faf7f1', borderRadius: 10, padding: '8px 11px', minWidth: 150, maxWidth: 260, boxShadow: '0 12px 28px -10px rgba(0,0,0,.5)', pointerEvents: 'none', zIndex: 5 }}>
+                  <div style={{ fontSize: 11, color: '#cdc4b8', marginBottom: acts.length ? 5 : 0 }}>{clock(hh * 60)}–{clock(hh * 60 + 60)} · {d.hours[hh] ? hm(d.hours[hh]) : 'sin actividad'}</div>
+                  {acts.map((a, k) => (
+                    <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, marginTop: 3 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 999, background: a.color, flexShrink: 0 }} />
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                      <span style={{ color: '#cdc4b8', fontWeight: 700, flexShrink: 0 }}>{hm(a.ov)}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
+            </div>
           </div>}
 
           {/* Reparto por área */}
@@ -2264,6 +2285,99 @@ function DayDetail({ d, dayLabel }: { d: RDetail; dayLabel: string }) {
   )
 }
 
+const MON_ABBR = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+const MON_FULL = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+/* Resumen de TODAS las actividades de un periodo (semana o mes, navegable) con el total de tiempo
+   de cada una, ordenado. Reemplaza la lista pobre del Historial con selector de fechas. */
+function PeriodSummary({ history }: { history: AppData['history'] }) {
+  const [mode, setMode] = useState<'semana' | 'mes'>('semana')
+  const [anchor, setAnchor] = useState(() => iso(new Date()))
+  const [hideSleep, setHideSleep] = useState(false)
+  const today = iso(new Date())
+  const [ay, am] = anchor.split('-').map(Number)
+
+  let start: string, end: string, label: string, isCurrent: boolean
+  if (mode === 'semana') {
+    const wk = weekOfISO(anchor); start = wk[0]; end = wk[6]
+    const [sy, sm, sd] = start.split('-').map(Number); const [ey, em, ed] = end.split('-').map(Number)
+    const yr = new Date().getFullYear()   // muestra el año sólo si la semana no es de este año (evita ambigüedad al navegar)
+    const yrTag = (ey !== yr || sy !== yr) ? ` ${ey}` : ''
+    label = (sm === em ? `${sd}–${ed} ${MON_ABBR[em - 1]}` : `${sd} ${MON_ABBR[sm - 1]}–${ed} ${MON_ABBR[em - 1]}`) + yrTag
+    isCurrent = wk.includes(today)
+  } else {
+    const mm = String(am).padStart(2, '0')
+    start = `${ay}-${mm}-01`
+    end = `${ay}-${mm}-${String(new Date(ay, am, 0).getDate()).padStart(2, '0')}`
+    label = `${MON_FULL[am - 1]} ${ay}`
+    isCurrent = today.slice(0, 7) === `${ay}-${mm}`
+  }
+
+  const entries = history.filter(h => h.date >= start && h.date <= end && !(hideSleep && h.area === 'sueno'))
+  // Agrupa por nombre (consistente con el resto de la app). El color se toma del ÁREA DOMINANTE
+  // del grupo (la de más minutos), no de la primera entrada registrada (que dependía del orden).
+  const byName: Record<string, { name: string; total: number; count: number; areaMin: Partial<Record<Area, number>> }> = {}
+  entries.forEach(h => { const k = h.name || '—'; const g = byName[k] || (byName[k] = { name: k, total: 0, count: 0, areaMin: {} }); g.total += h.dur; g.count++; g.areaMin[h.area] = (g.areaMin[h.area] || 0) + h.dur })
+  const list = Object.values(byName).map(g => {
+    const domArea = (Object.entries(g.areaMin) as [Area, number][]).sort((a, b) => b[1] - a[1])[0]?.[0]
+    return { name: g.name, total: g.total, count: g.count, color: (domArea && AREAS[domArea]?.color) || '#8b8379' }
+  }).sort((a, b) => b.total - a.total)
+  const totalAll = list.reduce((s, x) => s + x.total, 0)
+  const maxT = Math.max(1, list.length ? list[0].total : 1)
+
+  const move = (dir: 1 | -1) => {
+    if (mode === 'semana') setAnchor(a => addDaysISO(a, dir * 7))
+    else { let y = ay, m = am + dir; if (m < 1) { m = 12; y-- } if (m > 12) { m = 1; y++ } setAnchor(`${y}-${String(m).padStart(2, '0')}-01`) }
+  }
+  const btn = (on: boolean): CSSProperties => ({ cursor: 'pointer', border: `1px solid ${on ? '#1c1a17' : '#ddd4c6'}`, background: on ? '#1c1a17' : 'transparent', color: on ? '#faf7f1' : '#6b645b', borderRadius: 999, padding: '6px 14px', fontSize: 13, fontWeight: 600 })
+  const navBtn: CSSProperties = { width: 34, height: 34, border: '1px solid #e2d9cb', background: 'transparent', borderRadius: 10, color: '#a49b90', cursor: 'pointer', fontSize: 16 }
+
+  return (
+    <div className="t-card" style={{ background: '#fff', border: '1px solid #ece3d5', borderRadius: 28, padding: 22, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Resumen de actividad</span>
+          <span style={{ fontSize: 13.5, color: '#8b8379' }}>todas las actividades del periodo y el tiempo total de cada una</span>
+        </div>
+        <div style={{ display: 'flex', gap: 6, background: '#f2ece0', padding: 3, borderRadius: 999 }}>
+          {(['semana', 'mes'] as const).map(m => <button key={m} onClick={() => setMode(m)} style={btn(mode === m)}>{m === 'semana' ? 'Semana' : 'Mes'}</button>)}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <button onClick={() => move(-1)} title={mode === 'semana' ? 'Semana anterior' : 'Mes anterior'} style={navBtn}>‹</button>
+        <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', textTransform: 'capitalize', minWidth: 120, textAlign: 'center' }}>{label}</span>
+        <button onClick={() => move(1)} title={mode === 'semana' ? 'Semana siguiente' : 'Mes siguiente'} style={navBtn}>›</button>
+        {!isCurrent && <button onClick={() => setAnchor(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#8a4b28', cursor: 'pointer' }}>{mode === 'semana' ? 'Esta semana' : 'Este mes'}</button>}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 13, color: '#6b645b' }}>{hm(totalAll)} registradas</span>
+        <button onClick={() => setHideSleep(s => !s)} title="Mostrar u ocultar el sueño" style={{ border: '1px solid #e2d9cb', background: hideSleep ? '#faf7f1' : '#eef1e7', borderRadius: 999, padding: '5px 11px', fontSize: 12, color: hideSleep ? '#a49b90' : '#4f6238', cursor: 'pointer' }}>{hideSleep ? 'sin sueño' : 'con sueño'}</button>
+      </div>
+
+      {list.length === 0 ? (
+        <div style={{ fontSize: 13.5, color: '#a49b90', padding: '20px 0', textAlign: 'center' }}>No hay actividad registrada en {mode === 'semana' ? 'esta semana' : 'este mes'}.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+          {list.map((a, i) => (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 999, background: a.color, display: 'block', flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                <span style={{ fontSize: 11.5, color: '#a49b90', flexShrink: 0 }}>{a.count}×</span>
+                <span style={{ fontWeight: 600, flexShrink: 0, fontVariantNumeric: 'tabular-nums', minWidth: 62, textAlign: 'right' }}>{hm(a.total)}</span>
+                <span style={{ fontSize: 12, color: '#a49b90', flexShrink: 0, width: 40, textAlign: 'right' }}>{totalAll ? Math.round((a.total / totalAll) * 100) : 0}%</span>
+              </div>
+              <div style={{ height: 6, background: '#f0e8da', borderRadius: 999, overflow: 'hidden', marginLeft: 19 }}>
+                <div style={{ width: `${Math.max(2, (a.total / maxT) * 100)}%`, height: '100%', background: a.color, borderRadius: 999 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Descripción de una junta con sus LINKS clicables (soporta <a href> y URLs sueltas). */
 function MeetingDescription({ raw }: { raw: string }) {
   // Normaliza saltos y quita etiquetas EXCEPTO <a>…</a>; luego tokeniza links (anchors o URLs sueltas).
@@ -2289,8 +2403,9 @@ function MeetingDescription({ raw }: { raw: string }) {
 
 /** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
-function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose }: {
+function ScheduleModal({ tasks, defaultStart, presetTaskId, existing = [], onSchedule, onClose }: {
   tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null
+  existing?: { name: string; start: number; dur: number }[]
   onSchedule: (b: ScheduledBlock, createInCal: boolean) => void; onClose: () => void
 }) {
   const [inCal, setInCal] = useState(false)   // también crear el evento en Google Calendar
@@ -2302,17 +2417,23 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
   const [area, setArea] = useState<Area>('ocio')
   const [startStr, setStartStr] = useState(clock(defaultStart))
   const [dur, setDur] = useState<number>(durByDiff((presetTask || list[0])?.task))
+  // Campo de texto de duración independiente: permite BORRAR y teclear libremente (el número real
+  // `dur` se actualiza al vuelo si es válido y se acota [5,600] al salir del campo). Antes el
+  // `|| 5` en cada tecla lo forzaba a 5 y no se podía borrar.
+  const [durStr, setDurStr] = useState(String(dur))
+  const setDuration = (n: number) => { const c = Math.max(5, Math.min(600, Math.round(n))); setDur(c); setDurStr(String(c)) }
   const startMin = parse(startStr)
   const endStr = clock(startMin + dur)
   const areaOpts = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno')
   const canSave = mode === 'task' ? !!sel : name.trim().length > 0
   const confirm = () => {
     if (!canSave) return
+    const d = Math.max(5, Math.min(600, dur || 5))   // acota siempre, aunque teclee y dé Agendar sin salir del campo
     if (mode === 'task') {
       const t = list.find(x => x.task.id === sel); if (!t) return
-      onSchedule({ id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start: startMin, dur, epicaId: t.epicaId, taskId: t.task.id }, inCal)
+      onSchedule({ id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start: startMin, dur: d, epicaId: t.epicaId, taskId: t.task.id }, inCal)
     } else {
-      onSchedule({ id: uid(), name: name.trim() || 'Actividad', area, start: startMin, dur }, inCal)
+      onSchedule({ id: uid(), name: name.trim() || 'Actividad', area, start: startMin, dur: d }, inCal)
     }
   }
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }
@@ -2335,7 +2456,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
           list.length ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', border: '1px solid #eee6da', borderRadius: 14, padding: 8 }}>
               {list.map(t => { const on = t.task.id === sel; return (
-                <button key={t.task.id} onClick={() => { setSel(t.task.id!); setDur(durByDiff(t.task)) }} style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f5ece2' : 'transparent', borderRadius: 12, padding: '9px 11px', cursor: 'pointer' }}>
+                <button key={t.task.id} onClick={() => { setSel(t.task.id!); setDuration(durByDiff(t.task)) }} style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f5ece2' : 'transparent', borderRadius: 12, padding: '9px 11px', cursor: 'pointer' }}>
                   <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
                   <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
                   <span style={{ fontSize: 12, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
@@ -2359,17 +2480,32 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, onSchedule, onClose 
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={LBL}>termina</span>
-            <input type="time" value={endStr} onChange={e => { let end = parse(e.target.value); if (end <= startMin) end += 1440; setDur(Math.max(5, end - startMin)) }} style={field} />
+            <input type="time" value={endStr} onChange={e => { let end = parse(e.target.value); if (end <= startMin) end += 1440; setDuration(end - startMin) }} style={field} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={LBL}>duración</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="number" min={5} max={600} step={5} value={dur} onChange={e => setDur(Math.max(5, Number(e.target.value) || 5))} style={{ ...field, width: 78 }} />
-              <span style={{ fontSize: 13, color: '#a49b90' }}>{hm(dur)}</span>
+              <input type="number" min={5} max={600} step={5} inputMode="numeric" value={durStr}
+                onChange={e => { const v = e.target.value; setDurStr(v); const n = parseInt(v, 10); if (Number.isFinite(n) && n > 0) setDur(n) }}
+                onBlur={() => { let n = parseInt(durStr, 10); if (!Number.isFinite(n) || n < 5) n = 5; if (n > 600) n = 600; setDur(n); setDurStr(String(n)) }}
+                style={{ ...field, width: 78 }} />
+              <span style={{ fontSize: 13, color: '#a49b90' }}>min</span>
             </div>
           </div>
         </div>
-        <input type="range" min={15} max={300} step={15} value={Math.min(300, dur)} onChange={e => setDur(Number(e.target.value))} aria-label="Duración" style={{ width: '100%', height: 24, accentColor: '#c2933a' }} />
+        {/* Presets rápidos de duración */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {[15, 30, 45, 60, 90, 120].map(p => { const on = dur === p; return (
+            <button key={p} onClick={() => setDuration(p)} style={{ cursor: 'pointer', border: `1px solid ${on ? '#c2933a' : '#e2d9cb'}`, background: on ? 'rgba(194,147,58,0.12)' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, fontWeight: 600 }}>{hm(p)}</button>
+          ) })}
+        </div>
+        <input type="range" min={15} max={300} step={15} value={Math.min(300, dur)} onChange={e => setDuration(Number(e.target.value))} aria-label="Duración" style={{ width: '100%', height: 24, accentColor: '#c2933a' }} />
+
+        {(() => {
+          const clash = existing.filter(b => startMin < b.start + b.dur && startMin + dur > b.start)
+          if (!clash.length) return null
+          return <div style={{ fontSize: 12.5, color: '#8a3c2a', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 12, padding: '9px 12px', lineHeight: 1.45 }}>⚠ Se encima con {clash.map(c => `«${c.name}» (${clock(c.start)}–${clock(c.start + c.dur)})`).join(', ')}. Puedes moverla más tarde.</div>
+        })()}
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, color: '#2E5A9E', cursor: 'pointer' }}>
           <input type="checkbox" checked={inCal} onChange={e => setInCal(e.target.checked)} />
