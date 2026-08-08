@@ -332,6 +332,14 @@ export default function TiempoClient() {
     for (const t of tasks || []) if (!seen.has(t.epicaId)) seen.set(t.epicaId, { id: t.epicaId, name: t.epicaName, color: t.color })
     return [...seen.values()]
   }, [tasks])
+  // Rango GLOBAL en orden manual (planOrder) sobre TODAS las tareas del día — para que el número
+  // muestre el lugar en toda la lista aunque estés filtrando por épica ("en qué lugar va del total").
+  const manualRank = useMemo(() => {
+    const m: Record<string, number> = {}
+    const arr = [...(tasks || [])].sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))
+    arr.forEach((t, i) => { if (t.task.id) m[t.task.id] = i + 1 })
+    return m
+  }, [tasks])
   const filteredTasks = useMemo(() => {
     if (tasks === null) return null
     const arr = tasks.filter(t => {
@@ -1638,7 +1646,7 @@ export default function TiempoClient() {
                       )
                     })()}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
-                    <TaskPicker tasks={filteredTasks} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={filteredTasks} rank={manualRank} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings.filter(m => m.date === taskDay)} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
@@ -2978,7 +2986,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, rank, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; rank?: Record<string, number>; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -3055,7 +3063,7 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
               )}
               <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
               <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, cursor: 'pointer', minWidth: 0 }}>
-                {draggable && <span title={`Orden: ${pos + 1}`} style={{ flexShrink: 0, width: 20, height: 20, borderRadius: 999, background: '#efe6d8', color: '#8a4b28', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontVariantNumeric: 'tabular-nums', marginTop: 1 }}>{pos + 1}</span>}
+                {draggable && (() => { const num = rank?.[t.task.id!] ?? (pos + 1); return <span title={`Lugar ${num} en tu orden del día`} style={{ flexShrink: 0, width: 20, height: 20, borderRadius: 999, background: '#efe6d8', color: '#8a4b28', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontVariantNumeric: 'tabular-nums', marginTop: 1 }}>{num}</span> })()}
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0, marginTop: 5 }} />
                 <span style={{ fontSize: 15, fontWeight: 500, lineHeight: 1.3, color: '#1c1a17', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }}>{t.task.t || 'Sin título'}</span>
               </span>
