@@ -3266,8 +3266,8 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
   }
 
   return (
-    <div onClick={creating ? onClose : close} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '18px 12px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
-      <div role="dialog" aria-modal="true" aria-label={creating ? 'Nueva tarea' : 'Editar tarea'} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 940, maxHeight: '94vh', background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <div onClick={creating ? onClose : close} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '14px 10px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+      <div role="dialog" aria-modal="true" aria-label={creating ? 'Nueva tarea' : 'Editar tarea'} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 1160, maxHeight: '96vh', background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ height: 4, background: epColor, flexShrink: 0 }} />
         <div style={{ padding: '20px 24px 22px', display: 'flex', flexDirection: 'column', overflowY: 'auto', flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, position: 'sticky', top: -20, background: '#fff', zIndex: 3, paddingTop: 20, marginTop: -20 }}>
@@ -3319,6 +3319,8 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
             </div>
           )}
 
+          <div className="td-grid" style={{ marginTop: 6 }}>
+          <div className="td-col">
           <NLbl>Estado</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT(p => {
@@ -3373,6 +3375,8 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
             ) })}
           </div>
 
+          </div>
+          <div className="td-col">
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
             {t.status === 'Terminada' && <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Terminada el</NLbl><input type="date" value={t.doneAt || ''} onChange={e => setT({ ...t, doneAt: e.target.value || undefined })} style={{ ...nf, border: '1px solid rgba(62,142,142,0.4)', color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff' }} /></label>}
             <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
@@ -3439,6 +3443,9 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
               <input value={comment} placeholder="Escribe un comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...nf, flex: 1 }} />
               <button onClick={addComment} style={smallBtn}>Comentar</button>
             </div>
+          </div>
+
+          </div>
           </div>
 
           {/* Comenzar (contador). dur 0 = libre */}
@@ -3571,6 +3578,10 @@ function SleepLogger({ onLog }: { onLog: (date: string, mins: number) => void })
 const MARGEN_CSS = `
 .hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 20px; align-items: start; }
 .hoy-grid > * { min-width: 0; }
+/* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). */
+.td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 32px; align-items: start; }
+.td-grid > .td-col { min-width: 0; display: flex; flex-direction: column; }
+@media (max-width: 760px) { .td-grid { grid-template-columns: 1fr; } }
 .margen-root a:hover { color: #b4653a; }
 .margen-root input, .margen-root select { font-family: inherit; font-size: inherit; color: inherit; }
 .margen-root input:focus-visible, .margen-root select:focus-visible { outline: 2px solid #b4653a; outline-offset: 2px; }

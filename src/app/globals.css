@@ -135,6 +135,10 @@ body {
 .ep-live { animation: epPulse 2.4s ease-out infinite; }
 .ep-pop  { animation: epPop .3s ease both; }
 .ep-modal { animation: epPop .25s ease both; }
+/* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). Compartido Tiempo/Épicas. */
+.td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 34px; align-items: start; }
+.td-grid > .td-col { min-width: 0; display: flex; flex-direction: column; }
+@media (max-width: 760px) { .td-grid { grid-template-columns: 1fr; } }
 
 /* Editor de notas (contenteditable) y render de notas ricas */
 [contenteditable][data-ph]:empty::before { content: attr(data-ph); color: rgba(20, 35, 61, 0.35); pointer-events: none; }

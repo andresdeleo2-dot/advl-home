@@ -5602,7 +5602,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const openEditFromView = () => { setTaskView(null); openTaskEdit(taskView.eId, t.id!) }
         return (
           <div onClick={() => setTaskView(null)} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 40px)' }}>
+            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
               <div style={{ height: 4, background: ep.color, flexShrink: 0 }} />
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div style={{ minWidth: 0 }}>
@@ -5964,7 +5964,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
         return (
           <div onClick={() => closeTaskEdit()} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 620, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 40px)' }}>
+            <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 1160, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
               <div style={{ height: 4, background: target?.color || ep?.color || '#2E5A9E', flexShrink: 0 }} />
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '16px 26px 12px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div>
@@ -6012,6 +6012,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   ? <textarea value={taskDraft.resumen || ''} onChange={e => setTaskDraft(d => ({ ...d, resumen: e.target.value }))} rows={3} placeholder="¿Qué es esta actividad y qué quieres lograr?" style={{ ...inpSmall, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} />
                   : <div style={{ ...inpSmall, width: '100%', color: 'rgba(20,35,61,0.5)', fontSize: 12 }}>Corre <code>sql/tareas-resumen.sql</code> en Supabase para activar este campo.</div>}
 
+                <div className="td-grid" style={{ marginTop: 4 }}>
+                <div className="td-col">
                 <label style={lbl}>Estado</label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {PICK_STATUSES.map(s => {
@@ -6107,6 +6109,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
+                </div>
+                <div className="td-col">
                 <label style={lbl}>Prioridad</label>
                 {!taskDraft.priority && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: -4, marginBottom: 8 }}>Sugerida por la fecha — toca para fijarla.</div>}
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -6174,6 +6178,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                 <label style={lbl}>Nota</label>
                 <RichText value={taskDraft.note || ''} onChange={v => setTaskDraft(d => ({ ...d, note: v }))} placeholder="Negritas (B), cursiva (I) y viñetas (• Lista)…" minHeight={170} />
+                </div>
+                </div>
 
                 </div>
 
