@@ -3055,6 +3055,7 @@ function TaskPicker({ tasks, selId, draggable, mitIds, onToggleMit, onReorder, o
               )}
               <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
               <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+                {draggable && <span title={`Orden: ${pos + 1}`} style={{ flexShrink: 0, width: 20, height: 20, borderRadius: 999, background: '#efe6d8', color: '#8a4b28', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontVariantNumeric: 'tabular-nums', marginTop: 1 }}>{pos + 1}</span>}
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0, marginTop: 5 }} />
                 <span style={{ fontSize: 15, fontWeight: 500, lineHeight: 1.3, color: '#1c1a17', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }}>{t.task.t || 'Sin título'}</span>
               </span>
