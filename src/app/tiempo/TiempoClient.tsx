@@ -1129,6 +1129,8 @@ export default function TiempoClient() {
       .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] marcar rutina falló:', e) })
   }
   const startRoutine = (name: string, epicaId?: string, rIdx?: number) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0, ...(epicaId != null && rIdx != null ? { routineRef: { epicaId, rIdx } } : {}) })) setView('hoy') }
+  // Empezar una actividad GENERAL (revisar cosas, algo sin tarea): timer libre al instante.
+  const startGeneral = (name: string) => { if (beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0 })) setView('hoy') }
   // Marca una rutina como HECHA en un día (idempotente: no la desmarca). Usado al Terminar una
   // sesión de rutina y por el botón "✓ Terminada".
   const setRoutineDone = (epicaId: string, rIdx: number, dayISO: string) => {
@@ -1567,6 +1569,7 @@ export default function TiempoClient() {
                   {tasksError && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 14, padding: '10px 14px', fontSize: 13, color: '#8a3c2a' }}>No se pudieron cargar las tareas.<button onClick={refreshTasks} style={{ border: '1px solid #e8cabf', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer' }}>Reintentar</button></div>}
 
                   {act === 'Trabajo profundo' && <>
+                    {!V.hasSession && <QuickStart onStart={startGeneral} />}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                         <span style={{ fontSize: 13.5, color: '#6b645b', textTransform: 'capitalize' }}>{taskDay === today ? 'Tareas de hoy' : `Tareas · ${longDayOf(taskDay)}`}</span>
@@ -2171,6 +2174,21 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 function Legend({ c, children }: { c: string; children: React.ReactNode }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 9, height: 9, borderRadius: 3, background: c, display: 'block' }} />{children}</span>
+}
+
+/* Empezar algo GENERAL al instante (revisar cosas, tareas sueltas sin épica): nombre opcional + ▶. */
+function QuickStart({ onStart }: { onStart: (name: string) => void }) {
+  const [name, setName] = useState('')
+  const go = () => { onStart(name); setName('') }
+  return (
+    <div style={{ border: '1px solid #ece3d5', background: '#fff', borderRadius: 16, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontSize: 10.5, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }}>empezar algo ahora · sin tarea</span>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') go() }} placeholder="¿Qué estás haciendo? (revisar cosas, general…)" style={{ flex: 1, minWidth: 0, background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 10, padding: '10px 12px', fontSize: 14, color: '#1c1a17', outline: 'none' }} />
+        <button onClick={go} title="Empezar un cronómetro libre ahora" style={{ border: 'none', background: '#1c1a17', color: '#faf7f1', borderRadius: 10, padding: '10px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>▶ Empezar</button>
+      </div>
+    </div>
+  )
 }
 
 /* Panel de subtareas del Modo foco: marca las hechas y agrega nuevas sin salir del foco.
