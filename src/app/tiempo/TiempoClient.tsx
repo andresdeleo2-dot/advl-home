@@ -3266,11 +3266,11 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
   }
 
   return (
-    <div onClick={creating ? onClose : close} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '32px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
-      <div role="dialog" aria-modal="true" aria-label={creating ? 'Nueva tarea' : 'Editar tarea'} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
-        <div style={{ height: 4, background: epColor }} />
-        <div style={{ padding: '20px 24px 22px', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+    <div onClick={creating ? onClose : close} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '18px 12px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+      <div role="dialog" aria-modal="true" aria-label={creating ? 'Nueva tarea' : 'Editar tarea'} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 940, maxHeight: '94vh', background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ height: 4, background: epColor, flexShrink: 0 }} />
+        <div style={{ padding: '20px 24px 22px', display: 'flex', flexDirection: 'column', overflowY: 'auto', flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, position: 'sticky', top: -20, background: '#fff', zIndex: 3, paddingTop: 20, marginTop: -20 }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: epColor }} />{creating ? 'Nueva tarea' : info.epicaName}{!creating && <span style={{ color: 'rgba(20,35,61,0.4)' }}>· se guarda solo</span>}</div>
             <button aria-label="Cerrar" onClick={creating ? onClose : close} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
           </div>
