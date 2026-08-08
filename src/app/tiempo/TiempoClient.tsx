@@ -1200,6 +1200,13 @@ export default function TiempoClient() {
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
+  // Editar campos de la tarea en foco (fechas: vence/hacer, etc.) y sincronizar a Épicas.
+  const patchFocusTask = (taskId: string, epicaId: string, patch: Partial<EpicaTask>) => {
+    const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
+    const upd: EpicaTask = { ...tt.task, ...patch }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
   // Agregar un link a la tarea en foco.
   const addLinkOf = (taskId: string, epicaId: string, label: string, url: string) => {
     const u = url.trim(), l = label.trim(); if (!u && !l) return
@@ -2060,7 +2067,7 @@ export default function TiempoClient() {
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center', marginTop: 8 }}>
-              <button onClick={() => setPomoOn(v => !v)} style={{ border: `1px solid ${pomoOn ? '#C2933A' : '#3a352e'}`, background: pomoOn ? 'rgba(231,197,107,0.12)' : 'transparent', color: pomoOn ? '#E7C56B' : '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>🍅 Pomodoro {pomoOn ? 'activado' : 'apagado'}</button>
+              <button onClick={() => setPomoOn(v => !v)} title="Técnica Pomodoro: trabaja en bloques de 25 min de foco + 5 min de descanso, con aviso en cada cambio. Actívalo para que el temporizador te guíe." style={{ border: `1px solid ${pomoOn ? '#C2933A' : '#3a352e'}`, background: pomoOn ? 'rgba(231,197,107,0.12)' : 'transparent', color: pomoOn ? '#E7C56B' : '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>🍅 Pomodoro {pomoOn ? 'activado' : 'apagado'}</button>
               <button onClick={V.sessionPaused ? resumeSession : pauseSession} style={{ border: 'none', background: V.sessionPaused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: V.sessionPaused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>{V.sessionPaused ? '▶ Reanudar' : '⏸ Pausar'}</button>
               {!V.sessionOpen && <button onClick={extend} style={{ border: '1px solid #3a352e', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>+15m</button>}
               <button onClick={() => finish(false)} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Terminar</button>
@@ -2079,8 +2086,11 @@ export default function TiempoClient() {
             )}
             {focusTask && (
               <FocusExtras
+                due={focusTask.task.due || ''}
+                plan={focusTask.task.plan || ''}
                 links={focusTask.task.links || []}
                 comentarios={focusTask.task.comentarios || []}
+                onPatch={patch => patchFocusTask(focusTask.task.id!, focusTask.epicaId, patch)}
                 onAddLink={(label, url) => addLinkOf(focusTask.task.id!, focusTask.epicaId, label, url)}
                 onAddComment={text => addCommentOf(focusTask.task.id!, focusTask.epicaId, text)}
               />
@@ -2191,8 +2201,8 @@ function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; 
   )
 }
 
-/* Enlaces y comentarios de la tarea en foco: abrir links y dejar comentarios sin salir del foco. */
-function FocusExtras({ links, comentarios, onAddLink, onAddComment }: { links: EpicaTaskLink[]; comentarios: EpicaTaskComment[]; onAddLink: (label: string, url: string) => void; onAddComment: (text: string) => void }) {
+/* Fechas, enlaces y comentarios de la tarea en foco: editar sin salir del foco. */
+function FocusExtras({ due, plan, links, comentarios, onPatch, onAddLink, onAddComment }: { due: string; plan: string; links: EpicaTaskLink[]; comentarios: EpicaTaskComment[]; onPatch: (patch: Partial<EpicaTask>) => void; onAddLink: (label: string, url: string) => void; onAddComment: (text: string) => void }) {
   const [showLinkAdd, setShowLinkAdd] = useState(false)
   const [nlLabel, setNlLabel] = useState(''); const [nlUrl, setNlUrl] = useState('')
   const [comment, setComment] = useState('')
@@ -2203,6 +2213,21 @@ function FocusExtras({ links, comentarios, onAddLink, onAddComment }: { links: E
   const secLbl: CSSProperties = { fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }
   return (
     <div style={{ width: 'min(520px, 92vw)', maxHeight: '38vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 14, marginTop: 4 }}>
+      {/* Fechas: cuándo se hace (plan) y cuándo se termina (vence) — editables aquí mismo */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        <span style={secLbl}>fechas</span>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 130 }}>
+            <span style={{ fontSize: 12, color: '#a49b90' }}>Hacer (plan)</span>
+            <input type="date" value={plan} onChange={e => onPatch({ plan: e.target.value })} style={{ ...field, colorScheme: 'dark' }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 130 }}>
+            <span style={{ fontSize: 12, color: '#a49b90' }}>Vence (se termina)</span>
+            <input type="date" value={due} onChange={e => onPatch({ due: e.target.value })} style={{ ...field, colorScheme: 'dark' }} />
+          </label>
+        </div>
+      </div>
+
       {/* Enlaces */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
