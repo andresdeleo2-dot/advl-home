@@ -196,7 +196,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
   const [movidasOpen, setMovidasOpen] = useState(true)              // seccion "Se movieron / no se cumplieron"
-  const [taskLinksOpen, setTaskLinksOpen] = useState(false)        // enlaces de la épica en la vista de tarea (cerrado por defecto)
+  const [taskLinksOpen, setTaskLinksOpen] = useState(true)        // enlaces de la épica en la vista de tarea (abierto por defecto para que se vean)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -491,7 +491,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }, [epics])
 
   // El dropdown de enlaces de la épica arranca cerrado cada vez que abres una tarea
-  useEffect(() => { setTaskLinksOpen(false); setNewSubtask('') }, [taskView])
+  useEffect(() => { setTaskLinksOpen(true); setNewSubtask('') }, [taskView])
 
   // centra el chip del día seleccionado en la tira
   useEffect(() => {
@@ -6167,7 +6167,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 ) })()}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {(taskDraft.subtasks || []).map((s, i) => (
+                  {(taskDraft.subtasks || []).map((s, i) => ({ s, i })).sort((a, b) => (a.s.done ? 1 : 0) - (b.s.done ? 1 : 0)).map(({ s, i }) => (
                     <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <button onClick={() => setTaskDraft(d => { const st = [...(d.subtasks || [])]; st[i] = { ...st[i], done: !st[i].done }; return { ...d, subtasks: st } })} title={s.done ? 'Hecha' : 'Marcar hecha'} style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: s.done ? '#2E6E6E' : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{s.done && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</button>
                       <input value={s.t} onChange={e => setTaskDraft(d => { const st = [...(d.subtasks || [])]; st[i] = { ...st[i], t: e.target.value }; return { ...d, subtasks: st } })} placeholder="Paso o subtarea…" style={{ ...inpSmall, textDecoration: s.done ? 'line-through' : 'none', color: s.done ? 'rgba(20,35,61,0.4)' : '#14233D' }} />

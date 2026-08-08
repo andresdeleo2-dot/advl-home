@@ -3206,7 +3206,7 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
   const [newSub, setNewSub] = useState('')
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
-  const [epLinksOpen, setEpLinksOpen] = useState(false)   // dropdown "Enlaces de {épica}"
+  const [epLinksOpen, setEpLinksOpen] = useState(true)   // dropdown "Enlaces de {épica}" (abierto por defecto para que se vean)
   const [nlLabel, setNlLabel] = useState('')              // nuevo link: etiqueta
   const [nlUrl, setNlUrl] = useState('')                  // nuevo link: url
   const [subPop, setSubPop] = useState<number | null>(null)  // subtarea abierta (editar nota/links/%)
@@ -3398,7 +3398,7 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
 
           <div style={{ marginTop: 14 }}><NLbl>Subtareas · {(t.subtasks || []).filter(s => s.done).length}/{(t.subtasks || []).length}</NLbl></div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {(t.subtasks || []).map((s, i) => (
+            {(t.subtasks || []).map((s, i) => ({ s, i })).sort((a, b) => (a.s.done ? 1 : 0) - (b.s.done ? 1 : 0)).map(({ s, i }) => (
               <div key={s.id || i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                 <button onClick={() => setSubs(a => a.map((x, j) => { if (j !== i) return x; const nd = !x.done; return { ...x, done: nd, doneAt: nd ? new Date().toISOString() : undefined } }))} style={{ width: 18, height: 18, borderRadius: 5, border: '1.5px solid ' + (s.done ? '#3E8E8E' : 'rgba(15,35,64,0.25)'), background: s.done ? '#3E8E8E' : '#fff', cursor: 'pointer', flexShrink: 0 }} />
                 <input value={s.t} onChange={e => setSubs(a => a.map((x, j) => j === i ? { ...x, t: e.target.value } : x))} style={{ ...nf, flex: 1, textDecoration: s.done ? 'line-through' : 'none' }} />
