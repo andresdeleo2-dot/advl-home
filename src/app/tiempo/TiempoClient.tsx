@@ -108,6 +108,7 @@ export default function TiempoClient() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const [focusOpen, setFocusOpen] = useState(false)          // Modo foco: overlay a pantalla completa de la sesión
+  const [workedOpen, setWorkedOpen] = useState(false)        // dropdown "ya trabajadas hoy" bajo las tareas del día (cerrado por defecto)
   const [sessionMin, setSessionMin] = useState(false)        // popup de sesión minimizado a pastilla (clic para reabrir)
   const [pomoOn, setPomoOn] = useState(false)                // Pomodoro dentro del modo foco (25 trabajo / 5 descanso)
   const pomoNotified = useRef<Set<string>>(new Set())        // transiciones de pomodoro ya avisadas (una vez c/u)
@@ -1670,6 +1671,54 @@ export default function TiempoClient() {
                   {act === 'Reuniones' && <MeetingsList meetings={meetings.filter(m => m.date === taskDay)} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
                   {(act === 'Trámites' || act === 'Aprendizaje') && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 18px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>Ver costo y empezar {act} →</div>}
                   {act === 'Trabajo profundo' && <div onClick={() => { setSelTaskId(null); setSelMeetingId(null); setCostOpen(true) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#8a4b28', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>o empezar un bloque de foco sin tarea →</div>}
+
+                  {/* Desplegable "ya trabajadas hoy" — cerrado por defecto, bajo las tareas del día */}
+                  {act === 'Trabajo profundo' && (dayLog.length + epicDoneToday.length + daySubtasksDone.length) > 0 && (() => {
+                    const wc = dayLog.length + epicDoneToday.length + daySubtasksDone.length
+                    const fn = dayLog.filter(l => isTodayView && l.startMin > now && !l.done).length
+                    return (
+                      <div style={{ borderTop: '1px solid #eee6da', paddingTop: 12, marginTop: 2 }}>
+                        <button onClick={() => setWorkedOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'transparent', cursor: 'pointer', width: '100%', textAlign: 'left', padding: 0 }}>
+                          <span style={{ display: 'inline-block', transform: workedOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s', color: '#a49b90', fontSize: 12 }}>▸</span>
+                          <span style={{ ...LBL }}>ya trabajadas{isTodayView ? ' hoy' : ''}</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#8a4b28', background: '#f5ece2', borderRadius: 999, padding: '2px 9px' }}>{wc}</span>
+                          {fn > 0 && <span style={{ fontSize: 11.5, fontWeight: 600, color: '#8a3c2a', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 999, padding: '2px 8px' }}>⚠ {fn} con hora futura</span>}
+                          <span style={{ flex: 1 }} />
+                          <span style={{ fontSize: 12.5, color: '#a49b90' }}>{workedOpen ? 'ocultar' : 'ver'}</span>
+                        </button>
+                        {workedOpen && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8 }}>
+                            {[...dayLog].reverse().map(l => { const fut = isTodayView && l.startMin > now && !l.done; return (
+                              <div key={'wd' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', cursor: 'pointer', borderBottom: '1px solid #f2ece0' }}>
+                                <span style={{ fontSize: 12.5, color: '#a49b90', width: 92, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{l.range}</span>
+                                <span style={{ width: 7, height: 7, borderRadius: 999, background: l.dot, flexShrink: 0 }} />
+                                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
+                                <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
+                                <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: l.done ? '#4f6238' : (fut ? '#8a3c2a' : '#8a4b28'), width: 80, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : (fut ? '⚠ futura' : 'trabajado')}</span>
+                              </div>
+                            ) })}
+                            {epicDoneToday.map(t => (
+                              <div key={'we' + t.task.id} onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', cursor: 'pointer', borderBottom: '1px solid #f2ece0' }}>
+                                <span style={{ fontSize: 11.5, color: '#c2b9ab', width: 92, flexShrink: 0 }}>en Épicas</span>
+                                <span style={{ width: 7, height: 7, borderRadius: 999, background: t.color, flexShrink: 0 }} />
+                                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: '#4f6238', width: 80, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
+                              </div>
+                            ))}
+                            {daySubtasksDone.map(st => (
+                              <div key={'ws' + st.key} onClick={() => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', cursor: 'pointer', borderBottom: '1px solid #f2ece0' }}>
+                                <span style={{ fontSize: 12.5, color: '#a49b90', width: 92, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(st.at)}</span>
+                                <span style={{ color: '#2E6E6E', fontSize: 13, flexShrink: 0 }}>✓</span>
+                                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ fontSize: 12, color: '#a49b90' }}>· subtarea</span></span>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: '#2E6E6E', width: 80, textAlign: 'right', flexShrink: 0 }}>subtarea ✓</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
               </div>
 
             </div>
