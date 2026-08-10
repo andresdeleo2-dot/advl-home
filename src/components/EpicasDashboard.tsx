@@ -198,6 +198,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [movidasOpen, setMovidasOpen] = useState(true)              // seccion "Se movieron / no se cumplieron"
   const [taskLinksOpen, setTaskLinksOpen] = useState(true)        // enlaces de la épica en la vista de tarea (abierto por defecto para que se vean)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
+  const [weekMoveKey, setWeekMoveKey] = useState<string | null>(null) // tarjeta con el selector de día abierto (agendar por día con un toque)
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [sprintDrag, setSprintDrag] = useState<string | null>(null) // tarjeta arrastrada en la vista multi-semana
@@ -2319,6 +2320,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
+      {/* Resumen de la semana: cuántas actividades, pendientes, dificultad y trabajo estimado */}
+      {(() => {
+        const all = [...byDay.values()].flat().filter(x => passF(x.t))
+        if (all.length === 0) return null
+        const pend = all.filter(x => x.t.status !== 'Terminada')
+        const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }
+        pend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
+        const totMin = pend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+        const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
+        const pill = (c: string, bg: string, label: string, n: number) => n > 0
+          ? <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 99, padding: '3px 10px', font: '700 11.5px var(--font-ui)', color: c, background: bg }}><span style={{ width: 7, height: 7, borderRadius: 99, background: c }} />{label} {n}</span>
+          : null
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '0 0 12px', padding: '11px 14px', borderRadius: 14, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{all.length} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{all.length === 1 ? 'actividad' : 'actividades'}</span></span>
+              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginTop: 2 }}>{pend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> de trabajo estimado</span>
+            </div>
+            <span style={{ width: 1, height: 30, background: 'rgba(15,35,64,0.1)' }} />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ font: '700 9.5px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.4)', marginRight: 2 }}>dificultad</span>
+              {pill('#5f8a52', 'rgba(95,138,82,0.12)', 'Fácil', dc.facil)}
+              {pill('#A87A2C', 'rgba(168,122,44,0.12)', 'Media', dc.media)}
+              {pill('#B0522E', 'rgba(176,82,46,0.12)', 'Difícil', dc.dificil)}
+              {dc.sin > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 99, padding: '3px 10px', font: '700 11.5px var(--font-ui)', color: 'rgba(20,35,61,0.5)', background: 'rgba(15,35,64,0.05)' }}>sin dificultad {dc.sin}</span>}
+            </div>
+          </div>
+        )
+      })()}
+
       {boardView === 'tabla' ? renderDayTable([...byDay.values()].flat().filter(x => passF(x.t))) : (() => {
       // Rutinas ("las diarias") + tablero en UN solo contenedor, para que las celdas
       // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
@@ -2364,6 +2395,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const pend = full.filter(x => x.t.status !== 'Terminada').length
           const done = full.length - pend
           const allDone = full.length > 0 && pend === 0
+          const dayMin = full.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+          const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
+          const overloaded = dayMin > 480   // más de ~8h planeadas en un día
           return (
             <div key={d} data-weekday={d}
               style={{ flex: '1 1 150px', minWidth: 150, maxWidth: 320, boxSizing: 'border-box', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.05)' : isWeekend ? 'rgba(15,35,64,0.02)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', opacity: past && !over ? 0.85 : 1, transition: 'background .15s, border-color .15s' }}>
@@ -2373,6 +2407,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
                 {list.length > 0 && (
                   <span style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: allDone ? 'rgba(62,142,142,0.14)' : 'rgba(194,147,58,0.14)', color: allDone ? '#2E6E6E' : '#A87A2C' }}>{allDone ? '✓' : `${done}/${list.length}`}</span>
+                )}
+                {pend > 0 && (
+                  <span title={`≈ ${dayHrs} de trabajo estimado este día${overloaded ? ' · demasiado, reparte algunas' : ''}`} style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: overloaded ? 'rgba(176,82,46,0.14)' : 'rgba(15,35,64,0.06)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>~{dayHrs}</span>
                 )}
                 <span style={{ flex: 1 }} />
                 <button onClick={() => newTaskForDay(d)} aria-label={`Nueva tarea para ${dateLabel(d)}`} title="Nueva tarea este día"
@@ -2434,7 +2471,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <DifDots d={t.difficulty} size={9} />{t.difficulty && <span style={{ font: '700 9.5px var(--font-ui)' }}>{difStyle(t.difficulty).label}</span>}
                           </button>
                           {typeof t.progress === 'number' && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>}
+                          <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día de la semana" aria-label="Mover a otro día" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.4)', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}>📅</button>
                         </div>
+                        {weekMoveKey === k && (
+                          <div onPointerDown={ev => ev.stopPropagation()} style={{ display: 'flex', gap: 3, marginTop: 7, paddingLeft: 25 }}>
+                            {days.map((dd, di) => { const cur = t.plan === dd; return (
+                              <button key={dd} onClick={ev => { ev.stopPropagation(); setTaskPlan(e, i, dd); setWeekMoveKey(null) }} onPointerDown={ev => ev.stopPropagation()} title={`Mover a ${DAYNAMES[di]} ${dayNum(dd)}`} style={{ flex: 1, height: 24, borderRadius: 6, cursor: 'pointer', border: cur ? 'none' : '1px solid rgba(15,35,64,0.14)', background: cur ? '#10233F' : '#fff', color: cur ? '#fff' : 'rgba(20,35,61,0.6)', font: '700 10px var(--font-ui)' }}>{['L', 'M', 'X', 'J', 'V', 'S', 'D'][di]}</button>
+                            ) })}
+                          </div>
+                        )}
                       </div>
                     )
                   })}
@@ -6300,6 +6345,9 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
     </>
   )
 }
+
+// Minutos estimados de una tarea por su dificultad (para el resumen/carga de la semana).
+const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 30 : d === 'dificil' ? 120 : 60
 
 const goldBtn: CSSProperties = {
   border: 'none', cursor: 'pointer', borderRadius: 12, fontWeight: 800, color: '#1B1305',
