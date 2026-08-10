@@ -108,6 +108,7 @@ export default function TiempoClient() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const [focusOpen, setFocusOpen] = useState(false)          // Modo foco: overlay a pantalla completa de la sesión
+  const [workedOpen, setWorkedOpen] = useState(false)        // dropdown "actividades ya trabajadas" (cerrado por defecto)
   const [sessionMin, setSessionMin] = useState(false)        // popup de sesión minimizado a pastilla (clic para reabrir)
   const [pomoOn, setPomoOn] = useState(false)                // Pomodoro dentro del modo foco (25 trabajo / 5 descanso)
   const pomoNotified = useRef<Set<string>>(new Set())        // transiciones de pomodoro ya avisadas (una vez c/u)
@@ -340,6 +341,24 @@ export default function TiempoClient() {
     arr.forEach((t, i) => { if (t.task.id) m[t.task.id] = i + 1 })
     return m
   }, [tasks])
+  // Tareas ESTANCADAS: las que empezaste (En curso / con avance / con bitácora) pero llevas ≥3 días
+  // sin tocarlas (último avance o creación). Mapea taskId → días sin avanzar (para el badge).
+  const staleByTask = useMemo(() => {
+    const t0 = iso(new Date())
+    const daysBetween = (a: string, b: string) => Math.round((new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()) / 86400000)
+    const m: Record<string, number> = {}
+    for (const t of allTasks || []) {
+      const tk = t.task; if (!tk.id || tk.status === 'Terminada' || tk.status === 'Archivada') continue
+      const log = (tk.progressLog as EpicaProgressEntry[] | undefined) || []
+      const started = tk.status === 'En curso' || (typeof tk.progress === 'number' && tk.progress > 0) || log.length > 0
+      if (!started) continue
+      const lastD = log.length ? [...log].map(x => x.d).sort().slice(-1)[0] : (tk.createdAt || null)
+      if (!lastD) continue
+      const d = daysBetween(lastD, t0)
+      if (d >= 3) m[tk.id] = d
+    }
+    return m
+  }, [allTasks])
   const filteredTasks = useMemo(() => {
     if (tasks === null) return null
     const arr = tasks.filter(t => {
@@ -896,7 +915,7 @@ export default function TiempoClient() {
   const isTodayView = taskDay === iso(new Date())
   const dayLog = useMemo(() =>
     data.history.map((h, idx) => ({ h, idx })).filter(x => x.h.date === taskDay).sort((a, b) => a.h.start - b.h.start).map(x => ({
-      idx: x.idx, range: clock(x.h.start) + '–' + clock(x.h.start + x.h.dur), name: x.h.name, dur: hm(x.h.dur),
+      idx: x.idx, range: clock(x.h.start) + '–' + clock(x.h.start + x.h.dur), name: x.h.name, dur: hm(x.h.dur), startMin: x.h.start,
       dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false, taskId: x.h.taskId,
     })), [data.history, taskDay])
   const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
@@ -969,7 +988,7 @@ export default function TiempoClient() {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
       if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
       const today0 = iso(new Date())
-      const hist = { date: today0, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+      const hist = { date: today0, name: s.name, area: s.area, start: Math.min(Math.round(s.origStart ?? s.start), Math.round(now)), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
       save({ session: ns, history: dataRef.current.history.concat([hist]), ...extraPatch })
       showUndo(`✓ Guardé ${hm(el)} de «${s.name}» y empecé «${ns.name}»`, () => save({ history: dataRef.current.history.filter(h => h !== hist) }))
       if (s.taskId && s.epicaId) {
@@ -1072,7 +1091,7 @@ export default function TiempoClient() {
     const s = data.session; if (!s) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     const today = iso(new Date())
-    const entry = { date: today, name: s.name, area: s.area, start: Math.round(s.origStart ?? s.start), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+    const entry = { date: today, name: s.name, area: s.area, start: Math.min(Math.round(s.origStart ?? s.start), Math.round(now)), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
     save({ session: null, history: dataRef.current.history.concat([entry]) })
     setTaskDay(today)   // el registro cae en hoy: asegura que la vista lo muestre
     showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
@@ -1646,7 +1665,7 @@ export default function TiempoClient() {
                       )
                     })()}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
-                    <TaskPicker tasks={filteredTasks} rank={manualRank} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={filteredTasks} rank={manualRank} stale={staleByTask} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     <div onClick={() => { const e = epicasList.find(x => x.id === filters.epica) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: taskDay, links: [] } }) }} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '10px 18px', fontSize: 14, color: '#6b645b', cursor: 'pointer' }}>+ Nueva tarea{filters.epica ? ` en ${todayEpicas.find(e => e.id === filters.epica)?.name || ''}` : ''}</div>
                   </>}
                   {act === 'Reuniones' && <MeetingsList meetings={meetings.filter(m => m.date === taskDay)} selId={selMeetingId} onPick={m => { setSelMeetingId(m.id); setSelTaskId(null); setDur(m.dur); setCostOpen(true) }} epicas={epicasList} onAddEpica={meetingToEpica} />}
@@ -1716,6 +1735,16 @@ export default function TiempoClient() {
                     <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
                   </div>
                 ))}
+                {(dayLog.length + epicDoneToday.length + daySubtasksDone.length) > 0 && (() => { const wc = dayLog.length + epicDoneToday.length + daySubtasksDone.length; const fn = dayLog.filter(l => isTodayView && l.startMin > now && !l.done).length; return (<>
+                  <button onClick={() => setWorkedOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 0', border: 'none', borderBottom: '1px solid #eee6da', background: 'transparent', cursor: 'pointer', width: '100%', textAlign: 'left' }}>
+                    <span style={{ display: 'inline-block', transform: workedOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s', color: '#a49b90', fontSize: 12 }}>▸</span>
+                    <span style={{ fontSize: 14.5, color: '#6b645b', fontWeight: 500 }}>actividades ya trabajadas</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#8a4b28', background: '#f5ece2', borderRadius: 999, padding: '2px 9px' }}>{wc}</span>
+                    {fn > 0 && <span style={{ fontSize: 12, fontWeight: 600, color: '#8a3c2a', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 999, padding: '2px 9px' }}>⚠ {fn} con hora futura</span>}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 12.5, color: '#a49b90' }}>{workedOpen ? 'ocultar' : 'ver'}</span>
+                  </button>
+                  {workedOpen && <>
                 {[...dayLog].reverse().map(l => (
                   <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
@@ -1728,7 +1757,7 @@ export default function TiempoClient() {
                       : <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩ A tareas</button>)}
                     <button onClick={e => { e.stopPropagation(); setHistIdx(l.idx) }} title="Editar el registro: cambiar hora/duración, marcar si se terminó, o borrarlo" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
                     <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : '#8a4b28', width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : 'trabajado'}</span>
+                    <span title={(isTodayView && l.startMin > now && !l.done) ? 'Este registro tiene una hora que aún no llega — probablemente un error. Ábrelo (Editar) para corregir la hora o borrarlo.' : undefined} style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : (isTodayView && l.startMin > now ? '#8a3c2a' : '#8a4b28'), width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : (isTodayView && l.startMin > now ? '⚠ hora futura' : 'trabajado')}</span>
                   </div>
                 ))}
                 {epicDoneToday.map(t => (
@@ -1752,6 +1781,8 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 13, fontWeight: 500, color: '#2E6E6E', width: 90, textAlign: 'right', flexShrink: 0 }}>subtarea ✓</span>
                   </div>
                 ))}
+                  </>}
+                </>) })()}
                 {isTodayView && V.upcoming.map((b, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
@@ -2986,7 +3017,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, rank, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; rank?: Record<string, number>; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, rank, stale, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; rank?: Record<string, number>; stale?: Record<string, number>; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -3076,6 +3107,7 @@ function TaskPicker({ tasks, rank, selId, draggable, mitIds, onToggleMit, onReor
               <Tag c={t.color} bg={t.color + '22'}>{t.epicaName}</Tag>
               <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
               {t.recurring && <Tag c="#7A6FB0" bg="rgba(122,111,176,0.14)">diaria</Tag>}
+              {stale?.[t.task.id!] != null && <span title={`La empezaste pero llevas ${stale[t.task.id!]} días sin avanzarla`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: '#8a3c2a', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 999, padding: '2px 8px' }}>⏳ {stale[t.task.id!]}d sin avanzar</span>}
               {t.task.priority && <Tag c={PRIO_TONE[t.task.priority]} bg={PRIO_TONE[t.task.priority] + '22'}>{t.task.priority}</Tag>}
               {t.task.difficulty && <Tag c="#5B6B86" bg="rgba(91,107,134,0.12)">{t.task.difficulty}</Tag>}
               {t.task.due && <Tag c="#A87A2C" bg="rgba(194,147,58,0.14)">vence {fmtDue(t.task.due)}</Tag>}
