@@ -1220,6 +1220,19 @@ export default function TiempoClient() {
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
+  // Reordenar una subtarea PENDIENTE (↑↓) entre las pendientes, como en Épicas. Intercambia con
+  // la pendiente vecina en su posición REAL del arreglo (las hechas se quedan en su lugar).
+  const moveSubtaskOf = (taskId: string, epicaId: string, subKey: string, dir: -1 | 1) => {
+    const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
+    const subs = [...(tt.task.subtasks || [])]
+    const pend = subs.map((s, i) => ({ s, i })).filter(x => !x.s.done)
+    const k = pend.findIndex(x => (x.s.id || x.s.t) === subKey); if (k < 0) return
+    const j = k + dir; if (j < 0 || j >= pend.length) return
+    const a = pend[k].i, b = pend[j].i; [subs[a], subs[b]] = [subs[b], subs[a]]
+    const upd: EpicaTask = { ...tt.task, subtasks: subs }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
   // Agregar comentario a la tarea en foco (mismo patrón: sincroniza a Épicas).
   const addCommentOf = (taskId: string, epicaId: string, text: string) => {
     const t = text.trim(); if (!t) return
@@ -2160,6 +2173,7 @@ export default function TiempoClient() {
                 done={subsDone}
                 onToggle={key => toggleSubtaskOf(focusTask.task.id!, focusTask.epicaId, key)}
                 onAdd={text => addSubtaskOf(focusTask.task.id!, focusTask.epicaId, text)}
+                onMove={(key, dir) => moveSubtaskOf(focusTask.task.id!, focusTask.epicaId, key, dir)}
               />
             )}
             {focusTask && (
@@ -2268,11 +2282,26 @@ function QuickStart({ onStart }: { onStart: (name: string) => void }) {
 
 /* Panel de subtareas del Modo foco: marca las hechas y agrega nuevas sin salir del foco.
    Se muestra aunque la tarea aún no tenga subtareas (invita a dividirla en pasos). */
-function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; done: number; onToggle: (key: string) => void; onAdd: (text: string) => void }) {
+function FocusSubtasks({ subs, done, onToggle, onAdd, onMove }: { subs: EpicaSubtask[]; done: number; onToggle: (key: string) => void; onAdd: (text: string) => void; onMove?: (key: string, dir: -1 | 1) => void }) {
   const [txt, setTxt] = useState('')
   const add = () => { const t = txt.trim(); if (!t) return; onAdd(t); setTxt('') }
-  // Las TERMINADAS van al fondo (orden estable dentro de cada grupo).
-  const ordered = [...subs].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0))
+  // Pendientes arriba (reordenables), terminadas al fondo.
+  const pend = subs.filter(s => !s.done)
+  const doneL = subs.filter(s => s.done)
+  const canMove = !!onMove && pend.length > 1
+  const arrowBtn: CSSProperties = { border: 'none', background: 'transparent', color: '#a49b90', cursor: 'pointer', fontSize: 9, lineHeight: 1, padding: '1px 3px' }
+  const row = (sub: EpicaSubtask, arrows: { up: boolean; down: boolean } | null) => { const key = sub.id || sub.t; return (
+    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', width: '100%' }}>
+      <button onClick={() => onToggle(key)} title={sub.done ? 'desmarcar' : 'marcar hecha'} style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a', cursor: 'pointer' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</button>
+      <span onClick={() => onToggle(key)} style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none', cursor: 'pointer' }}>{sub.t || 'Subtarea'}</span>
+      {arrows && (
+        <span style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          <button onClick={() => onMove!(key, -1)} disabled={arrows.up} aria-label="Subir" title="Subir" style={{ ...arrowBtn, opacity: arrows.up ? 0.3 : 1, cursor: arrows.up ? 'default' : 'pointer' }}>▲</button>
+          <button onClick={() => onMove!(key, 1)} disabled={arrows.down} aria-label="Bajar" title="Bajar" style={{ ...arrowBtn, opacity: arrows.down ? 0.3 : 1, cursor: arrows.down ? 'default' : 'pointer' }}>▼</button>
+        </span>
+      )}
+    </div>
+  ) }
   return (
     <div style={{ width: 'min(520px, 92vw)', maxHeight: '34vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
@@ -2280,12 +2309,8 @@ function FocusSubtasks({ subs, done, onToggle, onAdd }: { subs: EpicaSubtask[]; 
         {subs.length > 0 && <span style={{ fontSize: 12, color: done === subs.length ? '#a9c48c' : '#cdc4b8' }}>{done}/{subs.length} hechas</span>}
       </div>
       {subs.length === 0 && <span style={{ fontSize: 13.5, color: '#8b8379', padding: '0 4px 8px', lineHeight: 1.4 }}>Divide esta tarea en pasos para ir marcando qué haces.</span>}
-      {ordered.map((sub, i) => { const key = sub.id || sub.t; return (
-        <button key={sub.id || sub.t || i} onClick={() => onToggle(key)} style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 4px', width: '100%' }}>
-          <span style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</span>
-          <span style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none' }}>{sub.t || 'Subtarea'}</span>
-        </button>
-      ) })}
+      {pend.map((sub, k) => row(sub, canMove ? { up: k === 0, down: k === pend.length - 1 } : null))}
+      {doneL.map(sub => row(sub, null))}
       <div style={{ display: 'flex', gap: 8, marginTop: 8, borderTop: '1px solid #2a2620', paddingTop: 10 }}>
         <input value={txt} onChange={e => setTxt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }} placeholder="+ agregar subtarea" style={{ flex: 1, minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }} />
         {txt.trim() && <button onClick={add} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Agregar</button>}
