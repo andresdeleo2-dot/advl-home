@@ -1,10 +1,39 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { safeUrl } from '@/components/epicas/core'
 
 type CalEvent = {
   id: string; title: string; start: string; end?: string; allDay: boolean
-  location?: string; htmlLink?: string; hangoutLink?: string
+  location?: string; htmlLink?: string; hangoutLink?: string; description?: string
+}
+
+// Día largo de un evento (miércoles, 13 de agosto de 2026).
+function longDay(ev: CalEvent) {
+  const d = new Date(ev.allDay ? ev.start.slice(0, 10) + 'T12:00:00' : ev.start)
+  const s = d.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** Descripción del evento con sus LINKS clicables (soporta <a href> y URLs sueltas). */
+function DescWithLinks({ raw }: { raw: string }) {
+  const s = raw
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<(?!\/?a\b)[^>]+>/gi, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>|(https?:\/\/[^\s<]+)/gi
+  const parts: ReactNode[] = []
+  let last = 0, m: RegExpExecArray | null, key = 0
+  while ((m = re.exec(s))) {
+    if (m.index > last) parts.push(<span key={key++}>{s.slice(last, m.index)}</span>)
+    const url = m[1] || m[3]
+    const label = m[1] ? (m[2].replace(/<[^>]*>/g, '').trim() || m[1]) : m[3]
+    parts.push(<a key={key++} href={safeUrl(url)} target="_blank" rel="noopener noreferrer" className="font-semibold text-[#2E5A9E] underline break-all">{label}</a>)
+    last = m.index + m[0].length
+  }
+  if (last < s.length) parts.push(<span key={key++}>{s.slice(last)}</span>)
+  return <div className="max-h-52 overflow-y-auto whitespace-pre-wrap break-words border-t border-[rgba(15,35,64,0.08)] pt-2.5 text-[13px] leading-relaxed text-[#4c5a70]">{parts}</div>
 }
 
 const DAY_NAMES = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do']
@@ -46,6 +75,7 @@ function todayMidnight() { const d = new Date(); d.setHours(0, 0, 0, 0); return 
 export default function CalendarWidget() {
   const [view, setView] = useState<'agenda' | 'semana'>('agenda')
   const [events, setEvents] = useState<CalEvent[] | null>(null)
+  const [selected, setSelected] = useState<CalEvent | null>(null)   // evento abierto en el popup de detalle
 
   useEffect(() => {
     fetch('/api/calendar')
@@ -106,9 +136,9 @@ export default function CalendarWidget() {
                 <div className="divide-y divide-[rgba(15,35,64,0.06)]">
                   {evs.map(ev => (
                     <div key={ev.id}
-                      onClick={() => { if (ev.htmlLink) window.open(ev.htmlLink, '_blank', 'noopener') }}
-                      title={ev.htmlLink ? 'Abrir en Google Calendar' : ev.title}
-                      className={`flex items-start gap-3 px-4 py-2.5 ${ev.htmlLink ? 'cursor-pointer hover:bg-[rgba(15,35,64,0.03)]' : ''} ${isTodayGroup ? 'bg-[rgba(194,147,58,0.05)]' : ''}`}>
+                      onClick={() => setSelected(ev)}
+                      title="Ver detalle del evento"
+                      className={`flex items-start gap-3 px-4 py-2.5 cursor-pointer hover:bg-[rgba(15,35,64,0.03)] ${isTodayGroup ? 'bg-[rgba(194,147,58,0.05)]' : ''}`}>
                       <div className={`mt-1.5 h-2 w-2 flex-shrink-0 rounded-full ${isTodayGroup ? 'bg-[#C2933A]' : 'bg-[rgba(15,35,64,0.22)]'}`} />
                       <div className="min-w-0 flex-1">
                         <p className="clamp-1 text-[12.5px] font-semibold text-[#14233D]">{ev.title}</p>
@@ -150,8 +180,8 @@ export default function CalendarWidget() {
                     <div className="flex flex-col gap-0.5">
                       {dayEvents.map(ev => (
                         <div key={ev.id} title={`${ev.title}${ev.allDay ? '' : ' · ' + fmtRange(ev)}${ev.location ? ' · ' + ev.location : ''}`}
-                          onClick={() => { if (ev.htmlLink) window.open(ev.htmlLink, '_blank', 'noopener') }}
-                          className={`rounded px-1 py-0.5 ${ev.htmlLink ? 'cursor-pointer' : ''} ${isPast ? 'bg-[rgba(15,35,64,0.05)] text-[rgba(15,35,64,0.35)]' : 'bg-[rgba(194,147,58,0.12)] text-[#A87A2C]'}`}>
+                          onClick={() => setSelected(ev)}
+                          className={`rounded px-1 py-0.5 cursor-pointer ${isPast ? 'bg-[rgba(15,35,64,0.05)] text-[rgba(15,35,64,0.35)]' : 'bg-[rgba(194,147,58,0.12)] text-[#A87A2C]'}`}>
                           {!ev.allDay && (
                             <p className="text-[8px] font-semibold leading-tight opacity-70 tabular-nums">{hhmm(ev.start)}</p>
                           )}
@@ -164,6 +194,33 @@ export default function CalendarWidget() {
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Popup de detalle del evento: título, día, hora, lugar, descripción con links y accesos */}
+      {selected && (
+        <div onClick={() => setSelected(null)} className="fixed inset-0 z-[120] flex items-center justify-center bg-[rgba(10,22,42,0.5)] p-4 backdrop-blur-sm">
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" className="flex max-h-[85vh] w-full max-w-md flex-col gap-3 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <span className="rounded-full border border-[rgba(46,90,158,0.3)] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[.08em] text-[#2E5A9E]">🗓 evento · calendario</span>
+              <button onClick={() => setSelected(null)} aria-label="Cerrar" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[rgba(15,35,64,0.06)] text-[rgba(20,35,61,0.55)] hover:bg-[rgba(15,35,64,0.1)]">✕</button>
+            </div>
+            <h3 className="serif text-2xl leading-tight text-[#10233F]">{selected.title || '(sin título)'}</h3>
+            <div className="flex flex-col gap-1 text-[13.5px] text-[#4c5a70]">
+              <span className="capitalize">🗓 {longDay(selected)}</span>
+              <span>🕐 {fmtRange(selected)}</span>
+              {selected.location && <span>📍 {selected.location}</span>}
+            </div>
+            {selected.description && selected.description.trim() && <DescWithLinks raw={selected.description} />}
+            <div className="mt-1 flex flex-wrap gap-2">
+              {selected.hangoutLink && (
+                <a href={selected.hangoutLink} target="_blank" rel="noopener noreferrer" className="rounded-full bg-[#16365F] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#10233F]">Unirse a Meet ↗</a>
+              )}
+              {selected.htmlLink && (
+                <a href={selected.htmlLink} target="_blank" rel="noopener noreferrer" className="rounded-full border border-[rgba(15,35,64,0.14)] px-4 py-2.5 text-[13px] font-semibold text-[#2E5A9E] hover:bg-[rgba(15,35,64,0.03)]">Abrir en Google Calendar ↗</a>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
