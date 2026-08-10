@@ -200,6 +200,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekMoveKey, setWeekMoveKey] = useState<string | null>(null) // tarjeta con el selector de día abierto (agendar por día con un toque)
   const [sinDiaOpen, setSinDiaOpen] = useState(false)                 // bandeja "Sin día" (backlog) en la vista Ajuste
+  const [sprintCollapsed, setSprintCollapsed] = useState<Set<string>>(new Set()) // semanas colapsadas en Ajuste multi-semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [sprintDrag, setSprintDrag] = useState<string | null>(null) // tarjeta arrastrada en la vista multi-semana
@@ -2495,6 +2496,64 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  // Chip compacto reusable (vista Ajuste y multi-semana). `weekDays` = los 7 días de SU semana
+  // (para el popover 📅). `fromDay` != null si viene de un día (habilita "Sin día").
+  const ajusteChip = (x: { e: Epica; t: EpicaTask; i: number }, weekDays: string[], fromDay: string | null) => {
+    const { e, t, i } = x; const k = planKey(e.id, t); const done = t.status === 'Terminada'; const dragging = weekDrag === k
+    return (
+      <div key={k} style={{ position: 'relative' }}>
+        <div onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
+          title={`${t.t} — clic para abrir · arrástrala a otro día`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
+          <button onClick={ev => { ev.stopPropagation(); if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={done ? 'Marcar sin terminar' : 'Marcar terminada'} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{done && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg>}</button>
+          <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+          <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+          {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
+          <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>
+          <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
+        </div>
+        {weekMoveKey === k && (
+          <div onPointerDown={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 20, display: 'flex', gap: 3, padding: 6, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, boxShadow: '0 16px 30px -18px rgba(15,35,64,0.6)' }}>
+            {weekDays.map((dd, di) => { const cur = t.plan === dd; return <button key={dd} onClick={ev => { ev.stopPropagation(); planTaskToDay(e, i, dd, { toast: true }); setWeekMoveKey(null) }} title={`Mover a ${DAYNAMES[di]} ${dayNum(dd)}`} style={{ height: 26, width: 26, borderRadius: 6, cursor: 'pointer', border: cur ? 'none' : '1px solid rgba(15,35,64,0.14)', background: cur ? '#10233F' : '#fff', color: cur ? '#fff' : 'rgba(20,35,61,0.6)', font: '700 10px var(--font-ui)' }}>{['L', 'M', 'X', 'J', 'V', 'S', 'D'][di]}</button> })}
+            {fromDay && <button onClick={ev => { ev.stopPropagation(); setTaskPlan(e, i, ''); setWeekMoveKey(null) }} title="Quitar de la semana (sin día)" style={{ height: 26, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', font: '700 10px var(--font-ui)' }}>Sin día</button>}
+          </div>
+        )}
+      </div>
+    )
+  }
+  // Un carril de día (ancho completo) con sus chips. `items` sin ordenar; se ordena aquí.
+  const ajusteLane = (d: string, items: { e: Epica; t: EpicaTask; i: number }[], weekDays: string[]) => {
+    const sorted = [...items].sort((a, b) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)))
+    const isTd = d === today; const past = d < today
+    const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7
+    const over = weekOverDay === d && !!weekDrag
+    const pendN = sorted.filter(x => x.t.status !== 'Terminada').length
+    const doneN = sorted.length - pendN
+    const dayMin = sorted.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+    const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
+    const overloaded = dayMin > 480
+    return (
+      <div key={d} data-weekday={d} style={{ display: 'flex', gap: 12, alignItems: 'stretch', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.45)' : '1px solid rgba(15,35,64,0.08)', opacity: past && !over ? 0.9 : 1, transition: 'background .15s' }}>
+        <div style={{ flex: '0 0 96px', width: 96, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 12px', borderRight: '1px solid rgba(15,35,64,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
+            <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+            {sorted.length > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: doneN === sorted.length ? '#2E6E6E' : '#A87A2C' }}>{doneN}/{sorted.length}</span>}
+            {pendN > 0 && <span title={`≈ ${dayHrs} estimadas${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
+          </div>
+          <button onClick={() => newTaskForDay(d)} title="Nueva tarea este día" style={{ marginTop: 2, alignSelf: 'flex-start', height: 22, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', font: '700 11px var(--font-ui)' }}>+ tarea</button>
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'flex-start', alignContent: 'flex-start', padding: '11px 12px' }}>
+          {sorted.length === 0
+            ? <span style={{ fontSize: 11.5, color: over ? '#A87A2C' : 'rgba(20,35,61,0.35)', padding: '4px 0' }}>{over ? 'Soltar aquí' : 'Sin actividades · arrastra una o toca “+ tarea”'}</span>
+            : sorted.map(x => ajusteChip(x, weekDays, d))}
+        </div>
+      </div>
+    )
+  }
+
   /** Vista "Ajuste": carriles horizontales por día (ancho completo) con chips compactos,
    *  para VER muchas actividades de un vistazo y REPARTIRLAS por la semana (arrastrar o 📅).
    *  Resuelve el problema de las columnas angostas donde todo se amontona en un día. */
@@ -2614,6 +2673,73 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })}
       </div>
+      </>
+    )
+  }
+
+  /** Vista "Ajuste" MULTI-SEMANA (2 y 3 semanas): por cada semana, un bloque colapsable con
+   *  su resumen + los 7 carriles de día con chips compactos. Mismo enfoque que Ajuste, pero
+   *  a través de varias semanas (para repartir con más horizonte). */
+  const renderSprintAjuste = (weekMondays: string[]) => {
+    const hStart = weekMondays[0]
+    const hEnd = addDays(weekMondays[weekMondays.length - 1], 6)
+    const inHorizon = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd
+    const horizonEpics = activeEpics.filter(e => (e.tasks || []).some(inHorizon))
+    const effEpica = horizonEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+      : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
+      : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : true
+    const matchF = (e: Epica, t: EpicaTask) => (effEpica === 'todas' || e.id === effEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
+    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
+    const firstWeekDays = Array.from({ length: 7 }, (_, k) => addDays(weekMondays[0], k))
+    const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
+    const thisMon = mondayISO(today)
+    return (
+      <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
+        {renderEpicaChips(horizonEpics, effEpica)}
+        <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="todas">Toda dificultad</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+        </select>
+        {(effEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas') && <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>}
+      </div>
+
+      {sinDia.length > 0 && (
+        <div style={{ marginBottom: 12, borderRadius: 14, border: '1px dashed rgba(15,35,64,0.16)', background: 'rgba(15,35,64,0.015)', overflow: 'hidden' }}>
+          <button onClick={() => setSinDiaOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: 'transparent', padding: '10px 14px' }}>
+            <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.55)' }}>Sin día</span>
+            <span style={{ font: '800 11px var(--font-ui)', color: '#A87A2C' }}>{sinDia.length}</span>
+            <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)' }}>· mándalas a un día con 📅 (van a la 1ª semana) o arrástralas</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'rgba(20,35,61,0.45)', transform: sinDiaOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+          </button>
+          {sinDiaOpen && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 14px 12px' }}>{sinDia.slice(0, 60).map(x => ajusteChip(x, firstWeekDays, null))}</div>}
+        </div>
+      )}
+
+      {weekMondays.map(wm => {
+        const days = Array.from({ length: 7 }, (_, k) => addDays(wm, k))
+        const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
+        days.forEach(d => byDay.set(d, []))
+        activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED && matchF(e, t)) byDay.get(t.plan)!.push({ e, t, i }) }))
+        const all = [...byDay.values()].flat(); const pend = all.filter(x => x.t.status !== 'Terminada')
+        const wMin = pend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+        // Semanas con tareas: abiertas por defecto. Semanas VACÍAS: colapsadas por defecto
+        // (para no mostrar 7 carriles vacíos). El clic invierte el default en ambos casos.
+        const collapsed = all.length > 0 ? sprintCollapsed.has(wm) : !sprintCollapsed.has(wm)
+        const isThisWeek = wm === thisMon
+        return (
+          <div key={wm} style={{ marginBottom: 14, border: `1px solid ${isThisWeek ? 'rgba(194,147,58,0.35)' : 'rgba(15,35,64,0.08)'}`, borderRadius: 16, overflow: 'hidden' }}>
+            <button onClick={() => setSprintCollapsed(s => { const n = new Set(s); if (n.has(wm)) n.delete(wm); else n.add(wm); return n })} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', cursor: 'pointer', border: 'none', background: isThisWeek ? 'rgba(194,147,58,0.08)' : '#FBFAF6', padding: '11px 14px' }}>
+              <span className="serif" style={{ fontSize: 16, fontWeight: 600, color: '#10233F' }}>{weekRangeLabel(wm)}</span>
+              {isThisWeek && <span style={{ font: '700 9px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: '#A87A2C', border: '1px solid rgba(194,147,58,0.4)', borderRadius: 99, padding: '1px 7px' }}>Esta semana</span>}
+              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>{all.length} act · {pend.length} pend · <b style={{ color: '#A87A2C' }}>~{hmw(wMin)}</b></span>
+              <span style={{ marginLeft: 'auto', fontSize: 12, color: 'rgba(20,35,61,0.45)', transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+            </button>
+            {!collapsed && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 10 }}>{days.map(d => ajusteLane(d, byDay.get(d)!, days))}</div>}
+          </div>
+        )
+      })}
       </>
     )
   }
@@ -3718,6 +3844,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const week = planMode === 'semana'
     const ajuste = planMode === 'ajuste'
     const multi = planMode === '2sem' || planMode === '3sem' || planMode === 'mes'
+    const sprintLanes = planMode === '2sem' || planMode === '3sem'   // multi-semana con carriles (estilo Ajuste)
     const cal = planMode === 'calendario'
     const timeline = planMode === 'timeline'
     const resumen = planMode === 'resumen'
@@ -3830,7 +3957,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
+          {week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
 
