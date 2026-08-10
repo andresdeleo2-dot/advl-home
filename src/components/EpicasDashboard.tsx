@@ -157,7 +157,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
-  const [planMode, setPlanMode] = useState<'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen'>('dia') // horizonte del enfoque
+  const [planMode, setPlanMode] = useState<'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen'>('dia') // horizonte del enfoque
   const [dayTableEdit, setDayTableEdit] = useState(false)          // edición inline de la tabla del día
   const [dayCapacity, setDayCapacity] = useState(8)                // presupuesto de carga del día (puntos)
   const [calDrag, setCalDrag] = useState<string | null>(null)      // tarjeta arrastrada en el calendario
@@ -199,6 +199,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [taskLinksOpen, setTaskLinksOpen] = useState(true)        // enlaces de la épica en la vista de tarea (abierto por defecto para que se vean)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
   const [weekMoveKey, setWeekMoveKey] = useState<string | null>(null) // tarjeta con el selector de día abierto (agendar por día con un toque)
+  const [sinDiaOpen, setSinDiaOpen] = useState(false)                 // bandeja "Sin día" (backlog) en la vista Ajuste
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
   const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [sprintDrag, setSprintDrag] = useState<string | null>(null) // tarjeta arrastrada en la vista multi-semana
@@ -350,7 +351,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Permite abrir el editor de una tarea desde otra sección (Tiempo) por deep-link (?e=&t=).
   const openTaskEditRef = useRef<((epicId: string, tid: string) => void) | null>(null)
   useEffect(() => {
-    const MODES = ['dia', 'semana', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen']
+    const MODES = ['dia', 'semana', 'ajuste', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen']
     const applyFromUrl = () => {
       const q = new URLSearchParams(window.location.search)
       const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode(v as typeof planMode)
@@ -2494,6 +2495,129 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  /** Vista "Ajuste": carriles horizontales por día (ancho completo) con chips compactos,
+   *  para VER muchas actividades de un vistazo y REPARTIRLAS por la semana (arrastrar o 📅).
+   *  Resuelve el problema de las columnas angostas donde todo se amontona en un día. */
+  const renderPlanAjuste = () => {
+    const monday = mondayISO(viewDate)
+    const sunday = addDays(monday, 6)
+    const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i))
+    const inWeek = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= monday && t.plan <= sunday
+    const weekEpics = activeEpics.filter(e => (e.tasks || []).some(inWeek))
+    const effWeekEpica = weekEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+      : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
+      : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : true
+    const matchF = (e: Epica, t: EpicaTask) => (effWeekEpica === 'todas' || e.id === effWeekEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
+    const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
+    days.forEach(d => byDay.set(d, []))
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED && matchF(e, t)) byDay.get(t.plan)!.push({ e, t, i }) }))
+    const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
+    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
+    const all = [...byDay.values()].flat()
+    const pend = all.filter(x => x.t.status !== 'Terminada')
+    const totMin = pend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+    const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }; pend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
+    const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
+
+    const chip = (x: { e: Epica; t: EpicaTask; i: number }, fromDay: string | null) => {
+      const { e, t, i } = x; const k = planKey(e.id, t); const done = t.status === 'Terminada'; const dragging = weekDrag === k
+      return (
+        <div key={k} style={{ position: 'relative' }}>
+          <div onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
+            title={`${t.t} — clic para abrir · arrástrala a otro día`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
+            <button onClick={ev => { ev.stopPropagation(); if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={done ? 'Marcar sin terminar' : 'Marcar terminada'} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{done && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg>}</button>
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+            {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
+            <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>
+            <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
+          </div>
+          {weekMoveKey === k && (
+            <div onPointerDown={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 20, display: 'flex', gap: 3, padding: 6, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, boxShadow: '0 16px 30px -18px rgba(15,35,64,0.6)' }}>
+              {days.map((dd, di) => { const cur = t.plan === dd; return <button key={dd} onClick={ev => { ev.stopPropagation(); planTaskToDay(e, i, dd, { toast: true }); setWeekMoveKey(null) }} title={`Mover a ${DAYNAMES[di]} ${dayNum(dd)}`} style={{ height: 26, width: 26, borderRadius: 6, cursor: 'pointer', border: cur ? 'none' : '1px solid rgba(15,35,64,0.14)', background: cur ? '#10233F' : '#fff', color: cur ? '#fff' : 'rgba(20,35,61,0.6)', font: '700 10px var(--font-ui)' }}>{['L', 'M', 'X', 'J', 'V', 'S', 'D'][di]}</button> })}
+              {fromDay && <button onClick={ev => { ev.stopPropagation(); setTaskPlan(e, i, ''); setWeekMoveKey(null) }} title="Quitar de la semana (sin día)" style={{ height: 26, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', font: '700 10px var(--font-ui)' }}>Sin día</button>}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
+        {renderEpicaChips(weekEpics, effWeekEpica)}
+        <select value={weekDif} onChange={e => setWeekDif(e.target.value as typeof weekDif)} title="Filtrar por dificultad" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: weekDif !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+          <option value="todas">Toda dificultad</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+        </select>
+        {(effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas') && <button onClick={() => { setPlanFilter('todas'); setWeekEpica('todas'); setWeekDif('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>}
+      </div>
+
+      {all.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '0 0 12px', padding: '11px 14px', borderRadius: 14, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)' }}>
+          <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{all.length} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{all.length === 1 ? 'actividad' : 'actividades'}</span></span>
+          <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>{pend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> estimadas</span>
+          <span style={{ width: 1, height: 26, background: 'rgba(15,35,64,0.1)' }} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {dc.facil > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: '#5f8a52', background: 'rgba(95,138,82,0.12)' }}>Fácil {dc.facil}</span>}
+            {dc.media > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: '#A87A2C', background: 'rgba(168,122,44,0.12)' }}>Media {dc.media}</span>}
+            {dc.dificil > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: '#B0522E', background: 'rgba(176,82,46,0.12)' }}>Difícil {dc.dificil}</span>}
+            {dc.sin > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)', background: 'rgba(15,35,64,0.05)' }}>sin dif {dc.sin}</span>}
+          </div>
+        </div>
+      )}
+
+      {sinDia.length > 0 && (
+        <div style={{ marginBottom: 12, borderRadius: 14, border: '1px dashed rgba(15,35,64,0.16)', background: 'rgba(15,35,64,0.015)', overflow: 'hidden' }}>
+          <button onClick={() => setSinDiaOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: 'transparent', padding: '10px 14px' }}>
+            <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.55)' }}>Sin día</span>
+            <span style={{ font: '800 11px var(--font-ui)', color: '#A87A2C' }}>{sinDia.length}</span>
+            <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)' }}>· mándalas a un día con 📅 o arrástralas</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'rgba(20,35,61,0.45)', transform: sinDiaOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+          </button>
+          {sinDiaOpen && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 14px 12px' }}>{sinDia.slice(0, 60).map(x => chip(x, null))}</div>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {days.map(d => {
+          const items = byDay.get(d)!.sort(cmp)
+          const isTd = d === today; const past = d < today
+          const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7
+          const over = weekOverDay === d && !!weekDrag
+          const pendN = items.filter(x => x.t.status !== 'Terminada').length
+          const doneN = items.length - pendN
+          const dayMin = items.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+          const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
+          const overloaded = dayMin > 480
+          return (
+            <div key={d} data-weekday={d} style={{ display: 'flex', gap: 12, alignItems: 'stretch', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.45)' : '1px solid rgba(15,35,64,0.08)', opacity: past && !over ? 0.9 : 1, transition: 'background .15s' }}>
+              <div style={{ flex: '0 0 96px', width: 96, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 12px', borderRight: '1px solid rgba(15,35,64,0.06)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
+                  <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                  {items.length > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: doneN === items.length ? '#2E6E6E' : '#A87A2C' }}>{doneN}/{items.length}</span>}
+                  {pendN > 0 && <span title={`≈ ${dayHrs} estimadas${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
+                </div>
+                <button onClick={() => newTaskForDay(d)} title="Nueva tarea este día" style={{ marginTop: 2, alignSelf: 'flex-start', height: 22, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', font: '700 11px var(--font-ui)' }}>+ tarea</button>
+              </div>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'flex-start', alignContent: 'flex-start', padding: '11px 12px' }}>
+                {items.length === 0
+                  ? <span style={{ fontSize: 11.5, color: over ? '#A87A2C' : 'rgba(20,35,61,0.35)', padding: '4px 0' }}>{over ? 'Soltar aquí' : 'Sin actividades · arrastra una o toca “+ tarea”'}</span>
+                  : items.map(x => chip(x, d))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      </>
+    )
+  }
+
   /** Vista multi-semana (2 sem / 3 sem / mes) tipo sprint: una columna por semana,
    *  con las tareas agrupadas por día. Arrastra una tarjeta a otra semana para
    *  reprogramarla (mismo día de la semana). Comparte filtros con la vista semana. */
@@ -3592,12 +3716,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   const renderPlanToday = () => {
     const week = planMode === 'semana'
+    const ajuste = planMode === 'ajuste'
     const multi = planMode === '2sem' || planMode === '3sem' || planMode === 'mes'
     const cal = planMode === 'calendario'
     const timeline = planMode === 'timeline'
     const resumen = planMode === 'resumen'
     const monthy = planMode === 'mes' || cal || timeline   // navegación/etiqueta por mes
-    const board = week || multi || cal || timeline || resumen
+    const board = week || ajuste || multi || cal || timeline || resumen
     const weekMonday = mondayISO(viewDate)
     const todayMonday = mondayISO(today)
     // Semanas del horizonte según el modo
@@ -3612,9 +3737,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : weekRangeLabel(weekMonday)
     const monthName = cap(new Date(viewDate + 'T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
     // Etiquetas del masthead
-    const bigLabel = monthy ? monthName : (week || resumen) ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
-    const eyebrow = week ? 'Enfoque de la semana' : resumen ? 'Resumen de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
-    const topLabel = (week || resumen) ? weekRel
+    const bigLabel = monthy ? monthName : (week || ajuste || resumen) ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
+    const eyebrow = week ? 'Enfoque de la semana' : ajuste ? 'Ajuste de la semana' : resumen ? 'Resumen de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
+    const topLabel = (week || ajuste || resumen) ? weekRel
       : monthy ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
       // "Próximas N semanas" sólo si la ventana arranca en la semana actual; si la
       // deslizaste hacia atrás (para ver semanas pasadas) muestra el rango real.
@@ -3657,7 +3782,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" className="ep-modes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
-                {([['dia', 'Día'], ['semana', 'Semana'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
+                {([['dia', 'Día'], ['semana', 'Semana'], ['ajuste', 'Ajuste'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
@@ -3666,7 +3791,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {board ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <button onClick={goPrev} aria-label={multi ? 'Una semana atrás' : 'Período anterior'} title={multi ? 'Una semana atrás (para ver semanas pasadas)' : undefined} style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>‹</button>
-                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{monthy ? 'Este mes' : (week || resumen) ? 'Esta semana' : 'Ahora'}</button>}
+                  {!horizonHasToday && <button onClick={() => setViewDate(today)} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{monthy ? 'Este mes' : (week || ajuste || resumen) ? 'Esta semana' : 'Ahora'}</button>}
                   <button onClick={goNext} aria-label={multi ? 'Una semana adelante' : 'Período siguiente'} title={multi ? 'Una semana adelante' : undefined} style={{ height: 33, width: 33, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }}>›</button>
                 </div>
               ) : !isToday && (
@@ -3705,7 +3830,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {week ? renderPlanWeek() : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
+          {week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
 

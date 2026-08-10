@@ -423,7 +423,7 @@ export type Prefs = {
   estadoFilter: 'activas' | 'archivadas' | 'todas'; catFilter: string
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
-  planMode: 'dia' | 'semana' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen'
+  planMode: 'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen'
   weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; boardView: 'tablero' | 'tabla'; epicView: 'lista' | 'tabla'; dayCapacity: number
   epicSort: 'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
