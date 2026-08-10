@@ -108,7 +108,6 @@ export default function TiempoClient() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const [focusOpen, setFocusOpen] = useState(false)          // Modo foco: overlay a pantalla completa de la sesión
-  const [workedOpen, setWorkedOpen] = useState(false)        // dropdown "actividades ya trabajadas" (cerrado por defecto)
   const [sessionMin, setSessionMin] = useState(false)        // popup de sesión minimizado a pastilla (clic para reabrir)
   const [pomoOn, setPomoOn] = useState(false)                // Pomodoro dentro del modo foco (25 trabajo / 5 descanso)
   const pomoNotified = useRef<Set<string>>(new Set())        // transiciones de pomodoro ya avisadas (una vez c/u)
@@ -1735,16 +1734,6 @@ export default function TiempoClient() {
                     <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
                   </div>
                 ))}
-                {(dayLog.length + epicDoneToday.length + daySubtasksDone.length) > 0 && (() => { const wc = dayLog.length + epicDoneToday.length + daySubtasksDone.length; const fn = dayLog.filter(l => isTodayView && l.startMin > now && !l.done).length; return (<>
-                  <button onClick={() => setWorkedOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 0', border: 'none', borderBottom: '1px solid #eee6da', background: 'transparent', cursor: 'pointer', width: '100%', textAlign: 'left' }}>
-                    <span style={{ display: 'inline-block', transform: workedOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s', color: '#a49b90', fontSize: 12 }}>▸</span>
-                    <span style={{ fontSize: 14.5, color: '#6b645b', fontWeight: 500 }}>actividades ya trabajadas</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: '#8a4b28', background: '#f5ece2', borderRadius: 999, padding: '2px 9px' }}>{wc}</span>
-                    {fn > 0 && <span style={{ fontSize: 12, fontWeight: 600, color: '#8a3c2a', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 999, padding: '2px 9px' }}>⚠ {fn} con hora futura</span>}
-                    <span style={{ flex: 1 }} />
-                    <span style={{ fontSize: 12.5, color: '#a49b90' }}>{workedOpen ? 'ocultar' : 'ver'}</span>
-                  </button>
-                  {workedOpen && <>
                 {[...dayLog].reverse().map(l => (
                   <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
@@ -1781,8 +1770,6 @@ export default function TiempoClient() {
                     <span style={{ fontSize: 13, fontWeight: 500, color: '#2E6E6E', width: 90, textAlign: 'right', flexShrink: 0 }}>subtarea ✓</span>
                   </div>
                 ))}
-                  </>}
-                </>) })()}
                 {isTodayView && V.upcoming.map((b, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
