@@ -198,6 +198,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [movidasOpen, setMovidasOpen] = useState(true)              // seccion "Se movieron / no se cumplieron"
   const [taskLinksOpen, setTaskLinksOpen] = useState(true)        // enlaces de la épica en la vista de tarea (abierto por defecto para que se vean)
   const [weekDrag, setWeekDrag] = useState<string | null>(null)     // key de la tarjeta arrastrada en la vista semana
+  const [sinFechaOpen, setSinFechaOpen] = useState(true)            // panel "sin fecha" (arrastrar al día) en la vista Semana
   const [weekMoveKey, setWeekMoveKey] = useState<string | null>(null) // tarjeta con el selector de día abierto (agendar por día con un toque)
   const [sinDiaOpen, setSinDiaOpen] = useState(false)                 // bandeja "Sin día" (backlog) en la vista Ajuste
   const [sprintCollapsed, setSprintCollapsed] = useState<Set<string>>(new Set()) // semanas colapsadas en Ajuste multi-semana
@@ -2360,7 +2361,45 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         .filter(x => effWeekEpica === 'todas' || x.e.id === effWeekEpica)   // respetan el filtro por épica
       const showRoutines = routines.length > 0 && routinesOpen
       const HEADER_H = 46, ROW_H = 30, railW = 132
+      // Tareas SIN día (sin plan): se arrastran a un día para agendarlas. Respetan
+      // los filtros de épica y dificultad de la vista.
+      const unsch = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
+        .filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada'
+          && (effWeekEpica === 'todas' || x.e.id === effWeekEpica)
+          && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif))
       return (
+      <>
+      {unsch.length > 0 && (
+        <div style={{ marginBottom: 10, border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12, background: '#FBFAF6', padding: '8px 11px' }}>
+          <button onClick={() => setSinFechaOpen(o => !o)} aria-expanded={sinFechaOpen} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }}>
+            <span style={{ height: 6, width: 6, borderRadius: 99, background: '#5B6B86' }} />
+            <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Sin fecha</span>
+            <span style={{ fontSize: 9.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{unsch.length}</span>
+            {sinFechaOpen && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.42)' }}>· arrastra una a un día para agendarla</span>}
+            <span style={{ flex: 1 }} />
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: sinFechaOpen ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+          {sinFechaOpen && (
+            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingTop: 9 }}>
+              {unsch.map(x => {
+                const { e, t } = x; const k = planKey(e.id, t); const dragging = weekDrag === k; const ps = prioStyle(t.priority)
+                return (
+                  <div key={k} onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
+                    title={`${t.t} — arrastra a un día para agendarla`}
+                    style={{ flexShrink: 0, width: 178, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${ps.accent}`, borderRadius: 9, padding: '7px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: weekDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16365F', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.t}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                      {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dueTone(t.due, false).c }}>{fmtDue(t.due)}</span>}
+                      {t.difficulty && <DifDots d={t.difficulty} size={9} />}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
         {/* RIEL: nombres de las rutinas, alineados con sus celdas en cada columna */}
         {routines.length > 0 && (
@@ -2490,6 +2529,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )
         })}
       </div>
+      </>
       )
       })()}
       </>
