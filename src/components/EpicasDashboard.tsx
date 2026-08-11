@@ -2629,6 +2629,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED && matchF(e, t)) byDay.get(t.plan)!.push({ e, t, i }) }))
+    // Carga TOTAL del día (todas las épicas, SIN filtro): para estimar la carga real
+    // aunque estés filtrando por una épica y muevas actividades.
+    const byDayTotal = new Map<string, { e: Epica; t: EpicaTask }[]>()
+    days.forEach(d => byDayTotal.set(d, []))
+    activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.plan && byDayTotal.has(t.plan) && t.status !== ARCHIVED) byDayTotal.get(t.plan)!.push({ e, t }) }))
+    const filtering = effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas'
     const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat()
@@ -2710,7 +2716,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const overloaded = dayMin > 480
           return (
             <div key={d} data-weekday={d} style={{ display: 'flex', gap: 12, alignItems: 'stretch', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.04)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.45)' : '1px solid rgba(15,35,64,0.08)', opacity: past && !over ? 0.9 : 1, transition: 'background .15s' }}>
-              <div style={{ flex: '0 0 96px', width: 96, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 12px', borderRight: '1px solid rgba(15,35,64,0.06)' }}>
+              <div style={{ flex: filtering ? '0 0 122px' : '0 0 96px', width: filtering ? 122 : 96, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 12px', borderRight: '1px solid rgba(15,35,64,0.06)' }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <span style={{ font: '700 10px var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
                   <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
@@ -2719,6 +2725,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {items.length > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: doneN === items.length ? '#2E6E6E' : '#A87A2C' }}>{doneN}/{items.length}</span>}
                   {pendN > 0 && <span title={`≈ ${dayHrs} estimadas${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
                 </div>
+                {/* Carga TOTAL del día (todas las épicas) — visible al filtrar, para estimar la carga real */}
+                {filtering && (() => {
+                  const totAll = byDayTotal.get(d)!
+                  const totPend = totAll.filter(x => x.t.status !== 'Terminada')
+                  if (totAll.length === 0) return null
+                  const tMin = totPend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+                  const tHrs = tMin >= 60 ? `${Math.round(tMin / 60 * 10) / 10}h` : `${tMin}m`
+                  const tOver = tMin > 480
+                  const tdc = { facil: 0, media: 0, dificil: 0, sin: 0 }; totPend.forEach(x => { const dd = x.t.difficulty; if (dd === 'facil') tdc.facil++; else if (dd === 'dificil') tdc.dificil++; else if (dd === 'media') tdc.media++; else tdc.sin++ })
+                  return (
+                    <div title="Carga total del día (todas las épicas, sin filtro)" style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 1 }}>
+                      <span style={{ font: '700 8px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.4)' }}>Total</span>
+                      <span style={{ font: '800 9.5px var(--font-ui)', color: tOver ? '#B0522E' : 'rgba(20,35,61,0.6)' }}>{totPend.length}</span>
+                      <span style={{ font: '700 9px var(--font-ui)', color: tOver ? '#B0522E' : 'rgba(20,35,61,0.45)' }}>~{tHrs}</span>
+                      {tdc.facil > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: '#5f8a52' }}>F{tdc.facil}</span>}
+                      {tdc.media > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: '#A87A2C' }}>M{tdc.media}</span>}
+                      {tdc.dificil > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: '#B0522E' }}>D{tdc.dificil}</span>}
+                      {tdc.sin > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>·{tdc.sin}</span>}
+                    </div>
+                  )
+                })()}
                 <button onClick={() => newTaskForDay(d)} title="Nueva tarea este día" style={{ marginTop: 2, alignSelf: 'flex-start', height: 22, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', font: '700 11px var(--font-ui)' }}>+ tarea</button>
               </div>
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'flex-start', alignContent: 'flex-start', padding: '11px 12px' }}>
