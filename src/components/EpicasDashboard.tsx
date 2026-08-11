@@ -145,8 +145,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
   const [backlogFPrio, setBacklogFPrio] = useState<string>('todas')
   const [backlogQ, setBacklogQ] = useState('')                 // búsqueda de texto en el backlog
-  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas' | 'semana'>('tabla')
+  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'>('tabla')
   const [backlogWeek, setBacklogWeek] = useState<string>('')        // lunes ancla de la vista Semana del backlog ('' = esta semana)
+  const [mdSel, setMdSel] = useState<{ eId: string; tid: string } | null>(null)  // tarea seleccionada en la vista maestro/detalle
+  const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
+  const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
+  const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
   const [boardDrag, setBoardDrag] = useState<string | null>(null)      // key de la tarjeta arrastrada
   const [boardOverCol, setBoardOverCol] = useState<string | null>(null)
   const boardDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -4690,7 +4694,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </button>
           {backlogOpen && (
             <div role="group" aria-label="Vista del backlog" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
-              {([['tabla', 'Tabla'], ['tablero', 'Tablero'], ['tarjetas', 'Tarjetas'], ['semana', 'Semana']] as const).map(([v, label]) => {
+              {([['tabla', 'Tabla'], ['tablero', 'Tablero'], ['tarjetas', 'Tarjetas'], ['calendario', 'Calendario'], ['semana', 'Semana'], ['detalle', 'Detalle']] as const).map(([v, label]) => {
                 const on = backlogView === v
                 return (
                   <button key={v} aria-pressed={on} onClick={() => setBacklogView(v)}
@@ -4782,7 +4786,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )}
 
-            {isBoard ? renderBoard(rows) : backlogView === 'semana' ? renderBacklogWeek() : backlogView === 'tarjetas' ? (
+            {isBoard ? renderBoard(rows) : backlogView === 'detalle' ? renderMasterDetail(sorted) : backlogView === 'calendario' ? renderCalendarPanel(sorted) : backlogView === 'semana' ? renderBacklogWeek() : backlogView === 'tarjetas' ? (
             <div style={{ padding: '4px 12px 12px' }}>
               {sorted.length === 0
                 ? <div style={{ padding: '26px 10px', textAlign: 'center', fontSize: 13, color: 'rgba(20,35,61,0.5)' }}>Nada coincide con los filtros.</div>
@@ -5175,6 +5179,509 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return (
       <div onClick={closeEdit} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '28px 20px', overflow: 'auto' }}>
         <div role="dialog" aria-modal="true" aria-label="Editar épica" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 660, background: '#fff', borderRadius: 22, boxShadow: '0 50px 90px -30px rgba(8,18,36,.75)', overflow: 'hidden' }}>{content}</div>
+      </div>
+    )
+  }
+
+  const renderTaskDetail = (view: { eId: string; tid: string }, opts: { onClose: () => void; docked?: boolean }) => {
+        const found = findTask(view.eId, view.tid)   // se resuelve en cada render: nunca apunta a otra tarea
+        if (!found) return null
+        const { e: ep, t, i } = found
+        const dt = dueTone(t.due, t.status === 'Terminada')
+        const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }
+        const openEditFromView = () => { opts.onClose(); openTaskEdit(view.eId, t.id!) }
+    const card = (
+            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={opts.docked ? { width: '100%', height: '100%', background: '#fff', borderRadius: 14, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } : { width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
+              <div style={{ height: 4, background: ep.color, flexShrink: 0 }} />
+              <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 27, lineHeight: 1.05, color: '#10233F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
+                      {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
+                      {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
+                      {t.plan && t.plan < today && t.status !== 'Terminada' && <span style={{ fontSize: 11, fontWeight: 700, color: '#B0522E' }}>⏳ pendiente de días anteriores</span>}
+                      {diasTrabajados(t) >= 2 && <span title="Días distintos en que le has metido mano" style={{ fontSize: 11, fontWeight: 700, color: MULTIDIA_TONE.c }}>⧗ trabajada en {diasTrabajados(t)} días</span>}
+                    </div>
+                    {t.repeat && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 9, padding: '6px 11px', borderRadius: 99, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}` }}>
+                        <span style={{ font: '700 11.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻ Se repite {repeatLabel(t.repeat)}</span>
+                        {(t.repeatDone?.length ?? 0) > 0 && <span style={{ fontSize: 11, color: REPEAT_TONE.c }}>· {t.repeatDone!.length} {t.repeatDone!.length === 1 ? 'ciclo cumplido' : 'ciclos cumplidos'}</span>}
+                        {t.repeatUntil && <span style={{ fontSize: 11, color: REPEAT_TONE.c }}>· hasta {fmtDue(t.repeatUntil)}</span>}
+                      </div>
+                    )}
+                  </div>
+                  <button aria-label="Cerrar detalle de tarea" onClick={() => opts.onClose()} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+
+                <div className="ep-modal-body" style={{ padding: '16px 26px 8px', overflowY: 'auto', flex: 1 }}>
+
+                {/* RESUMEN — justo debajo del título (qué es la actividad y qué se quiere lograr) */}
+                {t.resumen && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={eb}>Resumen</div>
+                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>
+                  </div>
+                )}
+
+                {/* ENLACES DE LA ÉPICA — dropdown plegado por defecto con las conexiones de la épica */}
+                {(() => {
+                  const links = (ep.links || []).filter(l => l.url && l.url !== '#')
+                  if (links.length === 0) return null
+                  return (
+                    <div style={{ marginBottom: 16, borderRadius: 12, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden' }}>
+                      <button onClick={() => setTaskLinksOpen(o => !o)} aria-expanded={taskLinksOpen}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: '#FBFAF6', padding: '10px 12px' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 99, background: ep.color, flexShrink: 0 }} />
+                        <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.6)' }}>Enlaces de {ep.name}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{links.length}</span>
+                        <span style={{ flex: 1 }} />
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: taskLinksOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                      </button>
+                      {taskLinksOpen && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                          {links.map((l, li) => {
+                            const c = typeColor(l.type)
+                            return (
+                              <a key={li} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
+                                <span style={{ width: 7, height: 7, borderRadius: 99, background: c, flexShrink: 0 }} />
+                                {l.l}
+                              </a>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {/* Estado (editable) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Estado</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => setTaskStatus(ep, i, s)} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
+                  </div>
+                </div>
+
+                {/* Objetivo al que contribuye */}
+                {(ep.kpis || []).length > 0 && (() => {
+                  const actual = milestoneOfTask(ep, t.id)
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={eb}>Contribuye a</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <select value={actual?.id || ''} onChange={ev => setTaskMilestone(ep, t.id!, ev.target.value || null)}
+                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: actual ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                          <option value="">— Ningún objetivo —</option>
+                          {ep.kpis.map(m => <option key={m.id} value={m.id}>{m.t}</option>)}
+                        </select>
+                        {actual && (() => {
+                          const mp = milestoneProgress(actual, ep); const hecho = milestoneDone(actual, ep)
+                          return mp.hasMeta ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: hecho ? '#2E6E6E' : '#A87A2C' }}>
+                              <span style={{ width: 54, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden', display: 'inline-block' }}>
+                                <span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : ep.color }} />
+                              </span>
+                              {mp.cur}/{mp.target}{hecho ? ' ✦' : ''}
+                            </span>
+                          ) : null
+                        })()}
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* Prioridad (editable) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Prioridad</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(['alta', 'media', 'baja'] as Prio[]).map(p => { const on = t.priority === p; const ps2 = prioStyle(p); return <button key={p} onClick={() => setPriority(ep, i, p)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${ps2.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.08)' : '#fff' }}><PrioBars p={p} /><span style={{ font: '700 10px var(--font-ui)', color: on ? ps2.c : 'rgba(20,35,61,0.5)' }}>{ps2.label}</span></button> })}
+                  </div>
+                </div>
+
+                {/* Dificultad (editable) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Dificultad</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(['facil', 'media', 'dificil'] as Dif[]).map(dd => { const on = t.difficulty === dd; const dsy = difStyle(dd); return <button key={dd} onClick={() => setDifficulty(ep, i, dd)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '8px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${dsy.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? dsy.bg : '#fff' }}><DifDots d={dd} /><span style={{ font: '700 10px var(--font-ui)', color: on ? dsy.c : 'rgba(20,35,61,0.5)' }}>{dsy.label}</span></button> })}
+                  </div>
+                </div>
+
+                {/* Avance (editable) — commit al soltar (no re-renderiza en cada escalón) */}
+                <ProgressSlider value={t.progress ?? 0} color={ep.color} labelStyle={eb}
+                  onCommit={v => setTaskProgress(ep, i, v)} onHundred={() => setTaskProgress(ep, i, 100)} />
+
+                {/* Bitácora de avance (días trabajados + nota) */}
+                {(() => {
+                  const log = t.progressLog || []
+                  const deltas = progressDeltas(log)
+                  const todayLogged = log.some(x => x.d === todayISO())
+                  // Tiempo invertido: suma de los minutos registrados desde la sección Tiempo (campo `min`).
+                  const investedMin = log.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+                  const fmtMin = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
+                        <span style={eb}>Bitácora de avance{log.length > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}> {log.length} {log.length === 1 ? 'día' : 'días'}</span>}{investedMin > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}> · ⏱ {fmtMin(investedMin)} invertidas</span>}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                          <input type="date" value="" onChange={e => addProgressDay(ep, i, e.target.value)} title="Registrar otro día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '6px 8px', fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }} />
+                          <button onClick={() => addProgressDay(ep, i, todayISO())} disabled={todayLogged} style={{ cursor: todayLogged ? 'default' : 'pointer', borderRadius: 9, padding: '7px 13px', fontSize: 12, fontWeight: 800, border: todayLogged ? '1px solid rgba(62,142,142,0.35)' : 'none', ...(todayLogged ? { background: 'rgba(62,142,142,0.12)', color: '#2E6E6E' } : { background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }) }}>{todayLogged ? '✓ Avancé hoy' : 'Avancé hoy'}</button>
+                        </div>
+                      </div>
+                      {log.length === 0
+                        ? <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)' }}>Marca los días en que avanzaste en esta tarea, con una nota si quieres.</div>
+                        : (() => {
+                            const CAP = 4
+                            const collapsed = log.length > CAP && !logExpanded
+                            const shown = collapsed ? log.slice(0, CAP) : log
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: logExpanded ? 260 : undefined, overflowY: logExpanded ? 'auto' : 'visible' }}>
+                                {shown.map(entry => {
+                                  const isTd = entry.d === todayISO()
+                                  const dlt = deltas[entry.d]
+                                  return (
+                                    <div key={entry.d} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)' }}>
+                                      {/* Fecha editable del avance */}
+                                      <input type="date" defaultValue={entry.d} onChange={e => setProgressDate(ep, i, entry.d, e.target.value)} title="Cambiar la fecha de este avance" aria-label="Fecha del avance"
+                                        style={{ flexShrink: 0, width: 132, border: `1px solid ${isTd ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.12)'}`, borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F', background: '#fff', outline: 'none' }} />
+                                      {/* % total al final de ese día (editable) + delta derivado */}
+                                      <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                        <input type="number" min={0} max={100} defaultValue={typeof entry.pct === 'number' ? entry.pct : ''} placeholder="—"
+                                          onBlur={e => { const v = e.target.value.trim(); setProgressPct(ep, i, entry.d, v === '' ? null : Number(v)) }}
+                                          title="% total al final de ese día" aria-label="Porcentaje ese día"
+                                          style={{ width: 46, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 4px', fontSize: 12, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none', textAlign: 'right' }} />
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>%</span>
+                                        {typeof dlt === 'number' && (
+                                          <span title="Avanzaste esto ese día (vs. el día anterior con %)" style={{ marginLeft: 2, fontSize: 11, fontWeight: 800, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{dlt > 0 ? '+' : ''}{dlt}%</span>
+                                        )}
+                                      </span>
+                                      <input defaultValue={entry.note || ''} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} placeholder="Nota del día…" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
+                                      <button onClick={() => removeProgressDay(ep, i, entry.d)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.55)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                                    </div>
+                                  )
+                                })}
+                                {log.length > CAP && (
+                                  <button onClick={() => setLogExpanded(v => !v)} style={{ alignSelf: 'flex-start', cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700, padding: '2px 0' }}>{collapsed ? `Ver ${log.length - CAP} días más ▾` : 'Ver menos ▴'}</button>
+                                )}
+                              </div>
+                            )
+                          })()
+                      }
+                    </div>
+                  )
+                })()}
+
+                {/* Fechas (editables) */}
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
+                  {t.status === 'Terminada' && <div><div style={eb}>Terminada el</div><input type="date" value={t.doneAt || ''} onChange={e => setTaskDoneAt(ep, i, e.target.value)} style={{ border: '1px solid rgba(62,142,142,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff', outline: 'none' }} /></div>}
+                  <div><div style={eb}>Hacer</div><input type="date" value={t.plan || ''} onChange={e => setTaskPlan(ep, i, e.target.value)} style={{ border: '1px solid rgba(46,90,158,0.35)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} /></div>
+                  <div><div style={eb}>Vence</div><input type="date" value={t.due} onChange={e => setTaskDue(ep, i, e.target.value)} style={{ border: `1px solid ${dt.border}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} /></div>
+                  {/* Recordatorio: dispara una notificación a esa hora (con la app abierta) */}
+                  <div>
+                    <div style={eb}>Recordarme 🔔</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setTaskRemind(ep, i, e.target.value)}
+                        style={{ border: '1px solid rgba(122,111,176,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.remindAt ? '#7A6FB0' : 'rgba(20,35,61,0.4)', background: t.remindAt ? 'rgba(122,111,176,0.08)' : '#fff', outline: 'none' }} />
+                      {t.remindAt && <button onClick={() => setTaskRemind(ep, i, '')} title="Quitar recordatorio" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 14 }}>✕</button>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Subtareas — editables aquí mismo, sin abrir "Editar" */}
+                {(() => {
+                  const subs = t.subtasks || []
+                  const hechas = subs.filter(s => s.done).length
+                  const pend = subs.map((s, si) => ({ s, si })).filter(x => !x.s.done)
+                  const done = subs.map((s, si) => ({ s, si })).filter(x => x.s.done)
+                  const difRank = (d?: string) => d === 'dificil' ? 3 : d === 'media' ? 2 : d === 'facil' ? 1 : 0
+                  const subCmp = (a: { s: EpicaSubtask }, b: { s: EpicaSubtask }) =>
+                    subSort === 'prioridad' ? PRIO_RANK[a.s.priority || 'media'] - PRIO_RANK[b.s.priority || 'media']
+                    : subSort === 'dificultad' ? difRank(b.s.difficulty) - difRank(a.s.difficulty)   // difícil primero
+                    : subSort === 'dia' ? (a.s.plan || '9999-99').localeCompare(b.s.plan || '9999-99')
+                    : 0
+                  const pendShown = subSort === 'manual' ? pend : [...pend].sort(subCmp)
+                  const row = (s: EpicaSubtask, si: number, arrows?: { up?: number; down?: number }) => (
+                    <div key={s.id || si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+                      <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
+                        style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                      </button>
+                      {/* El título abre el popup de la subtarea (nota, links, %) */}
+                      <button onClick={() => s.id && setSubPop({ eId: ep.id, tid: t.id!, sid: s.id })} title="Abrir subtarea"
+                        style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '4px 6px', fontSize: 13, color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.t || <span style={{ color: 'rgba(20,35,61,0.4)' }}>(sin título)</span>}
+                      </button>
+                      {/* Indicadores: día · prioridad · dificultad · %, nota, links */}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {s.plan && (() => { const over = !s.done && s.plan < today; return <span title={`Trabajar el ${fmtDue(s.plan)}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 9.5px var(--font-ui)', color: over ? '#B0522E' : '#2E5A9E', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(46,90,158,0.08)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(46,90,158,0.2)'}`, borderRadius: 99, padding: '1px 7px' }}>📅 {cap(new Date(s.plan + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' }).replace('.', ''))}</span> })()}
+                        {s.priority && <span title={`Prioridad ${prioStyle(s.priority).label}`}><PrioBars p={s.priority} size={11} /></span>}
+                        {s.difficulty && <span title={`Dificultad ${difStyle(s.difficulty).label}`}><DifDots d={s.difficulty} size={9} /></span>}
+                        {typeof s.progress === 'number' && s.progress > 0 && <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}
+                        {s.note && <span title="Tiene nota" style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>✎</span>}
+                        {(s.links?.length ?? 0) > 0 && <span title={`${s.links!.length} links`} style={{ font: '700 10px var(--font-ui)', color: '#A87A2C' }}>🔗{s.links!.length}</span>}
+                      </span>
+                      {arrows && (
+                        <span className="ep-sub-del" style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                          <button onClick={() => arrows.up != null && moveSubtask(ep, i, si, arrows.up)} disabled={arrows.up == null} aria-label="Subir" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.up == null ? 0.3 : 1 }}>↑</button>
+                          <button onClick={() => arrows.down != null && moveSubtask(ep, i, si, arrows.down)} disabled={arrows.down == null} aria-label="Bajar" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.down == null ? 0.3 : 1 }}>↓</button>
+                        </span>
+                      )}
+                      <button className="ep-sub-del" onClick={() => removeSubtask(ep, i, si)} aria-label="Eliminar subtarea" title="Eliminar"
+                        style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13 }}>✕</button>
+                    </div>
+                  )
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        <span style={eb}>Subtareas {subs.length > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{hechas}/{subs.length} · {Math.round((hechas / subs.length) * 100)}%</span>}</span>
+                        <span style={{ flex: 1 }} />
+                        {pend.length > 1 && (
+                          <select value={subSort} onChange={e => setSubSort(e.target.value as typeof subSort)} title="Ordenar subtareas" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 7, padding: '3px 6px', fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
+                            <option value="manual">Orden manual</option>
+                            <option value="prioridad">Prioridad</option>
+                            <option value="dificultad">Dificultad</option>
+                            <option value="dia">Día</option>
+                          </select>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {pendShown.map((x, k) => row(x.s, x.si, subSort === 'manual' ? { up: k > 0 ? pend[k - 1].si : undefined, down: k < pend.length - 1 ? pend[k + 1].si : undefined } : undefined))}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 2 }}>
+                          <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, border: '1.5px dashed rgba(15,35,64,0.22)' }} />
+                          <input value={newSubtask} onChange={ev => setNewSubtask(ev.target.value)}
+                            onKeyDown={ev => { if (ev.key === 'Enter' && newSubtask.trim()) { addSubtask(ep, i, newSubtask); setNewSubtask('') } }}
+                            onBlur={() => { if (newSubtask.trim()) { addSubtask(ep, i, newSubtask); setNewSubtask('') } }}
+                            placeholder="Agregar subtarea y Enter…"
+                            style={{ flex: 1, minWidth: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '5px 8px', fontSize: 12.5, background: '#fff', outline: 'none', color: '#16365F' }} />
+                        </div>
+                      </div>
+                      {done.length > 0 && (
+                        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
+                          <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: '#2E6E6E', marginBottom: 4 }}>Completadas · {done.length}</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {done.map(x => row(x.s, x.si))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {t.note && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={eb}>Nota</div>
+                    <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', maxHeight: 320, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} />
+                  </div>
+                )}
+
+                {t.links && t.links.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={eb}>Links</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                      {t.links.map((l, li) => (
+                        <a key={li} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 12px' }}>🔗 {l.label || l.url}</a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* COMENTARIOS — se agregan aquí mismo, sin abrir "Editar" */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Comentarios {(t.comentarios?.length ?? 0) > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}>{t.comentarios!.length}</span>}</div>
+                  {(t.comentarios?.length ?? 0) > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 9 }}>
+                      {[...t.comentarios!].sort((a, b) => b.at.localeCompare(a.at)).map(c => (
+                        <div key={c.at} className="ep-sub-row" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, color: '#14233D', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.text}</div>
+                            <div style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)', marginTop: 3 }}>{new Date(c.at).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+                          </div>
+                          <button className="ep-sub-del" onClick={() => removeComment(ep, i, c.at)} aria-label="Borrar comentario" title="Borrar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7 }}>
+                    <textarea value={newComment} onChange={ev => setNewComment(ev.target.value)}
+                      onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && newComment.trim()) { addComment(ep, i, newComment); setNewComment('') } }}
+                      placeholder="Escribe un comentario… (⌘/Ctrl+Enter para agregar)" rows={2}
+                      style={{ flex: 1, minWidth: 0, resize: 'vertical', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#16365F', background: '#fff', outline: 'none', fontFamily: 'inherit' }} />
+                    <button onClick={() => { if (newComment.trim()) { addComment(ep, i, newComment); setNewComment('') } }} disabled={!newComment.trim()}
+                      style={{ flexShrink: 0, cursor: newComment.trim() ? 'pointer' : 'default', borderRadius: 9, padding: '9px 14px', fontSize: 12.5, fontWeight: 800, border: 'none', background: newComment.trim() ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : 'rgba(15,35,64,0.08)', color: newComment.trim() ? '#1B1305' : 'rgba(20,35,61,0.4)' }}>Comentar</button>
+                  </div>
+                </div>
+
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap', flexShrink: 0, background: '#fff' }}>
+                  <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
+                  <span style={{ flex: 1 }} />
+                  {/* Comenzar ahora: abre Tiempo, la agrega al día y arranca el cronómetro ligado a esta tarea */}
+                  <button onClick={() => { window.location.href = '/tiempo?start=' + encodeURIComponent(t.id!) }}
+                    title="Empezar ahora con cronómetro en Tiempo (la agrega a tu día; el tiempo se registra en esta tarea)"
+                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 800, border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.12)', color: '#8a5a12' }}>▶ Comenzar</button>
+                  {/* Marcar terminada (o reabrir) — acción principal, siempre a la vista */}
+                  {(() => {
+                    const done = t.status === 'Terminada'
+                    return (
+                      <button onClick={() => setTaskStatus(ep, i, done ? (t.planPrev || 'En curso') : 'Terminada')}
+                        title={done ? 'Reabrir la actividad' : 'Marcar la actividad como terminada'}
+                        style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 20px', fontSize: 13, fontWeight: 800,
+                          border: done ? '1px solid rgba(46,90,158,0.4)' : 'none',
+                          background: done ? 'rgba(46,90,158,0.10)' : 'linear-gradient(135deg,#3E8E8E,#2E6E6E)',
+                          color: done ? '#2E5A9E' : '#fff' }}>
+                        {done
+                          ? <>↩ Reabrir</>
+                          : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> Terminar</>}
+                      </button>
+                    )
+                  })()}
+                  <button onClick={() => opts.onClose()} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cerrar</button>
+                  <button onClick={openEditFromView} style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
+                </div>
+            </div>
+    )
+    return opts.docked ? card : (
+      <div onClick={opts.onClose} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+        {card}
+      </div>
+    )
+  }
+
+  // Vista MAESTRO/DETALLE: lista de tareas a la izquierda; al picar una, su detalle
+  // completo editable al centro (SIN popup) reusando renderTaskDetail acoplado.
+  const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+    const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
+    return (
+      <div className="ep-md" style={{ display: 'flex', gap: 14, alignItems: 'stretch', minHeight: 420 }}>
+        <div className="ep-md-list" style={{ flex: '0 0 300px', maxWidth: 340, maxHeight: 680, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5, paddingRight: 2 }}>
+          {rows.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '14px 6px' }}>Nada coincide con los filtros.</div>}
+          {rows.map(({ e, t }) => {
+            const on = !!valid && valid.eId === e.id && valid.tid === t.id
+            const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
+            return (
+              <button key={planKey(e.id, t)} onClick={() => setMdSel({ eId: e.id, tid: t.id! })}
+                style={{ flexShrink: 0, textAlign: 'left', cursor: 'pointer', borderRadius: 11, padding: '10px 12px', border: on ? '1.5px solid #10233F' : '1px solid rgba(15,35,64,0.10)', background: on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                  <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
+                  {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+        <div className="ep-md-detail" style={{ flex: 1, minWidth: 0 }}>
+          {valid
+            ? renderTaskDetail(valid, { onClose: () => setMdSel(null), docked: true })
+            : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, borderRadius: 14, border: '1px dashed rgba(15,35,64,0.14)', color: 'rgba(20,35,61,0.45)', fontSize: 13 }}>Elige una tarea de la izquierda para ver y editar su detalle.</div>}
+        </div>
+      </div>
+    )
+  }
+
+  // Vista CALENDARIO + PANEL: calendario del mes al centro; a la derecha, la lista en
+  // 2 drop-downs (Sin fecha / Agendadas). Arrastra una tarjeta del panel a un día para
+  // agendarla; las agendadas también se ven en el calendario. Reusa el arrastre del cal.
+  const renderCalendarPanel = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+    const monthStr = (calPanelMonth || todayISO()).slice(0, 7)
+    const cells = monthGrid(monthStr)
+    const byDay = new Map<string, typeof rows>()
+    cells.forEach(c => byDay.set(c, []))
+    rows.forEach(x => { const p = x.t.plan; if (p && byDay.has(p)) byDay.get(p)!.push(x) })
+    const unsched = rows.filter(x => !x.t.plan && x.t.status !== 'Terminada')
+    const agendadas = rows.filter(x => !!x.t.plan).sort((a, b) => (a.t.plan || '').localeCompare(b.t.plan || ''))
+    const monthLbl = cap(new Date(monthStr + '-01T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
+    const isThisMonth = monthStr === todayISO().slice(0, 7)
+    const cellSt: CSSProperties = { minHeight: 100, boxSizing: 'border-box', padding: 5, borderRight: '1px solid rgba(15,35,64,0.06)', borderBottom: '1px solid rgba(15,35,64,0.06)', display: 'flex', flexDirection: 'column', gap: 3 }
+    const navBtn: CSSProperties = { height: 30, width: 30, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }
+    const pCard = (x: typeof rows[number], showDay: boolean) => {
+      const { e, t } = x; const k = planKey(e.id, t); const dragging = calDrag === k; const ps = prioStyle(t.priority); const done = t.status === 'Terminada'
+      return (
+        <div key={k} onPointerDown={ev => onCalDown(ev, k)} onPointerMove={onCalMove} onPointerUp={() => onCalUp(x)} onPointerCancel={onCalCancel}
+          title={`${t.t} — arrastra a un día`}
+          style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.1)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, borderRadius: 9, padding: '7px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: calDrag && !dragging ? 0.5 : 1, boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : 'none' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.t}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+            {showDay && t.plan && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
+            {t.difficulty && <DifDots d={t.difficulty} size={9} />}
+          </div>
+        </div>
+      )
+    }
+    const grpHeader = (label: string, n: number, open: boolean, toggle: () => void) => (
+      <button onClick={toggle} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', border: 'none', background: 'transparent', cursor: 'pointer', padding: '8px 2px' }}>
+        <span style={{ height: 6, width: 6, borderRadius: 99, background: '#5B6B86' }} />
+        <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>{label}</span>
+        <span style={{ fontSize: 9.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{n}</span>
+        <span style={{ flex: 1 }} />
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+    )
+    return (
+      <div className="ep-md" style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+        {/* Calendario del mes */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setCalPanelMonth(addMonths((calPanelMonth || todayISO().slice(0, 7) + '-01'), -1))} aria-label="Mes anterior" style={navBtn}>‹</button>
+            <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 16, color: isThisMonth ? '#A87A2C' : '#10233F' }}>{monthLbl}</span>
+            <button onClick={() => setCalPanelMonth(addMonths((calPanelMonth || todayISO().slice(0, 7) + '-01'), 1))} aria-label="Mes siguiente" style={navBtn}>›</button>
+            {!isThisMonth && <button onClick={() => setCalPanelMonth('')} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '6px 11px', font: '700 12px var(--font-ui)', cursor: 'pointer' }}>Este mes</button>}
+          </div>
+          <div style={{ overflowX: 'auto', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12 }}>
+            <div style={{ minWidth: 640 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid rgba(15,35,64,0.10)', background: 'rgba(15,35,64,0.02)' }}>
+                {DAYNAMES.map((d, k) => <div key={d} style={{ padding: '7px 8px', font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: k >= 5 ? 'rgba(20,35,61,0.4)' : 'rgba(15,35,64,0.5)', textAlign: 'center' }}>{d.slice(0, 3)}</div>)}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)' }}>
+                {cells.map(cd => {
+                  const inMonth = cd.slice(0, 7) === monthStr; const isTd = cd === today; const items = byDay.get(cd)!; const over = calOverDay === cd && !!calDrag
+                  return (
+                    <div key={cd} data-calday={cd} style={{ ...cellSt, background: over ? 'rgba(194,147,58,0.10)' : isTd ? 'rgba(194,147,58,0.05)' : inMonth ? '#fff' : 'rgba(15,35,64,0.02)', outline: over ? '1.5px dashed #C2933A' : 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <span className="serif" style={{ fontSize: 13, fontWeight: 600, color: isTd ? '#A87A2C' : inMonth ? '#10233F' : 'rgba(20,35,61,0.35)' }}>{dayNum(cd)}</span>
+                        {isTd && <span style={{ font: '700 8px var(--font-ui)', color: '#A87A2C' }}>HOY</span>}
+                        <span style={{ flex: 1 }} />
+                        {over && <span style={{ font: '700 8px var(--font-ui)', color: '#A87A2C' }}>SOLTAR</span>}
+                      </div>
+                      {items.map(x => {
+                        const { e, t } = x; const k = planKey(e.id, t); const dragging = calDrag === k; const done = t.status === 'Terminada'
+                        return (
+                          <div key={k} onPointerDown={ev => onCalDown(ev, k)} onPointerMove={onCalMove} onPointerUp={() => onCalUp(x)} onPointerCancel={onCalCancel}
+                            title={`${t.t} — arrastra a otro día`}
+                            style={{ display: 'flex', alignItems: 'center', gap: 4, borderLeft: `3px solid ${done ? '#2E6E6E' : e.color}`, background: done ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.03)', borderRadius: 5, padding: '2px 5px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: calDrag && !dragging ? 0.5 : 1 }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+        {/* Panel derecho: 2 drop-downs */}
+        <div style={{ flex: '0 0 288px', maxWidth: 320, maxHeight: 700, overflowY: 'auto' }}>
+          <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginBottom: 6 }}>Arrastra una actividad a un día del calendario para agendarla.</div>
+          <div style={{ borderBottom: '1px solid rgba(15,35,64,0.08)' }} />
+          {grpHeader('Sin fecha', unsched.length, cpSinOpen, () => setCpSinOpen(o => !o))}
+          {cpSinOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
+              {unsched.length === 0 ? <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', padding: '2px 2px 8px' }}>Nada sin fecha.</div> : unsched.map(x => pCard(x, false))}
+            </div>
+          )}
+          <div style={{ borderBottom: '1px solid rgba(15,35,64,0.08)' }} />
+          {grpHeader('Agendadas', agendadas.length, cpAgOpen, () => setCpAgOpen(o => !o))}
+          {cpAgOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {agendadas.length === 0 ? <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', padding: '2px 2px 8px' }}>Nada agendado.</div> : agendadas.map(x => pCard(x, true))}
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -6040,368 +6547,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
-      {taskView && (() => {
-        const found = findTask(taskView.eId, taskView.tid)   // se resuelve en cada render: nunca apunta a otra tarea
-        if (!found) return null
-        const { e: ep, t, i } = found
-        const dt = dueTone(t.due, t.status === 'Terminada')
-        const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }
-        const openEditFromView = () => { setTaskView(null); openTaskEdit(taskView.eId, t.id!) }
-        return (
-          <div onClick={() => setTaskView(null)} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
-              <div style={{ height: 4, background: ep.color, flexShrink: 0 }} />
-              <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
-                    <div className="serif" style={{ fontWeight: 600, fontSize: 27, lineHeight: 1.05, color: '#10233F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
-                      {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
-                      {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
-                      {t.plan && t.plan < today && t.status !== 'Terminada' && <span style={{ fontSize: 11, fontWeight: 700, color: '#B0522E' }}>⏳ pendiente de días anteriores</span>}
-                      {diasTrabajados(t) >= 2 && <span title="Días distintos en que le has metido mano" style={{ fontSize: 11, fontWeight: 700, color: MULTIDIA_TONE.c }}>⧗ trabajada en {diasTrabajados(t)} días</span>}
-                    </div>
-                    {t.repeat && (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 9, padding: '6px 11px', borderRadius: 99, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}` }}>
-                        <span style={{ font: '700 11.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻ Se repite {repeatLabel(t.repeat)}</span>
-                        {(t.repeatDone?.length ?? 0) > 0 && <span style={{ fontSize: 11, color: REPEAT_TONE.c }}>· {t.repeatDone!.length} {t.repeatDone!.length === 1 ? 'ciclo cumplido' : 'ciclos cumplidos'}</span>}
-                        {t.repeatUntil && <span style={{ fontSize: 11, color: REPEAT_TONE.c }}>· hasta {fmtDue(t.repeatUntil)}</span>}
-                      </div>
-                    )}
-                  </div>
-                  <button aria-label="Cerrar detalle de tarea" onClick={() => setTaskView(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 34, width: 34, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
-                </div>
-
-                <div className="ep-modal-body" style={{ padding: '16px 26px 8px', overflowY: 'auto', flex: 1 }}>
-
-                {/* RESUMEN — justo debajo del título (qué es la actividad y qué se quiere lograr) */}
-                {t.resumen && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Resumen</div>
-                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>
-                  </div>
-                )}
-
-                {/* ENLACES DE LA ÉPICA — dropdown plegado por defecto con las conexiones de la épica */}
-                {(() => {
-                  const links = (ep.links || []).filter(l => l.url && l.url !== '#')
-                  if (links.length === 0) return null
-                  return (
-                    <div style={{ marginBottom: 16, borderRadius: 12, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden' }}>
-                      <button onClick={() => setTaskLinksOpen(o => !o)} aria-expanded={taskLinksOpen}
-                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: '#FBFAF6', padding: '10px 12px' }}>
-                        <span style={{ width: 7, height: 7, borderRadius: 99, background: ep.color, flexShrink: 0 }} />
-                        <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.6)' }}>Enlaces de {ep.name}</span>
-                        <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{links.length}</span>
-                        <span style={{ flex: 1 }} />
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: taskLinksOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
-                      </button>
-                      {taskLinksOpen && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderTop: '1px solid rgba(15,35,64,0.08)' }}>
-                          {links.map((l, li) => {
-                            const c = typeColor(l.type)
-                            return (
-                              <a key={li} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
-                                <span style={{ width: 7, height: 7, borderRadius: 99, background: c, flexShrink: 0 }} />
-                                {l.l}
-                              </a>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
-
-                {/* Estado (editable) */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={eb}>Estado</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => setTaskStatus(ep, i, s)} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
-                  </div>
-                </div>
-
-                {/* Objetivo al que contribuye */}
-                {(ep.kpis || []).length > 0 && (() => {
-                  const actual = milestoneOfTask(ep, t.id)
-                  return (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={eb}>Contribuye a</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <select value={actual?.id || ''} onChange={ev => setTaskMilestone(ep, t.id!, ev.target.value || null)}
-                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: actual ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
-                          <option value="">— Ningún objetivo —</option>
-                          {ep.kpis.map(m => <option key={m.id} value={m.id}>{m.t}</option>)}
-                        </select>
-                        {actual && (() => {
-                          const mp = milestoneProgress(actual, ep); const hecho = milestoneDone(actual, ep)
-                          return mp.hasMeta ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: hecho ? '#2E6E6E' : '#A87A2C' }}>
-                              <span style={{ width: 54, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden', display: 'inline-block' }}>
-                                <span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : ep.color }} />
-                              </span>
-                              {mp.cur}/{mp.target}{hecho ? ' ✦' : ''}
-                            </span>
-                          ) : null
-                        })()}
-                      </div>
-                    </div>
-                  )
-                })()}
-
-                {/* Prioridad (editable) */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={eb}>Prioridad</div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {(['alta', 'media', 'baja'] as Prio[]).map(p => { const on = t.priority === p; const ps2 = prioStyle(p); return <button key={p} onClick={() => setPriority(ep, i, p)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${ps2.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.08)' : '#fff' }}><PrioBars p={p} /><span style={{ font: '700 10px var(--font-ui)', color: on ? ps2.c : 'rgba(20,35,61,0.5)' }}>{ps2.label}</span></button> })}
-                  </div>
-                </div>
-
-                {/* Dificultad (editable) */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={eb}>Dificultad</div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {(['facil', 'media', 'dificil'] as Dif[]).map(dd => { const on = t.difficulty === dd; const dsy = difStyle(dd); return <button key={dd} onClick={() => setDifficulty(ep, i, dd)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '8px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${dsy.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? dsy.bg : '#fff' }}><DifDots d={dd} /><span style={{ font: '700 10px var(--font-ui)', color: on ? dsy.c : 'rgba(20,35,61,0.5)' }}>{dsy.label}</span></button> })}
-                  </div>
-                </div>
-
-                {/* Avance (editable) — commit al soltar (no re-renderiza en cada escalón) */}
-                <ProgressSlider value={t.progress ?? 0} color={ep.color} labelStyle={eb}
-                  onCommit={v => setTaskProgress(ep, i, v)} onHundred={() => setTaskProgress(ep, i, 100)} />
-
-                {/* Bitácora de avance (días trabajados + nota) */}
-                {(() => {
-                  const log = t.progressLog || []
-                  const deltas = progressDeltas(log)
-                  const todayLogged = log.some(x => x.d === todayISO())
-                  // Tiempo invertido: suma de los minutos registrados desde la sección Tiempo (campo `min`).
-                  const investedMin = log.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
-                  const fmtMin = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
-                  return (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
-                        <span style={eb}>Bitácora de avance{log.length > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}> {log.length} {log.length === 1 ? 'día' : 'días'}</span>}{investedMin > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}> · ⏱ {fmtMin(investedMin)} invertidas</span>}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                          <input type="date" value="" onChange={e => addProgressDay(ep, i, e.target.value)} title="Registrar otro día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '6px 8px', fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }} />
-                          <button onClick={() => addProgressDay(ep, i, todayISO())} disabled={todayLogged} style={{ cursor: todayLogged ? 'default' : 'pointer', borderRadius: 9, padding: '7px 13px', fontSize: 12, fontWeight: 800, border: todayLogged ? '1px solid rgba(62,142,142,0.35)' : 'none', ...(todayLogged ? { background: 'rgba(62,142,142,0.12)', color: '#2E6E6E' } : { background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }) }}>{todayLogged ? '✓ Avancé hoy' : 'Avancé hoy'}</button>
-                        </div>
-                      </div>
-                      {log.length === 0
-                        ? <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)' }}>Marca los días en que avanzaste en esta tarea, con una nota si quieres.</div>
-                        : (() => {
-                            const CAP = 4
-                            const collapsed = log.length > CAP && !logExpanded
-                            const shown = collapsed ? log.slice(0, CAP) : log
-                            return (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: logExpanded ? 260 : undefined, overflowY: logExpanded ? 'auto' : 'visible' }}>
-                                {shown.map(entry => {
-                                  const isTd = entry.d === todayISO()
-                                  const dlt = deltas[entry.d]
-                                  return (
-                                    <div key={entry.d} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)' }}>
-                                      {/* Fecha editable del avance */}
-                                      <input type="date" defaultValue={entry.d} onChange={e => setProgressDate(ep, i, entry.d, e.target.value)} title="Cambiar la fecha de este avance" aria-label="Fecha del avance"
-                                        style={{ flexShrink: 0, width: 132, border: `1px solid ${isTd ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.12)'}`, borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F', background: '#fff', outline: 'none' }} />
-                                      {/* % total al final de ese día (editable) + delta derivado */}
-                                      <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                                        <input type="number" min={0} max={100} defaultValue={typeof entry.pct === 'number' ? entry.pct : ''} placeholder="—"
-                                          onBlur={e => { const v = e.target.value.trim(); setProgressPct(ep, i, entry.d, v === '' ? null : Number(v)) }}
-                                          title="% total al final de ese día" aria-label="Porcentaje ese día"
-                                          style={{ width: 46, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 4px', fontSize: 12, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none', textAlign: 'right' }} />
-                                        <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>%</span>
-                                        {typeof dlt === 'number' && (
-                                          <span title="Avanzaste esto ese día (vs. el día anterior con %)" style={{ marginLeft: 2, fontSize: 11, fontWeight: 800, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{dlt > 0 ? '+' : ''}{dlt}%</span>
-                                        )}
-                                      </span>
-                                      <input defaultValue={entry.note || ''} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} placeholder="Nota del día…" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
-                                      <button onClick={() => removeProgressDay(ep, i, entry.d)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.55)', fontSize: 13, lineHeight: 1 }}>✕</button>
-                                    </div>
-                                  )
-                                })}
-                                {log.length > CAP && (
-                                  <button onClick={() => setLogExpanded(v => !v)} style={{ alignSelf: 'flex-start', cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700, padding: '2px 0' }}>{collapsed ? `Ver ${log.length - CAP} días más ▾` : 'Ver menos ▴'}</button>
-                                )}
-                              </div>
-                            )
-                          })()
-                      }
-                    </div>
-                  )
-                })()}
-
-                {/* Fechas (editables) */}
-                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
-                  {t.status === 'Terminada' && <div><div style={eb}>Terminada el</div><input type="date" value={t.doneAt || ''} onChange={e => setTaskDoneAt(ep, i, e.target.value)} style={{ border: '1px solid rgba(62,142,142,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff', outline: 'none' }} /></div>}
-                  <div><div style={eb}>Hacer</div><input type="date" value={t.plan || ''} onChange={e => setTaskPlan(ep, i, e.target.value)} style={{ border: '1px solid rgba(46,90,158,0.35)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} /></div>
-                  <div><div style={eb}>Vence</div><input type="date" value={t.due} onChange={e => setTaskDue(ep, i, e.target.value)} style={{ border: `1px solid ${dt.border}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} /></div>
-                  {/* Recordatorio: dispara una notificación a esa hora (con la app abierta) */}
-                  <div>
-                    <div style={eb}>Recordarme 🔔</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setTaskRemind(ep, i, e.target.value)}
-                        style={{ border: '1px solid rgba(122,111,176,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.remindAt ? '#7A6FB0' : 'rgba(20,35,61,0.4)', background: t.remindAt ? 'rgba(122,111,176,0.08)' : '#fff', outline: 'none' }} />
-                      {t.remindAt && <button onClick={() => setTaskRemind(ep, i, '')} title="Quitar recordatorio" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 14 }}>✕</button>}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Subtareas — editables aquí mismo, sin abrir "Editar" */}
-                {(() => {
-                  const subs = t.subtasks || []
-                  const hechas = subs.filter(s => s.done).length
-                  const pend = subs.map((s, si) => ({ s, si })).filter(x => !x.s.done)
-                  const done = subs.map((s, si) => ({ s, si })).filter(x => x.s.done)
-                  const difRank = (d?: string) => d === 'dificil' ? 3 : d === 'media' ? 2 : d === 'facil' ? 1 : 0
-                  const subCmp = (a: { s: EpicaSubtask }, b: { s: EpicaSubtask }) =>
-                    subSort === 'prioridad' ? PRIO_RANK[a.s.priority || 'media'] - PRIO_RANK[b.s.priority || 'media']
-                    : subSort === 'dificultad' ? difRank(b.s.difficulty) - difRank(a.s.difficulty)   // difícil primero
-                    : subSort === 'dia' ? (a.s.plan || '9999-99').localeCompare(b.s.plan || '9999-99')
-                    : 0
-                  const pendShown = subSort === 'manual' ? pend : [...pend].sort(subCmp)
-                  const row = (s: EpicaSubtask, si: number, arrows?: { up?: number; down?: number }) => (
-                    <div key={s.id || si} className="ep-sub-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
-                      <button onClick={() => toggleSubtask(ep, i, si)} aria-label={s.done ? 'Desmarcar' : 'Marcar'}
-                        style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', background: s.done ? '#2E6E6E' : '#fff', border: s.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        {s.done && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
-                      </button>
-                      {/* El título abre el popup de la subtarea (nota, links, %) */}
-                      <button onClick={() => s.id && setSubPop({ eId: ep.id, tid: t.id!, sid: s.id })} title="Abrir subtarea"
-                        style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: '4px 6px', fontSize: 13, color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {s.t || <span style={{ color: 'rgba(20,35,61,0.4)' }}>(sin título)</span>}
-                      </button>
-                      {/* Indicadores: día · prioridad · dificultad · %, nota, links */}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                        {s.plan && (() => { const over = !s.done && s.plan < today; return <span title={`Trabajar el ${fmtDue(s.plan)}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: '700 9.5px var(--font-ui)', color: over ? '#B0522E' : '#2E5A9E', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(46,90,158,0.08)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(46,90,158,0.2)'}`, borderRadius: 99, padding: '1px 7px' }}>📅 {cap(new Date(s.plan + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' }).replace('.', ''))}</span> })()}
-                        {s.priority && <span title={`Prioridad ${prioStyle(s.priority).label}`}><PrioBars p={s.priority} size={11} /></span>}
-                        {s.difficulty && <span title={`Dificultad ${difStyle(s.difficulty).label}`}><DifDots d={s.difficulty} size={9} /></span>}
-                        {typeof s.progress === 'number' && s.progress > 0 && <span style={{ font: '700 10px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>{s.progress}%</span>}
-                        {s.note && <span title="Tiene nota" style={{ fontSize: 11, color: 'rgba(20,35,61,0.4)' }}>✎</span>}
-                        {(s.links?.length ?? 0) > 0 && <span title={`${s.links!.length} links`} style={{ font: '700 10px var(--font-ui)', color: '#A87A2C' }}>🔗{s.links!.length}</span>}
-                      </span>
-                      {arrows && (
-                        <span className="ep-sub-del" style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-                          <button onClick={() => arrows.up != null && moveSubtask(ep, i, si, arrows.up)} disabled={arrows.up == null} aria-label="Subir" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.up == null ? 0.3 : 1 }}>↑</button>
-                          <button onClick={() => arrows.down != null && moveSubtask(ep, i, si, arrows.down)} disabled={arrows.down == null} aria-label="Bajar" style={{ height: 18, width: 18, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 9, lineHeight: 1, opacity: arrows.down == null ? 0.3 : 1 }}>↓</button>
-                        </span>
-                      )}
-                      <button className="ep-sub-del" onClick={() => removeSubtask(ep, i, si)} aria-label="Eliminar subtarea" title="Eliminar"
-                        style={{ flexShrink: 0, height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13 }}>✕</button>
-                    </div>
-                  )
-                  return (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                        <span style={eb}>Subtareas {subs.length > 0 && <span style={{ color: '#2E6E6E', fontWeight: 800 }}>{hechas}/{subs.length} · {Math.round((hechas / subs.length) * 100)}%</span>}</span>
-                        <span style={{ flex: 1 }} />
-                        {pend.length > 1 && (
-                          <select value={subSort} onChange={e => setSubSort(e.target.value as typeof subSort)} title="Ordenar subtareas" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 7, padding: '3px 6px', fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
-                            <option value="manual">Orden manual</option>
-                            <option value="prioridad">Prioridad</option>
-                            <option value="dificultad">Dificultad</option>
-                            <option value="dia">Día</option>
-                          </select>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {pendShown.map((x, k) => row(x.s, x.si, subSort === 'manual' ? { up: k > 0 ? pend[k - 1].si : undefined, down: k < pend.length - 1 ? pend[k + 1].si : undefined } : undefined))}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 2 }}>
-                          <span style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, border: '1.5px dashed rgba(15,35,64,0.22)' }} />
-                          <input value={newSubtask} onChange={ev => setNewSubtask(ev.target.value)}
-                            onKeyDown={ev => { if (ev.key === 'Enter' && newSubtask.trim()) { addSubtask(ep, i, newSubtask); setNewSubtask('') } }}
-                            onBlur={() => { if (newSubtask.trim()) { addSubtask(ep, i, newSubtask); setNewSubtask('') } }}
-                            placeholder="Agregar subtarea y Enter…"
-                            style={{ flex: 1, minWidth: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '5px 8px', fontSize: 12.5, background: '#fff', outline: 'none', color: '#16365F' }} />
-                        </div>
-                      </div>
-                      {done.length > 0 && (
-                        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
-                          <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: '#2E6E6E', marginBottom: 4 }}>Completadas · {done.length}</div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            {done.map(x => row(x.s, x.si))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
-
-                {t.note && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Nota</div>
-                    <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', maxHeight: 320, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} />
-                  </div>
-                )}
-
-                {t.links && t.links.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Links</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                      {t.links.map((l, li) => (
-                        <a key={li} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 12px' }}>🔗 {l.label || l.url}</a>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* COMENTARIOS — se agregan aquí mismo, sin abrir "Editar" */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={eb}>Comentarios {(t.comentarios?.length ?? 0) > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}>{t.comentarios!.length}</span>}</div>
-                  {(t.comentarios?.length ?? 0) > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 9 }}>
-                      {[...t.comentarios!].sort((a, b) => b.at.localeCompare(a.at)).map(c => (
-                        <div key={c.at} className="ep-sub-row" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, color: '#14233D', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.text}</div>
-                            <div style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)', marginTop: 3 }}>{new Date(c.at).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
-                          </div>
-                          <button className="ep-sub-del" onClick={() => removeComment(ep, i, c.at)} aria-label="Borrar comentario" title="Borrar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13, lineHeight: 1 }}>✕</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7 }}>
-                    <textarea value={newComment} onChange={ev => setNewComment(ev.target.value)}
-                      onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && newComment.trim()) { addComment(ep, i, newComment); setNewComment('') } }}
-                      placeholder="Escribe un comentario… (⌘/Ctrl+Enter para agregar)" rows={2}
-                      style={{ flex: 1, minWidth: 0, resize: 'vertical', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#16365F', background: '#fff', outline: 'none', fontFamily: 'inherit' }} />
-                    <button onClick={() => { if (newComment.trim()) { addComment(ep, i, newComment); setNewComment('') } }} disabled={!newComment.trim()}
-                      style={{ flexShrink: 0, cursor: newComment.trim() ? 'pointer' : 'default', borderRadius: 9, padding: '9px 14px', fontSize: 12.5, fontWeight: 800, border: 'none', background: newComment.trim() ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : 'rgba(15,35,64,0.08)', color: newComment.trim() ? '#1B1305' : 'rgba(20,35,61,0.4)' }}>Comentar</button>
-                  </div>
-                </div>
-
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap', flexShrink: 0, background: '#fff' }}>
-                  <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
-                  <span style={{ flex: 1 }} />
-                  {/* Comenzar ahora: abre Tiempo, la agrega al día y arranca el cronómetro ligado a esta tarea */}
-                  <button onClick={() => { window.location.href = '/tiempo?start=' + encodeURIComponent(t.id!) }}
-                    title="Empezar ahora con cronómetro en Tiempo (la agrega a tu día; el tiempo se registra en esta tarea)"
-                    style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 800, border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.12)', color: '#8a5a12' }}>▶ Comenzar</button>
-                  {/* Marcar terminada (o reabrir) — acción principal, siempre a la vista */}
-                  {(() => {
-                    const done = t.status === 'Terminada'
-                    return (
-                      <button onClick={() => setTaskStatus(ep, i, done ? (t.planPrev || 'En curso') : 'Terminada')}
-                        title={done ? 'Reabrir la actividad' : 'Marcar la actividad como terminada'}
-                        style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 20px', fontSize: 13, fontWeight: 800,
-                          border: done ? '1px solid rgba(46,90,158,0.4)' : 'none',
-                          background: done ? 'rgba(46,90,158,0.10)' : 'linear-gradient(135deg,#3E8E8E,#2E6E6E)',
-                          color: done ? '#2E5A9E' : '#fff' }}>
-                        {done
-                          ? <>↩ Reabrir</>
-                          : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> Terminar</>}
-                      </button>
-                    )
-                  })()}
-                  <button onClick={() => setTaskView(null)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cerrar</button>
-                  <button onClick={openEditFromView} style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
-                </div>
-            </div>
-          </div>
-        )
-      })()}
+      {taskView && renderTaskDetail(taskView, { onClose: () => setTaskView(null) })}
 
       {taskEdit && (() => {
         const ep = epics.find(e => e.id === taskEdit.epicId)        // épica de origen
