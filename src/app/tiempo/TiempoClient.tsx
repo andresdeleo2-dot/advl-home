@@ -1433,7 +1433,11 @@ export default function TiempoClient() {
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
            <div className="hoy-panels">
            {hoyPanel === 'tareas' ? (
-             <button className="hoy-rail" onClick={() => setHoyPanel('both')} title="Mostrar el resumen del día"><span style={{ fontSize: 15, color: '#8a4b28' }}>⤢</span><span className="hoy-rail-txt">Resumen del día</span></button>
+             <div className="hoy-rail">
+               <button onClick={() => setHoyPanel('resumen')} title="Ver el resumen del día en grande" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg></button>
+               <span className="hoy-rail-txt" onClick={() => setHoyPanel('resumen')} style={{ cursor: 'pointer' }}>Resumen del día</span>
+               <button onClick={() => setHoyPanel('both')} title="Ver ambos paneles" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="7" height="16" rx="1" /><rect x="14" y="4" width="7" height="16" rx="1" /></svg></button>
+             </div>
            ) : (<section className="hoy-panel" style={{ flex: 1 }}>
              <div className="hoy-panel-head">
                <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', flex: 1 }}>Resumen del día</span>
@@ -1607,7 +1611,11 @@ export default function TiempoClient() {
               </div>
             </section>)}
             {hoyPanel === 'resumen' ? (
-              <button className="hoy-rail" onClick={() => setHoyPanel('both')} title="Mostrar tareas y agenda"><span style={{ fontSize: 15, color: '#8a4b28' }}>⤢</span><span className="hoy-rail-txt">Tareas y agenda</span></button>
+              <div className="hoy-rail">
+                <button onClick={() => setHoyPanel('tareas')} title="Ver tareas y agenda en grande" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg></button>
+                <span className="hoy-rail-txt" onClick={() => setHoyPanel('tareas')} style={{ cursor: 'pointer' }}>Tareas y agenda</span>
+                <button onClick={() => setHoyPanel('both')} title="Ver ambos paneles" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="7" height="16" rx="1" /><rect x="14" y="4" width="7" height="16" rx="1" /></svg></button>
+              </div>
             ) : (<section className="hoy-panel" style={{ flex: hoyPanel === 'tareas' ? 1 : 1.15 }}>
               <div className="hoy-panel-head">
                 <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', flex: 1 }}>Tareas y agenda</span>
@@ -3700,8 +3708,7 @@ const MARGEN_CSS = `
 .hoy-panels { display: flex; gap: 20px; align-items: flex-start; }
 .hoy-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .hoy-panel-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 0; }
-.hoy-rail { flex: 0 0 46px; align-self: flex-start; position: sticky; top: 12px; max-height: calc(100dvh - 24px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px 0; border: 1px solid #ece3d5; border-radius: 18px; background: #fff; cursor: pointer; box-shadow: 0 6px 18px -12px rgba(28,26,23,.4); }
-.hoy-rail:hover { background: #faf7f1; border-color: #e2d9cb; }
+.hoy-rail { flex: 0 0 48px; align-self: flex-start; position: sticky; top: 12px; max-height: calc(100dvh - 24px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 14px 0; border: 1px solid #ece3d5; border-radius: 18px; background: #fff; box-shadow: 0 6px 18px -12px rgba(28,26,23,.4); }
 .hoy-rail-txt { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; letter-spacing: .04em; color: #6b645b; white-space: nowrap; }
 @media (max-width: 860px) { .hoy-panels { flex-direction: column; } .hoy-panel { width: 100% !important; } .hoy-rail { flex-direction: row; align-self: auto; width: 100%; height: 44px; padding: 0 14px; } .hoy-rail-txt { writing-mode: horizontal-tb; transform: none; } }
 /* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). */
