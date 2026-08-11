@@ -1775,8 +1775,10 @@ export default function TiempoClient() {
                     )
                   })()}
               </div>
+            </section>)}
+           </div>
 
-            {/* Tarjeta C — el resto del día */}
+            {/* Tarjeta C — el resto del día (siempre visible, fuera de los paneles) */}
             <div className="t-card" style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
                 <span style={LBL}>el día{!isTodayView ? ` · ${longDayOf(taskDay)}` : ''}</span>
@@ -1883,8 +1885,6 @@ export default function TiempoClient() {
                 ))}
               </div>
             </div>
-            </section>)}
-           </div>
           </div>
         ) : view === 'semana' ? (
           /* ── SEMANA ───────────────────────────────────────────────── */
