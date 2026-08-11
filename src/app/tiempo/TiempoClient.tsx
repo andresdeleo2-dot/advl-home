@@ -3700,7 +3700,8 @@ const MARGEN_CSS = `
 .hoy-panels { display: flex; gap: 20px; align-items: flex-start; }
 .hoy-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .hoy-panel-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 0; }
-.hoy-rail { flex: 0 0 46px; align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 0; border: 1px solid #ece3d5; border-radius: 18px; background: #fff; cursor: pointer; }
+.hoy-rail { flex: 0 0 46px; align-self: flex-start; position: sticky; top: 12px; max-height: calc(100dvh - 24px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px 0; border: 1px solid #ece3d5; border-radius: 18px; background: #fff; cursor: pointer; box-shadow: 0 6px 18px -12px rgba(28,26,23,.4); }
+.hoy-rail:hover { background: #faf7f1; border-color: #e2d9cb; }
 .hoy-rail-txt { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; letter-spacing: .04em; color: #6b645b; white-space: nowrap; }
 @media (max-width: 860px) { .hoy-panels { flex-direction: column; } .hoy-panel { width: 100% !important; } .hoy-rail { flex-direction: row; align-self: auto; width: 100%; height: 44px; padding: 0 14px; } .hoy-rail-txt { writing-mode: horizontal-tb; transform: none; } }
 /* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). */
