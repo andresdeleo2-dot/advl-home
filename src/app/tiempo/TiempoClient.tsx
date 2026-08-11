@@ -81,6 +81,7 @@ const dayIdxMon = (s: string) => { const [y, m, d] = s.split('-').map(Number); r
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
   const [view, setView] = useState<'hoy' | 'semana' | 'rutina' | 'historial'>('hoy')
+  const [hoyPanel, setHoyPanel] = useState<'both' | 'resumen' | 'tareas'>('both')   // vista Hoy: ambos paneles, o uno maximizado
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
   const [data, setData] = useState<AppData>(() => defaults())
@@ -1430,6 +1431,19 @@ export default function TiempoClient() {
         {!loaded ? <div style={{ height: 320 }} /> : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
+           <div className="hoy-panels">
+           {hoyPanel === 'tareas' ? (
+             <button className="hoy-rail" onClick={() => setHoyPanel('both')} title="Mostrar el resumen del día"><span style={{ fontSize: 15, color: '#8a4b28' }}>⤢</span><span className="hoy-rail-txt">Resumen del día</span></button>
+           ) : (<section className="hoy-panel" style={{ flex: 1 }}>
+             <div className="hoy-panel-head">
+               <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', flex: 1 }}>Resumen del día</span>
+               {hoyPanel === 'resumen'
+                 ? <button onClick={() => setHoyPanel('both')} title="Ver ambos paneles" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }}>⤢ ver ambos</button>
+                 : <>
+                   <button onClick={() => setHoyPanel('resumen')} title="Maximizar el resumen" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, fontSize: 14, color: '#6b645b', cursor: 'pointer', lineHeight: 1 }}>⤢</button>
+                   <button onClick={() => setHoyPanel('tareas')} title="Minimizar el resumen (ver solo tareas)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, fontSize: 18, color: '#6b645b', cursor: 'pointer', lineHeight: 1 }}>–</button>
+                 </>}
+             </div>
             {isTodayView && (() => {
               const gHr = Math.floor(now / 60)
               const greeting = gHr < 12 ? 'Buenos días' : gHr < 19 ? 'Buenas tardes' : 'Buenas noches'
@@ -1493,8 +1507,6 @@ export default function TiempoClient() {
                 </div>
               )
             })()}
-            <div className="hoy-grid">
-
               {/* Tarjeta A — Tiempo útil */}
               <div style={card(26)}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1592,6 +1604,19 @@ export default function TiempoClient() {
                     ))}
                   </div>
                 )}
+              </div>
+            </section>)}
+            {hoyPanel === 'resumen' ? (
+              <button className="hoy-rail" onClick={() => setHoyPanel('both')} title="Mostrar tareas y agenda"><span style={{ fontSize: 15, color: '#8a4b28' }}>⤢</span><span className="hoy-rail-txt">Tareas y agenda</span></button>
+            ) : (<section className="hoy-panel" style={{ flex: hoyPanel === 'tareas' ? 1 : 1.15 }}>
+              <div className="hoy-panel-head">
+                <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', flex: 1 }}>Tareas y agenda</span>
+                {hoyPanel === 'tareas'
+                  ? <button onClick={() => setHoyPanel('both')} title="Ver ambos paneles" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }}>⤢ ver ambos</button>
+                  : <>
+                    <button onClick={() => setHoyPanel('tareas')} title="Maximizar tareas y agenda" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, fontSize: 14, color: '#6b645b', cursor: 'pointer', lineHeight: 1 }}>⤢</button>
+                    <button onClick={() => setHoyPanel('resumen')} title="Minimizar tareas (ver solo resumen)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, fontSize: 18, color: '#6b645b', cursor: 'pointer', lineHeight: 1 }}>–</button>
+                  </>}
               </div>
 
               {/* Tarjeta B — workspace: elige qué vas a hacer */}
@@ -1734,8 +1759,6 @@ export default function TiempoClient() {
                   })()}
               </div>
 
-            </div>
-
             {/* Tarjeta C — el resto del día */}
             <div className="t-card" style={card(22)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 }}>
@@ -1843,6 +1866,8 @@ export default function TiempoClient() {
                 ))}
               </div>
             </div>
+            </section>)}
+           </div>
           </div>
         ) : view === 'semana' ? (
           /* ── SEMANA ───────────────────────────────────────────────── */
@@ -3671,6 +3696,13 @@ function SleepLogger({ onLog }: { onLog: (date: string, mins: number) => void })
 const MARGEN_CSS = `
 .hoy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 20px; align-items: start; }
 .hoy-grid > * { min-width: 0; }
+/* Vista Hoy en 2 paneles (Resumen | Tareas) con minimizar/maximizar. */
+.hoy-panels { display: flex; gap: 20px; align-items: flex-start; }
+.hoy-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.hoy-panel-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 0; }
+.hoy-rail { flex: 0 0 46px; align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 0; border: 1px solid #ece3d5; border-radius: 18px; background: #fff; cursor: pointer; }
+.hoy-rail-txt { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; letter-spacing: .04em; color: #6b645b; white-space: nowrap; }
+@media (max-width: 860px) { .hoy-panels { flex-direction: column; } .hoy-panel { width: 100% !important; } .hoy-rail { flex-direction: row; align-self: auto; width: 100%; height: 44px; padding: 0 14px; } .hoy-rail-txt { writing-mode: horizontal-tb; transform: none; } }
 /* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). */
 .td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 32px; align-items: start; }
 .td-grid > .td-col { min-width: 0; display: flex; flex-direction: column; }
