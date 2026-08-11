@@ -1246,6 +1246,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[ti].due = v
     patchEpic(e.id, { tasks })
   }
+  // Resumen editable inline (necesita la columna `resumen`).
+  const setTaskResumen = (e: Epica, ti: number, v: string) => {
+    if (!resumenReady.current) { showToast('Corre la migración de `resumen` para editarlo aquí', true); return }
+    const tasks = clone(e.tasks); tasks[ti].resumen = v.trim()
+    patchEpic(e.id, { tasks })
+  }
+  // Links editables inline (label/url/orden), sin abrir "Editar".
+  const setTaskLinks = (e: Epica, ti: number, links: EpicaTaskLink[]) => {
+    const tasks = clone(e.tasks); tasks[ti].links = links
+    patchEpic(e.id, { tasks })
+  }
   // Fecha en que se terminó (editable). Vacío = la quita (sin cambiar el estado).
   const setTaskDoneAt = (e: Epica, ti: number, v: string) => {
     const tasks = clone(e.tasks); if (v) tasks[ti].doneAt = v; else delete tasks[ti].doneAt
@@ -5244,11 +5255,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                 <div className="ep-modal-body" style={{ padding: '16px 26px 8px', overflowY: 'auto', flex: 1 }}>
 
-                {/* RESUMEN — justo debajo del título (qué es la actividad y qué se quiere lograr) */}
-                {t.resumen && (
+                {/* RESUMEN — editable aquí mismo (si existe la columna) */}
+                {(resumenReady.current || t.resumen) && (
                   <div style={{ marginBottom: 16 }}>
                     <div style={eb}>Resumen</div>
-                    <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>
+                    {resumenReady.current
+                      ? <textarea key={`res:${t.id}`} defaultValue={t.resumen || ''} onBlur={ev => { const v = ev.target.value; if (v.trim() !== (t.resumen || '')) setTaskResumen(ep, i, v) }} placeholder="¿Qué es esta actividad y qué quieres lograr?" rows={3}
+                          style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13.5, lineHeight: 1.5, color: '#14233D', background: '#fff', outline: 'none', fontFamily: 'inherit' }} />
+                      : <div style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', whiteSpace: 'pre-wrap' }}>{t.resumen}</div>}
                   </div>
                 )}
 
@@ -5503,16 +5517,37 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 )}
 
-                {t.links && t.links.length > 0 && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Links</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                      {t.links.map((l, li) => (
-                        <a key={li} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 12px' }}>🔗 {l.label || l.url}</a>
-                      ))}
-                    </div>
+                {/* LINKS — editables aquí mismo (agregar / editar / ordenar / quitar) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={eb}>Links {(t.links?.length ?? 0) > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}>{t.links!.length}</span>}</span>
+                    <button onClick={() => setTaskLinks(ep, i, [...(t.links || []), { label: '', url: '' }])} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11.5, fontWeight: 700 }}>+ Link</button>
                   </div>
-                )}
+                  {/* La lista se re-monta cuando cambia (agregar/quitar/ordenar/editar) para que
+                      los inputs uncontrolled muestren siempre el valor correcto. */}
+                  <div key={`links:${t.id}:${JSON.stringify(t.links || [])}`} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {(t.links || []).length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Sin links. Agrega con “+ Link”.</div>}
+                    {(t.links || []).map((l, li) => {
+                      const nn = (t.links || []).length
+                      const arr: CSSProperties = { height: 30, width: 26, borderRadius: 7, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 11, lineHeight: 1, flexShrink: 0 }
+                      const move = (dir: -1 | 1) => { const j = li + dir; if (j < 0 || j >= nn) return; const ls = [...(t.links || [])];[ls[li], ls[j]] = [ls[j], ls[li]]; setTaskLinks(ep, i, ls) }
+                      return (
+                        <div key={li} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+                          {nn > 1 && (
+                            <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                              <button aria-label="Subir" title="Subir" disabled={li === 0} onClick={() => move(-1)} style={{ ...arr, cursor: li === 0 ? 'default' : 'pointer', opacity: li === 0 ? 0.35 : 1 }}>↑</button>
+                              <button aria-label="Bajar" title="Bajar" disabled={li === nn - 1} onClick={() => move(1)} style={{ ...arr, cursor: li === nn - 1 ? 'default' : 'pointer', opacity: li === nn - 1 ? 0.35 : 1 }}>↓</button>
+                            </span>
+                          )}
+                          <input defaultValue={l.label} onBlur={ev => { const v = ev.target.value; if (v !== l.label) setTaskLinks(ep, i, (t.links || []).map((x, j) => j === li ? { ...x, label: v } : x)) }} placeholder="Nombre" style={{ flex: '0 0 120px', width: 120, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
+                          <input defaultValue={l.url} onBlur={ev => { const v = ev.target.value; if (v !== l.url) setTaskLinks(ep, i, (t.links || []).map((x, j) => j === li ? { ...x, url: v } : x)) }} placeholder="https://…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', color: '#14233D', outline: 'none' }} />
+                          {l.url && <a href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" title="Abrir" style={{ flexShrink: 0, textDecoration: 'none', color: '#A87A2C', fontSize: 14 }}>↗</a>}
+                          <button aria-label="Quitar link" onClick={() => setTaskLinks(ep, i, (t.links || []).filter((_, j) => j !== li))} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)' }}>✕</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
 
                 {/* COMENTARIOS — se agregan aquí mismo, sin abrir "Editar" */}
                 <div style={{ marginBottom: 16 }}>
