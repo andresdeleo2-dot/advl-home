@@ -145,7 +145,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
   const [backlogFPrio, setBacklogFPrio] = useState<string>('todas')
   const [backlogQ, setBacklogQ] = useState('')                 // búsqueda de texto en el backlog
-  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas'>('tabla')
+  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas' | 'semana'>('tabla')
+  const [backlogWeek, setBacklogWeek] = useState<string>('')        // lunes ancla de la vista Semana del backlog ('' = esta semana)
   const [boardDrag, setBoardDrag] = useState<string | null>(null)      // key de la tarjeta arrastrada
   const [boardOverCol, setBoardOverCol] = useState<string | null>(null)
   const boardDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -4604,6 +4605,79 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const filterSel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.65)', background: '#fff', outline: 'none' }
     const editInp: CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.16)', borderRadius: 7, padding: '5px 7px', fontSize: 12, fontWeight: 600, color: '#14233D', background: '#fff', outline: 'none' }
 
+    // Vista SEMANA del backlog: calendario L-D arrastrable con las tareas ya filtradas.
+    const renderBacklogWeek = () => {
+      const monday = backlogWeek || mondayISO(today)
+      const sunday = addDays(monday, 6)
+      const days = Array.from({ length: 7 }, (_, di) => addDays(monday, di))
+      const hasToday = today >= monday && today <= sunday
+      const unsch = sorted.filter(x => !x.t.plan && x.t.status !== 'Terminada')
+      const byDay = new Map<string, typeof sorted>()
+      days.forEach(d => byDay.set(d, []))
+      sorted.forEach(x => { const p = x.t.plan; if (p && byDay.has(p)) byDay.get(p)!.push(x) })
+      const navBtn: CSSProperties = { height: 30, width: 30, borderRadius: 9, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', cursor: 'pointer', color: '#10233F', fontSize: 15 }
+      const newForDay = (d: string) => { const target = backlogFEpica !== 'todas' ? backlogFEpica : defaultEpicId(); if (!target) { showToast('Crea una épica primero', true); return } openTaskEdit(target, null, { plan: d }) }
+      const card = (x: typeof sorted[number]) => {
+        const { e, t } = x; const k = planKey(e.id, t); const dragging = weekDrag === k; const tdone = t.status === 'Terminada'; const ps = prioStyle(t.priority); const dt = dueTone(t.due, tdone)
+        return (
+          <div key={k} onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
+            title={`${t.t} — arrastra a otro día`}
+            style={{ background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${tdone ? '#2E6E6E' : ps.accent}`, borderRadius: 9, padding: '7px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: weekDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: tdone ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: tdone ? 'line-through' : 'none', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.t}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+              {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c }}>{fmtDue(t.due)}</span>}
+              {t.difficulty && <DifDots d={t.difficulty} size={9} />}
+            </div>
+          </div>
+        )
+      }
+      return (
+        <div style={{ padding: '4px 12px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setBacklogWeek(addDays(monday, -7))} aria-label="Semana anterior" style={navBtn}>‹</button>
+            <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 15, color: hasToday ? '#A87A2C' : '#10233F' }}>{weekRangeLabel(monday)}</span>
+            <button onClick={() => setBacklogWeek(addDays(monday, 7))} aria-label="Semana siguiente" style={navBtn}>›</button>
+            {!hasToday && <button onClick={() => setBacklogWeek('')} style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '6px 11px', font: '700 12px var(--font-ui)', cursor: 'pointer' }}>Esta semana</button>}
+            <span style={{ flex: 1 }} />
+            <span className="ep-hide-sm" style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)' }}>Arrastra entre días · desde “Sin fecha” para agendar</span>
+          </div>
+          {unsch.length > 0 && (
+            <div style={{ marginBottom: 10, border: '1px solid rgba(15,35,64,0.08)', borderRadius: 12, background: '#FBFAF6', padding: '8px 11px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
+                <span style={{ height: 6, width: 6, borderRadius: 99, background: '#5B6B86' }} />
+                <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Sin fecha</span>
+                <span style={{ fontSize: 9.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{unsch.length}</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto' }}>
+                {unsch.map(x => <div key={planKey(x.e.id, x.t)} style={{ flexShrink: 0, width: 178 }}>{card(x)}</div>)}
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6, alignItems: 'flex-start' }}>
+            {days.map(d => {
+              const list = byDay.get(d)!; const wd = (new Date(d + 'T00:00:00').getDay() + 6) % 7; const isTd = d === today; const over = weekOverDay === d && !!weekDrag
+              return (
+                <div key={d} data-weekday={d} style={{ flex: '1 1 150px', minWidth: 150, maxWidth: 320, boxSizing: 'border-box', borderRadius: 14, background: over ? 'rgba(194,147,58,0.08)' : isTd ? 'rgba(194,147,58,0.05)' : '#FBFAF6', border: over ? '1.5px dashed #C2933A' : isTd ? '1.5px solid rgba(194,147,58,0.5)' : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden', transition: 'background .15s, border-color .15s' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 10px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+                    <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
+                    <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
+                    {list.length > 0 && <span style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: 'rgba(194,147,58,0.14)', color: '#A87A2C' }}>{list.length}</span>}
+                    <span style={{ flex: 1 }} />
+                    <button onClick={() => newForDay(d)} title="Nueva tarea este día" style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 14, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: 8, minHeight: 64 }}>
+                    {list.length === 0 && <button onClick={() => newForDay(d)} style={{ borderRadius: 10, border: '1px dashed rgba(15,35,64,0.14)', background: 'transparent', padding: '14px 8px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: over ? '#A87A2C' : 'rgba(20,35,61,0.4)', cursor: 'pointer' }}>{over ? 'Soltar aquí' : '+ Agregar'}</button>}
+                    {list.map(card)}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div id="backlog" className="glass" style={{ borderRadius: 16, overflow: 'hidden', marginTop: 34, scrollMarginTop: 16 }}>
         {/* El interruptor de vista es interactivo, así que no puede ir DENTRO del
@@ -4616,7 +4690,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </button>
           {backlogOpen && (
             <div role="group" aria-label="Vista del backlog" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
-              {([['tabla', 'Tabla'], ['tablero', 'Tablero'], ['tarjetas', 'Tarjetas']] as const).map(([v, label]) => {
+              {([['tabla', 'Tabla'], ['tablero', 'Tablero'], ['tarjetas', 'Tarjetas'], ['semana', 'Semana']] as const).map(([v, label]) => {
                 const on = backlogView === v
                 return (
                   <button key={v} aria-pressed={on} onClick={() => setBacklogView(v)}
@@ -4708,7 +4782,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )}
 
-            {isBoard ? renderBoard(rows) : backlogView === 'tarjetas' ? (
+            {isBoard ? renderBoard(rows) : backlogView === 'semana' ? renderBacklogWeek() : backlogView === 'tarjetas' ? (
             <div style={{ padding: '4px 12px 12px' }}>
               {sorted.length === 0
                 ? <div style={{ padding: '26px 10px', textAlign: 'center', fontSize: 13, color: 'rgba(20,35,61,0.5)' }}>Nada coincide con los filtros.</div>
