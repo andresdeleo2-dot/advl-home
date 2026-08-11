@@ -428,7 +428,7 @@ export type Prefs = {
   epicSort: 'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
-  backlogView: 'tabla' | 'tablero'
+  backlogView: 'tabla' | 'tablero' | 'tarjetas'
   backlogDone: boolean; backlogFEpica: string; backlogFStatus: string; backlogFPrio: string
   featuredId: string | null
 }

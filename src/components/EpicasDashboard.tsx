@@ -145,7 +145,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
   const [backlogFPrio, setBacklogFPrio] = useState<string>('todas')
   const [backlogQ, setBacklogQ] = useState('')                 // búsqueda de texto en el backlog
-  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero'>('tabla')
+  const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas'>('tabla')
   const [boardDrag, setBoardDrag] = useState<string | null>(null)      // key de la tarjeta arrastrada
   const [boardOverCol, setBoardOverCol] = useState<string | null>(null)
   const boardDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
@@ -4576,7 +4576,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </button>
           {backlogOpen && (
             <div role="group" aria-label="Vista del backlog" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
-              {([['tabla', 'Tabla'], ['tablero', 'Tablero']] as const).map(([v, label]) => {
+              {([['tabla', 'Tabla'], ['tablero', 'Tablero'], ['tarjetas', 'Tarjetas']] as const).map(([v, label]) => {
                 const on = backlogView === v
                 return (
                   <button key={v} aria-pressed={on} onClick={() => setBacklogView(v)}
@@ -4668,7 +4668,43 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )}
 
-            {isBoard ? renderBoard(rows) : (
+            {isBoard ? renderBoard(rows) : backlogView === 'tarjetas' ? (
+            <div style={{ padding: '4px 12px 12px' }}>
+              {sorted.length === 0
+                ? <div style={{ padding: '26px 10px', textAlign: 'center', fontSize: 13, color: 'rgba(20,35,61,0.5)' }}>Nada coincide con los filtros.</div>
+                : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(238px,1fr))', gap: 12 }}>
+                    {sorted.map(({ e, t }) => {
+                      const ts = taskStyle(t.status); const dt = dueTone(t.due, t.status === 'Terminada'); const ps = prioStyle(t.priority)
+                      const k = keyOf({ e, t }); const sel = backlogSel.has(k); const done = t.status === 'Terminada'
+                      return (
+                        <div key={k} onClick={ev => { if ((ev.target as HTMLElement).closest('input,button,a')) return; setTaskView({ eId: e.id, tid: t.id! }) }}
+                          className="glass glass-hover" style={{ position: 'relative', borderRadius: 14, padding: '13px 14px', cursor: 'pointer', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, background: sel ? 'rgba(194,147,58,0.06)' : undefined }}>
+                          <input type="checkbox" checked={sel} onClick={ev => ev.stopPropagation()} onChange={() => toggleOne(k)} title="Seleccionar" style={{ position: 'absolute', top: 12, right: 12, cursor: 'pointer' }} />
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.55)', marginBottom: 6 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}</div>
+                          <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', marginBottom: 9, paddingRight: 20 }}>{t.t}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ font: '700 10px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '2px 8px' }}>{ts.label}</span>
+                            {t.priority && <span title={`Prioridad ${prioStyle(t.priority).label}`}><PrioBars p={t.priority} size={11} /></span>}
+                            {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`}><DifDots d={t.difficulty} size={9} /></span>}
+                            {t.plan && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
+                            {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c }}>vence {fmtDue(t.due)}</span>}
+                            {(t.subtasks?.length ?? 0) > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>☑ {t.subtasks!.filter(s => s.done).length}/{t.subtasks!.length}</span>}
+                          </div>
+                          {typeof t.progress === 'number' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9 }}>
+                              <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${t.progress}%`, height: '100%', background: e.color }} /></span>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.42)', marginTop: 11 }}>Clic en una tarjeta para abrir y editar todos sus campos.</div>
+            </div>
+            ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
                 <thead>
