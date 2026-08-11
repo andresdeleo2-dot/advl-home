@@ -2466,8 +2466,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {list.length > 0 && (
                   <span style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: allDone ? 'rgba(62,142,142,0.14)' : 'rgba(194,147,58,0.14)', color: allDone ? '#2E6E6E' : '#A87A2C' }}>{allDone ? '✓' : `${done}/${list.length}`}</span>
                 )}
-                {pend > 0 && (
-                  <span title={`≈ ${dayHrs} de trabajo estimado este día${overloaded ? ' · demasiado, reparte algunas' : ''}`} style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: overloaded ? 'rgba(176,82,46,0.14)' : 'rgba(15,35,64,0.06)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>~{dayHrs}</span>
+                {dayMin > 0 && (
+                  <span title={`≈ ${dayHrs} de trabajo estimado por dificultad${overloaded ? ' · demasiado, reparte algunas' : ''}`} style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: overloaded ? 'rgba(176,82,46,0.14)' : 'rgba(15,35,64,0.06)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>~{dayHrs}</span>
                 )}
                 <span style={{ flex: 1 }} />
                 <button onClick={() => newTaskForDay(d)} aria-label={`Nueva tarea para ${dateLabel(d)}`} title="Nueva tarea este día"
@@ -2566,7 +2566,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
           <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
           {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
-          <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>
+          {t.difficulty && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title="Estimado por dificultad">~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>}
           <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
         </div>
         {weekMoveKey === k && (
@@ -2598,7 +2598,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
             {sorted.length > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: doneN === sorted.length ? '#2E6E6E' : '#A87A2C' }}>{doneN}/{sorted.length}</span>}
-            {pendN > 0 && <span title={`≈ ${dayHrs} estimadas${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
+            {dayMin > 0 && <span title={`≈ ${dayHrs} estimado por dificultad${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
           </div>
           <button onClick={() => newTaskForDay(d)} title="Nueva tarea este día" style={{ marginTop: 2, alignSelf: 'flex-start', height: 22, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', font: '700 11px var(--font-ui)' }}>+ tarea</button>
         </div>
@@ -2654,7 +2654,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
             <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
             {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
-            <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>
+            {t.difficulty && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title="Estimado por dificultad">~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>}
             <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
           </div>
           {weekMoveKey === k && (
@@ -2680,7 +2680,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       {all.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '0 0 12px', padding: '11px 14px', borderRadius: 14, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)' }}>
           <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{all.length} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{all.length === 1 ? 'actividad' : 'actividades'}</span></span>
-          <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>{pend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> estimadas</span>
+          <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }} title="El estimado sólo cuenta las tareas con dificultad (fácil 30m · media 1h · difícil 2h). Las sin dificultad no se estiman.">{pend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> estimado por dificultad</span>
           <span style={{ width: 1, height: 26, background: 'rgba(15,35,64,0.1)' }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {dc.facil > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: '#5f8a52', background: 'rgba(95,138,82,0.12)' }}>Fácil {dc.facil}</span>}
@@ -2723,26 +2723,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                   {items.length > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: doneN === items.length ? '#2E6E6E' : '#A87A2C' }}>{doneN}/{items.length}</span>}
-                  {pendN > 0 && <span title={`≈ ${dayHrs} estimadas${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
+                  {dayMin > 0 && <span title={`≈ ${dayHrs} estimado por dificultad${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
                 </div>
-                {/* Carga TOTAL del día (todas las épicas) — visible al filtrar, para estimar la carga real */}
+                {/* Carga TOTAL del día (TODAS las épicas, sin filtro) — visible al filtrar. */}
                 {filtering && (() => {
-                  const totAll = byDayTotal.get(d)!
-                  const totPend = totAll.filter(x => x.t.status !== 'Terminada')
-                  if (totAll.length === 0) return null
-                  const tMin = totPend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+                  const totPend = byDayTotal.get(d)!.filter(x => x.t.status !== 'Terminada')
+                  if (totPend.length === 0) return null
+                  const withDif = totPend.filter(x => x.t.difficulty)
+                  const tMin = withDif.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)   // sólo las que tienen dificultad
                   const tHrs = tMin >= 60 ? `${Math.round(tMin / 60 * 10) / 10}h` : `${tMin}m`
                   const tOver = tMin > 480
-                  const tdc = { facil: 0, media: 0, dificil: 0, sin: 0 }; totPend.forEach(x => { const dd = x.t.difficulty; if (dd === 'facil') tdc.facil++; else if (dd === 'dificil') tdc.dificil++; else if (dd === 'media') tdc.media++; else tdc.sin++ })
+                  const nSin = totPend.length - withDif.length
+                  const tdc = { facil: 0, media: 0, dificil: 0 }; withDif.forEach(x => { const dd = x.t.difficulty; if (dd === 'facil') tdc.facil++; else if (dd === 'dificil') tdc.dificil++; else tdc.media++ })
                   return (
-                    <div title="Carga total del día (todas las épicas, sin filtro)" style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 1 }}>
-                      <span style={{ font: '700 8px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.4)' }}>Total</span>
-                      <span style={{ font: '800 9.5px var(--font-ui)', color: tOver ? '#B0522E' : 'rgba(20,35,61,0.6)' }}>{totPend.length}</span>
-                      <span style={{ font: '700 9px var(--font-ui)', color: tOver ? '#B0522E' : 'rgba(20,35,61,0.45)' }}>~{tHrs}</span>
-                      {tdc.facil > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: '#5f8a52' }}>F{tdc.facil}</span>}
-                      {tdc.media > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: '#A87A2C' }}>M{tdc.media}</span>}
-                      {tdc.dificil > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: '#B0522E' }}>D{tdc.dificil}</span>}
-                      {tdc.sin > 0 && <span style={{ font: '700 8.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>·{tdc.sin}</span>}
+                    <div title={`Carga TOTAL del día (todas las épicas): ${totPend.length} actividades pendientes.\n~${tHrs} estimado sólo de las que tienen dificultad (fácil 30m · media 1h · difícil 2h).${nSin ? `\n${nSin} sin dificultad (no se estiman).` : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 2, paddingTop: 3, borderTop: '1px dashed rgba(15,35,64,0.1)' }}>
+                      <span style={{ font: '700 8px/1 var(--font-ui)', letterSpacing: '.05em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.4)' }}>Todo el día</span>
+                      <span style={{ font: '800 11px var(--font-ui)', color: tOver ? '#B0522E' : '#10233F' }}>{totPend.length}</span>
+                      {tdc.facil > 0 && <span title="Fácil" style={{ font: '700 8.5px var(--font-ui)', color: '#5f8a52' }}>F{tdc.facil}</span>}
+                      {tdc.media > 0 && <span title="Media" style={{ font: '700 8.5px var(--font-ui)', color: '#A87A2C' }}>M{tdc.media}</span>}
+                      {tdc.dificil > 0 && <span title="Difícil" style={{ font: '700 8.5px var(--font-ui)', color: '#B0522E' }}>D{tdc.dificil}</span>}
+                      {nSin > 0 && <span title="Sin dificultad (no se estiman)" style={{ font: '700 8.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>·{nSin} s/dif</span>}
+                      {tMin > 0 && <span title="Estimado por dificultad" style={{ font: '700 9px var(--font-ui)', color: tOver ? '#B0522E' : 'rgba(20,35,61,0.45)' }}>~{tHrs}</span>}
                     </div>
                   )
                 })()}
@@ -6985,7 +6986,9 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
 }
 
 // Minutos estimados de una tarea por su dificultad (para el resumen/carga de la semana).
-const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 30 : d === 'dificil' ? 120 : 60
+// Estimación de tiempo SÓLO a partir de la dificultad (fácil 30m · media 1h · difícil 2h).
+// Sin dificultad = 0: no hay base para estimar, así que esas tareas no inventan horas.
+const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 30 : d === 'media' ? 60 : d === 'dificil' ? 120 : 0
 
 const goldBtn: CSSProperties = {
   border: 'none', cursor: 'pointer', borderRadius: 12, fontWeight: 800, color: '#1B1305',
