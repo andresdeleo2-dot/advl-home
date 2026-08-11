@@ -148,6 +148,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'>('tabla')
   const [backlogWeek, setBacklogWeek] = useState<string>('')        // lunes ancla de la vista Semana del backlog ('' = esta semana)
   const [mdSel, setMdSel] = useState<{ eId: string; tid: string } | null>(null)  // tarea seleccionada en la vista maestro/detalle
+  const [mdRange, setMdRange] = useState<'todas' | 'semana' | '2sem' | 'mes'>('todas')  // rango de fecha en Detalle/Agenda del Enfoque
   const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
   const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
   const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
@@ -4006,12 +4007,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
           {detalle || agenda ? (() => {
             // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
-            // con el filtro de épica (chips) y dificultad ya conocidos.
+            // con el filtro de épica (chips), dificultad, "ocultar completadas" y un rango
+            // de fecha (esta semana / 2 sem / mes) por su día "Hacer".
             const enfEpics = activeEpics.filter(e => (e.tasks || []).some(t => t.status !== ARCHIVED))
             const effEnf = enfEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+            const rStart = mondayISO(today)
+            const [ry, rm] = today.split('-').map(Number)
+            const monthEnd = `${today.slice(0, 7)}-${String(new Date(ry, rm, 0).getDate()).padStart(2, '0')}`
+            const rEnd = mdRange === 'semana' ? addDays(rStart, 6) : mdRange === '2sem' ? addDays(rStart, 13) : mdRange === 'mes' ? monthEnd : ''
+            const rStartUse = mdRange === 'mes' ? today.slice(0, 7) + '-01' : rStart
+            const inRange = (t: EpicaTask) => mdRange === 'todas' ? true : (!!t.plan && t.plan >= rStartUse && t.plan <= rEnd)
             const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
-              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif))
-            return <>{renderBoardFilters(enfEpics, effEnf)}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
+              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif) && !(boardHideDone && x.t.status === 'Terminada') && inRange(x.t))
+            const rangeChips = (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 12px' }}>
+                <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>📅 Rango</span>
+                {([['todas', 'Todas'], ['semana', 'Esta semana'], ['2sem', 'Próx. 2 sem'], ['mes', 'Este mes']] as const).map(([k, label]) => {
+                  const on = mdRange === k
+                  return <button key={k} onClick={() => setMdRange(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}</button>
+                })}
+              </div>
+            )
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
@@ -5202,7 +5219,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }
         const openEditFromView = () => { opts.onClose(); openTaskEdit(view.eId, t.id!) }
     const card = (
-            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={opts.docked ? { width: '100%', height: '100%', background: '#fff', borderRadius: 14, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } : { width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
+            <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={opts.docked ? { width: '100%', maxWidth: 'none', height: '100%', background: '#fff', borderRadius: 14, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } : { width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
               <div style={{ height: 4, background: ep.color, flexShrink: 0 }} />
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div style={{ minWidth: 0 }}>
@@ -5565,7 +5582,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
     const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
     return (
-      <div className="ep-md" style={{ display: 'flex', gap: 14, alignItems: 'stretch', minHeight: 420 }}>
+      <div className="ep-md" style={{ display: 'flex', width: '100%', gap: 14, alignItems: 'stretch', minHeight: 420 }}>
         <div className="ep-md-list" style={{ flex: '0 0 300px', maxWidth: 340, maxHeight: 680, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5, paddingRight: 2 }}>
           {rows.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '14px 6px' }}>Nada coincide con los filtros.</div>}
           {rows.map(({ e, t }) => {
@@ -5633,7 +5650,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       </button>
     )
     return (
-      <div className="ep-md" style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+      <div className="ep-md" style={{ display: 'flex', width: '100%', gap: 14, alignItems: 'flex-start' }}>
         {/* Calendario del mes */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
