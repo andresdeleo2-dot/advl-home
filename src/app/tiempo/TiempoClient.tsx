@@ -987,7 +987,10 @@ export default function TiempoClient() {
     const s = data.session
     if (s) {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
-      if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
+      const msg = el > 480
+        ? `«${s.name}» lleva ${hm(el)} — parece que el cronómetro se quedó corriendo. Si acepto GUARDO todo ese tiempo y empiezo «${ns.name}». Cancela si no trabajaste todo eso (luego usa "Descartar" en la sesión).`
+        : `Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`
+      if (!window.confirm(msg)) return false
       const today0 = iso(new Date())
       const hist = { date: today0, name: s.name, area: s.area, start: Math.min(Math.round(s.origStart ?? s.start), Math.round(now)), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
       save({ session: ns, history: dataRef.current.history.concat([hist]), ...extraPatch })
@@ -1092,6 +1095,12 @@ export default function TiempoClient() {
     const s = data.session; if (!s) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     const today = iso(new Date())
+    // Cronómetro olvidado: una sola sesión de >8h casi siempre quedó corriendo (p. ej. toda la
+    // noche). Avisa antes de registrar semejante bloque; si cancelas, se descarta (no se registra).
+    if (elapsed > 480 && !window.confirm(`Llevas ${hm(elapsed)} en «${s.name}». Parece que el cronómetro se quedó corriendo (¿toda la noche?). ¿Registrar TODO ese tiempo como trabajado?\n\nAceptar = registrarlo · Cancelar = descartarlo sin registrar.`)) {
+      save({ session: null }); showUndo(`Descarté «${s.name}» sin registrar`, () => save({ session: s }))
+      return
+    }
     const entry = { date: today, name: s.name, area: s.area, start: Math.min(Math.round(s.origStart ?? s.start), Math.round(now)), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
     save({ session: null, history: dataRef.current.history.concat([entry]) })
     setTaskDay(today)   // el registro cae en hoy: asegura que la vista lo muestre
