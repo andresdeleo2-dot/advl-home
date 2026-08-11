@@ -162,7 +162,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
   const [planMoveDay, setPlanMoveDay] = useState('')               // date input de la barra de acciones
-  const [planMode, setPlanMode] = useState<'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen'>('dia') // horizonte del enfoque
+  const [planMode, setPlanMode] = useState<'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen' | 'agenda' | 'detalle'>('dia') // horizonte del enfoque
   const [dayTableEdit, setDayTableEdit] = useState(false)          // edición inline de la tabla del día
   const [dayCapacity, setDayCapacity] = useState(8)                // presupuesto de carga del día (puntos)
   const [calDrag, setCalDrag] = useState<string | null>(null)      // tarjeta arrastrada en el calendario
@@ -358,7 +358,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Permite abrir el editor de una tarea desde otra sección (Tiempo) por deep-link (?e=&t=).
   const openTaskEditRef = useRef<((epicId: string, tid: string) => void) | null>(null)
   useEffect(() => {
-    const MODES = ['dia', 'semana', 'ajuste', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen']
+    const MODES = ['dia', 'semana', 'ajuste', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen', 'agenda', 'detalle']
     const applyFromUrl = () => {
       const q = new URLSearchParams(window.location.search)
       const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode(v as typeof planMode)
@@ -3893,8 +3893,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const cal = planMode === 'calendario'
     const timeline = planMode === 'timeline'
     const resumen = planMode === 'resumen'
+    const agenda = planMode === 'agenda'     // Vista A: calendario + panel (sin fecha / agendadas)
+    const detalle = planMode === 'detalle'   // Vista B: maestro/detalle (lista + detalle sin popup)
     const monthy = planMode === 'mes' || cal || timeline   // navegación/etiqueta por mes
-    const board = week || ajuste || multi || cal || timeline || resumen
+    const board = week || ajuste || multi || cal || timeline || resumen || agenda || detalle
     const weekMonday = mondayISO(viewDate)
     const todayMonday = mondayISO(today)
     // Semanas del horizonte según el modo
@@ -3909,9 +3911,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : weekRangeLabel(weekMonday)
     const monthName = cap(new Date(viewDate + 'T00:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }))
     // Etiquetas del masthead
-    const bigLabel = monthy ? monthName : (week || ajuste || resumen) ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
-    const eyebrow = week ? 'Enfoque de la semana' : ajuste ? 'Ajuste de la semana' : resumen ? 'Resumen de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
-    const topLabel = (week || ajuste || resumen) ? weekRel
+    const bigLabel = detalle ? 'Detalle' : agenda ? 'Agenda' : monthy ? monthName : (week || ajuste || resumen) ? weekRangeLabel(weekMonday) : spanLabel(hStart, hEnd)
+    const eyebrow = detalle ? 'Lista + detalle' : agenda ? 'Calendario + actividades' : week ? 'Enfoque de la semana' : ajuste ? 'Ajuste de la semana' : resumen ? 'Resumen de la semana' : cal ? 'Calendario' : timeline ? 'Línea de tiempo' : planMode === 'mes' ? 'Plan del mes' : `Sprint · ${weekMondays.length} semanas`
+    const topLabel = detalle ? 'Todas las actividades' : agenda ? 'Arrastra al día' : (week || ajuste || resumen) ? weekRel
       : monthy ? (viewDate.slice(0, 7) === today.slice(0, 7) ? 'Este mes' : 'Otro mes')
       // "Próximas N semanas" sólo si la ventana arranca en la semana actual; si la
       // deslizaste hacia atrás (para ver semanas pasadas) muestra el rango real.
@@ -3954,7 +3956,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" className="ep-modes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
-                {([['dia', 'Día'], ['semana', 'Semana'], ['ajuste', 'Ajuste'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
+                {([['dia', 'Día'], ['semana', 'Semana'], ['ajuste', 'Ajuste'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['agenda', 'Agenda'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen'], ['detalle', 'Detalle']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
@@ -4002,7 +4004,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
+          {detalle || agenda ? (() => {
+            // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
+            // con el filtro de épica (chips) y dificultad ya conocidos.
+            const enfEpics = activeEpics.filter(e => (e.tasks || []).some(t => t.status !== ARCHIVED))
+            const effEnf = enfEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+            const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
+              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif))
+            return <>{renderBoardFilters(enfEpics, effEnf)}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
+          })()
+          : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
 
