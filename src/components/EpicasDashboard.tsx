@@ -5158,6 +5158,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <input type="number" value={k.auto ? '' : (k.current ?? '')} disabled={!!k.auto} onChange={e => set({ current: num(e.target.value) })}
                             placeholder={k.auto ? 'auto' : '85'} style={{ ...inpNarrow, flex: '0 0 70px', width: 70, opacity: k.auto ? .5 : 1 }} />
                         </label>
+                        {k.lowerIsBetter && !k.auto && (
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }} title="Valor de partida: desde dónde empezaste (para medir el avance)">
+                            Inicio
+                            <input type="number" value={k.start ?? ''} onChange={e => set({ start: num(e.target.value) })} placeholder="85" style={{ ...inpNarrow, flex: '0 0 66px', width: 66 }} />
+                          </label>
+                        )}
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
                           Meta
                           <input type="number" value={k.target ?? ''} onChange={e => set({ target: num(e.target.value) })} placeholder="80" style={{ ...inpNarrow, flex: '0 0 70px', width: 70 }} />
@@ -5173,7 +5179,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <input type="checkbox" checked={k.auto === 'tareas'} onChange={e => set({ auto: e.target.checked ? 'tareas' : undefined })} /> Medir con tareas cerradas
                         </label>
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Para metas que bajan: peso, deuda, gastos…">
-                          <input type="checkbox" checked={!!k.lowerIsBetter} onChange={e => set({ lowerIsBetter: e.target.checked || undefined })} /> Menos es mejor
+                          <input type="checkbox" checked={!!k.lowerIsBetter} onChange={e => set({ lowerIsBetter: e.target.checked || undefined, ...(e.target.checked && k.start == null && k.current != null ? { start: k.current } : {}) })} /> Menos es mejor
                         </label>
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: '#2E6E6E', cursor: 'pointer', fontWeight: 600 }}>
                           <input type="checkbox" checked={!!k.done} onChange={e => set({ done: e.target.checked || undefined, doneAt: e.target.checked ? todayISO() : undefined })} /> Cumplido

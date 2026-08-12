@@ -23,9 +23,15 @@ const TS_KEY = KEY + '.ts'
 // Minutos transcurridos de una sesión, tolerando cruce de medianoche (now se reinicia
 // a minutos-del-día). Si la resta es fuertemente negativa (cruzó medianoche), +1440.
 const elapsedMin = (start: number, nowMin: number) => { let d = nowMin - start; if (d < -1) d += 1440; return d }
-// Minutos transcurridos de una sesión contando pausas: acumulado + segmento en curso (0 si está en pausa).
-const sessionElapsed = (s: { start: number; pausedAccum?: number; pausedAt?: number }, nowMin: number) =>
-  (s.pausedAccum || 0) + (s.pausedAt != null ? 0 : Math.max(0, elapsedMin(s.start, nowMin)))
+// Minutos transcurridos contando pausas: acumulado + segmento en curso (0 si está en pausa). Si la
+// sesión trae `segAt` (ms), el segmento se mide con el RELOJ REAL — así una sesión que cruza medianoche
+// o que se quedó corriendo >24h ya no da minutos erróneos (el modelo por minutos-del-día se envolvía).
+const sessionElapsed = (s: { start: number; pausedAccum?: number; pausedAt?: number; segAt?: number }, nowMin: number) => {
+  const banked = s.pausedAccum || 0
+  if (s.pausedAt != null) return banked
+  if (s.segAt != null) return banked + Math.max(0, (Date.now() - s.segAt) / 60000)
+  return banked + Math.max(0, elapsedMin(s.start, nowMin))
+}
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
 // Luminancia de un color hex → elige texto claro/oscuro para etiquetas dentro de la barra.
 const lum = (hex: string) => { const h = hex.replace('#', ''); if (h.length < 6) return 1; const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16); return (0.299 * r + 0.587 * g + 0.114 * b) / 255 }
@@ -242,11 +248,15 @@ export default function TiempoClient() {
   const [refreshing, setRefreshing] = useState(false)
   const [tasksError, setTasksError] = useState(false)
   const [resumenReady, setResumenReady] = useState(false)   // true si existe la columna `resumen` (tras la migración)
+  // Por defecto TRUE (optimista): si la columna no existe, el server lo dice y se bloquea el input
+  // (evita el 500 de recordar/comentar sin migración) — sin parpadeo mientras carga si sí existe.
+  const [remindReady, setRemindReady] = useState(true)
+  const [comentariosReady, setComentariosReady] = useState(true)
   const refreshTasks = useCallback(() => {
     setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
-      setResumenReady(!!j.resumenReady)
+      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady)
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[] = []
       for (const e of j.data as Epica[]) {
@@ -287,8 +297,27 @@ export default function TiempoClient() {
   // Al volver a la pestaña de Tiempo (tras editar en Épicas) se refresca solo.
   useEffect(() => {
     const canRefresh = () => document.visibilityState === 'visible' && !editorOpenRef.current
-    const onVis = () => { if (canRefresh()) { refreshTasks(); loadMeetings() } }
-    const onFocus = () => { if (canRefresh()) { refreshTasks(); loadMeetings() } }
+    // Re-lee el estado durable del servidor al volver: si OTRO dispositivo/pestaña lo dejó más
+    // nuevo (serverTs > el ts local), lo ADOPTA antes de seguir editando aquí. Así una edición en
+    // el teléfono no se pierde cuando la laptop (con estado viejo en memoria) guarde encima.
+    // No adopta con un editor abierto ni con una sesión en curso (para no pisar trabajo en vuelo).
+    const adopt = () => {
+      if (!canRefresh() || dataRef.current.session) return
+      fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
+        // Revalida TAMBIÉN el editor tras el fetch: si se abrió un registro/tarea mientras el fetch
+        // estaba en vuelo, adoptar reemplazaría data.history y el autoguardado por índice pisaría otra fila.
+        if (!j?.ok || !canRefresh() || dataRef.current.session) return
+        const serverTs = Number(j.ts) || 0
+        const curTs = Number(localStorage.getItem(TS_KEY) || 0)
+        if (serverTs > curTs && j.data && Object.keys(j.data).length) {
+          const merged = Object.assign(defaults(), j.data)
+          setData(merged)
+          try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
+        }
+      }).catch(() => {})
+    }
+    const onVis = () => { if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
+    const onFocus = () => { if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onFocus)
     // Poll "en vivo": cada 25s (salvo con un editor abierto) refleja cambios de Épicas sin recargar.
@@ -1012,7 +1041,8 @@ export default function TiempoClient() {
   // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
   // sacar un bloque de agendados). Devuelve true si arrancó (false si el usuario canceló).
   const beginSession = (nsIn: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
-    const ns = { ...nsIn, origStart: nsIn.start }   // recuerda el inicio REAL (no cambia al reanudar)
+    const t0ms = Date.now()
+    const ns = { ...nsIn, origStart: nsIn.start, startedAt: t0ms, segAt: t0ms }   // ancla al reloj real
     const s = data.session
     if (s) {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
@@ -1021,13 +1051,17 @@ export default function TiempoClient() {
         : `Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`
       if (!window.confirm(msg)) return false
       const today0 = iso(new Date())
-      const hist = { date: today0, name: s.name, area: s.area, start: Math.min(Math.round(s.origStart ?? s.start), Math.round(now)), dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+      const logId = uid()
+      const startD = s.startedAt != null ? new Date(s.startedAt) : null
+      const histDay = startD ? iso(startD) : today0
+      const histStart = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
+      const hist: HistoryRow = { date: histDay, name: s.name, area: s.area, start: histStart, dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
       save({ session: ns, history: dataRef.current.history.concat([hist]), ...extraPatch })
       showUndo(`✓ Guardé ${hm(el)} de «${s.name}» y empecé «${ns.name}»`, () => save({ history: dataRef.current.history.filter(h => h !== hist) }))
       if (s.taskId && s.epicaId) {
         const tt = tasksRef.current.find(x => x.task.id === s.taskId)
         if (tt) {
-          const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today0, note: `⏱ ${hm(el)} trabajado`, pct: tt.task.progress, min: el } as EpicaProgressEntry]
+          const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: histDay, note: `⏱ ${hm(el)} trabajado`, pct: tt.task.progress, min: el, logId } as EpicaProgressEntry]
           const upd: EpicaTask = { ...tt.task, progressLog: log }
           syncTask(s.epicaId, upd)
           setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
@@ -1051,9 +1085,26 @@ export default function TiempoClient() {
     setAllTasks(prev => (prev || []).filter(x => x.task.id !== task.id))
     setSelTaskId(id => id === task.id ? null : id); setEditTask(null)
   }
+  // Mantiene la bitácora de Épicas en sync con un registro de Tiempo: al BORRAR (newDur=null) quita
+  // su entrada de progressLog; al EDITAR la duración, ajusta el `min`. Liga por `logId`. Así el
+  // "tiempo invertido" de Épicas no diverge de lo que ves en Tiempo (bug de la revisión).
+  const adjustEpicLog = (row: HistoryRow, newDur: number | null) => {
+    if (!row.taskId || !row.epicaId || !row.logId) return
+    const tt = tasksRef.current.find(x => x.task.id === row.taskId); if (!tt) return
+    const cur = (tt.task.progressLog as EpicaProgressEntry[] | undefined) || []
+    if (!cur.some(l => l.logId === row.logId)) return
+    const log = newDur == null
+      ? cur.filter(l => l.logId !== row.logId)
+      : cur.map(l => l.logId === row.logId ? { ...l, min: newDur, note: `⏱ ${hm(newDur)} trabajado` } : l)
+    const upd: EpicaTask = { ...tt.task, progressLog: log }
+    syncTask(row.epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task: upd } : x))
+  }
   // Registro de hoy (localStorage): editar entradas (auto-guardado, NO cierra el editor).
   const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
+    const row = dataRef.current.history[idx]
     save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, ...patch } : h) })
+    if (row && typeof patch.dur === 'number' && patch.dur !== row.dur) adjustEpicLog(row, patch.dur)
   }
   // Toast "deshacer": guarda una acción de restauración por ~6s.
   const showUndo = (msg: string, fn: () => void) => {
@@ -1063,7 +1114,26 @@ export default function TiempoClient() {
   }
   // Deshacer re-agrega el ELEMENTO borrado sobre el estado actual (dataRef), no restaura un
   // snapshot completo del arreglo (que pisaría cualquier cambio hecho mientras el toast estaba visible).
-  const delHist = (idx: number) => { const row = data.history[idx]; if (!row) return; save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null); showUndo('Registro borrado', () => save({ history: [...dataRef.current.history, row] })) }
+  // skipEpicSync = la llamó reopenTask, que YA ajustó Épicas en una sola escritura (evita la 2ª
+  // escritura encadenada que, con tasksRef aún sin actualizar, revertía el reopen a "Terminada").
+  const delHist = (idx: number, skipEpicSync = false) => {
+    const row = data.history[idx]; if (!row) return
+    // guarda la entrada de bitácora ligada (para poder restaurarla al deshacer) y quítala de Épicas
+    let removedLog: EpicaProgressEntry | undefined
+    if (!skipEpicSync && row.taskId && row.logId) { removedLog = ((tasksRef.current.find(x => x.task.id === row.taskId)?.task.progressLog as EpicaProgressEntry[] | undefined) || []).find(l => l.logId === row.logId) }
+    if (!skipEpicSync) adjustEpicLog(row, null)
+    save({ history: data.history.filter((_, i) => i !== idx) }); setHistIdx(null)
+    showUndo('Registro borrado', () => {
+      save({ history: [...dataRef.current.history, row] })
+      if (removedLog && row.taskId && row.epicaId) {   // restaura también el tiempo en Épicas
+        const tt = tasksRef.current.find(x => x.task.id === row.taskId); if (!tt) return
+        const cur = (tt.task.progressLog as EpicaProgressEntry[] | undefined) || []
+        if (cur.some(l => l.logId === row.logId)) return
+        const upd: EpicaTask = { ...tt.task, progressLog: [...cur, removedLog!] }
+        syncTask(row.epicaId, upd); setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task: upd } : x))
+      }
+    })
+  }
   const deleteBlock = (id: string) => { const blk = data.blocks.find(x => x.id === id); if (!blk) return; save({ blocks: data.blocks.filter(x => x.id !== id) }); showUndo('Bloque borrado', () => save({ blocks: [...dataRef.current.blocks, blk] })) }
   // Reabre una tarea en Épicas (En curso, sin doneAt) SIN clobber: usa el objeto completo.
   const reopenByTask = (epicaId: string, taskId: string) => {
@@ -1077,8 +1147,19 @@ export default function TiempoClient() {
   // (así, si algo falla, no se pierde el registro).
   const reopenTask = (idx: number) => {
     const row = data.history[idx]; if (!row) return
-    if (row.taskId && row.epicaId) reopenByTask(row.epicaId, row.taskId)
-    delHist(idx)
+    // Reabrir + quitar su tiempo de la bitácora en UNA sola escritura (si lo hiciéramos en dos, la
+    // 2ª leería tasksRef aún sin actualizar y revertiría el reopen). Luego se borra la fila local.
+    if (row.taskId && row.epicaId) {
+      const tt = tasksRef.current.find(x => x.task.id === row.taskId)
+      if (tt) {
+        const cur = (tt.task.progressLog as EpicaProgressEntry[] | undefined) || []
+        const progressLog = row.logId ? cur.filter(l => l.logId !== row.logId) : cur
+        const upd: EpicaTask = { ...tt.task, status: 'En curso', doneAt: undefined, progressLog }
+        syncTask(row.epicaId, upd)
+        setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task: upd } : x))
+      }
+    }
+    delHist(idx, true)   // Épicas ya quedó sincronizado arriba
   }
   // Al guardar el registro con el check "se terminó" cambiado, sincroniza a Épicas.
   const syncHistDone = (row: AppData['history'][number], done: boolean) => {
@@ -1137,14 +1218,20 @@ export default function TiempoClient() {
       save({ session: null }); showUndo(`Descarté «${s.name}» sin registrar`, () => save({ session: s }))
       return
     }
-    const entry = { date: today, name: s.name, area: s.area, start: Math.min(Math.round(s.origStart ?? s.start), Math.round(now)), dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }
+    const logId = uid()   // liga el registro de Tiempo con su entrada en la bitácora de Épicas
+    // Inicio REAL desde el reloj (día + minuto). Antes se acotaba con Math.min(...,now), lo que
+    // corrompía el inicio de una sesión que cruzaba medianoche (lo mandaba al futuro).
+    const startD = s.startedAt != null ? new Date(s.startedAt) : null
+    const entryDay = startD ? iso(startD) : today
+    const startMin = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
+    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, history: dataRef.current.history.concat([entry]) })
-    setTaskDay(today)   // el registro cae en hoy: asegura que la vista lo muestre
+    setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
     showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
-        const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed } as EpicaProgressEntry]
+        const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: entryDay, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed, logId } as EpicaProgressEntry]
         const withLog: EpicaTask = { ...tt.task, progressLog: log }
         const upd: EpicaTask = markDone ? completeTaskFields(withLog, doneDayFor(tt.task, today)) : withLog
         syncTask(s.epicaId, upd)
@@ -1293,6 +1380,7 @@ export default function TiempoClient() {
   }
   // Agregar comentario a la tarea en foco (mismo patrón: sincroniza a Épicas).
   const addCommentOf = (taskId: string, epicaId: string, text: string) => {
+    if (!comentariosReady) { setSaveErr(true); setSaveErrMsg('Para comentar corre sql/epicas-07-comentarios.sql en Supabase.'); return }
     const t = text.trim(); if (!t) return
     const tt = tasksRef.current.find(x => x.task.id === taskId); if (!tt) return
     const comentarios = [...(tt.task.comentarios || []), { at: new Date().toISOString(), text: t }]
@@ -1318,8 +1406,8 @@ export default function TiempoClient() {
   }
   const cancel = () => save({ session: null })
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
-  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, Math.round(elapsedMin(s.start, now))), pausedAt: Math.round(now) } }) }
-  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), pausedAt: undefined } }) }
+  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now) } }) }
+  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined } }) }
   // Volver a trabajar una actividad YA registrada hoy (la hiciste a las 11 y la retomas a las 3):
   // arranca una NUEVA sesión con el mismo nombre/área (y su tarea de Épicas si venía de una),
   // contador libre. Se ACUMULA: al terminar genera otro bloque en el día y otra entrada de tiempo.
@@ -2141,7 +2229,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} resumenReady={resumenReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -3750,10 +3838,12 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, resumenReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
+function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[] }[]
   resumenReady: boolean
+  remindReady: boolean
+  comentariosReady: boolean
   nextPlanOrder: (day: string) => number
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
@@ -3948,7 +4038,7 @@ function TaskDetail({ info, epicas, resumenReady, nextPlanOrder, onAutoSave, onU
             <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
             <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Vence</NLbl><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={nf} /></label>
           </div>
-          <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" disabled={!remindReady} title={remindReady ? undefined : 'Corre sql/epicas-06-remind.sql en Supabase para usar recordatorios'} value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%', opacity: remindReady ? 1 : 0.5 }} /></label>
 
           <NLbl>Repetición</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -4005,10 +4095,12 @@ function TaskDetail({ info, epicas, resumenReady, nextPlanOrder, onAutoSave, onU
             {(t.comentarios || []).map((c, i) => (
               <div key={i} style={{ fontSize: 13, color: '#3a4a63', lineHeight: 1.5 }}><span style={{ color: 'rgba(20,35,61,0.45)' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
             ))}
-            <div style={{ display: 'flex', gap: 7 }}>
-              <input value={comment} placeholder="Escribe un comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...nf, flex: 1 }} />
-              <button onClick={addComment} style={smallBtn}>Comentar</button>
-            </div>
+            {comentariosReady ? (
+              <div style={{ display: 'flex', gap: 7 }}>
+                <input value={comment} placeholder="Escribe un comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...nf, flex: 1 }} />
+                <button onClick={addComment} style={smallBtn}>Comentar</button>
+              </div>
+            ) : <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>Para comentar, corre <code>sql/epicas-07-comentarios.sql</code> en Supabase.</span>}
           </div>
 
           </div>

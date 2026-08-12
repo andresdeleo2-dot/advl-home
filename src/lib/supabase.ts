@@ -39,6 +39,7 @@ export type EpicaMilestone = {
   doneAt?: string
   auto?: 'tareas'           // el avance se calcula con las tareas cerradas de la épica
   lowerIsBetter?: boolean   // para metas que bajan (peso, deuda…)
+  start?: number            // valor de PARTIDA (baseline) para medir el avance de metas que bajan
   taskIds?: string[]        // tareas que cuentan para este objetivo (los "key results")
 }
 export type EpicaRoutine = {
@@ -86,7 +87,7 @@ export type EpicaTask = {
   repeatUntil?: string                 // 'YYYY-MM-DD' opcional: fin de la serie
   repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)
 }
-export type EpicaProgressEntry = { d: string; note?: string; pct?: number } // d = 'YYYY-MM-DD', pct = % al final de ese día
+export type EpicaProgressEntry = { d: string; note?: string; pct?: number; min?: number; logId?: string } // d = 'YYYY-MM-DD', pct = % al final de ese día; min = minutos trabajados (desde Tiempo); logId = liga con el registro de Tiempo
 export type EpicaTaskComment = { at: string; text: string }                 // at = ISO datetime
 export type EpicaLink = { l: string; url: string; type: string; primary?: boolean }
 

@@ -46,8 +46,10 @@ export async function GET() {
   const planHistReady = tareas.length ? ('plan_hist' in (tareas[0] as object)) : false
   // Igual para `orden`: el cliente sólo estampa/manda `orden` cuando la columna existe.
   const ordenReady = tareas.length ? ('orden' in (tareas[0] as object)) : false
-  const remindReady = tareas.length ? ('remind_at' in (tareas[0] as object)) : false
-  const comentariosReady = tareas.length ? ('comentarios' in (tareas[0] as object)) : false
+  // Sin tareas no se puede inspeccionar la fila: se asume READY (optimista) para no bloquear el
+  // recordatorio/comentario al crear la PRIMERA tarea si la migración ya está aplicada.
+  const remindReady = tareas.length ? ('remind_at' in (tareas[0] as object)) : true
+  const comentariosReady = tareas.length ? ('comentarios' in (tareas[0] as object)) : true
   const resumenReady = tareas.length ? ('resumen' in (tareas[0] as object)) : false
 
   return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady })

@@ -497,7 +497,9 @@ export function milestoneProgress(m: EpicaMilestone, e: Epica): { cur: number; t
   if (!target) return { cur, target: 0, pct: 0, hasMeta: false, linked: ids.length }
   let pct: number
   if (m.lowerIsBetter) {
-    const start = Math.max(m.current ?? target, target)
+    // Baseline: el valor de PARTIDA. Sin él, `start` valía `current` cada render → la barra se
+    // quedaba en 0% todo el trayecto. Se usa `m.start` (capturado en el editor) si existe.
+    const start = m.start ?? Math.max(m.current ?? target, target)
     pct = start === target ? 1 : (start - cur) / (start - target)
   } else pct = cur / target
   return { cur, target, pct: Math.max(0, Math.min(1, pct)), hasMeta: true, linked: ids.length }
