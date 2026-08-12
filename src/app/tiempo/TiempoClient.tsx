@@ -1730,6 +1730,7 @@ export default function TiempoClient() {
             onStart={startScheduled}
             onResume={resumeActivity}
             onEdit={(t) => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })}
+            onStartTask={(t) => startTask({ epicaId: t.epicaId, task: t.task }, durByDiff(t.task))}
             onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }}
             onNewTask={(epId) => { const e = epicasList.find(x => x.id === epId) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: planDay, links: [] } }) }}
           />
@@ -3352,7 +3353,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -3363,6 +3364,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onStart: (s: ScheduledBlock) => void
   onResume: (row: HistoryRow) => void
   onEdit: (t: TodayTask) => void
+  onStartTask: (t: TodayTask) => void
   onOpenTask: (taskId: string) => void
   onNewTask: (epicaId?: string) => void
   session: PlanSession | null
@@ -3466,6 +3468,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           <div style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</div>
           <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.epicaName}</div>
         </div>
+        <button onPointerDown={e => e.stopPropagation()} onClick={() => onStartTask(t)} title="Comenzar esta tarea ahora" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 9px', fontSize: 12, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶</button>
         <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la actividad completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 10px', fontSize: 12, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
         <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
       </div>
