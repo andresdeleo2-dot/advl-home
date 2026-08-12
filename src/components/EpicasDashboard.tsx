@@ -150,6 +150,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [mdSel, setMdSel] = useState<{ eId: string; tid: string } | null>(null)  // tarea seleccionada en la vista maestro/detalle
   const [mdRange, setMdRange] = useState<'todas' | 'semana' | '2sem' | 'mes'>('todas')  // rango de fecha en Detalle/Agenda del Enfoque
   const [mdDay, setMdDay] = useState<string>('')                    // filtro por día concreto (L-D) en Detalle/Agenda del Enfoque
+  const [workFilter, setWorkFilter] = useState<'' | 'plan' | 'openworked' | 'unworked'>('')  // filtro por estado de trabajo del día (Día/Detalle): planeadas · trabajadas sin terminar · sin trabajar
   const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
   const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
   const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
@@ -327,7 +328,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const p = loadPrefs()
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
-    setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode)
+    setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode === '2sem' || p.planMode === 'mes' ? '3sem' : p.planMode)
     setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setBoardView(p.boardView || 'tablero'); setEpicView(p.epicView); setDayCapacity(p.dayCapacity || 8)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
     setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
@@ -363,7 +364,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const MODES = ['dia', 'semana', 'ajuste', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen', 'agenda', 'detalle']
     const applyFromUrl = () => {
       const q = new URLSearchParams(window.location.search)
-      const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode(v as typeof planMode)
+      const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode((v === '2sem' || v === 'mes' ? '3sem' : v) as typeof planMode)
       const d = q.get('d'); if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setViewDate(d)
       const e = q.get('e'); if (e) setFeaturedId(e)
       const tsk = q.get('t'); if (tsk && e) setTimeout(() => openTaskEditRef.current?.(e, tsk), 0)
@@ -683,6 +684,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Plan de hoy: derivados ─────────────────────────────── */
   const isToday = viewDate === today
+  /** Filtro por estado de trabajo de un día `ref` (para Día y Detalle):
+   *  plan = las que se trabajarán ese día · openworked = trabajadas ese día pero sin
+   *  terminar · unworked = aún sin trabajar ese día. '' = todas. */
+  const passWork = (t: EpicaTask, ref: string) => {
+    if (!workFilter) return true
+    const worked = (t.progressLog || []).some(x => x.d === ref)
+    return workFilter === 'plan' ? t.plan === ref
+      : workFilter === 'openworked' ? (worked && t.status !== 'Terminada')
+      : (!worked && t.status !== 'Terminada')   // unworked
+  }
+  const renderWorkFilters = (ref: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 10px' }}>
+      <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>{ref === today ? '⚡ Trabajo de hoy' : '⚡ Trabajo del día'}</span>
+      {([['plan', '▶ Se trabajarán'], ['openworked', '◐ Trabajadas · sin terminar'], ['unworked', '○ Sin trabajar']] as const).map(([k, label]) => {
+        const on = workFilter === k
+        return <button key={k} onClick={() => setWorkFilter(on ? '' : k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', fontSize: 11, fontWeight: 700, border: on ? '1.5px solid #2E6E6E' : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(62,142,142,0.12)' : '#fff', color: on ? '#1F5A5A' : 'rgba(20,35,61,0.6)' }}>{label}</button>
+      })}
+      {workFilter && <button onClick={() => setWorkFilter('')} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#1F5A5A', fontSize: 11, fontWeight: 700 }}>Todas</button>}
+    </div>
+  )
   const planKey = (eId: string, t: EpicaTask) => `${eId}:${t.id}`
   /** Resuelve una referencia estable (épica + id de tarea) al índice actual.
    *  Devuelve null si la tarea ya no existe: así una referencia abierta (modal,
@@ -3997,7 +4018,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" className="ep-modes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
-                {([['dia', 'Día'], ['semana', 'Semana'], ['ajuste', 'Ajuste'], ['2sem', '2 sem'], ['3sem', '3 sem'], ['mes', 'Mes'], ['agenda', 'Agenda'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen'], ['detalle', 'Detalle']] as const).map(([m, label]) => {
+                {([['dia', 'Día'], ['detalle', 'Detalle'], ['semana', 'Semana'], ['ajuste', 'Ajuste'], ['3sem', '3 sem'], ['agenda', 'Agenda'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
@@ -4059,7 +4080,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const inRange = (t: EpicaTask) => mdRange === 'todas' ? true : (!!t.plan && t.plan >= rStartUse && t.plan <= rEnd)
             const weekDays = Array.from({ length: 7 }, (_, k) => addDays(rStart, k))   // L-D de esta semana
             const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
-              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif) && !(boardHideDone && x.t.status === 'Terminada') && inRange(x.t) && (!mdDay || x.t.plan === mdDay))
+              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif) && !(boardHideDone && x.t.status === 'Terminada') && inRange(x.t) && (!mdDay || x.t.plan === mdDay) && passWork(x.t, today))
             const rangeChips = (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 8px' }}>
@@ -4081,7 +4102,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{renderWorkFilters(today)}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
@@ -4191,7 +4212,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const dayEpics = Array.from(new Map(planItems.map(x => [x.e.id, x.e])).values())
                 const effDayEpica = dayEpics.some(e => e.id === dayEpica) ? dayEpica : 'todas'
                 const passE = (ep: Epica) => effDayEpica === 'todas' || ep.id === effDayEpica
-                const filtered = planPend.filter(x => passF(x.t) && passE(x.e))
+                const filtered = planPend.filter(x => passF(x.t) && passE(x.e) && passWork(x.t, viewDate))
                 const cmp = (a: typeof planPend[number], b: typeof planPend[number]) => {
                   if (planSort === 'prioridad') return (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) || ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9))
                   if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
@@ -4202,7 +4223,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const manual = planSort === 'plan'
                 const list = manual ? filtered : [...filtered].sort(cmp)
                 const table = dayView === 'tabla'
-                const tableRows = planItems.filter(x => passF(x.t) && passE(x.e))   // pend + hechas, para la tabla
+                const tableRows = planItems.filter(x => passF(x.t) && passE(x.e) && passWork(x.t, viewDate))   // pend + hechas, para la tabla
                 const visibleKeys = (table ? tableRows : list).map(x => planKey(x.e.id, x.t))
                 return (
                   <>
@@ -4249,6 +4270,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {!table && !manual && planFilter === 'todas' && list.length > 1 && <button onClick={() => commitPlanOrder(list)} aria-label="Guardar este orden como el orden manual" title="Guardar este orden como el orden manual" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', font: '700 11px var(--font-ui)' }}>Fijar este orden</button>}
                       </div>
                     )}
+                    {planItems.length > 0 && renderWorkFilters(viewDate)}
                     {manual && planFilter === 'todas' && filtered.length > 1 && planSel.size === 0 && (
                       <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}>En orden de arriba hacia abajo · el 01 es por dónde empiezas · arrastra para reordenar.</div>
                     )}
