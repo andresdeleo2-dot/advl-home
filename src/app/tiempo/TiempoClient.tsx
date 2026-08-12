@@ -3505,6 +3505,33 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         </div>
       </div>
 
+      {/* Resumen arriba: trabajadas (real) · planeadas total · planeadas hasta ahora */}
+      {(() => {
+        const realMin = worked.reduce((a, w) => a + w.dur, 0)
+        const planTotalMin = scheduled.reduce((a, s) => a + s.dur, 0)
+        const nowM = Math.round(now)
+        const planByNow = scheduled.reduce((a, s) => a + Math.max(0, Math.min(s.dur, nowM - s.start)), 0)
+        const behind = planByNow - realMin
+        const stat = (v: string, l: string, c: string) => (
+          <div style={{ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 14, padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 118 }}>
+            <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, color: c }}>{v}</span>
+            <span style={{ fontSize: 11.5, color: '#a49b90' }}>{l}</span>
+          </div>
+        )
+        return (
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            {stat(hm(realMin), `trabajadas${isToday ? ' hoy' : ''}`, '#6f8256')}
+            {stat(hm(planTotalMin), 'planeadas · total', '#c2933a')}
+            {isToday && stat(hm(planByNow), 'planeadas a esta hora', '#8a4b28')}
+            {isToday && planByNow > 0 && (
+              <span style={{ fontSize: 13, fontWeight: 500, color: behind <= 0 ? '#4f6238' : '#8a3c2a', background: behind <= 0 ? '#eef1e7' : '#f6e3dd', border: `1px solid ${behind <= 0 ? '#cfe0c4' : '#e8cabf'}`, borderRadius: 999, padding: '7px 13px' }}>
+                {behind <= 0 ? `✓ vas al día (${hm(-behind)} de margen)` : `vas ${hm(behind)} por debajo de lo planeado`}
+              </span>
+            )}
+          </div>
+        )
+      })()}
+
       <div className="plan-wrap">
         {/* Rejilla de horas */}
         <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
