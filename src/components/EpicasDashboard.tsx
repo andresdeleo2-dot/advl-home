@@ -684,15 +684,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Plan de hoy: derivados ─────────────────────────────── */
   const isToday = viewDate === today
-  /** Filtro por estado de trabajo de un día `ref` (para Día y Detalle):
-   *  plan = las que se trabajarán ese día · openworked = trabajadas ese día pero sin
-   *  terminar · unworked = aún sin trabajar ese día. '' = todas. */
+  /** Filtro por estado de trabajo:
+   *  plan       = las que se trabajarán en `ref` (planeadas para ese día).
+   *  openworked = "Trabajadas · sin terminar": se trabajó en ellas EL DÍA EN EL QUE
+   *               ESTÁN (su propio día planeado) y siguen abiertas. NO cuenta si se
+   *               trabajó en ellas otros días distintos a su día.
+   *  unworked   = aún sin trabajar en su día, abiertas. '' = todas. */
   const passWork = (t: EpicaTask, ref: string) => {
     if (!workFilter) return true
-    const worked = (t.progressLog || []).some(x => x.d === ref)
-    return workFilter === 'plan' ? t.plan === ref
-      : workFilter === 'openworked' ? (worked && t.status !== 'Terminada')
-      : (!worked && t.status !== 'Terminada')   // unworked
+    if (workFilter === 'plan') return t.plan === ref
+    const workedOwnDay = !!t.plan && (t.progressLog || []).some(x => x.d === t.plan)
+    return workFilter === 'openworked'
+      ? (workedOwnDay && t.status !== 'Terminada')
+      : (!workedOwnDay && t.status !== 'Terminada')   // unworked (sin trabajar en su día)
   }
   const renderWorkFilters = (ref: string) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 10px' }}>
