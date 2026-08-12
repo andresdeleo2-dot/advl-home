@@ -3376,6 +3376,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en la rejilla → registrar algo ya hecho
   // Editor de hora (lápiz) de cualquier tarjeta del calendario: agendada, hecha o la sesión en curso.
   const [timeEdit, setTimeEdit] = useState<{ target: 'sched' | 'worked' | 'session'; ref: string; start: number; dur: number; live: boolean; name: string } | null>(null)
+  // Barra de acciones flotante para tarjetas CORTAS (donde los botones no caben): aparece al pasar
+  // el mouse / tocar, en tamaño cómodo, anclada a la tarjeta. Evita botones encimados en 15m/1m.
+  const [actBar, setActBar] = useState<{ kind: 'sched' | 'worked' | 'session'; ref: string; top: number; lane: 'left' | 'right' } | null>(null)
+  const actTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showActBar = (b: { kind: 'sched' | 'worked' | 'session'; ref: string; top: number; lane: 'left' | 'right' }) => { if (actTimer.current) clearTimeout(actTimer.current); setActBar(b) }
+  const hideActBarSoon = () => { if (actTimer.current) clearTimeout(actTimer.current); actTimer.current = setTimeout(() => setActBar(null), 260) }
   const isToday = day === today
   const week = weekOfISO(day)
   const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
@@ -3503,7 +3509,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         {/* Rejilla de horas */}
         <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
           <div ref={gridRef}
-            onPointerDown={e => { if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { onAddFree(selFree, yToMin(e.clientY)); setSelFree(null) } }}
+            onPointerDown={e => { setActBar(null); if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { onAddFree(selFree, yToMin(e.clientY)); setSelFree(null) } }}
             onDoubleClick={e => { if (!selTask && !selFree) setDoneAt(yToMin(e.clientY)) }}
             title="Doble clic en una hora para registrar algo que ya hiciste"
             style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: (selTask || selFree) ? 'copy' : 'default' }}>
@@ -3537,16 +3543,17 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const activeR = drag?.kind === 'wresize' && drag.idx === w._idx
               return (
                 <div key={'w' + w._idx} title={`${w.name} · ${clock(w.start)}–${clock(w.start + dur)} · ${hm(dur)}`}
+                  onPointerEnter={() => { if (!tall) showActBar({ kind: 'worked', ref: String(w._idx), top: topOf(w.start), lane: 'left' }) }}
                   onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${w.name} · ${clock(w.start)}–${clock(w.start + dur)} · ${hm(dur)}` }) }}
-                  onPointerLeave={() => setHover(null)}
+                  onPointerLeave={() => { setHover(null); hideActBarSoon() }}
                   style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 2, boxShadow: activeR ? '0 6px 18px rgba(28,26,23,.16)' : 'none', zIndex: activeR ? 20 : 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + dur)} · {hm(dur)}</span>
-                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
+                    {tall && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
                       <button onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'worked', ref: String(w._idx), start: w.start, dur: w.dur, live: false, name: w.name }) }} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       <button onClick={e => { e.stopPropagation(); onResume(w) }} title="Volver a empezar" style={planBtn}>↻</button>
                       {openable && <button onClick={e => { e.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver la tarea" style={planBtn}>👁</button>}
-                    </div>
+                    </div>}
                   </div>
                   {tall && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
                   {/* Asa para redimensionar (agrandar/disminuir) */}
@@ -3572,10 +3579,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const plannedEnd = session.plannedDur > 0 ? start + session.plannedDur : nowM
               const endM = Math.max(start + SNAP, plannedEnd, nowM)   // llega a lo planeado o a ahora (si te pasaste)
               const doneH = Math.max(0, Math.min(endM, nowM) - start) // lo transcurrido dentro de la banda
+              const tallS = (endM - start) * PXM >= 40
               return (
-                <div onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'session', grab: yToMin(e.clientY) - session.start, start0: start, curMin: start, moved: false, x: e.clientX, y: e.clientY }) }}
+                <div onPointerEnter={() => { if (!tallS) showActBar({ kind: 'session', ref: 'session', top: topOf(start), lane: 'left' }) }}
+                  onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'session', grab: yToMin(e.clientY) - session.start, start0: start, curMin: start, moved: false, x: e.clientX, y: e.clientY }) }}
                   onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${session.name} · en curso · empezó ${clock(start)}${session.plannedDur > 0 ? ` · planeado ${hm(session.plannedDur)}` : ''} · llevas ${hm(session.dur)}` }) }}
-                  onPointerLeave={() => setHover(null)}
+                  onPointerLeave={() => { setHover(null); hideActBarSoon() }}
                   title="Actividad en curso — clic para abrir · arrastra para corregir la hora en que empezaste"
                   style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(start), height: hOf(endM - start), background: 'rgba(192,57,43,.06)', border: '1.5px solid #c0392b', borderRadius: 10, cursor: 'grab', touchAction: 'none', zIndex: 26, overflow: 'hidden' }}>
                   {/* relleno de lo transcurrido */}
@@ -3584,7 +3593,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: '#c0392b', flexShrink: 0 }}>▶ EN CURSO</span>
                     <span style={{ fontSize: 11, color: '#8b8379', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)} · {hm(session.dur)}</span>
                     <span style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{session.name}</span>
-                    <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name }) }} title="Editar la hora en que empezaste" style={{ ...planBtn, marginLeft: 'auto', color: '#c0392b', flexShrink: 0 }}>✎</button>
+                    {tallS && <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name }) }} title="Editar la hora en que empezaste" style={{ ...planBtn, marginLeft: 'auto', color: '#c0392b', flexShrink: 0 }}>✎</button>}
                   </div>
                 </div>
               )
@@ -3598,19 +3607,20 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const active = drag && 'id' in drag && drag.id === s.id
               return (
                 <div key={s.id}
+                  onPointerEnter={() => { if (!tall) showActBar({ kind: 'sched', ref: s.id, top: topOf(start), lane: 'right' }) }}
                   onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
                   onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${s.name} · ${clock(s.start)}–${clock(s.start + s.dur)} · ${hm(s.dur)}` }) }}
-                  onPointerLeave={() => setHover(null)}
+                  onPointerLeave={() => { setHover(null); hideActBarSoon() }}
                   style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: s.started ? '#f7f4ee' : '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', opacity: s.started ? 0.72 : 1, boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{s.started ? '✓ ' : ''}{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
                     <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}{s.started ? ' · plan' : ''}</span>
-                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
+                    {tall && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
                       {!s.started && <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title="Comenzar ahora" style={planBtn}>▶</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la tarea" style={planBtn}>👁</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>
-                    </div>
+                    </div>}
                   </div>
                   {/* Asa para redimensionar */}
                   <div onPointerDown={e => { e.stopPropagation(); setDrag({ kind: 'resize', id: s.id, start: s.start, curDur: s.dur, x: e.clientX, y: e.clientY }) }}
@@ -3624,6 +3634,31 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
             {(drag?.kind === 'new' || drag?.kind === 'newfree') && drag.curMin != null && (
               <div style={{ position: 'absolute', left: '50%', right: 6, top: topOf(drag.curMin), height: hOf(drag.dur), background: 'rgba(180,101,58,.14)', border: '1.5px dashed #b4653a', borderRadius: 10, pointerEvents: 'none', zIndex: 30 }} />
             )}
+            {/* Barra de acciones flotante para tarjetas cortas (aparece al pasar el mouse / tocar) */}
+            {actBar && !drag && (() => {
+              const s = actBar.kind === 'sched' ? scheduled.find(x => x.id === actBar.ref) : null
+              const w = actBar.kind === 'worked' ? worked.find(x => String(x._idx) === actBar.ref) : null
+              const t = s ? (tasks || []).find(x => x.task.id === s.taskId) : null
+              return (
+                <div onPointerDown={e => e.stopPropagation()} onPointerEnter={() => { if (actTimer.current) clearTimeout(actTimer.current) }} onPointerLeave={hideActBarSoon}
+                  style={{ position: 'absolute', top: Math.max(0, actBar.top - 34), ...(actBar.lane === 'right' ? { right: 8 } : { left: 'calc(50% - 8px)', transform: 'translateX(-100%)' }), zIndex: 40, display: 'flex', gap: 3, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 999, padding: '4px 6px', boxShadow: '0 8px 22px -8px rgba(28,26,23,.4)' }}>
+                  {s && (<>
+                    {!s.started && <button onClick={() => onStart(s)} title="Comenzar ahora" style={actBtn}>▶</button>}
+                    <button onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora" style={actBtn}>✎</button>
+                    {t && <button onClick={() => onEdit(t)} title="Ver la tarea" style={actBtn}>👁</button>}
+                    <button onClick={() => { onRemove(s.id); setActBar(null) }} title="Quitar del plan" style={actBtn}>×</button>
+                  </>)}
+                  {w && (<>
+                    <button onClick={() => setTimeEdit({ target: 'worked', ref: String(w._idx), start: w.start, dur: w.dur, live: false, name: w.name })} title="Editar hora" style={actBtn}>✎</button>
+                    <button onClick={() => onResume(w)} title="Volver a empezar" style={actBtn}>↻</button>
+                    {w.taskId && <button onClick={() => onOpenTask(w.taskId!)} title="Ver la tarea" style={actBtn}>👁</button>}
+                  </>)}
+                  {actBar.kind === 'session' && session && (
+                    <button onClick={() => setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name })} title="Editar la hora en que empezaste" style={{ ...actBtn, color: '#c0392b' }}>✎ inicio</button>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         </div>
 
@@ -3805,6 +3840,8 @@ function PlanAddDone({ tasks, defaultStart, onConfirm, onClose }: {
 }
 const planBtn: CSSProperties = { border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: '#8b8379', width: 22, height: 22, borderRadius: 6, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }
 const weekNav: CSSProperties = { border: '1px solid #e7dfd2', background: '#faf7f1', borderRadius: 999, width: 32, height: 36, fontSize: 18, color: '#6b645b', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }
+// Botón cómodo para la barra de acciones flotante de tarjetas cortas (más grande = fácil de tocar).
+const actBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, minWidth: 30, height: 30, padding: '0 8px', fontSize: 14, color: '#6b645b', cursor: 'pointer', lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap' }
 
 function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing = [], onSchedule, onClose }: {
   tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null; presetName?: string | null
