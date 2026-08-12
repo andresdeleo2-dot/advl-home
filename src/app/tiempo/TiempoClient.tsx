@@ -739,7 +739,7 @@ export default function TiempoClient() {
     })
 
     // Lo que agendaste hoy y aún no pasa (para verlo y arrancarlo desde la lista del día).
-    const scheduledUpcoming = scheduled.filter(s => s.start + s.dur > now).map(s => ({
+    const scheduledUpcoming = scheduled.filter(s => !s.started && s.start + s.dur > now).map(s => ({
       id: s.id, name: s.name, taskId: s.taskId, epicaId: s.epicaId, start: s.start, dur: s.dur, area: s.area,
       range: clock(s.start) + '–' + clock(s.start + s.dur), durLabel: hm(s.dur),
       dot: AREAS[s.area]?.color || '#c2933a',
@@ -1575,8 +1575,9 @@ export default function TiempoClient() {
   const removeScheduled = (id: string) => { const blk = (data.scheduled || []).find(s => s.id === id); if (!blk) return; save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) }); showUndo('Agendado quitado', () => save({ scheduled: [...(dataRef.current.scheduled || []), blk] })) }
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
   const startScheduled = (s: ScheduledBlock) => {
-    // NO cambia de vista: te quedas donde estás (Planificador/Hoy); la sesión sale como popup/banda.
-    if (beginSession({ name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, { scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })) {
+    // NO cambia de vista y NO borra el agendado: lo marca `started` para conservarlo como el PLAN
+    // (carril derecho del Planificador) y poder comparar plan vs real. La sesión sale como popup/banda.
+    if (beginSession({ name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, { scheduled: (data.scheduled || []).map(x => x.id === s.id ? { ...x, started: true } : x) })) {
       setPromptedSched(p => { const n = new Set(p); n.add(s.id); return n })
     }
   }
@@ -1630,7 +1631,7 @@ export default function TiempoClient() {
   // Agendado cuya hora ya llegó y aún no preguntamos (y no hay sesión corriendo): dispara
   // el aviso "¿iniciar ahora?". La ventana termina en start+dur para no avisar de algo ya vencido.
   const dueSched = !data.session
-    ? (data.scheduled || []).find(s => (s.date || iso(new Date())) === iso(new Date()) && !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
+    ? (data.scheduled || []).find(s => !s.started && (s.date || iso(new Date())) === iso(new Date()) && !promptedSched.has(s.id) && now + 0.5 >= s.start && now <= s.start + Math.max(15, s.dur))
     : undefined
 
   // Aviso de juntas del calendario: ~10 min antes y al empezar (una vez cada uno, con la pestaña abierta).
@@ -3576,14 +3577,14 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                   onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${session.name} · en curso · empezó ${clock(start)}${session.plannedDur > 0 ? ` · planeado ${hm(session.plannedDur)}` : ''} · llevas ${hm(session.dur)}` }) }}
                   onPointerLeave={() => setHover(null)}
                   title="Actividad en curso — clic para abrir · arrastra para corregir la hora en que empezaste"
-                  style={{ position: 'absolute', left: 2, right: 6, top: topOf(start), height: hOf(endM - start), background: 'rgba(192,57,43,.05)', border: '1.5px solid #c0392b', borderRadius: 10, cursor: 'grab', touchAction: 'none', zIndex: 26, overflow: 'hidden' }}>
+                  style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(start), height: hOf(endM - start), background: 'rgba(192,57,43,.06)', border: '1.5px solid #c0392b', borderRadius: 10, cursor: 'grab', touchAction: 'none', zIndex: 26, overflow: 'hidden' }}>
                   {/* relleno de lo transcurrido */}
                   <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: hOf(doneH), background: 'rgba(192,57,43,.13)', pointerEvents: 'none' }} />
                   <div style={{ position: 'relative', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: '#c0392b', flexShrink: 0 }}>▶ EN CURSO</span>
-                    <span style={{ fontSize: 11.5, color: '#8b8379', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}{session.plannedDur > 0 ? `–${clock(plannedEnd)} · planeado ${hm(session.plannedDur)}` : ''} · llevas {hm(session.dur)}</span>
-                    <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.name}</span>
-                    <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name }) }} title="Editar la hora en que empezaste" style={{ ...planBtn, marginLeft: 'auto', color: '#c0392b' }}>✎</button>
+                    <span style={{ fontSize: 11, color: '#8b8379', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)} · {hm(session.dur)}</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{session.name}</span>
+                    <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name }) }} title="Editar la hora en que empezaste" style={{ ...planBtn, marginLeft: 'auto', color: '#c0392b', flexShrink: 0 }}>✎</button>
                   </div>
                 </div>
               )
@@ -3600,12 +3601,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                   onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
                   onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${s.name} · ${clock(s.start)}–${clock(s.start + s.dur)} · ${hm(s.dur)}` }) }}
                   onPointerLeave={() => setHover(null)}
-                  style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: s.started ? '#f7f4ee' : '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', opacity: s.started ? 0.72 : 1, boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                    <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
-                    <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                    <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{s.started ? '✓ ' : ''}{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}{s.started ? ' · plan' : ''}</span>
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
-                      <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title="Comenzar ahora" style={planBtn}>▶</button>
+                      {!s.started && <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title="Comenzar ahora" style={planBtn}>▶</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la tarea" style={planBtn}>👁</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>

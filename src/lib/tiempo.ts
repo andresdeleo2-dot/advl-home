@@ -18,7 +18,7 @@ export type HistoryRow = { date: string; name: string; area: Area; start: number
 
 /** Tarea de Épicas (o actividad libre) agendada para HOY a una hora concreta. Al llegar
  *  la hora, la app pregunta si la quieres iniciar. Vive sólo en el estado de Tiempo. */
-export type ScheduledBlock = { id: string; name: string; area: Area; start: number; dur: number; date?: string; epicaId?: string; taskId?: string }
+export type ScheduledBlock = { id: string; name: string; area: Area; start: number; dur: number; date?: string; epicaId?: string; taskId?: string; started?: boolean }
 
 /** Chips de día en el orden L M X J V S D con su índice getDay(). */
 export const DOW_CHIPS: { lbl: string; i: number }[] = [
