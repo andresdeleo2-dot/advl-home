@@ -1,13 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel,
-  type AppData, type Area, type ScheduledBlock,
+  type AppData, type Area, type ScheduledBlock, type Block,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor } from '@/components/epicas/core'
@@ -80,7 +80,7 @@ const dayIdxMon = (s: string) => { const [y, m, d] = s.split('-').map(Number); r
 
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
-  const [view, setView] = useState<'hoy' | 'semana' | 'rutina' | 'historial'>('hoy')
+  const [view, setView] = useState<'plan' | 'hoy' | 'semana' | 'rutina' | 'historial'>('hoy')
   const [hoyPanel, setHoyPanel] = useState<'both' | 'resumen' | 'tareas'>('both')   // vista Hoy: ambos paneles, o uno maximizado
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1362,7 +1362,13 @@ export default function TiempoClient() {
   const bed = data.bed, sleepGoal = data.sleep
   const today = iso(new Date())
 
-  const tabs: [typeof view, string][] = [['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
+  const tabs: [typeof view, string][] = [['plan', 'Plan de hoy'], ['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
+
+  // ── Plan de hoy: helpers de agendado (siempre fecha = hoy) ─────────────
+  const planAdd = (t: TodayTask, start: number, dur = 15) =>
+    save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: today, epicaId: t.epicaId, taskId: t.task.id }] })
+  const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
+    save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
 
   // Agendado cuya hora ya llegó y aún no preguntamos (y no hay sesión corriendo): dispara
   // el aviso "¿iniciar ahora?". La ventana termina en start+dur para no avisar de algo ya vencido.
@@ -1437,7 +1443,21 @@ export default function TiempoClient() {
           </div>
         </div>
 
-        {!loaded ? <div style={{ height: 320 }} /> : view === 'hoy' ? (
+        {!loaded ? <div style={{ height: 320 }} /> : view === 'plan' ? (
+          /* ── PLAN DE HOY (calendario de arrastre) ──────────────────── */
+          <PlanDia
+            tasks={tasks}
+            scheduled={(data.scheduled || []).filter(s => (s.date || today) === today)}
+            blocks={data.blocks.filter(b => blockActiveOn(b, new Date().getDay()))}
+            meetings={meetings.filter(m => m.date === today)}
+            now={now}
+            onAdd={planAdd}
+            onPatch={planPatch}
+            onRemove={removeScheduled}
+            onStart={startScheduled}
+            onEdit={(t) => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })}
+          />
+        ) : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
            <div className="hoy-panels">
@@ -3001,6 +3021,189 @@ function MeetingDescription({ raw }: { raw: string }) {
 
 /** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
+/** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
+ *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
+type PlanDrag =
+  | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
+  | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
+  | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
+function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRemove, onStart, onEdit }: {
+  tasks: TodayTask[] | null; scheduled: ScheduledBlock[]; blocks: Block[]; meetings: Meeting[]; now: number
+  onAdd: (t: TodayTask, start: number, dur?: number) => void
+  onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
+  onRemove: (id: string) => void
+  onStart: (s: ScheduledBlock) => void
+  onEdit: (t: TodayTask) => void
+}) {
+  const PXM = 1.2, SNAP = 15
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<PlanDrag | null>(null)
+  const dragRef = useRef<PlanDrag | null>(null); dragRef.current = drag
+  const [selTask, setSelTask] = useState<string | null>(null)
+
+  // Ventana visible de la rejilla: de la hora más temprana a la más tardía entre eventos, ahora y 7–22h.
+  const [gridStart, gridEnd] = useMemo(() => {
+    let minS = 7 * 60, maxE = 22 * 60
+    const ev = [...scheduled, ...meetings.map(m => ({ start: m.start, dur: m.dur })), ...blocks.map(b => ({ start: b.start, dur: b.dur }))]
+    for (const e of ev) { if (e.start < minS) minS = e.start; if (e.start + e.dur > maxE) maxE = e.start + e.dur }
+    minS = Math.min(minS, Math.round(now) - 30); maxE = Math.max(maxE, Math.round(now) + 90)
+    return [Math.max(0, Math.floor(minS / 60) * 60), Math.min(1440, Math.ceil(maxE / 60) * 60)]
+  }, [scheduled, meetings, blocks, now])
+
+  const snap = (m: number) => Math.round(m / SNAP) * SNAP
+  const yToMin = (clientY: number) => { const r = gridRef.current?.getBoundingClientRect(); if (!r) return gridStart; return Math.max(gridStart, Math.min(gridEnd, gridStart + snap((clientY - r.top) / PXM))) }
+  const overGrid = (clientX: number) => { const r = gridRef.current?.getBoundingClientRect(); return !!r && clientX >= r.left && clientX <= r.right }
+  const topOf = (m: number) => (m - gridStart) * PXM
+  const hOf = (d: number) => Math.max(SNAP * PXM, d * PXM)
+
+  useEffect(() => {
+    if (!drag) return
+    const move = (e: PointerEvent) => {
+      const m = yToMin(e.clientY)
+      setDrag(d => {
+        if (!d) return d
+        if (d.kind === 'new') return { ...d, moved: true, curMin: overGrid(e.clientX) ? m : null, x: e.clientX, y: e.clientY }
+        if (d.kind === 'move') return { ...d, curMin: Math.max(gridStart, Math.min(gridEnd - d.dur, m - d.grab)), x: e.clientX, y: e.clientY }
+        return { ...d, curDur: Math.max(SNAP, Math.min(gridEnd - d.start, snap(m - d.start))), x: e.clientX, y: e.clientY }
+      })
+    }
+    const up = () => {
+      const d = dragRef.current
+      if (d) {
+        if (d.kind === 'new') { if (d.moved && d.curMin != null) onAdd(d.task, d.curMin, d.dur); else setSelTask(p => p === d.task.task.id ? null : (d.task.task.id || null)) }
+        else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
+        else onPatch(d.id, { dur: d.curDur })
+      }
+      setDrag(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+  }, [drag !== null]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const schedIds = new Set(scheduled.map(s => s.taskId).filter(Boolean))
+  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id))
+  const colorFor = (s: ScheduledBlock) => (tasks || []).find(t => t.task.id === s.taskId)?.color || AREAS[s.area]?.color || '#8b8379'
+  const hours: number[] = []; for (let h = gridStart; h <= gridEnd; h += 60) hours.push(h)
+  const gridH = (gridEnd - gridStart) * PXM
+
+  // Popup en vivo con la hora/duración mientras se arrastra o redimensiona.
+  const dragLabel = (() => {
+    if (!drag) return null
+    if (drag.kind === 'new') { if (drag.curMin == null) return null; return { x: drag.x, y: drag.y, txt: `${clock(drag.curMin)}–${clock(drag.curMin + drag.dur)} · ${hm(drag.dur)}` } }
+    if (drag.kind === 'move') return { x: drag.x, y: drag.y, txt: `${clock(drag.curMin)}–${clock(drag.curMin + drag.dur)} · ${hm(drag.dur)}` }
+    return { x: drag.x, y: drag.y, txt: `${clock(drag.start)}–${clock(drag.start + drag.curDur)} · ${hm(drag.curDur)}` }
+  })()
+
+  const chip = (t: TodayTask, onDown: (e: ReactPointerEvent) => void) => {
+    const sel = selTask === t.task.id
+    return (
+      <div key={t.task.id} onPointerDown={onDown}
+        style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 12px', borderRadius: 14, cursor: 'grab', touchAction: 'none',
+          background: sel ? '#f5ece2' : '#faf7f1', border: `1px solid ${sel ? '#b4653a' : '#e7dfd2'}` }}>
+        <span style={{ width: 9, height: 9, borderRadius: 999, background: t.color, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</div>
+          <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.epicaName}</div>
+        </div>
+        <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Plan de hoy</span>
+        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 620 }}>Arrastra una tarea a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). En celular, toca una tarjeta y luego toca la hora.{selTask ? ' — Toca una hora en el calendario para colocar la tarea elegida.' : ''}</span>
+      </div>
+
+      <div className="plan-wrap">
+        {/* Rejilla de horas */}
+        <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
+          <div ref={gridRef}
+            onPointerDown={e => { if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } }}
+            style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: selTask ? 'copy' : 'default' }}>
+            {/* Líneas de hora */}
+            {hours.map(h => (
+              <div key={h} style={{ position: 'absolute', left: 0, right: 0, top: topOf(h), height: 1, background: '#eee6da' }}>
+                <span style={{ position: 'absolute', left: -50, top: -8, fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums' }}>{clock(h)}</span>
+              </div>
+            ))}
+            {/* Fondo: bloques protegidos (rutina) */}
+            {blocks.map(b => (
+              <div key={'b' + b.id} title={b.name} style={{ position: 'absolute', left: 2, right: 6, top: topOf(b.start), height: hOf(b.dur), background: 'repeating-linear-gradient(45deg,#f2ece0,#f2ece0 6px,#efe8db 6px,#efe8db 12px)', border: '1px solid #e7dfd2', borderRadius: 8, padding: '3px 8px', overflow: 'hidden', pointerEvents: 'none' }}>
+                <span style={{ fontSize: 11, color: '#a49b90' }}>🛡 {b.name} · {clock(b.start)}</span>
+              </div>
+            ))}
+            {/* Reuniones del calendario */}
+            {meetings.map(m => (
+              <div key={'m' + m.id} title={m.name} style={{ position: 'absolute', left: 2, right: 6, top: topOf(m.start), height: hOf(m.dur), background: 'rgba(46,90,158,.10)', border: '1px solid rgba(46,90,158,.28)', borderRadius: 8, padding: '3px 8px', overflow: 'hidden', pointerEvents: 'none' }}>
+                <span style={{ fontSize: 11, color: '#2E5A9E' }}>🗓 {m.name || 'Ocupado'} · {clock(m.start)}</span>
+              </div>
+            ))}
+            {/* Línea de ahora */}
+            {now >= gridStart && now <= gridEnd && (
+              <div style={{ position: 'absolute', left: -6, right: 0, top: topOf(now), height: 2, background: '#c0392b', pointerEvents: 'none', zIndex: 5 }}>
+                <span style={{ position: 'absolute', left: -46, top: -8, fontSize: 11, color: '#c0392b', fontWeight: 600 }}>{clock(Math.round(now))}</span>
+              </div>
+            )}
+            {/* Bloques agendados (arrastrables) */}
+            {scheduled.map(s => {
+              const start = drag?.kind === 'move' && drag.id === s.id ? drag.curMin : s.start
+              const dur = drag?.kind === 'resize' && drag.id === s.id ? drag.curDur : s.dur
+              const t = (tasks || []).find(x => x.task.id === s.taskId)
+              const col = colorFor(s); const tall = dur * PXM >= 46
+              const active = drag && 'id' in drag && drag.id === s.id
+              return (
+                <div key={s.id}
+                  onPointerDown={e => { e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
+                  style={{ position: 'absolute', left: 2, right: 6, top: topOf(start), height: hOf(dur), background: '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title="Comenzar ahora" style={planBtn}>▶</button>
+                      {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver actividad" style={planBtn}>✎</button>}
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>
+                    </div>
+                  </div>
+                  {/* Asa para redimensionar */}
+                  <div onPointerDown={e => { e.stopPropagation(); setDrag({ kind: 'resize', id: s.id, start: s.start, curDur: s.dur, x: e.clientX, y: e.clientY }) }}
+                    style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 12, cursor: 'ns-resize', touchAction: 'none', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 1 }}>
+                    <span style={{ width: 26, height: 3, borderRadius: 3, background: col, opacity: .5 }} />
+                  </div>
+                </div>
+              )
+            })}
+            {/* Fantasma al arrastrar una tarjeta nueva */}
+            {drag?.kind === 'new' && drag.curMin != null && (
+              <div style={{ position: 'absolute', left: 2, right: 6, top: topOf(drag.curMin), height: hOf(drag.dur), background: 'rgba(180,101,58,.14)', border: '1.5px dashed #b4653a', borderRadius: 10, pointerEvents: 'none', zIndex: 30 }} />
+            )}
+          </div>
+        </div>
+
+        {/* Columna: tareas por agendar */}
+        <div className="t-card plan-side" style={{ ...card(12), padding: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+            <span style={LBL}>por agendar</span>
+            <span style={{ fontSize: 12, color: '#a49b90' }}>{pending.length}</span>
+          </div>
+          {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: 15, moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
+            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>Ya agendaste todas tus tareas de hoy, o no tienes tareas para hoy. Plánealas en Épicas.</span>
+          )}
+          {scheduled.length > 0 && <div style={{ borderTop: '1px solid #eee6da', paddingTop: 10, fontSize: 12, color: '#a49b90' }}>{scheduled.length} en el calendario · {hm(scheduled.reduce((a, s) => a + s.dur, 0))} planeadas</div>}
+        </div>
+      </div>
+
+      {dragLabel && (
+        <div style={{ position: 'fixed', left: dragLabel.x + 14, top: dragLabel.y + 14, zIndex: 99, background: '#1c1a17', color: '#faf7f1', fontSize: 12.5, fontWeight: 600, padding: '6px 10px', borderRadius: 8, pointerEvents: 'none', fontVariantNumeric: 'tabular-nums', boxShadow: '0 4px 14px rgba(0,0,0,.25)' }}>{dragLabel.txt}</div>
+      )}
+    </div>
+  )
+}
+const planBtn: CSSProperties = { border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: '#8b8379', width: 22, height: 22, borderRadius: 6, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+
 function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing = [], onSchedule, onClose }: {
   tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null; presetName?: string | null
   existing?: { name: string; start: number; dur: number }[]
@@ -3720,6 +3923,10 @@ const MARGEN_CSS = `
 .hoy-rail { flex: 0 0 48px; align-self: flex-start; position: sticky; top: 12px; max-height: calc(100dvh - 24px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 14px 0; border: 1px solid #ece3d5; border-radius: 18px; background: #fff; box-shadow: 0 6px 18px -12px rgba(28,26,23,.4); }
 .hoy-rail-txt { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; letter-spacing: .04em; color: #6b645b; white-space: nowrap; }
 @media (max-width: 860px) { .hoy-panels { flex-direction: column; } .hoy-panel { width: 100% !important; } .hoy-rail { flex-direction: row; align-self: auto; width: 100%; height: 44px; padding: 0 14px; } .hoy-rail-txt { writing-mode: horizontal-tb; transform: none; } }
+/* Plan de hoy: rejilla + columna de tareas por agendar. */
+.plan-wrap { display: flex; gap: 16px; align-items: flex-start; }
+.plan-side { flex: 0 0 288px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: 12px; max-height: calc(100dvh - 24px); overflow-y: auto; }
+@media (max-width: 820px) { .plan-wrap { flex-direction: column-reverse; } .plan-side { flex: none; width: 100%; position: static; max-height: none; } }
 /* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). */
 .td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 32px; align-items: start; }
 .td-grid > .td-col { min-width: 0; display: flex; flex-direction: column; }
