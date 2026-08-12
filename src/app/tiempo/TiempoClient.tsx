@@ -119,7 +119,7 @@ export default function TiempoClient() {
   const remindNotified = useRef<Set<string>>(new Set())      // recordatorios (remindAt) ya avisados
   const meetNotified = useRef<Set<string>>(new Set())        // juntas ya avisadas (10 min antes / al empezar)
   const [filters, setFilters] = useState<Filters>({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() })
-  const [sortBy, setSortBy] = useState<'manual' | 'alfa' | 'prioridad' | 'dificultad'>('manual')
+  const [sortBy, setSortBy] = useState<'manual' | 'plan' | 'alfa' | 'prioridad' | 'dificultad'>('plan')
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
   const tasksRef = useRef<TodayTask[]>([])
@@ -319,11 +319,14 @@ export default function TiempoClient() {
   // Tareas del día que se PLANIFICA (Planificador): planeadas ese día o recurrentes ese día.
   const planTasks = useMemo<TodayTask[] | null>(() => {
     if (allTasks === null) return null
+    // Las que ya se trabajaron ese día (tienen registro) NO deben salir en "por agendar".
+    const workedDay = new Set((data.history || []).filter(h => h.date === planDay && h.taskId).map(h => h.taskId))
     return allTasks
       .filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada')
       .filter(t => t.task.plan === planDay || recurringDueToday(t.task, planDay))
+      .filter(t => !workedDay.has(t.task.id))
       .map(t => ({ ...t, recurring: recurringDueToday(t.task, planDay) }))
-  }, [allTasks, planDay])
+  }, [allTasks, planDay, data.history])
 
   // Rutinas diarias de Épicas que aplican el día visible (para marcarlas / iniciarlas aquí).
   // Rutinas diarias como TRACKER SEMANAL (7 chips L-D con progreso, como en Épicas): por cada
@@ -384,9 +387,15 @@ export default function TiempoClient() {
     if (sortBy === 'alfa') arr.sort((a, b) => (a.task.t || '').localeCompare(b.task.t || '', 'es'))
     else if (sortBy === 'prioridad') arr.sort((a, b) => (PR[a.task.priority || ''] ?? 9) - (PR[b.task.priority || ''] ?? 9))
     else if (sortBy === 'dificultad') arr.sort((a, b) => (DF[a.task.difficulty || ''] ?? 9) - (DF[b.task.difficulty || ''] ?? 9))
+    else if (sortBy === 'plan') {
+      // Orden en que las planeaste en el Planificador (por hora de agendado); las no agendadas al final.
+      const ord = new Map<string, number>()
+      for (const s of (data.scheduled || []).filter(s => (s.date || taskDay) === taskDay && s.taskId)) if (!ord.has(s.taskId!)) ord.set(s.taskId!, s.start)
+      arr.sort((a, b) => (ord.get(a.task.id || '') ?? 1e9) - (ord.get(b.task.id || '') ?? 1e9) || (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))
+    }
     else arr.sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))  // manual
     return arr
-  }, [tasks, filters, sortBy])
+  }, [tasks, filters, sortBy, data.scheduled, taskDay])
 
   function save(patch: Partial<AppData>) {
     const nd = { ...dataRef.current, ...patch }
@@ -591,6 +600,7 @@ export default function TiempoClient() {
     const upcoming = timeline.filter(b => b.start + b.dur > now).map(b => {
       const hit = afectados.find(a => a.id === b.id)
       return {
+        start: b.start, durMin: b.dur,
         range: clock(b.start) + '–' + clock(b.start + b.dur),
         name: b.name, dur: hm(b.dur),
         dot: AREAS[b.area] ? AREAS[b.area].color : '#8b8379',
@@ -1369,6 +1379,23 @@ export default function TiempoClient() {
       actions: (<button onClick={() => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver / editar la tarea" style={dtBtn}>Ver</button>),
     })),
   ]
+  // Filas del día COMPLETO (Tarjeta C): lo trabajado + lo agendado por venir + rutina/juntas por venir.
+  const diaFullRows: WorkedRow[] = [
+    ...diaRows,
+    ...(isTodayView ? V.scheduledUpcoming.map(s => ({
+      key: 'sch' + s.id, sortTime: s.start, timeLabel: s.range, color: '#c2933a', name: s.name, durMin: s.dur, durLabel: s.durLabel,
+      statusLabel: 'agendado ' + s.when, statusColor: '#8a4b28', statusRank: 4,
+      actions: (<>
+        <button onClick={() => startScheduled({ id: s.id, name: s.name, area: s.area, start: s.start, dur: s.dur, epicaId: s.epicaId, taskId: s.taskId })} title="Empezar ahora" style={{ ...dtBtn, color: '#8a4b28' }}>▶ Iniciar</button>
+        {s.taskId && <button onClick={() => { const tt = (allTasks || []).find(x => x.task.id === s.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={dtBtn}>Ver</button>}
+        <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={dtBtn}>×</button>
+      </>),
+    })) : []),
+    ...(isTodayView ? V.upcoming.map((b, i) => ({
+      key: 'up' + i, sortTime: b.start, timeLabel: b.range, color: b.dot, name: b.name + (b.cal ? '  🗓' : ''), durMin: b.durMin, durLabel: b.dur,
+      statusLabel: b.state, statusColor: b.stateColor, statusRank: 5,
+    })) : []),
+  ]
   // Agendar una tarea concreta (desde su fila o su detalle): abre el selector ya con ella elegida,
   // sugiriendo el PRÓXIMO HUECO donde cabe (por su dificultad); si no hay, el próximo cuarto de hora.
   const scheduleTaskAt = (taskId: string) => {
@@ -1704,6 +1731,38 @@ export default function TiempoClient() {
                   </div>
                 )}
               </div>
+              {/* Resumen: cómo está planeado el día (desde el Planificador) */}
+              {(() => {
+                const pf = (data.scheduled || []).filter(s => (s.date || today) === taskDay).slice().sort((a, b) => a.start - b.start)
+                const tot = pf.reduce((a, s) => a + s.dur, 0), work = pf.filter(s => s.area === 'trabajo').reduce((a, s) => a + s.dur, 0)
+                return (
+                  <div className="t-card" style={{ ...card(14), padding: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={LBL}>cómo está planeado {dayLabel}</span>
+                      <button onClick={() => { setPlanDay(taskDay); setView('plan') }} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>Abrir Planificador →</button>
+                    </div>
+                    {pf.length ? (<>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: SERIF, fontSize: 36, lineHeight: 1 }}>{hm(tot)}</span>
+                        <span style={{ fontSize: 14, color: '#6b645b' }}>planeadas · {pf.length} {pf.length === 1 ? 'actividad' : 'actividades'}{work > 0 ? ` · ${hm(work)} de trabajo` : ''}</span>
+                      </div>
+                      <span style={{ fontSize: 13, color: '#a49b90' }}>de {clock(pf[0].start)} a {clock(pf[pf.length - 1].start + pf[pf.length - 1].dur)}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+                        {pf.map(s => (
+                          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid #f2ece0' }}>
+                            <span style={{ fontSize: 12.5, color: '#8b8379', width: 92, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{clock(s.start)}–{clock(s.start + s.dur)}</span>
+                            <span style={{ width: 7, height: 7, borderRadius: 999, background: AREAS[s.area]?.color || '#c2933a', flexShrink: 0 }} />
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                            <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{hm(s.dur)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>) : (
+                      <span style={{ fontSize: 13.5, color: '#a49b90', lineHeight: 1.5 }}>Aún no planeas {dayLabel}. Abre el Planificador y arrastra tus tareas a una hora para armar el día.</span>
+                    )}
+                  </div>
+                )
+              })()}
             </section>)}
             {hoyPanel === 'resumen' ? (
               <div className="hoy-rail">
@@ -1886,31 +1945,7 @@ export default function TiempoClient() {
                 <Legend c="#6f8256">protegido intacto</Legend>
                 <Legend c="#eee6da">libre</Legend>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {isTodayView && V.scheduledUpcoming.map(s => (
-                  <div key={'sch' + s.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
-                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{s.range}</span>
-                    <span style={{ width: 8, height: 8, borderRadius: 999, background: '#c2933a', display: 'block' }} />
-                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#1c1a17', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                      <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#8a4b28', border: '1px solid #e6cfa4', borderRadius: 999, padding: '2px 7px', flexShrink: 0 }}>agendado {s.when}</span>
-                    </span>
-                    <span style={{ fontSize: 14, color: '#a49b90' }}>{s.durLabel}</span>
-                    <button onClick={() => startScheduled({ id: s.id, name: s.name, area: s.area, start: s.start, dur: s.dur, epicaId: s.epicaId, taskId: s.taskId })} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶ Iniciar</button>
-                    <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
-                  </div>
-                ))}
-                {diaRows.length > 0 && <WorkedTable rows={diaRows} />}
-                {isTodayView && V.upcoming.map((b, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
-                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
-                    <span style={{ width: 8, height: 8, borderRadius: 999, background: b.dot, display: 'block' }} />
-                    <span style={{ fontSize: 16, flex: 1, color: b.nameColor, display: 'flex', alignItems: 'center', gap: 8 }}>{b.name}{b.cal && <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#8b8379', border: '1px solid #e2d9cb', borderRadius: 999, padding: '2px 7px' }}>calendario</span>}</span>
-                    <span style={{ fontSize: 14, color: '#a49b90' }}>{b.dur}</span>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: b.stateColor, width: 120, textAlign: 'right' }}>{b.state}</span>
-                  </div>
-                ))}
-              </div>
+              {diaFullRows.length > 0 && <WorkedTable rows={diaFullRows} />}
             </div>
           </div>
         ) : view === 'semana' ? (
@@ -3110,6 +3145,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
   const dragRef = useRef<PlanDrag | null>(null); dragRef.current = drag
   const [selTask, setSelTask] = useState<string | null>(null)
   const [selFree, setSelFree] = useState<string | null>(null)
+  const [hover, setHover] = useState<{ x: number; y: number; txt: string } | null>(null)
 
   // Ventana visible de la rejilla: de la hora más temprana a la más tardía entre eventos, ahora y 7–22h.
   const [gridStart, gridEnd] = useMemo(() => {
@@ -3177,6 +3213,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
           <div style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</div>
           <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.epicaName}</div>
         </div>
+        <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la actividad completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 10px', fontSize: 12, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
         <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
       </div>
     )
@@ -3249,6 +3286,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
               return (
                 <div key={'w' + i} title={`${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}${openable ? ' · clic para abrir' : ''}`}
                   onClick={() => { if (openable) onOpenTask(w.taskId!) }}
+                  onPointerMove={e => setHover({ x: e.clientX, y: e.clientY, txt: `${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}` })}
+                  onPointerLeave={() => setHover(null)}
                   style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(w.dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden', cursor: openable ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + w.dur)} · {hm(w.dur)}</span>
@@ -3276,7 +3315,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
               const active = drag && 'id' in drag && drag.id === s.id
               return (
                 <div key={s.id}
-                  onPointerDown={e => { e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
+                  onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
+                  onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${s.name} · ${clock(s.start)}–${clock(s.start + s.dur)} · ${hm(s.dur)}` }) }}
+                  onPointerLeave={() => setHover(null)}
                   style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
@@ -3339,6 +3380,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
 
       {dragLabel && (
         <div style={{ position: 'fixed', left: dragLabel.x + 14, top: dragLabel.y + 14, zIndex: 99, background: '#1c1a17', color: '#faf7f1', fontSize: 12.5, fontWeight: 600, padding: '6px 10px', borderRadius: 8, pointerEvents: 'none', fontVariantNumeric: 'tabular-nums', boxShadow: '0 4px 14px rgba(0,0,0,.25)' }}>{dragLabel.txt}</div>
+      )}
+      {hover && !drag && (
+        <div style={{ position: 'fixed', left: hover.x + 14, top: hover.y + 14, zIndex: 98, background: '#1c1a17', color: '#faf7f1', fontSize: 12, fontWeight: 500, padding: '6px 10px', borderRadius: 8, pointerEvents: 'none', maxWidth: 280, boxShadow: '0 4px 14px rgba(0,0,0,.25)' }}>{hover.txt}</div>
       )}
     </div>
   )
@@ -3636,7 +3680,7 @@ function DiffIcon({ n }: { n: number }) {
 }
 
 /** Barra de filtros de las tareas de hoy (por épica, prioridad, dificultad, estado). */
-function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void; sortBy: string; setSortBy: (s: 'manual' | 'alfa' | 'prioridad' | 'dificultad') => void }) {
+function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas: { id: string; name: string; color: string }[]; filters: Filters; setFilters: (f: (p: Filters) => Filters) => void; sortBy: string; setSortBy: (s: 'manual' | 'plan' | 'alfa' | 'prioridad' | 'dificultad') => void }) {
   const toggle = (dim: 'prio' | 'diff' | 'estado', val: string) => setFilters(f => { const s = new Set(f[dim]); s.has(val) ? s.delete(val) : s.add(val); return { ...f, [dim]: s } })
   const chip = (on: boolean, c: string) => ({ border: `1px solid ${on ? c : '#e2d9cb'}`, background: on ? c + '20' : 'transparent', color: on ? c : '#6b645b', borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer', textTransform: 'capitalize' as const })
   const any = filters.epica || filters.prio.size || filters.diff.size || filters.estado.size
@@ -3655,7 +3699,8 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
         {TASK_STATUSES.map(s => { const ts = taskStyle(s); return <button key={s} onClick={() => toggle('estado', s)} style={chip(filters.estado.has(s), ts.c)}>{s}</button> })}
         {any && <button onClick={() => setFilters(() => ({ epica: null, prio: new Set(), diff: new Set(), estado: new Set() }))} style={{ border: 'none', background: 'transparent', color: '#a49b90', fontSize: 12, cursor: 'pointer' }}>limpiar</button>}
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto', fontSize: 12, color: '#a49b90' }}>orden
-          <select value={sortBy} onChange={e => setSortBy(e.target.value as 'manual' | 'alfa' | 'prioridad' | 'dificultad')} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 10px', fontSize: 12, color: '#6b645b', cursor: 'pointer' }}>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value as 'manual' | 'plan' | 'alfa' | 'prioridad' | 'dificultad')} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 10px', fontSize: 12, color: '#6b645b', cursor: 'pointer' }}>
+            <option value="plan">Plan del día</option>
             <option value="manual">Manual</option>
             <option value="alfa">A–Z</option>
             <option value="prioridad">Prioridad</option>
