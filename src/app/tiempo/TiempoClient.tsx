@@ -1292,7 +1292,7 @@ export default function TiempoClient() {
       .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('rutina ' + r.status + ' ' + t.slice(0, 140)) } })
       .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] marcar rutina falló:', e) })
   }
-  const startRoutine = (name: string, epicaId?: string, rIdx?: number) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0, ...(epicaId != null && rIdx != null ? { routineRef: { epicaId, rIdx } } : {}) })) setView('hoy') }
+  const startRoutine = (name: string, epicaId?: string, rIdx?: number) => { beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0, ...(epicaId != null && rIdx != null ? { routineRef: { epicaId, rIdx } } : {}) }) }
   // Empezar una actividad GENERAL (revisar cosas, algo sin tarea): timer libre al instante.
   // Empieza una actividad "general" (contador libre). NO cambia de vista: la sesión se ve como
   // popup flotante y como banda EN CURSO en el Planificador, así funciona en Hoy o en el Planificador.
@@ -1342,7 +1342,7 @@ export default function TiempoClient() {
   }
   // Comenzar una tarea desde su detalle. dur = 0 → contador libre (hasta que pares).
   const startTask = (info: { epicaId: string; task: EpicaTask }, d: number) => {
-    if (beginSession({ name: info.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: d, epicaId: info.epicaId, taskId: info.task.id })) { setEditTask(null); setView('hoy') }
+    if (beginSession({ name: info.task.t || 'Tarea', area: 'trabajo', start: Math.round(now), dur: d, epicaId: info.epicaId, taskId: info.task.id })) setEditTask(null)
   }
   // Crear una tarea nueva en la épica elegida (mismos campos que Épicas).
   const createTask = (epicaId: string, task: EpicaTask) => {
@@ -1575,8 +1575,9 @@ export default function TiempoClient() {
   const removeScheduled = (id: string) => { const blk = (data.scheduled || []).find(s => s.id === id); if (!blk) return; save({ scheduled: (data.scheduled || []).filter(s => s.id !== id) }); showUndo('Agendado quitado', () => save({ scheduled: [...(dataRef.current.scheduled || []), blk] })) }
   // Iniciar un bloque agendado: arranca la sesión (con su tarea si la tiene) y lo saca de agendados.
   const startScheduled = (s: ScheduledBlock) => {
+    // NO cambia de vista: te quedas donde estás (Planificador/Hoy); la sesión sale como popup/banda.
     if (beginSession({ name: s.name, area: s.area, start: Math.round(now), dur: s.dur, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId } : {}) }, { scheduled: (data.scheduled || []).filter(x => x.id !== s.id) })) {
-      setPromptedSched(p => { const n = new Set(p); n.add(s.id); return n }); setView('hoy')
+      setPromptedSched(p => { const n = new Set(p); n.add(s.id); return n })
     }
   }
   const dismissSched = (id: string) => setPromptedSched(p => { const n = new Set(p); n.add(id); return n })
@@ -2074,7 +2075,7 @@ export default function TiempoClient() {
                               <span style={{ fontSize: 13, color: '#6b6f7a', width: 96, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(m.start)}–{clock(m.start + m.dur)}</span>
                               <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
                               <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{hm(m.dur)}</span>
-                              {isTodayView && <button onClick={e => { e.stopPropagation(); if (beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur })) setView('hoy') }} title="Empezar ahora con su duración" style={{ border: '1px solid rgba(46,90,158,0.3)', background: '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#2E5A9E', cursor: 'pointer', flexShrink: 0 }}>▶</button>}
+                              {isTodayView && <button onClick={e => { e.stopPropagation(); beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur }) }} title="Empezar ahora con su duración" style={{ border: '1px solid rgba(46,90,158,0.3)', background: '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#2E5A9E', cursor: 'pointer', flexShrink: 0 }}>▶</button>}
                             </div>
                           ))}
                         </div>
@@ -2383,7 +2384,9 @@ export default function TiempoClient() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
             <span style={{ ...LBL, color: V.sessionPaused ? '#d98a55' : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : 'en curso'}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 12.5, color: '#a49b90' }}>empezó {V.sessionStartLabel}</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: '#a49b90' }} title="Corrige la hora en que empezaste (ajusta el tiempo que lleva corriendo)">empezó
+                <input type="time" value={clock(sessStartMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #4a443c', borderRadius: 8, color: '#faf7f1', padding: '2px 5px', fontSize: 12.5, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
+              </label>
               <button onClick={() => setSessionMin(true)} title="Minimizar (queda como pastilla)" aria-label="Minimizar la sesión" style={{ border: '1px solid #4a443c', background: 'transparent', color: '#cdc4b8', borderRadius: 999, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, lineHeight: 1, cursor: 'pointer', flexShrink: 0 }}>–</button>
             </div>
           </div>
@@ -2441,6 +2444,9 @@ export default function TiempoClient() {
             <span style={{ fontSize: 12, letterSpacing: '.14em', textTransform: 'uppercase', color: pomoOn ? (inBreak ? '#8fae74' : '#E7C56B') : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : pomoOn ? (inBreak ? '🌿 descanso' : '🎯 foco') : 'en curso'}</span>
             <span style={{ fontSize: 'clamp(18px,3vw,26px)', fontWeight: 500, textAlign: 'center', maxWidth: 700, lineHeight: 1.2 }}>{V.sessionName}</span>
             <span style={{ fontSize: 14, color: '#a49b90' }}>🕐 son las {nowClock}{sitPlan > 0 ? (overSit ? ` · pasaste tu plan de ${hm(sitPlan)}` : <> · terminarías a las <b style={{ color: '#cdc4b8' }}>{endClock}</b></>) : ' · contador libre'}</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#a49b90' }} title="Corrige la hora en que empezaste (ajusta el tiempo que lleva corriendo)">empezó
+              <input type="time" value={clock(sessStartMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
+            </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: V.sessionPaused ? 0.5 : 1 }}>{V.sessionElapsedLabel || '0m'}</span>
             {/* Acumulado de la tarea (retomar) + planeado vs real */}
             {(prior > 0 || planned > 0) && (
@@ -2533,7 +2539,7 @@ export default function TiempoClient() {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
               {meetView.hangoutLink && <a href={meetView.hangoutLink} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 500 }}>Unirse a Meet ↗</a>}
               {meetView.htmlLink && <a href={meetView.htmlLink} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', border: '1px solid #e2d9cb', color: '#2E5A9E', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 500 }}>Abrir en Google Calendar ↗</a>}
-              {isTodayView && meetView.date === today && <button onClick={() => { const m = meetView; setMeetView(null); if (beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur })) setView('hoy') }} style={{ border: '1px solid rgba(46,90,158,0.35)', background: 'rgba(46,90,158,0.08)', color: '#2E5A9E', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>▶ Empezar</button>}
+              {isTodayView && meetView.date === today && <button onClick={() => { const m = meetView; setMeetView(null); beginSession({ name: m.name, area: 'personas', start: Math.round(now), dur: m.dur }) }} style={{ border: '1px solid rgba(46,90,158,0.35)', background: 'rgba(46,90,158,0.08)', color: '#2E5A9E', borderRadius: 999, padding: '10px 15px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>▶ Empezar</button>}
             </div>
           </div>
         </div>
