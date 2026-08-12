@@ -978,6 +978,12 @@ export default function TiempoClient() {
       dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false, taskId: x.h.taskId,
     })), [data.history, taskDay])
   const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
+  // Horas PLANEADAS a trabajar ese día = estimación (por dificultad) de las tareas planeadas para el día.
+  // Sirve para el "planeado vs real" (real = dayWorkedMin).
+  const plannedDay = useMemo(() => {
+    const list = (allTasks || []).filter(t => t.task.status !== 'Archivada' && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay)))
+    return { min: list.reduce((s, t) => s + durByDiff(t.task), 0), count: list.length }
+  }, [allTasks, taskDay])
   const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
 
   // Subtareas COMPLETADAS el día visto (con su hora) — para verlas en el registro del día.
@@ -1674,6 +1680,7 @@ export default function TiempoClient() {
             onResume={resumeActivity}
             onEdit={(t) => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })}
             onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }}
+            onNewTask={(epId) => { const e = epicasList.find(x => x.id === epId) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: planDay, links: [] } }) }}
           />
         ) : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
@@ -1804,7 +1811,19 @@ export default function TiempoClient() {
                 <div style={{ borderTop: '1px solid #eee6da', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
                   <Row label="Hora de dormir" value={V.bedLabel} />
+                  <Row label={`Planeado ${dayLabel} · estimado`} value={plannedDay.min ? '~' + hm(plannedDay.min) : '—'} />
                   <Row label={`Trabajo registrado ${dayLabel}`} value={dayWorkedMin ? hm(dayWorkedMin) : '—'} />
+                  {plannedDay.min > 0 && (() => {
+                    const pct = Math.min(100, Math.round((dayWorkedMin / plannedDay.min) * 100)); const over = dayWorkedMin > plannedDay.min
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ height: 6, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: over ? '#8a4b28' : '#6f8256', borderRadius: 999 }} />
+                        </div>
+                        <span style={{ fontSize: 12.5, color: '#8b8379' }}>{over ? `Llevas ${hm(dayWorkedMin)} · te pasaste ${hm(dayWorkedMin - plannedDay.min)} de lo planeado` : `Llevas ${hm(dayWorkedMin)} de ~${hm(plannedDay.min)} planeadas · ${pct}%`}</span>
+                      </div>
+                    )
+                  })()}
                 </div>
                 {V.routineNext.length > 0 && (
                   <div style={{ borderTop: '1px solid #eee6da', paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1856,23 +1875,47 @@ export default function TiempoClient() {
                   </div>
                 )}
               </div>
-              {/* Resumen: cómo está planeado el día (desde el Planificador) */}
+              {/* Resumen: planeado vs real + cómo está planeado el día */}
               {(() => {
                 const pf = (data.scheduled || []).filter(s => (s.date || today) === taskDay).slice().sort((a, b) => a.start - b.start)
-                const tot = pf.reduce((a, s) => a + s.dur, 0), work = pf.filter(s => s.area === 'trabajo').reduce((a, s) => a + s.dur, 0)
+                const sched = pf.reduce((a, s) => a + s.dur, 0)
+                const est = plannedDay.min, real = dayWorkedMin
+                const base = est || sched                 // barra planeado→real
+                const pct = base ? Math.min(100, Math.round((real / base) * 100)) : 0
+                const over = base > 0 && real > base
                 return (
                   <div className="t-card" style={{ ...card(14), padding: 24 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                      <span style={LBL}>cómo está planeado {dayLabel}</span>
+                      <span style={LBL}>planeado vs real · {dayLabel}</span>
                       <button onClick={() => { setPlanDay(taskDay); setView('plan') }} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>Abrir Planificador →</button>
                     </div>
-                    {pf.length ? (<>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                        <span style={{ fontFamily: SERIF, fontSize: 36, lineHeight: 1 }}>{hm(tot)}</span>
-                        <span style={{ fontSize: 14, color: '#6b645b' }}>planeadas · {pf.length} {pf.length === 1 ? 'actividad' : 'actividades'}{work > 0 ? ` · ${hm(work)} de trabajo` : ''}</span>
+                    {/* Números grandes: planeado (estimado de tus tareas) y trabajado */}
+                    <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1 }}>{est ? '~' + hm(est) : '—'}</span>
+                        <span style={{ fontSize: 12.5, color: '#a49b90' }}>planeadas · {plannedDay.count} {plannedDay.count === 1 ? 'tarea' : 'tareas'}</span>
                       </div>
-                      <span style={{ fontSize: 13, color: '#a49b90' }}>de {clock(pf[0].start)} a {clock(pf[pf.length - 1].start + pf[pf.length - 1].dur)}</span>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, color: '#6f8256' }}>{real ? hm(real) : '0m'}</span>
+                        <span style={{ fontSize: 12.5, color: '#a49b90' }}>trabajadas (real)</span>
+                      </div>
+                      {sched > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: 1, color: '#c2933a' }}>{hm(sched)}</span>
+                          <span style={{ fontSize: 12.5, color: '#a49b90' }}>agendadas</span>
+                        </div>
+                      )}
+                    </div>
+                    {base > 0 && (<>
+                      <div style={{ height: 8, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: over ? '#8a4b28' : '#6f8256', borderRadius: 999 }} />
+                      </div>
+                      <span style={{ fontSize: 13, color: '#6b645b' }}>{over ? `Te pasaste ${hm(real - base)} de lo planeado.` : `Llevas ${hm(real)} de ~${hm(base)} planeadas · ${pct}%.`}</span>
+                    </>)}
+                    {/* Agenda del Planificador (si la hay) */}
+                    {pf.length ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2, borderTop: '1px solid #eee6da', paddingTop: 12 }}>
+                        <span style={{ fontSize: 12.5, color: '#a49b90', marginBottom: 4 }}>agenda del día · de {clock(pf[0].start)} a {clock(pf[pf.length - 1].start + pf[pf.length - 1].dur)}</span>
                         {pf.map(s => (
                           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid #f2ece0' }}>
                             <span style={{ fontSize: 12.5, color: '#8b8379', width: 92, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{clock(s.start)}–{clock(s.start + s.dur)}</span>
@@ -1882,8 +1925,8 @@ export default function TiempoClient() {
                           </div>
                         ))}
                       </div>
-                    </>) : (
-                      <span style={{ fontSize: 13.5, color: '#a49b90', lineHeight: 1.5 }}>Aún no planeas {dayLabel}. Abre el Planificador y arrastra tus tareas a una hora para armar el día.</span>
+                    ) : (
+                      <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{est > 0 ? `Tienes ${plannedDay.count} ${plannedDay.count === 1 ? 'tarea planeada' : 'tareas planeadas'} (~${hm(est)}). Ábrelas en el Planificador para acomodarlas por hora.` : `Aún no planeas ${dayLabel}. Planea tareas en Épicas o agrégalas en el Planificador.`}</span>
                     )}
                   </div>
                 )
@@ -3249,7 +3292,7 @@ type PlanDrag =
   | { kind: 'newfree'; name: string; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
   onAdd: (t: TodayTask, start: number, dur?: number) => void
@@ -3260,7 +3303,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
   onResume: (row: HistoryRow) => void
   onEdit: (t: TodayTask) => void
   onOpenTask: (taskId: string) => void
+  onNewTask: (epicaId?: string) => void
 }) {
+  const [epFilter, setEpFilter] = useState<string | null>(null)
   const isToday = day === today
   const week = weekOfISO(day)
   const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
@@ -3314,7 +3359,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
   }, [drag !== null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const schedIds = new Set(scheduled.map(s => s.taskId).filter(Boolean))
-  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id))
+  // Épicas presentes en las tareas por agendar (para el filtro).
+  const planEpicas = [...new Map((tasks || []).filter(t => !schedIds.has(t.task.id)).map(t => [t.epicaId, { id: t.epicaId, name: t.epicaName, color: t.color }])).values()]
+  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id) && (!epFilter || t.epicaId === epFilter))
   const colorFor = (s: ScheduledBlock) => (tasks || []).find(t => t.task.id === s.taskId)?.color || AREAS[s.area]?.color || '#8b8379'
   const hours: number[] = []; for (let h = gridStart; h <= gridEnd; h += 60) hours.push(h)
   const gridH = (gridEnd - gridStart) * PXM
@@ -3474,8 +3521,20 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
             <span style={LBL}>por agendar · {isToday ? 'hoy' : longDayOf(day)}</span>
             <span style={{ fontSize: 12, color: '#a49b90' }}>{pending.length}</span>
           </div>
+          {/* Nueva tarea + filtro por épica */}
+          <button onClick={() => onNewTask(epFilter || undefined)} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer', background: 'transparent' }}>+ Nueva tarea{epFilter ? ` en ${planEpicas.find(e => e.id === epFilter)?.name || ''}` : ''}</button>
+          {planEpicas.length > 1 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              <button onClick={() => setEpFilter(null)} style={{ border: `1px solid ${!epFilter ? '#b4653a' : '#e7dfd2'}`, background: !epFilter ? '#f5ece2' : '#faf7f1', color: !epFilter ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer' }}>Todas</button>
+              {planEpicas.map(e => { const on = epFilter === e.id; return (
+                <button key={e.id} onClick={() => setEpFilter(on ? null : e.id)} title={e.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${on ? '#b4653a' : '#e7dfd2'}`, background: on ? '#f5ece2' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer', maxWidth: 130 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
+                </button>
+              ) })}
+            </div>
+          )}
           {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: 15, moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
-            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>No hay tareas planeadas para este día. Cámbialo en Épicas (plan) o arrastra una rutina de abajo.</span>
+            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? 'Sin tareas por agendar en esa épica.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
           )}
           {routines.length > 0 && (
             <>
