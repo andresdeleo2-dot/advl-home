@@ -316,6 +316,15 @@ export default function TiempoClient() {
   const selTask = (tasks || []).find(t => t.task.id === selTaskId) || null
   const selMeeting = meetings.find(m => m.id === selMeetingId) || null
 
+  // Tareas del día que se PLANIFICA (Planificador): planeadas ese día o recurrentes ese día.
+  const planTasks = useMemo<TodayTask[] | null>(() => {
+    if (allTasks === null) return null
+    return allTasks
+      .filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada')
+      .filter(t => t.task.plan === planDay || recurringDueToday(t.task, planDay))
+      .map(t => ({ ...t, recurring: recurringDueToday(t.task, planDay) }))
+  }, [allTasks, planDay])
+
   // Rutinas diarias de Épicas que aplican el día visible (para marcarlas / iniciarlas aquí).
   // Rutinas diarias como TRACKER SEMANAL (7 chips L-D con progreso, como en Épicas): por cada
   // rutina de cada épica, los 7 booleanos de la semana de `taskDay` + cuántos días lleva.
@@ -1368,6 +1377,10 @@ export default function TiempoClient() {
   // ── Planificador: helpers de agendado (fecha = día que se planifica) ───
   const planAdd = (t: TodayTask, start: number, dur = 15) =>
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: planDay, epicaId: t.epicaId, taskId: t.task.id }] })
+  const planAddFree = (name: string, start: number, dur = 15) =>
+    save({ scheduled: [...(data.scheduled || []), { id: uid(), name: name || 'Actividad', area: 'trabajo', start, dur, date: planDay }] })
+  // Rutinas diarias de Épicas (hábitos) para planificar en el Planificador.
+  const planRoutines = epicasList.flatMap(e => (e.routines || []).map(r => ({ name: r.t, epicaName: e.name, color: e.color })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
     save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
 
@@ -1450,17 +1463,21 @@ export default function TiempoClient() {
             day={planDay}
             today={today}
             onPickDay={setPlanDay}
-            tasks={tasks}
+            tasks={planTasks}
+            routines={planRoutines}
             scheduled={(data.scheduled || []).filter(s => (s.date || today) === planDay)}
             worked={data.history.filter(h => h.date === planDay)}
             blocks={data.blocks.filter(b => blockActiveOn(b, new Date(planDay + 'T12:00:00').getDay()))}
             meetings={meetings.filter(m => m.date === planDay)}
             now={now}
             onAdd={planAdd}
+            onAddFree={planAddFree}
             onPatch={planPatch}
             onRemove={removeScheduled}
             onStart={startScheduled}
+            onResume={resumeActivity}
             onEdit={(t) => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })}
+            onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }}
           />
         ) : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
@@ -3028,18 +3045,23 @@ function MeetingDescription({ raw }: { raw: string }) {
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
 /** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
  *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
+type PlanRoutine = { name: string; epicaName: string; color: string }
 type PlanDrag =
   | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
+  | { kind: 'newfree'; name: string; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meetings, now, onAdd, onPatch, onRemove, onStart, onEdit }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask }: {
   day: string; today: string; onPickDay: (d: string) => void
-  tasks: TodayTask[] | null; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
+  tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
   onAdd: (t: TodayTask, start: number, dur?: number) => void
+  onAddFree: (name: string, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
   onStart: (s: ScheduledBlock) => void
+  onResume: (row: HistoryRow) => void
   onEdit: (t: TodayTask) => void
+  onOpenTask: (taskId: string) => void
 }) {
   const isToday = day === today
   const week = weekOfISO(day)
@@ -3049,6 +3071,7 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
   const [drag, setDrag] = useState<PlanDrag | null>(null)
   const dragRef = useRef<PlanDrag | null>(null); dragRef.current = drag
   const [selTask, setSelTask] = useState<string | null>(null)
+  const [selFree, setSelFree] = useState<string | null>(null)
 
   // Ventana visible de la rejilla: de la hora más temprana a la más tardía entre eventos, ahora y 7–22h.
   const [gridStart, gridEnd] = useMemo(() => {
@@ -3071,7 +3094,7 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
       const m = yToMin(e.clientY)
       setDrag(d => {
         if (!d) return d
-        if (d.kind === 'new') return { ...d, moved: true, curMin: overGrid(e.clientX) ? m : null, x: e.clientX, y: e.clientY }
+        if (d.kind === 'new' || d.kind === 'newfree') return { ...d, moved: true, curMin: overGrid(e.clientX) ? m : null, x: e.clientX, y: e.clientY }
         if (d.kind === 'move') return { ...d, curMin: Math.max(gridStart, Math.min(gridEnd - d.dur, m - d.grab)), x: e.clientX, y: e.clientY }
         return { ...d, curDur: Math.max(SNAP, Math.min(gridEnd - d.start, snap(m - d.start))), x: e.clientX, y: e.clientY }
       })
@@ -3079,7 +3102,8 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
     const up = () => {
       const d = dragRef.current
       if (d) {
-        if (d.kind === 'new') { if (d.moved && d.curMin != null) onAdd(d.task, d.curMin, d.dur); else setSelTask(p => p === d.task.task.id ? null : (d.task.task.id || null)) }
+        if (d.kind === 'new') { if (d.moved && d.curMin != null) onAdd(d.task, d.curMin, d.dur); else { setSelFree(null); setSelTask(p => p === d.task.task.id ? null : (d.task.task.id || null)) } }
+        else if (d.kind === 'newfree') { if (d.moved && d.curMin != null) onAddFree(d.name, d.curMin, d.dur); else { setSelTask(null); setSelFree(p => p === d.name ? null : d.name) } }
         else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
         else onPatch(d.id, { dur: d.curDur })
       }
@@ -3099,7 +3123,7 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
   // Popup en vivo con la hora/duración mientras se arrastra o redimensiona.
   const dragLabel = (() => {
     if (!drag) return null
-    if (drag.kind === 'new') { if (drag.curMin == null) return null; return { x: drag.x, y: drag.y, txt: `${clock(drag.curMin)}–${clock(drag.curMin + drag.dur)} · ${hm(drag.dur)}` } }
+    if (drag.kind === 'new' || drag.kind === 'newfree') { if (drag.curMin == null) return null; return { x: drag.x, y: drag.y, txt: `${clock(drag.curMin)}–${clock(drag.curMin + drag.dur)} · ${hm(drag.dur)}` } }
     if (drag.kind === 'move') return { x: drag.x, y: drag.y, txt: `${clock(drag.curMin)}–${clock(drag.curMin + drag.dur)} · ${hm(drag.dur)}` }
     return { x: drag.x, y: drag.y, txt: `${clock(drag.start)}–${clock(drag.start + drag.curDur)} · ${hm(drag.curDur)}` }
   })()
@@ -3124,7 +3148,7 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
     <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Planificador</span>
-        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). En celular, toca una tarjeta y luego toca la hora.{selTask ? ' — Toca una hora en el calendario para colocar la tarea elegida.' : ''}</span>
+        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea o rutina a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). Lo que ya hiciste sale a la izquierda (clic para abrir o ↻ volver a empezar). En celular, toca una tarjeta y luego toca la hora.{(selTask || selFree) ? ' — Toca una hora en el calendario para colocarla.' : ''}</span>
         {/* Selector de día de la semana */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => onPickDay(addDaysISO(week[0], -7))} title="Semana anterior" style={weekNav}>‹</button>
@@ -3157,8 +3181,8 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
         {/* Rejilla de horas */}
         <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
           <div ref={gridRef}
-            onPointerDown={e => { if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } }}
-            style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: selTask ? 'copy' : 'default' }}>
+            onPointerDown={e => { if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { onAddFree(selFree, yToMin(e.clientY)); setSelFree(null) } }}
+            style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: (selTask || selFree) ? 'copy' : 'default' }}>
             {/* Líneas de hora */}
             {hours.map(h => (
               <div key={h} style={{ position: 'absolute', left: 0, right: 0, top: topOf(h), height: 1, background: '#eee6da' }}>
@@ -3183,10 +3207,18 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
             {worked.map((w, i) => {
               const col = AREAS[w.area]?.color || '#7a9e6a'; const tall = w.dur * PXM >= 40
               const future = isToday && w.start > now && !w.done
+              const openable = !!w.taskId
               return (
-                <div key={'w' + i} title={`${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}`}
-                  style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(w.dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden' }}>
-                  <div style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums' }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + w.dur)} · {hm(w.dur)}</div>
+                <div key={'w' + i} title={`${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}${openable ? ' · clic para abrir' : ''}`}
+                  onClick={() => { if (openable) onOpenTask(w.taskId!) }}
+                  style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(w.dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden', cursor: openable ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + w.dur)} · {hm(w.dur)}</span>
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
+                      <button onClick={e => { e.stopPropagation(); onResume(w) }} title="Volver a empezar" style={planBtn}>↻</button>
+                      {openable && <button onClick={e => { e.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver actividad" style={planBtn}>✎</button>}
+                    </div>
+                  </div>
                   {tall && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
                 </div>
               )
@@ -3226,20 +3258,42 @@ function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meet
               )
             })}
             {/* Fantasma al arrastrar una tarjeta nueva */}
-            {drag?.kind === 'new' && drag.curMin != null && (
+            {(drag?.kind === 'new' || drag?.kind === 'newfree') && drag.curMin != null && (
               <div style={{ position: 'absolute', left: '50%', right: 6, top: topOf(drag.curMin), height: hOf(drag.dur), background: 'rgba(180,101,58,.14)', border: '1.5px dashed #b4653a', borderRadius: 10, pointerEvents: 'none', zIndex: 30 }} />
             )}
           </div>
         </div>
 
-        {/* Columna: tareas por agendar */}
+        {/* Columna: tareas por agendar + rutinas diarias */}
         <div className="t-card plan-side" style={{ ...card(12), padding: 18 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-            <span style={LBL}>por agendar</span>
+            <span style={LBL}>por agendar · {isToday ? 'hoy' : longDayOf(day)}</span>
             <span style={{ fontSize: 12, color: '#a49b90' }}>{pending.length}</span>
           </div>
           {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: 15, moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
-            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>Ya agendaste todas tus tareas de hoy, o no tienes tareas para hoy. Plánealas en Épicas.</span>
+            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>No hay tareas planeadas para este día. Cámbialo en Épicas (plan) o arrastra una rutina de abajo.</span>
+          )}
+          {routines.length > 0 && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12, marginTop: 4 }}>
+                <span style={LBL}>rutinas diarias</span>
+                <span style={{ fontSize: 12, color: '#a49b90' }}>{routines.length}</span>
+              </div>
+              {routines.map((r, i) => {
+                const sel = selFree === r.name
+                return (
+                  <div key={'r' + i} onPointerDown={e => setDrag({ kind: 'newfree', name: r.name, dur: 15, moved: false, curMin: null, x: e.clientX, y: e.clientY })}
+                    style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, cursor: 'grab', touchAction: 'none', background: sel ? '#f5ece2' : '#faf7f1', border: `1px solid ${sel ? '#b4653a' : '#e7dfd2'}` }}>
+                    <span style={{ fontSize: 13, flexShrink: 0 }}>🔁</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                      <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.epicaName}</div>
+                    </div>
+                    <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
+                  </div>
+                )
+              })}
+            </>
           )}
           {scheduled.length > 0 && <div style={{ borderTop: '1px solid #eee6da', paddingTop: 10, fontSize: 12, color: '#a49b90' }}>{scheduled.length} en el calendario · {hm(scheduled.reduce((a, s) => a + s.dur, 0))} planeadas</div>}
         </div>
