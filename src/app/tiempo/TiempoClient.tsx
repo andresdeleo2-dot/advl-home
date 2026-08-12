@@ -1518,7 +1518,7 @@ export default function TiempoClient() {
   // Filas del día COMPLETO (Tarjeta C): la sesión EN CURSO (arriba) + lo trabajado + lo agendado + rutina/juntas.
   const diaFullRows: WorkedRow[] = [
     ...(isTodayView && data.session ? [{
-      key: 'session', sortTime: 1e9, timeLabel: clock(sessStartMin) + '–' + clock(Math.round(now)), color: AREAS[data.session.area]?.color || '#c0392b', icon: '▶',
+      key: 'session', sortTime: sessStartMin, timeLabel: clock(sessStartMin) + '–' + clock(Math.round(now)), color: AREAS[data.session.area]?.color || '#c0392b', icon: '▶',
       name: data.session.name, durMin: sessElapsed, durLabel: hm(sessElapsed),
       statusLabel: 'en curso', statusColor: '#8a4b28', statusRank: -1,
       onClick: data.session.taskId ? () => { const tt = (allTasks || []).find(x => x.task.id === data.session!.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) } : undefined,
@@ -1719,6 +1719,7 @@ export default function TiempoClient() {
             allOpenTasks={allTasks}
             onGeneral={startGeneral}
             onAddDone={planAddDone}
+            onOpenMeeting={setMeetView}
             onAdd={planAdd}
             onAddFree={planAddFree}
             onPatch={planPatch}
@@ -2160,7 +2161,7 @@ export default function TiempoClient() {
                 <Legend c="#6f8256">protegido intacto</Legend>
                 <Legend c="#eee6da">libre</Legend>
               </div>
-              {diaFullRows.length > 0 && <WorkedTable rows={diaFullRows} />}
+              {diaFullRows.length > 0 && <WorkedTable rows={diaFullRows} defaultDir={1} />}
             </div>
           </div>
         ) : view === 'semana' ? (
@@ -3288,9 +3289,9 @@ type WorkedRow = {
 }
 type WorkedCol = 'time' | 'name' | 'dur' | 'status'
 /** Tabla ordenable de "lo que pasó en el día": encabezados clicables (Hora/Actividad/Duración/Estado). */
-function WorkedTable({ rows, compact = false, actionsLabel = 'acciones' }: { rows: WorkedRow[]; compact?: boolean; actionsLabel?: string }) {
+function WorkedTable({ rows, compact = false, actionsLabel = 'acciones', defaultDir = -1 }: { rows: WorkedRow[]; compact?: boolean; actionsLabel?: string; defaultDir?: 1 | -1 }) {
   const [col, setCol] = useState<WorkedCol>('time')
-  const [dir, setDir] = useState<1 | -1>(-1)
+  const [dir, setDir] = useState<1 | -1>(defaultDir)
   const click = (c: WorkedCol) => { if (c === col) setDir(d => (d === 1 ? -1 : 1)); else { setCol(c); setDir(c === 'time' ? -1 : 1) } }
   const sorted = [...rows].sort((a, b) => {
     let d = 0
@@ -3342,7 +3343,7 @@ type PlanDrag =
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
   onAdd: (t: TodayTask, start: number, dur?: number) => void
@@ -3359,6 +3360,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
   allOpenTasks: TodayTask[] | null
   onGeneral: (name: string) => void
   onAddDone: (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => void
+  onOpenMeeting: (m: Meeting) => void
 }) {
   const [epFilter, setEpFilter] = useState<string | null>(null)
   const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en la rejilla → registrar algo ya hecho
@@ -3504,9 +3506,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
                 <span style={{ fontSize: 11, color: '#a49b90' }}>🛡 {b.name} · {clock(b.start)}</span>
               </div>
             ))}
-            {/* Reuniones del calendario */}
+            {/* Reuniones del calendario (clic → detalle con lugar/links/Meet) */}
             {meetings.map(m => (
-              <div key={'m' + m.id} title={m.name} style={{ position: 'absolute', left: 2, right: 6, top: topOf(m.start), height: hOf(m.dur), background: 'rgba(46,90,158,.10)', border: '1px solid rgba(46,90,158,.28)', borderRadius: 8, padding: '3px 8px', overflow: 'hidden', pointerEvents: 'none' }}>
+              <div key={'m' + m.id} onClick={() => onOpenMeeting(m)} title={`${m.name || 'Ocupado'} · clic para ver el detalle`} style={{ position: 'absolute', left: 2, right: 6, top: topOf(m.start), height: hOf(m.dur), background: 'rgba(46,90,158,.10)', border: '1px solid rgba(46,90,158,.28)', borderRadius: 8, padding: '3px 8px', overflow: 'hidden', cursor: 'pointer', zIndex: 3 }}>
                 <span style={{ fontSize: 11, color: '#2E5A9E' }}>🗓 {m.name || 'Ocupado'} · {clock(m.start)}</span>
               </div>
             ))}
