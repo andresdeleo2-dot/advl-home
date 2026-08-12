@@ -139,6 +139,13 @@ body {
 .td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 34px; align-items: start; }
 .td-grid > .td-col { min-width: 0; display: flex; flex-direction: column; }
 @media (max-width: 760px) { .td-grid { grid-template-columns: 1fr; } }
+/* Épicas · Detalle/Agenda/Backlog (ep-md): en móvil apila lista + detalle en vez de dos columnas
+   fijas que se estrujan (la lista de 320px no encogía y el detalle quedaba en ~0px). */
+@media (max-width: 760px) {
+  .ep-md { flex-direction: column; align-items: stretch; }
+  .ep-md > div { flex-basis: auto !important; width: 100% !important; max-width: none !important; }
+  .ep-md-list { position: static !important; max-height: none !important; }
+}
 
 /* Editor de notas (contenteditable) y render de notas ricas */
 [contenteditable][data-ph]:empty::before { content: attr(data-ph); color: rgba(20, 35, 61, 0.35); pointer-events: none; }

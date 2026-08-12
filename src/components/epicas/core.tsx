@@ -100,6 +100,28 @@ export function repeatLabel(r: EpicaRepeat): string {
 }
 export const REPEAT_TONE = { c: '#7A6FB0', bg: 'rgba(122,111,176,0.10)', border: 'rgba(122,111,176,0.32)' }
 
+/** Completar una tarea recurrente devolviendo la tarea REPROGRAMADA a su siguiente ocurrencia
+ *  (o Terminada si se pasó de `repeatUntil`). No muta. `doneISO` = día cumplido; `planOrderFor(day)`
+ *  = planOrder a asignar en el día destino. Espeja la lógica de completeFromPlan de Épicas para que
+ *  completar desde /tiempo NO deje la serie pegada (misma reprogramación en ambos lados). */
+export function completeRecurring(t: EpicaTask, doneISO: string, planOrderFor: (day: string) => number): EpicaTask {
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(t.plan || '') ? t.plan! : doneISO
+  const rd = [...(t.repeatDone || []), doneISO].slice(-60)
+  if (!t.repeat) return { ...t, repeatDone: rd, planPrev: t.status, status: 'Terminada', doneAt: doneISO }
+  const next = nextOccurrence(base, t.repeat, doneISO)
+  if (t.repeatUntil && next > t.repeatUntil) {
+    const done: EpicaTask = { ...t, repeatDone: rd, planPrev: t.status, status: 'Terminada', doneAt: doneISO }
+    delete (done as { repeat?: unknown }).repeat
+    return done
+  }
+  const nt: EpicaTask = { ...t, repeatDone: rd, plan: next, planOrder: planOrderFor(next), status: t.planStatusPrev || 'Por hacer' }
+  if (t.due && t.due === base) nt.due = next
+  delete (nt as { doneAt?: unknown }).doneAt
+  delete (nt as { progress?: unknown }).progress
+  delete (nt as { planStatusPrev?: unknown }).planStatusPrev
+  return nt
+}
+
 /** Registra el % del día de hoy en la bitácora (upsert). No muta arrays compartidos. */
 export function upsertProgressPct(task: EpicaTask, pct: number) {
   const today = todayISO()
@@ -346,7 +368,7 @@ export const taskWeight = (t: EpicaTask) => DIF_WEIGHT[t.difficulty || 'media'] 
 
 /** Días distintos en que se trabajó la tarea (según la bitácora de avance).
  *  Sirve para distinguir lo que se resuelve en un día de lo que se arrastra. */
-export const diasTrabajados = (t: EpicaTask) => (t.progressLog || []).length
+export const diasTrabajados = (t: EpicaTask) => new Set((t.progressLog || []).map(l => l.d)).size
 export const MULTIDIA_TONE = { c: '#7A6FB0', bg: 'rgba(122,111,176,0.10)', border: 'rgba(122,111,176,0.30)' }
 
 /** Tres puntos ascendentes (distintos de las barras de prioridad) para codificar dificultad. */

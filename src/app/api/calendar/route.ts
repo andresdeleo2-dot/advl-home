@@ -51,5 +51,10 @@ export async function GET() {
     })))
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 
-  return NextResponse.json(events)
+  // Un evento puede estar en más de un calendario (invitación personal + entrada del calendario
+  // de grupo) → mismo id: se deduplica para no mostrar la reunión dos veces ni chocar keys de React.
+  const seen = new Set<string>()
+  const deduped = events.filter(e => { const id = String(e.id ?? ''); if (!id) return true; if (seen.has(id)) return false; seen.add(id); return true })
+
+  return NextResponse.json(deduped)
 }

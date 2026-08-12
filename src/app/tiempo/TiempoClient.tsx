@@ -10,7 +10,7 @@ import {
   type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
-import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor } from '@/components/epicas/core'
+import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
@@ -183,9 +183,10 @@ export default function TiempoClient() {
     const rt = iso(new Date())
     if (rt !== prevTodayRef.current) {
       if (taskDay === prevTodayRef.current) setTaskDay(rt)
+      if (planDay === prevTodayRef.current) setPlanDay(rt)   // el Planificador también avanza a "hoy"
       prevTodayRef.current = rt
     }
-  }, [now, taskDay])
+  }, [now, taskDay, planDay])
 
   // Estado inicial del permiso de notificaciones.
   useEffect(() => { try { if (typeof Notification !== 'undefined') setNotifOn(Notification.permission === 'granted') } catch {} }, [])
@@ -775,6 +776,14 @@ export default function TiempoClient() {
     for (const h of data.history) if (h.taskId) m[h.taskId] = (m[h.taskId] || 0) + h.dur
     return m
   }, [data.history])
+  // Tiempo "de antes" de la sesión en curso. Para tareas RECURRENTES (hábitos) solo cuenta HOY:
+  // si no, "planeado vs real" acumularía el tiempo de todos los días contra una estimación por ocurrencia.
+  const priorForSession = (s: { taskId?: string }) => {
+    if (!s.taskId) return 0
+    const t = (allTasks || []).find(x => x.task.id === s.taskId)
+    if (t?.task.repeat) { const d0 = iso(new Date()); return data.history.filter(h => h.taskId === s.taskId && h.date === d0).reduce((a, h) => a + h.dur, 0) }
+    return priorByTask[s.taskId] || 0
+  }
 
   // Metadatos para el Historial: cruza los registros (que sólo traen epicaId/taskId) con las tareas
   // y épicas para poder filtrar/agrupar por ÉPICA y por DIFICULTAD, y mostrar el nombre/color de la épica.
@@ -1085,16 +1094,23 @@ export default function TiempoClient() {
     const ep = epicasList.find(e => e.id === epicaId)
     setAllTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task: t }])
   }
-  // Marca hecha en Épicas. Si es recurrente (diaria), marca el DÍA en repeatDone
-  // (no la cierra); si no, la pone Terminada.
+  // planOrder al final del día destino (para reprogramar recurrentes semanales/mensuales).
+  const nextPlanOrderFor = (day: string) => { let mx = 0; for (const x of tasksRef.current) if (x.task.plan === day && typeof x.task.planOrder === 'number') mx = Math.max(mx, x.task.planOrder!); return mx + 1000 }
+  // Al COMPLETAR una recurrente: los hábitos DIARIOS solo marcan el día en repeatDone (reaparecen
+  // mañana solos); los SEMANALES/MENSUALES se REPROGRAMAN a su próxima fecha (como en Épicas), si no
+  // se quedaban pegados con plan=hoy y no volvían a salir nunca.
+  const completeTaskFields = (task: EpicaTask, day2: string): EpicaTask => {
+    const rd = task.repeatDone || []
+    if (task.repeat && task.repeat.unit !== 'dia') return completeRecurring(task, day2, nextPlanOrderFor)
+    if (task.repeat) return { ...task, repeatDone: rd.includes(day2) ? rd : [...rd, day2] }
+    return { ...task, status: 'Terminada', doneAt: day2 }
+  }
+  // Marca hecha en Épicas (ver completeTaskFields para la lógica de recurrencia).
   const markEpicTaskDone = (epicaId: string, taskId: string, day: string = iso(new Date())) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
     const day2 = doneDayFor(tt.task, day)
-    const rd = tt.task.repeatDone || []
-    const upd: EpicaTask = tt.task.repeat
-      ? { ...tt.task, repeatDone: rd.includes(day2) ? rd : [...rd, day2] }
-      : { ...tt.task, status: 'Terminada', doneAt: day2 }
+    const upd: EpicaTask = completeTaskFields(tt.task, day2)
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
@@ -1129,10 +1145,8 @@ export default function TiempoClient() {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
         const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: today, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed } as EpicaProgressEntry]
-        const rdF = tt.task.repeatDone || []
-        const dd = doneDayFor(tt.task, today)
-        const doneChange = markDone ? (tt.task.repeat ? { repeatDone: rdF.includes(dd) ? rdF : [...rdF, dd] } : { status: 'Terminada', doneAt: dd }) : {}
-        const upd: EpicaTask = { ...tt.task, progressLog: log, ...doneChange }
+        const withLog: EpicaTask = { ...tt.task, progressLog: log }
+        const upd: EpicaTask = markDone ? completeTaskFields(withLog, doneDayFor(tt.task, today)) : withLog
         syncTask(s.epicaId, upd)
         setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
         if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
@@ -1203,8 +1217,22 @@ export default function TiempoClient() {
   // Reordenar manualmente las tareas: reasigna planOrder 1000,2000,… y persiste.
   const reorderTasks = (ids: string[]) => {
     const byId = new Map((allTasks || []).map(t => [t.task.id!, t]))
+    // Si hay un filtro activo, `ids` es solo el subconjunto filtrado. Renumerar solo esos
+    // corrompe el orden global (colisiones/huecos con las tareas ocultas). Se FUSIONA el
+    // subconjunto reordenado dentro del orden COMPLETO del día (por planOrder), reemplazando
+    // únicamente los slots que ocupaba el subconjunto.
+    const subset = new Set(ids)
+    const dayFull = [...(tasks || [])].map(t => t.task).filter(t => t.id).sort((a, b) => (a.planOrder ?? 1e9) - (b.planOrder ?? 1e9)).map(t => t.id!)
+    let finalIds: string[]
+    if (dayFull.length && !dayFull.every(id => subset.has(id))) {
+      const queue = ids.filter(id => byId.has(id))
+      finalIds = dayFull.map(id => subset.has(id) ? (queue.shift() ?? id) : id)
+      queue.forEach(id => finalIds.push(id))   // ids del subconjunto que no estaban en dayFull (borde)
+    } else {
+      finalIds = ids
+    }
     const byEpic = new Map<string, EpicaTask[]>()
-    ids.forEach((id, i) => {
+    finalIds.forEach((id, i) => {
       const tt = byId.get(id); if (!tt) return
       const po = (i + 1) * 1000
       if (tt.task.planOrder !== po) { const nt = { ...tt.task, planOrder: po }; byId.set(id, { ...tt, task: nt }); if (!byEpic.has(tt.epicaId)) byEpic.set(tt.epicaId, []); byEpic.get(tt.epicaId)!.push(nt) }
@@ -1446,10 +1474,17 @@ export default function TiempoClient() {
   const tabs: [typeof view, string][] = [['plan', 'Planificador'], ['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
 
   // ── Planificador: helpers de agendado (fecha = día que se planifica) ───
-  const planAdd = (t: TodayTask, start: number, dur = 15) =>
+  // save() poda los agendados de días pasados, así que agendar en el pasado se descartaría solo:
+  // lo cortamos antes con un aviso claro en vez de que el arrastre "no haga nada".
+  const planPastGuard = () => { if (planDay < iso(new Date())) { showUndo('No puedes agendar en un día que ya pasó', () => {}); return true } return false }
+  const planAdd = (t: TodayTask, start: number, dur = 15) => {
+    if (planPastGuard()) return
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: planDay, epicaId: t.epicaId, taskId: t.task.id }] })
-  const planAddFree = (name: string, start: number, dur = 15) =>
+  }
+  const planAddFree = (name: string, start: number, dur = 15) => {
+    if (planPastGuard()) return
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: name || 'Actividad', area: 'trabajo', start, dur, date: planDay }] })
+  }
   // Rutinas diarias de Épicas (hábitos) para planificar en el Planificador.
   const planRoutines = epicasList.flatMap(e => (e.routines || []).map(r => ({ name: r.t, epicaName: e.name, color: e.color })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
@@ -1484,10 +1519,12 @@ export default function TiempoClient() {
     if (!pomoOn || !s || s.pausedAt != null) return
     const el = sessionElapsed(s, now)
     const cycle = Math.floor(el / 30), pos = el % 30
-    if (pos >= 25 && pos < 25.7) {
+    // Detección de FLANCO (no ventana estrecha): si la pestaña está en 2º plano el tick se
+    // estrangula y `pos` puede saltarse [25,25.7); el Set por ciclo ya garantiza un solo aviso.
+    if (pos >= 25) {
       const key = `${s.start}·${cycle}·break`
       if (!pomoNotified.current.has(key)) { pomoNotified.current.add(key); beep(); notify('Descanso 🌿', 'Llevas 25 min de foco. Tómate 5 para respirar.') }
-    } else if (cycle >= 1 && pos < 0.7) {
+    } else if (cycle >= 1) {
       const key = `${s.start}·${cycle}·work`
       if (!pomoNotified.current.has(key)) { pomoNotified.current.add(key); beep(); notify('De vuelta al foco 🎯', 'Se acabó el descanso. Otro bloque de 25 min.') }
     }
@@ -2104,7 +2141,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} resumenReady={resumenReady} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail info={editTask} epicas={epicasList} resumenReady={resumenReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -2174,7 +2211,7 @@ export default function TiempoClient() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{V.sessionName}</span>
             <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9, opacity: V.sessionPaused ? 0.55 : 1 }}>{V.sessionElapsedLabel}</span>
-            {(() => { const s = data.session!; const prior = s.taskId ? (priorByTask[s.taskId] || 0) : 0; if (prior <= 0) return null; const el = Math.max(0, sessionElapsed(s, now)); return <span style={{ fontSize: 12, color: '#E7C56B' }}>+{hm(prior)} de antes · {hm(prior + el)} en total en la tarea</span> })()}
+            {(() => { const s = data.session!; const prior = priorForSession(s); if (prior <= 0) return null; const el = Math.max(0, sessionElapsed(s, now)); return <span style={{ fontSize: 12, color: '#E7C56B' }}>+{hm(prior)} de antes · {hm(prior + el)} en total en la tarea</span> })()}
             <span style={{ fontSize: 12.5, color: '#cdc4b8', lineHeight: 1.45 }}>{V.sessionNote}</span>
           </div>
           <button onClick={() => setFocusOpen(true)} style={{ border: '1px solid #4a443c', background: 'rgba(231,197,107,0.10)', color: '#E7C56B', borderRadius: 999, padding: '9px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>🎯 Modo foco</button>
@@ -2206,7 +2243,7 @@ export default function TiempoClient() {
         const focusSubs = focusTask?.task.subtasks || []
         const subsDone = focusSubs.filter(x => x.done).length
         // Acumulado de la tarea: lo YA registrado en sesiones previas + lo de esta sesión.
-        const prior = s.taskId ? (priorByTask[s.taskId] || 0) : 0
+        const prior = priorForSession(s)
         const totalTask = prior + Math.max(0, el)
         // Planeado: sólo si la tarea trae dificultad (estimación por dificultad). "si estaba planeada".
         const planned = focusTask?.task.difficulty ? durByDiff(focusTask.task) : 0
@@ -3713,10 +3750,11 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
+function TaskDetail({ info, epicas, resumenReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[] }[]
   resumenReady: boolean
+  nextPlanOrder: (day: string) => number
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
@@ -3784,8 +3822,11 @@ function TaskDetail({ info, epicas, resumenReady, onAutoSave, onUnplan, onCreate
   const markDoneHere = () => {
     if (saveT.current) { clearTimeout(saveT.current); saveT.current = null }
     const base = withNote(); const day = doneDayFor(base, iso(new Date()))
+    // Recurrente semanal/mensual → reprograma; diaria → repeatDone; normal → Terminada.
     const done: EpicaTask = base.repeat
-      ? { ...base, repeatDone: (base.repeatDone || []).includes(day) ? base.repeatDone! : [...(base.repeatDone || []), day] }
+      ? (base.repeat.unit !== 'dia'
+          ? completeRecurring(base, day, nextPlanOrder)
+          : { ...base, repeatDone: (base.repeatDone || []).includes(day) ? base.repeatDone! : [...(base.repeatDone || []), day] })
       : { ...base, status: 'Terminada', doneAt: day }
     onAutoSave(epId, done); onClose()
   }

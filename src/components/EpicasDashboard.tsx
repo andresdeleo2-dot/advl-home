@@ -871,33 +871,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); if (v) tasks[i].priority = v as Prio; else delete tasks[i].priority
     patchEpic(e.id, { tasks })
   }
-  /** Completar una tarea. Si se repite, en vez de terminarse se reprograma a su
-   *  siguiente fecha y se apunta el ciclo cumplido. Es el único camino de completado
-   *  (plan y tablero), para que la recurrencia no dependa de por dónde la marcaste. */
-  const completeFromPlan = (e: Epica, i: number) => {
-    const snap = clone(e.tasks[i])
-    const tasks = clone(e.tasks)
-    const t = tasks[i]
+  /** Aplica "completar" a la tarea t (MUTÁNDOLA). Si se repite y aún no está Terminada, la
+   *  REPROGRAMA a su siguiente ocurrencia (en vez de terminarla) y apunta el ciclo cumplido; si no,
+   *  la marca Terminada. Devuelve el mensaje de toast de la recurrencia, o null. ÚNICO lugar con la
+   *  lógica de recurrencia al completar: TODOS los caminos de "Terminar" pasan por aquí. */
+  const applyComplete = (t: EpicaTask): string | null => {
+    if (t.status === 'Terminada') return null
     const done = todayISO()
-
-    if (t.repeat && t.status !== 'Terminada') {
+    if (t.repeat) {
       const base = t.plan || done
       const next = nextOccurrence(base, t.repeat, done)
       const seriesOver = !!t.repeatUntil && next > t.repeatUntil
       t.repeatDone = [...(t.repeatDone || []), done].slice(-60)
-
       if (seriesOver) {
-        t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done
-        delete t.repeat
-      } else {
-        if (t.due && t.due === base) t.due = next    // la entrega acompaña al ciclo
-        t.plan = next
-        t.planOrder = maxPlanOrderFor(next) + 1000
-        t.status = t.planStatusPrev || 'Por hacer'   // vuelve a su estado de reposo
-        delete t.planStatusPrev; delete t.doneAt
-        delete t.progress                            // el avance es de cada ciclo, no acumulado
+        t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done; delete t.repeat
+        return 'Hecha ✓ · serie terminada'
       }
-      patchEpic(e.id, { tasks })
+      if (t.due && t.due === base) t.due = next       // la entrega acompaña al ciclo
+      t.plan = next
+      t.planOrder = maxPlanOrderFor(next) + 1000
+      t.status = t.planStatusPrev || 'Por hacer'      // vuelve a su estado de reposo
+      delete t.planStatusPrev; delete t.doneAt; delete t.progress
+      return `Hecha ✓ · vuelve ${relLong(next).toLowerCase()}`
+    }
+    t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done
+    return null
+  }
+  /** Completar desde el plan/tablero, con toast + deshacer para la recurrencia. */
+  const completeFromPlan = (e: Epica, i: number) => {
+    const snap = clone(e.tasks[i])
+    const tasks = clone(e.tasks)
+    const msg = applyComplete(tasks[i])
+    patchEpic(e.id, { tasks })
+    if (msg) {   // hubo recurrencia → ofrece deshacer
       const undo = () => {
         const ep = epicsRef.current.find(x => x.id === e.id); if (!ep) return
         const back = clone(ep.tasks)
@@ -905,16 +911,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         back[i] = snap
         patchEpic(e.id, { tasks: back })
       }
-      showToast(
-        seriesOver ? 'Hecha ✓ · serie terminada' : `Hecha ✓ · vuelve ${relLong(next).toLowerCase()}`,
-        false, { label: 'Deshacer', fn: undo })
-      return
+      showToast(msg, false, { label: 'Deshacer', fn: undo })
     }
-
-    t.planPrev = t.status
-    t.status = 'Terminada'
-    t.doneAt = done
-    patchEpic(e.id, { tasks })
   }
   const uncompleteFromPlan = (e: Epica, i: number) => {
     const tasks = clone(e.tasks)
@@ -1035,10 +1033,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setPlanSel(new Set())
     undoToast(`${count} ${count === 1 ? 'movida' : 'movidas'} a ${relLong(day).toLowerCase()}`, snaps)
   }
-  const planBulkDone = () => planBulk(t => {
-    if (t.status === 'Terminada') return
-    t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = todayISO()
-  }, 'marcadas como terminadas')
+  const planBulkDone = () => planBulk(t => { applyComplete(t) }, 'completadas')
   const planBulkRemove = () => planBulk(t => {
     delete t.plan; delete t.priority; delete t.planOrder; applyPlanStatus(t, '')
   }, 'quitadas del plan')
@@ -1049,7 +1044,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     else { delete t.progress; const log = (t.progressLog || []).filter(x => !(x.d === todayISO() && !x.note)); if (log.length) t.progressLog = log; else delete t.progressLog }
   }, `· avance ${v}%`)
   const planBulkStatus = (s: string) => planBulk(t => {
-    if (s === 'Terminada') { if (t.status !== 'Terminada') { t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = todayISO() } }
+    if (s === 'Terminada') { applyComplete(t) }   // reprograma las recurrentes en vez de terminarlas
     else { t.status = s; delete t.doneAt; delete t.planPrev }
   }, `· ${taskStyle(s).label.toLowerCase()}`)
   // Mueve toda la selección a otra épica (una a una, preservando sus campos de plan)
@@ -1261,6 +1256,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Interacciones inline en la destacada ───────────────── */
   const setTaskStatus = (e: Epica, ti: number, v: string) => {
     const tasks = clone(e.tasks)
+    // Marcar "Terminada" una tarea recurrente NO la termina: la reprograma (misma lógica que el
+    // botón de completar). Así la serie no se rompe sin importar por dónde la marcaste.
+    if (v === 'Terminada' && tasks[ti].repeat && tasks[ti].status !== 'Terminada') {
+      const msg = applyComplete(tasks[ti]); patchEpic(e.id, { tasks }); if (msg) showToast(msg); return
+    }
     // Recuerda el estado previo al completar, para que "descompletar" desde el plan lo restaure
     if (v === 'Terminada' && tasks[ti].status !== 'Terminada') tasks[ti].planPrev = tasks[ti].status
     tasks[ti].status = v
@@ -1675,6 +1675,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       t.repeat = { every: Math.max(1, Math.round(taskDraft.repeat.every || 1)), unit: taskDraft.repeat.unit }
       if (taskDraft.repeatUntil) t.repeatUntil = taskDraft.repeatUntil; else delete t.repeatUntil
     } else { delete t.repeat; delete t.repeatUntil }
+    // Marcar "Terminada" en el editor una tarea recurrente = REPROGRAMAR la serie (no terminarla).
+    // Va después del plan para ganarle: applyComplete fija plan=siguiente ocurrencia + estado de reposo.
+    let recurMsg: string | null = null
+    if (t.repeat && taskDraft.status === 'Terminada' && orig.status !== 'Terminada') {
+      t.status = 'Por hacer'; delete t.doneAt
+      recurMsg = applyComplete(t)
+    }
     if (curIdx == null) { t.id = t.id || uid(); if (!t.createdAt) t.createdAt = todayISO() }   // alta
 
     // Épica destino: puede diferir de la de origen si la cambiaste en el editor.
@@ -1699,7 +1706,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     closeTaskEdit({ discard: true })
     if (t.id) setTaskView({ eId: target.id, tid: t.id })   // tras guardar, abre el detalle de la tarea (no cierra en seco)
     if (moved) showToast(`Movida a ${target.name}`)
-    if (newPlan && newPlan !== viewDate && orig.plan !== newPlan) {
+    else if (recurMsg) showToast(recurMsg)   // recurrencia reprogramada (gana sobre "planeada para…")
+    else if (newPlan && newPlan !== viewDate && orig.plan !== newPlan) {
       showToast(`Planeada para ${relLong(newPlan).toLowerCase()}`, false, { label: 'Ver', fn: () => setViewDate(newPlan) })
     }
   }
@@ -4691,7 +4699,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       })
       undoToast(`${count} ${msg}`, snaps); setBacklogSel(new Set())
     }
-    const bulkStatus = (v: string) => bulkField(t => { if (v === 'Terminada' && t.status !== 'Terminada') t.planPrev = t.status; t.status = v; if (v === 'Terminada') { if (!t.doneAt) t.doneAt = todayISO() } else { delete t.doneAt; delete t.planPrev } }, `→ ${v}`)
+    const bulkStatus = (v: string) => bulkField(t => { if (v === 'Terminada') { applyComplete(t); return } t.status = v; delete t.doneAt; delete t.planPrev }, `→ ${v}`)
     const bulkPrio = (v: Prio) => bulkField(t => { t.priority = v }, `· prioridad ${v}`)
     const bulkDue = (v: string) => bulkField(t => { t.due = v }, '· entrega')
     const bulkPlan = (v: string) => {
@@ -4950,7 +4958,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <tbody>
                   {sorted.map(({ e, t, i }) => {
                     const ts = taskStyle(t.status); const dt = dueTone(t.due, t.status === 'Terminada'); const ps = prioStyle(t.priority)
-                    const k = e.id + ':' + i; const sel = backlogSel.has(k)
+                    const k = keyOf({ e, t }); const sel = backlogSel.has(k)
                     return (
                       <tr key={k} {...(backlogEdit ? {} : clickable(() => setTaskView({ eId: e.id, tid: t.id! }), `Ver tarea: ${t.t}`, true))} className="backlog-row" style={{ cursor: backlogEdit ? 'default' : 'pointer', borderBottom: '1px solid rgba(15,35,64,0.05)', background: sel ? 'rgba(194,147,58,0.10)' : undefined }}>
                         <td onClick={ev => ev.stopPropagation()} style={{ padding: '9px 0 9px 12px' }}><input type="checkbox" checked={sel} onChange={() => toggleOne(k)} style={{ cursor: 'pointer' }} /></td>
@@ -6072,15 +6080,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               )}
 
-              <a href={primaryDash(featured)} target={primaryDash(featured).startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ ...goldBtn, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, fontSize: 13.5 }}>
+              <a href={safeUrl(primaryDash(featured))} target={safeUrl(primaryDash(featured)).startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ ...goldBtn, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, fontSize: 13.5 }}>
                 Abrir dashboard <ArrowIcon />
               </a>
               {featured.links.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 11 }}>
                   {featured.links.map((ln, i) => {
-                    const c = typeColor(ln.type)
+                    const c = typeColor(ln.type); const u = safeUrl(ln.url)
                     return (
-                      <a key={i} href={ln.url || '#'} target={(ln.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff', border: `1px solid ${c}55`, borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 600, color: '#14233D' }}>
+                      <a key={i} href={u} target={u.startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff', border: `1px solid ${c}55`, borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 600, color: '#14233D' }}>
                         <span style={{ height: 6, width: 6, borderRadius: 99, background: c }} />{ln.l || ln.type}
                         {ln.primary && <span style={{ color: '#C2933A', fontSize: 11 }}>★</span>}
                       </a>
