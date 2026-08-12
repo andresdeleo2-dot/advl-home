@@ -1294,7 +1294,9 @@ export default function TiempoClient() {
   }
   const startRoutine = (name: string, epicaId?: string, rIdx?: number) => { if (beginSession({ name, area: 'trabajo', start: Math.round(now), dur: 0, ...(epicaId != null && rIdx != null ? { routineRef: { epicaId, rIdx } } : {}) })) setView('hoy') }
   // Empezar una actividad GENERAL (revisar cosas, algo sin tarea): timer libre al instante.
-  const startGeneral = (name: string) => { if (beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0 })) setView('hoy') }
+  // Empieza una actividad "general" (contador libre). NO cambia de vista: la sesión se ve como
+  // popup flotante y como banda EN CURSO en el Planificador, así funciona en Hoy o en el Planificador.
+  const startGeneral = (name: string) => { beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0 }) }
   // Marca una rutina como HECHA en un día (idempotente: no la desmarca). Usado al Terminar una
   // sesión de rutina y por el botón "✓ Terminada".
   const setRoutineDone = (epicaId: string, rIdx: number, dayISO: string) => {
@@ -1602,6 +1604,23 @@ export default function TiempoClient() {
     if (planPastGuard()) return
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: name || 'Actividad', area: 'trabajo', start, dur, date: planDay }] })
   }
+  // Registrar en el Planificador una actividad YA HECHA (doble clic en la rejilla): entra al historial
+  // del día planificado y, si viene de una tarea, suma su tiempo a la bitácora de Épicas (ligado por logId).
+  const planAddDone = (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => {
+    const logId = uid()
+    const entry: HistoryRow = { date: planDay, name: p.name || 'Actividad', area: p.area, start: p.start, dur: p.dur, done: true, ...(p.taskId ? { epicaId: p.epicaId, taskId: p.taskId, logId } : {}) }
+    save({ history: [...(data.history || []), entry] })
+    if (p.taskId && p.epicaId) {
+      const tt = tasksRef.current.find(x => x.task.id === p.taskId)
+      if (tt) {
+        const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: planDay, note: `⏱ ${hm(p.dur)} trabajado`, pct: tt.task.progress, min: p.dur, logId } as EpicaProgressEntry]
+        const upd: EpicaTask = { ...tt.task, progressLog: log }
+        syncTask(p.epicaId, upd)
+        setAllTasks(prev => (prev || []).map(x => x.task.id === p.taskId ? { ...x, task: upd } : x))
+      }
+    }
+    showUndo(`✓ Registré «${p.name || 'Actividad'}» (${hm(p.dur)})`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
+  }
   // Rutinas diarias de Épicas (hábitos) para planificar en el Planificador.
   const planRoutines = epicasList.flatMap(e => (e.routines || []).map(r => ({ name: r.t, epicaName: e.name, color: e.color })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
@@ -1697,6 +1716,9 @@ export default function TiempoClient() {
             now={now}
             session={data.session && planDay === today ? { name: data.session.name, start: sessStartMin, dur: sessElapsed, plannedDur: data.session.dur || 0, area: data.session.area, taskId: data.session.taskId } : null}
             onSessionStart={setSessionStart}
+            allOpenTasks={allTasks}
+            onGeneral={startGeneral}
+            onAddDone={planAddDone}
             onAdd={planAdd}
             onAddFree={planAddFree}
             onPatch={planPatch}
@@ -1989,7 +2011,7 @@ export default function TiempoClient() {
                   {tasksError && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 14, padding: '10px 14px', fontSize: 13, color: '#8a3c2a' }}>No se pudieron cargar las tareas.<button onClick={refreshTasks} style={{ border: '1px solid #e8cabf', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer' }}>Reintentar</button></div>}
 
                   {act === 'Trabajo profundo' && <>
-                    {!V.hasSession && <QuickStart onStart={startGeneral} />}
+                    <QuickStart onStart={startGeneral} />
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                         <span style={{ fontSize: 13.5, color: '#6b645b', textTransform: 'capitalize' }}>{taskDay === today ? 'Tareas de hoy' : `Tareas · ${longDayOf(taskDay)}`}</span>
@@ -3320,7 +3342,7 @@ type PlanDrag =
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, session, onSessionStart, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
   onAdd: (t: TodayTask, start: number, dur?: number) => void
@@ -3334,8 +3356,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
   onNewTask: (epicaId?: string) => void
   session: PlanSession | null
   onSessionStart: (startMin: number) => void
+  allOpenTasks: TodayTask[] | null
+  onGeneral: (name: string) => void
+  onAddDone: (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => void
 }) {
   const [epFilter, setEpFilter] = useState<string | null>(null)
+  const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en la rejilla → registrar algo ya hecho
   const isToday = day === today
   const week = weekOfISO(day)
   const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
@@ -3429,7 +3455,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
     <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Planificador</span>
-        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea o rutina a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). Lo que ya hiciste sale a la izquierda (clic para abrir o ↻ volver a empezar). En celular, toca una tarjeta y luego toca la hora.{(selTask || selFree) ? ' — Toca una hora en el calendario para colocarla.' : ''}</span>
+        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea o rutina a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). <b>Doble clic</b> en una hora registra algo que <b>ya hiciste</b>. Lo que ya hiciste sale a la izquierda (clic para abrir o ↻ volver a empezar).{(selTask || selFree) ? ' — Toca una hora en el calendario para colocarla.' : ''}</span>
         {/* Selector de día de la semana */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => onPickDay(addDaysISO(week[0], -7))} title="Semana anterior" style={weekNav}>‹</button>
@@ -3463,6 +3489,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
         <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
           <div ref={gridRef}
             onPointerDown={e => { if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { onAddFree(selFree, yToMin(e.clientY)); setSelFree(null) } }}
+            onDoubleClick={e => { if (!selTask && !selFree) setDoneAt(yToMin(e.clientY)) }}
+            title="Doble clic en una hora para registrar algo que ya hiciste"
             style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: (selTask || selFree) ? 'copy' : 'default' }}>
             {/* Líneas de hora */}
             {hours.map(h => (
@@ -3576,7 +3604,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
 
         {/* Columna: tareas por agendar + rutinas diarias */}
         <div className="t-card plan-side" style={{ ...card(12), padding: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+          {/* Empezar algo GENERAL al instante (siempre disponible) */}
+          <QuickStart onStart={onGeneral} />
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12 }}>
             <span style={LBL}>por agendar · {isToday ? 'hoy' : longDayOf(day)}</span>
             <span style={{ fontSize: 12, color: '#a49b90' }}>{pending.length}</span>
           </div>
@@ -3627,6 +3657,82 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
       {hover && !drag && (
         <div style={{ position: 'fixed', left: hover.x + 14, top: hover.y + 14, zIndex: 98, background: '#1c1a17', color: '#faf7f1', fontSize: 12, fontWeight: 500, padding: '6px 10px', borderRadius: 8, pointerEvents: 'none', maxWidth: 280, boxShadow: '0 4px 14px rgba(0,0,0,.25)' }}>{hover.txt}</div>
       )}
+      {doneAt !== null && <PlanAddDone tasks={allOpenTasks} defaultStart={doneAt} onConfirm={p => { onAddDone(p); setDoneAt(null) }} onClose={() => setDoneAt(null)} />}
+    </div>
+  )
+}
+/** Registrar una actividad YA HECHA en el Planificador (doble clic en la rejilla): elegir una tarea
+ *  (buscable + filtro por épica) o "General" libre, hora y duración. */
+function PlanAddDone({ tasks, defaultStart, onConfirm, onClose }: {
+  tasks: TodayTask[] | null; defaultStart: number
+  onConfirm: (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => void
+  onClose: () => void
+}) {
+  const list = (tasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada')
+  const [mode, setMode] = useState<'task' | 'free'>('task')
+  const [q, setQ] = useState(''); const [epF, setEpF] = useState<string | null>(null)
+  const [sel, setSel] = useState<string>('')
+  const [name, setName] = useState(''); const [area, setArea] = useState<Area>('trabajo')
+  const [startStr, setStartStr] = useState(clock(defaultStart))
+  const [dur, setDur] = useState(30)
+  const eps = [...new Map(list.map(t => [t.epicaId, { id: t.epicaId, name: t.epicaName, color: t.color }])).values()]
+  const filtered = list.filter(t => (!epF || t.epicaId === epF) && (!q.trim() || (t.task.t || '').toLowerCase().includes(q.trim().toLowerCase())))
+  const areaOpts = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno')
+  const canSave = mode === 'task' ? !!sel : name.trim().length > 0
+  const save = () => {
+    if (!canSave) return
+    const start = parse(startStr), d = Math.max(5, Math.min(600, dur || 5))
+    if (mode === 'task') { const t = list.find(x => x.task.id === sel); if (!t) return; onConfirm({ name: t.task.t || 'Tarea', area: 'trabajo', start, dur: d, taskId: t.task.id, epicaId: t.epicaId }) }
+    else onConfirm({ name: name.trim() || 'Actividad', area, start, dur: d })
+  }
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 95 }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={{ width: 'min(460px,100%)', maxHeight: '90vh', overflowY: 'auto', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={LBL}>registrar algo hecho · a las {clock(parse(startStr))}</span>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999, alignSelf: 'flex-start' }}>
+          {([['task', 'Tarea de Épicas'], ['free', 'General / libre']] as const).map(([k, lbl]) => (
+            <button key={k} onClick={() => setMode(k)} style={{ border: 'none', cursor: 'pointer', padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: 500, background: mode === k ? '#faf7f1' : 'transparent', color: mode === k ? '#1c1a17' : '#6b645b' }}>{lbl}</button>
+          ))}
+        </div>
+        {mode === 'task' ? (
+          list.length ? (<>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar tarea…" style={field} />
+            {eps.length > 1 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                <button onClick={() => setEpF(null)} style={{ border: `1px solid ${!epF ? '#b4653a' : '#e2d9cb'}`, background: !epF ? '#f5ece2' : '#faf7f1', color: !epF ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer' }}>Todas</button>
+                {eps.map(e => { const on = epF === e.id; return <button key={e.id} onClick={() => setEpF(on ? null : e.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${on ? '#b4653a' : '#e2d9cb'}`, background: on ? '#f5ece2' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer', maxWidth: 140 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span></button> })}
+              </div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', border: '1px solid #eee6da', borderRadius: 14, padding: 8 }}>
+              {filtered.length ? filtered.map(t => { const on = t.task.id === sel; return (
+                <button key={t.task.id} onClick={() => setSel(t.task.id!)} style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: on ? '#f5ece2' : 'transparent', borderRadius: 12, padding: '9px 11px', cursor: 'pointer' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
+                  <span style={{ fontSize: 12, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
+                </button>
+              ) }) : <span style={{ fontSize: 13, color: '#a49b90', padding: 8 }}>Sin coincidencias.</span>}
+            </div>
+          </>) : <span style={{ fontSize: 13.5, color: '#a49b90' }}>No hay tareas abiertas. Usa “General / libre”.</span>
+        ) : (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="¿Qué hiciste? (general…)" style={{ ...field, flex: 1, minWidth: 180 }} />
+            <select value={area} onChange={e => setArea(e.target.value as Area)} style={{ ...field, cursor: 'pointer' }}>{areaOpts.map(k => <option key={k} value={k}>{AREAS[k].label}</option>)}</select>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><span style={LBL}>empezó</span><input type="time" value={startStr} onChange={e => setStartStr(e.target.value)} style={field} /></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><span style={LBL}>duró</span><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><input type="number" min={5} max={600} step={5} value={dur} onChange={e => setDur(Math.max(5, Math.min(600, Number(e.target.value) || 5)))} style={{ ...field, width: 78 }} /><span style={{ fontSize: 13, color: '#a49b90' }}>min</span></div></div>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{[15, 30, 45, 60, 90].map(p => <button key={p} onClick={() => setDur(p)} style={{ border: `1px solid ${dur === p ? '#c2933a' : '#e2d9cb'}`, background: dur === p ? 'rgba(194,147,58,.12)' : '#faf7f1', color: dur === p ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer' }}>{hm(p)}</button>)}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+          <button disabled={!canSave} onClick={save} style={{ flex: 1, textAlign: 'center', background: canSave ? '#1c1a17' : '#c9c0b3', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: canSave ? 'pointer' : 'default' }}>✓ Registrar como hecho</button>
+          <button onClick={onClose} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '14px 18px', fontSize: 14, cursor: 'pointer' }}>Cancelar</button>
+        </div>
+      </div>
     </div>
   )
 }
