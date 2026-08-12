@@ -3387,7 +3387,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   const isToday = day === today
   const week = weekOfISO(day)
   const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
-  const PXM = 1.2, SNAP = 15
+  const SNAP = 15
+  // Zoom vertical del calendario (px por minuto): estira/encoge las horas para ver bien las tareas.
+  const [pxm, setPxm] = useState(1.2)
+  useEffect(() => { try { const v = Number(localStorage.getItem('advl.plan.pxm')); if (v >= 0.8 && v <= 4) setPxm(v) } catch {} }, [])
+  const setZoom = (v: number) => { const c = Math.min(4, Math.max(0.8, Math.round(v * 10) / 10)); setPxm(c); try { localStorage.setItem('advl.plan.pxm', String(c)) } catch {} }
+  const PXM = pxm
   const gridRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<PlanDrag | null>(null)
   const dragRef = useRef<PlanDrag | null>(null); dragRef.current = drag
@@ -3500,11 +3505,17 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           {!isToday && <button onClick={() => onPickDay(today)} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer' }}>Hoy</button>}
           <span style={{ fontSize: 13.5, color: '#a49b90', marginLeft: 4, textTransform: 'capitalize' }}>{longDayOf(day)}</span>
         </div>
-        {/* Leyenda de carriles */}
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: '#a49b90' }}>
+        {/* Leyenda de carriles + zoom vertical del calendario */}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: '#a49b90' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#e9f0e6', border: '1px solid #b6cbab' }} />hecho (izquierda)</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#fff', border: '1px solid #b4653a' }} />plan (derecha)</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'repeating-linear-gradient(45deg,#f2ece0,#f2ece0 4px,#efe8db 4px,#efe8db 8px)', border: '1px solid #e7dfd2' }} />rutina · 🗓 juntas</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }} title="Estirar o encoger el calendario (alto de las horas)">
+            <span style={{ fontSize: 11.5 }}>alto del calendario</span>
+            <button onClick={() => setZoom(pxm - 0.4)} disabled={pxm <= 0.8} aria-label="Encoger" style={{ ...weekNav, width: 28, height: 28, fontSize: 16, opacity: pxm <= 0.8 ? 0.4 : 1 }}>−</button>
+            <button onClick={() => setZoom(pxm + 0.4)} disabled={pxm >= 4} aria-label="Estirar" style={{ ...weekNav, width: 28, height: 28, fontSize: 16, opacity: pxm >= 4 ? 0.4 : 1 }}>+</button>
+            {Math.abs(pxm - 1.2) > 0.05 && <button onClick={() => setZoom(1.2)} style={{ border: 'none', background: 'transparent', color: '#8a4b28', fontSize: 11.5, cursor: 'pointer' }}>restablecer</button>}
+          </div>
         </div>
       </div>
 
@@ -3647,7 +3658,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{s.started ? '✓ ' : ''}{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
                     <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}{s.started ? ' · plan' : ''}</span>
                     {tall && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
-                      {!s.started && <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title="Comenzar ahora" style={planBtn}>▶</button>}
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title={s.started ? 'Volver a comenzar' : 'Comenzar ahora'} style={planBtn}>▶</button>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la tarea" style={planBtn}>👁</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>
@@ -3674,7 +3685,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                 <div onPointerDown={e => e.stopPropagation()} onPointerEnter={() => { if (actTimer.current) clearTimeout(actTimer.current) }} onPointerLeave={hideActBarSoon}
                   style={{ position: 'absolute', top: Math.max(0, actBar.top - 34), ...(actBar.lane === 'right' ? { right: 8 } : { left: 'calc(50% - 8px)', transform: 'translateX(-100%)' }), zIndex: 40, display: 'flex', gap: 3, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 999, padding: '4px 6px', boxShadow: '0 8px 22px -8px rgba(28,26,23,.4)' }}>
                   {s && (<>
-                    {!s.started && <button onClick={() => onStart(s)} title="Comenzar ahora" style={actBtn}>▶</button>}
+                    <button onClick={() => onStart(s)} title={s.started ? 'Volver a comenzar' : 'Comenzar ahora'} style={actBtn}>▶</button>
                     <button onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora" style={actBtn}>✎</button>
                     {t && <button onClick={() => onEdit(t)} title="Ver la tarea" style={actBtn}>👁</button>}
                     <button onClick={() => { onRemove(s.id); setActBar(null) }} title="Quitar del plan" style={actBtn}>×</button>
