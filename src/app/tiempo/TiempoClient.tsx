@@ -86,7 +86,7 @@ const dayIdxMon = (s: string) => { const [y, m, d] = s.split('-').map(Number); r
 
 export default function TiempoClient() {
   const [now, setNow] = useState(0)
-  const [view, setView] = useState<'plan' | 'hoy' | 'semana' | 'rutina' | 'historial'>('hoy')
+  const [view, setView] = useState<'plan' | 'hoy' | 'semana' | 'rutina' | 'historial'>('plan')   // abre en Planificador por defecto
   const [hoyPanel, setHoyPanel] = useState<'both' | 'resumen' | 'tareas'>('both')   // vista Hoy: ambos paneles, o uno maximizado
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
