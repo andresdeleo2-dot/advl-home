@@ -3510,7 +3510,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         const realMin = worked.reduce((a, w) => a + w.dur, 0)
         const planTotalMin = scheduled.reduce((a, s) => a + s.dur, 0)
         const nowM = Math.round(now)
-        const planByNow = scheduled.reduce((a, s) => a + Math.max(0, Math.min(s.dur, nowM - s.start)), 0)
+        // "a esta hora" = lo agendado cuyo horario ya llegó (start ≤ ahora), a duración completa.
+        const planByNow = scheduled.filter(s => s.start <= nowM).reduce((a, s) => a + s.dur, 0)
         const behind = planByNow - realMin
         const stat = (v: string, l: string, c: string) => (
           <div style={{ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 14, padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 118 }}>
