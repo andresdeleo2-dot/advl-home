@@ -7,7 +7,7 @@ import FavoritosStrip from '@/components/FavoritosStrip'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel,
-  type AppData, type Area, type ScheduledBlock, type Block,
+  type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor } from '@/components/epicas/core'
@@ -88,6 +88,7 @@ export default function TiempoClient() {
   const [loaded, setLoaded] = useState(false)
   const [allTasks, setAllTasks] = useState<TodayTask[] | null>(null)   // null = cargando; TODAS las tareas abiertas
   const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
+  const [planDay, setPlanDay] = useState(iso(new Date()))              // día que se planifica en el Planificador
   const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
@@ -1362,11 +1363,11 @@ export default function TiempoClient() {
   const bed = data.bed, sleepGoal = data.sleep
   const today = iso(new Date())
 
-  const tabs: [typeof view, string][] = [['plan', 'Plan de hoy'], ['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
+  const tabs: [typeof view, string][] = [['plan', 'Planificador'], ['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
 
-  // ── Plan de hoy: helpers de agendado (siempre fecha = hoy) ─────────────
+  // ── Planificador: helpers de agendado (fecha = día que se planifica) ───
   const planAdd = (t: TodayTask, start: number, dur = 15) =>
-    save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: today, epicaId: t.epicaId, taskId: t.task.id }] })
+    save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: planDay, epicaId: t.epicaId, taskId: t.task.id }] })
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
     save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
 
@@ -1444,12 +1445,16 @@ export default function TiempoClient() {
         </div>
 
         {!loaded ? <div style={{ height: 320 }} /> : view === 'plan' ? (
-          /* ── PLAN DE HOY (calendario de arrastre) ──────────────────── */
+          /* ── PLANIFICADOR (calendario de arrastre por día) ─────────── */
           <PlanDia
+            day={planDay}
+            today={today}
+            onPickDay={setPlanDay}
             tasks={tasks}
-            scheduled={(data.scheduled || []).filter(s => (s.date || today) === today)}
-            blocks={data.blocks.filter(b => blockActiveOn(b, new Date().getDay()))}
-            meetings={meetings.filter(m => m.date === today)}
+            scheduled={(data.scheduled || []).filter(s => (s.date || today) === planDay)}
+            worked={data.history.filter(h => h.date === planDay)}
+            blocks={data.blocks.filter(b => blockActiveOn(b, new Date(planDay + 'T12:00:00').getDay()))}
+            meetings={meetings.filter(m => m.date === planDay)}
             now={now}
             onAdd={planAdd}
             onPatch={planPatch}
@@ -3027,14 +3032,18 @@ type PlanDrag =
   | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
-function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRemove, onStart, onEdit }: {
-  tasks: TodayTask[] | null; scheduled: ScheduledBlock[]; blocks: Block[]; meetings: Meeting[]; now: number
+function PlanDia({ day, today, onPickDay, tasks, scheduled, worked, blocks, meetings, now, onAdd, onPatch, onRemove, onStart, onEdit }: {
+  day: string; today: string; onPickDay: (d: string) => void
+  tasks: TodayTask[] | null; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
   onAdd: (t: TodayTask, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
   onStart: (s: ScheduledBlock) => void
   onEdit: (t: TodayTask) => void
 }) {
+  const isToday = day === today
+  const week = weekOfISO(day)
+  const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
   const PXM = 1.2, SNAP = 15
   const gridRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<PlanDrag | null>(null)
@@ -3044,11 +3053,11 @@ function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRe
   // Ventana visible de la rejilla: de la hora más temprana a la más tardía entre eventos, ahora y 7–22h.
   const [gridStart, gridEnd] = useMemo(() => {
     let minS = 7 * 60, maxE = 22 * 60
-    const ev = [...scheduled, ...meetings.map(m => ({ start: m.start, dur: m.dur })), ...blocks.map(b => ({ start: b.start, dur: b.dur }))]
+    const ev = [...scheduled, ...worked, ...meetings.map(m => ({ start: m.start, dur: m.dur })), ...blocks.map(b => ({ start: b.start, dur: b.dur }))]
     for (const e of ev) { if (e.start < minS) minS = e.start; if (e.start + e.dur > maxE) maxE = e.start + e.dur }
-    minS = Math.min(minS, Math.round(now) - 30); maxE = Math.max(maxE, Math.round(now) + 90)
+    if (isToday) { minS = Math.min(minS, Math.round(now) - 30); maxE = Math.max(maxE, Math.round(now) + 90) }
     return [Math.max(0, Math.floor(minS / 60) * 60), Math.min(1440, Math.ceil(maxE / 60) * 60)]
-  }, [scheduled, meetings, blocks, now])
+  }, [scheduled, worked, meetings, blocks, now, isToday])
 
   const snap = (m: number) => Math.round(m / SNAP) * SNAP
   const yToMin = (clientY: number) => { const r = gridRef.current?.getBoundingClientRect(); if (!r) return gridStart; return Math.max(gridStart, Math.min(gridEnd, gridStart + snap((clientY - r.top) / PXM))) }
@@ -3113,9 +3122,35 @@ function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRe
 
   return (
     <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Plan de hoy</span>
-        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 620 }}>Arrastra una tarea a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). En celular, toca una tarjeta y luego toca la hora.{selTask ? ' — Toca una hora en el calendario para colocar la tarea elegida.' : ''}</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Planificador</span>
+        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). En celular, toca una tarjeta y luego toca la hora.{selTask ? ' — Toca una hora en el calendario para colocar la tarea elegida.' : ''}</span>
+        {/* Selector de día de la semana */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => onPickDay(addDaysISO(week[0], -7))} title="Semana anterior" style={weekNav}>‹</button>
+          <div className="plan-days">
+            {week.map((d, i) => {
+              const on = d === day, isTd = d === today
+              return (
+                <button key={d} onClick={() => onPickDay(d)} title={longDayOf(d)}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, minWidth: 40, padding: '6px 4px', borderRadius: 12, cursor: 'pointer',
+                    border: `1px solid ${on ? '#b4653a' : isTd ? '#d9b48a' : '#e7dfd2'}`, background: on ? '#b4653a' : '#faf7f1', color: on ? '#faf7f1' : '#6b645b' }}>
+                  <span style={{ fontSize: 10.5, opacity: .8 }}>{DN[i]}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{Number(d.slice(8, 10))}</span>
+                </button>
+              )
+            })}
+          </div>
+          <button onClick={() => onPickDay(addDaysISO(week[0], 7))} title="Semana siguiente" style={weekNav}>›</button>
+          {!isToday && <button onClick={() => onPickDay(today)} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer' }}>Hoy</button>}
+          <span style={{ fontSize: 13.5, color: '#a49b90', marginLeft: 4, textTransform: 'capitalize' }}>{longDayOf(day)}</span>
+        </div>
+        {/* Leyenda de carriles */}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: '#a49b90' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#e9f0e6', border: '1px solid #b6cbab' }} />hecho (izquierda)</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#fff', border: '1px solid #b4653a' }} />plan (derecha)</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'repeating-linear-gradient(45deg,#f2ece0,#f2ece0 4px,#efe8db 4px,#efe8db 8px)', border: '1px solid #e7dfd2' }} />rutina · 🗓 juntas</span>
+        </div>
       </div>
 
       <div className="plan-wrap">
@@ -3142,8 +3177,22 @@ function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRe
                 <span style={{ fontSize: 11, color: '#2E5A9E' }}>🗓 {m.name || 'Ocupado'} · {clock(m.start)}</span>
               </div>
             ))}
-            {/* Línea de ahora */}
-            {now >= gridStart && now <= gridEnd && (
+            {/* Divisor de carriles hecho | plan */}
+            <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: '#f0e8db', pointerEvents: 'none' }} />
+            {/* Actividades YA HECHAS ese día (registro real, carril izquierdo) */}
+            {worked.map((w, i) => {
+              const col = AREAS[w.area]?.color || '#7a9e6a'; const tall = w.dur * PXM >= 40
+              const future = isToday && w.start > now && !w.done
+              return (
+                <div key={'w' + i} title={`${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}`}
+                  style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(w.dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden' }}>
+                  <div style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums' }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + w.dur)} · {hm(w.dur)}</div>
+                  {tall && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
+                </div>
+              )
+            })}
+            {/* Línea de ahora (sólo hoy) */}
+            {isToday && now >= gridStart && now <= gridEnd && (
               <div style={{ position: 'absolute', left: -6, right: 0, top: topOf(now), height: 2, background: '#c0392b', pointerEvents: 'none', zIndex: 5 }}>
                 <span style={{ position: 'absolute', left: -46, top: -8, fontSize: 11, color: '#c0392b', fontWeight: 600 }}>{clock(Math.round(now))}</span>
               </div>
@@ -3158,7 +3207,7 @@ function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRe
               return (
                 <div key={s.id}
                   onPointerDown={e => { e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
-                  style={{ position: 'absolute', left: 2, right: 6, top: topOf(start), height: hOf(dur), background: '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                     <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
                     <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
@@ -3178,7 +3227,7 @@ function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRe
             })}
             {/* Fantasma al arrastrar una tarjeta nueva */}
             {drag?.kind === 'new' && drag.curMin != null && (
-              <div style={{ position: 'absolute', left: 2, right: 6, top: topOf(drag.curMin), height: hOf(drag.dur), background: 'rgba(180,101,58,.14)', border: '1.5px dashed #b4653a', borderRadius: 10, pointerEvents: 'none', zIndex: 30 }} />
+              <div style={{ position: 'absolute', left: '50%', right: 6, top: topOf(drag.curMin), height: hOf(drag.dur), background: 'rgba(180,101,58,.14)', border: '1.5px dashed #b4653a', borderRadius: 10, pointerEvents: 'none', zIndex: 30 }} />
             )}
           </div>
         </div>
@@ -3203,6 +3252,7 @@ function PlanDia({ tasks, scheduled, blocks, meetings, now, onAdd, onPatch, onRe
   )
 }
 const planBtn: CSSProperties = { border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: '#8b8379', width: 22, height: 22, borderRadius: 6, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+const weekNav: CSSProperties = { border: '1px solid #e7dfd2', background: '#faf7f1', borderRadius: 999, width: 32, height: 36, fontSize: 18, color: '#6b645b', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }
 
 function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing = [], onSchedule, onClose }: {
   tasks: TodayTask[] | null; defaultStart: number; presetTaskId?: string | null; presetName?: string | null
@@ -3926,6 +3976,7 @@ const MARGEN_CSS = `
 /* Plan de hoy: rejilla + columna de tareas por agendar. */
 .plan-wrap { display: flex; gap: 16px; align-items: flex-start; }
 .plan-side { flex: 0 0 288px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: 12px; max-height: calc(100dvh - 24px); overflow-y: auto; }
+.plan-days { display: flex; gap: 5px; flex-wrap: wrap; }
 @media (max-width: 820px) { .plan-wrap { flex-direction: column-reverse; } .plan-side { flex: none; width: 100%; position: static; max-height: none; } }
 /* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). */
 .td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 32px; align-items: start; }
