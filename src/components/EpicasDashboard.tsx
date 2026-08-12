@@ -1330,6 +1330,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(fromE.id, { tasks: fromTasks })
     patchEpic(toE.id, { tasks: toTasks })
     setBacklogSel(new Set())
+    setFeaturedId(toE.id)   // no "desaparece" de la vista aunque haya filtro activo
+    showToast(`«${task.t || 'Tarea'}» movida a ${toE.name}`)
   }
   /** Cambia el avance de una tarea.
    *  `defer` (arrastre del slider): pinta al instante y persiste UNA sola vez al soltar.
