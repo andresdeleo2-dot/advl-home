@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
@@ -1286,7 +1286,8 @@ export default function TiempoClient() {
   // arranca una NUEVA sesión con el mismo nombre/área (y su tarea de Épicas si venía de una),
   // contador libre. Se ACUMULA: al terminar genera otro bloque en el día y otra entrada de tiempo.
   const resumeActivity = (row: AppData['history'][number]) => {
-    if (beginSession({ name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) })) { setHistIdx(null); setView('hoy') }
+    // NO cambia de vista: se queda donde estás (la sesión en curso sale como popup flotante).
+    if (beginSession({ name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) })) setHistIdx(null)
   }
   // Devolver una tarea (a la que ya le pusiste tiempo hoy) a "tus tareas del día".
   const sendBackToTasks = (taskId: string) => {
@@ -1318,6 +1319,14 @@ export default function TiempoClient() {
   // Agendar en la cinta: abre el selector para elegir una tarea de Épicas (o actividad libre)
   // a esa hora. Al llegar la hora, la app pregunta si la quieres iniciar.
   const addActivityAt = (startMin: number) => { setSchedulePreset(null); setScheduleAt(Math.max(0, Math.min(1425, Math.round(startMin / 15) * 15))) }
+  // Agrega un REGISTRO nuevo (actividad ya hecha) al día visto y abre el editor para completarlo.
+  const addWorkedActivity = () => {
+    const base = isTodayView ? Math.max(0, Math.round(now / 15) * 15 - 30) : 9 * 60
+    const entry: HistoryRow = { date: taskDay, name: 'Actividad', area: 'trabajo', start: base, dur: 30, done: true }
+    const next = [...(data.history || []), entry]
+    save({ history: next })
+    setHistIdx(next.length - 1)
+  }
   // Default para "+ actividad": justo después del ÚLTIMO agendado de hoy (para encadenar), o ahora
   // si no hay ninguno o ya pasó. Así una nueva empieza donde terminó la anterior.
   const nextChainStart = () => {
@@ -1325,6 +1334,41 @@ export default function TiempoClient() {
     const ends = (data.scheduled || []).filter(s => (s.date || t0) === t0).map(s => s.start + s.dur)
     return Math.max(Math.round(now / 15) * 15, ...(ends.length ? [Math.round(Math.max(...ends) / 15) * 15] : [0]))
   }
+  // Filas normalizadas para la tabla ordenable "el día" (registro + hechas en Épicas + subtareas).
+  const diaRows: WorkedRow[] = [
+    ...dayLog.map(l => {
+      const fut = isTodayView && l.startMin > now && !l.done
+      const st = fut ? { statusLabel: '⚠ futura', statusColor: '#8a3c2a', statusRank: 3 } : l.done ? { statusLabel: 'hecho ✓', statusColor: '#4f6238', statusRank: 0 } : { statusLabel: 'trabajado', statusColor: '#8a4b28', statusRank: 1 }
+      return {
+        key: 'done' + l.idx, sortTime: l.startMin, timeLabel: l.range, color: l.dot, name: l.name, durMin: data.history[l.idx]?.dur ?? 0, durLabel: l.dur, ...st,
+        onClick: () => setHistIdx(l.idx),
+        actions: (<>
+          {l.taskId && <button onClick={() => viewLog(data.history[l.idx], l.idx)} title="Ver la tarea completa" style={dtBtn}>Ver</button>}
+          {l.taskId && isTodayView && (visibleTaskIds.has(l.taskId)
+            ? (data.backToTasks || []).includes(`${today}·${l.taskId}`) && <button onClick={() => removeBackToTasks(l.taskId!)} title="Quitarla de 'tus tareas del día'" style={{ ...dtBtn, borderColor: '#e6cfa4', background: '#f7ece2', color: '#8a4b28' }}>Quitar de tareas</button>
+            : <button onClick={() => sendBackToTasks(l.taskId!)} title="Devolverla a 'tus tareas del día'" style={{ ...dtBtn, borderColor: '#cfe0c4', background: '#eef1e7', color: '#4f6238' }}>↩ A tareas</button>)}
+          <button onClick={() => setHistIdx(l.idx)} title="Editar el registro (hora/duración/terminada/borrar)" style={dtBtn}>Editar</button>
+          <button onClick={() => resumeActivity(data.history[l.idx])} title="Volver a trabajar en esto ahora (se acumula)" style={{ ...dtBtn, color: '#8a4b28' }}>↻ Retomar</button>
+        </>),
+      }
+    }),
+    ...epicDoneToday.map(t => ({
+      key: 'epc' + t.task.id, sortTime: 24 * 60 + 1, timeLabel: 'en Épicas', color: t.color, name: t.task.t || 'Tarea', sub: t.epicaName, durMin: 0, durLabel: '',
+      statusLabel: 'hecho ✓', statusColor: '#4f6238', statusRank: 0,
+      onClick: () => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } }),
+      actions: (<>
+        <button onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver / editar la tarea" style={dtBtn}>Ver</button>
+        <button onClick={() => unmarkEpicDone(t)} title="No se trabajó / me equivoqué: quitarla del día" style={{ ...dtBtn, color: '#8a3c2a' }}>Quitar</button>
+        <button onClick={() => resumeActivity({ date: today, name: t.task.t || 'Tarea', area: 'trabajo', start: 0, dur: 0, epicaId: t.epicaId, taskId: t.task.id })} title="Volver a trabajar en esto ahora" style={{ ...dtBtn, color: '#8a4b28' }}>↻ Retomar</button>
+      </>),
+    })),
+    ...daySubtasksDone.map(st => ({
+      key: 'std' + st.key, sortTime: st.at, timeLabel: clock(st.at), icon: '✓', color: '#2E6E6E', name: st.sub, sub: 'subtarea de ' + st.taskName, durMin: 0, durLabel: '',
+      statusLabel: 'subtarea ✓', statusColor: '#2E6E6E', statusRank: 2,
+      onClick: () => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) },
+      actions: (<button onClick={() => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver / editar la tarea" style={dtBtn}>Ver</button>),
+    })),
+  ]
   // Agendar una tarea concreta (desde su fila o su detalle): abre el selector ya con ella elegida,
   // sugiriendo el PRÓXIMO HUECO donde cabe (por su dificultad); si no hay, el próximo cuarto de hora.
   const scheduleTaskAt = (taskId: string) => {
@@ -1784,33 +1828,8 @@ export default function TiempoClient() {
                           <span style={{ fontSize: 12.5, color: '#a49b90' }}>{workedOpen ? 'ocultar' : 'ver'}</span>
                         </button>
                         {workedOpen && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8 }}>
-                            {[...dayLog].reverse().map(l => { const fut = isTodayView && l.startMin > now && !l.done; return (
-                              <div key={'wd' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', cursor: 'pointer', borderBottom: '1px solid #f2ece0' }}>
-                                <span style={{ fontSize: 12.5, color: '#a49b90', width: 92, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{l.range}</span>
-                                <span style={{ width: 7, height: 7, borderRadius: 999, background: l.dot, flexShrink: 0 }} />
-                                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
-                                <span style={{ fontSize: 12.5, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
-                                <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '3px 9px', fontSize: 11.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻</button>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: l.done ? '#4f6238' : (fut ? '#8a3c2a' : '#8a4b28'), width: 80, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : (fut ? '⚠ futura' : 'trabajado')}</span>
-                              </div>
-                            ) })}
-                            {epicDoneToday.map(t => (
-                              <div key={'we' + t.task.id} onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', cursor: 'pointer', borderBottom: '1px solid #f2ece0' }}>
-                                <span style={{ fontSize: 11.5, color: '#c2b9ab', width: 92, flexShrink: 0 }}>en Épicas</span>
-                                <span style={{ width: 7, height: 7, borderRadius: 999, background: t.color, flexShrink: 0 }} />
-                                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: '#4f6238', width: 80, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
-                              </div>
-                            ))}
-                            {daySubtasksDone.map(st => (
-                              <div key={'ws' + st.key} onClick={() => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', cursor: 'pointer', borderBottom: '1px solid #f2ece0' }}>
-                                <span style={{ fontSize: 12.5, color: '#a49b90', width: 92, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(st.at)}</span>
-                                <span style={{ color: '#2E6E6E', fontSize: 13, flexShrink: 0 }}>✓</span>
-                                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#4c4741', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ fontSize: 12, color: '#a49b90' }}>· subtarea</span></span>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: '#2E6E6E', width: 80, textAlign: 'right', flexShrink: 0 }}>subtarea ✓</span>
-                              </div>
-                            ))}
+                          <div style={{ marginTop: 8 }}>
+                            <WorkedTable rows={diaRows} compact />
                           </div>
                         )}
                       </div>
@@ -1827,7 +1846,8 @@ export default function TiempoClient() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   {!isTodayView && <button onClick={() => setTaskDay(today)} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>Hoy</button>}
                   <span style={{ fontSize: 13, color: '#a49b90' }}>de {isTodayView ? V.barStartLabel : WEEK.winStartLabel} a {isTodayView ? V.scaleEndLabel : WEEK.winEndLabel}</span>
-                  {isTodayView && <button onClick={() => addActivityAt(nextChainStart())} title="Agregar una actividad — empieza donde terminó la última agendada" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ actividad</button>}
+                  <button onClick={addWorkedActivity} title="Registrar una actividad ya hecha (se abre para editar hora, duración y demás)" style={{ border: '1px solid #d9b48a', background: '#f7ece2', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', fontWeight: 500 }}>+ Nueva actividad</button>
+                  {isTodayView && <button onClick={() => addActivityAt(nextChainStart())} title="Agendar algo a una hora futura" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>+ Agendar</button>}
                 </div>
               </div>
               {isTodayView ? (<>
@@ -1880,42 +1900,7 @@ export default function TiempoClient() {
                     <button onClick={() => removeScheduled(s.id)} title="Quitar de agendados" style={{ border: 'none', background: 'transparent', fontSize: 18, color: '#c2b9ab', cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>×</button>
                   </div>
                 ))}
-                {[...dayLog].reverse().map(l => (
-                  <div key={'done' + l.idx} onClick={() => setHistIdx(l.idx)} title="Editar registro" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
-                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{l.range}</span>
-                    <span style={{ width: 8, height: 8, borderRadius: 999, background: l.dot, display: 'block' }} />
-                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</span>
-                    <span style={{ fontSize: 14, color: '#a49b90', flexShrink: 0 }}>{l.dur}</span>
-                    {l.taskId && <button onClick={e => { e.stopPropagation(); viewLog(data.history[l.idx], l.idx) }} title="Ver la tarea completa (avance, subtareas, bitácora…)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>}
-                    {l.taskId && isTodayView && (visibleTaskIds.has(l.taskId)
-                      ? (data.backToTasks || []).includes(`${today}·${l.taskId}`) && <button onClick={e => { e.stopPropagation(); removeBackToTasks(l.taskId!) }} title="Quitarla de 'tus tareas del día'" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>Quitar de tareas</button>
-                      : <button onClick={e => { e.stopPropagation(); sendBackToTasks(l.taskId!) }} title="Devolverla a 'tus tareas del día'" style={{ border: '1px solid #cfe0c4', background: '#eef1e7', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#4f6238', cursor: 'pointer', flexShrink: 0 }}>↩ A tareas</button>)}
-                    <button onClick={e => { e.stopPropagation(); setHistIdx(l.idx) }} title="Editar el registro: cambiar hora/duración, marcar si se terminó, o borrarlo" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Editar</button>
-                    <button onClick={e => { e.stopPropagation(); resumeActivity(data.history[l.idx]) }} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
-                    <span title={(isTodayView && l.startMin > now && !l.done) ? 'Este registro tiene una hora que aún no llega — probablemente un error. Ábrelo (Editar) para corregir la hora o borrarlo.' : undefined} style={{ fontSize: 13, fontWeight: 500, color: l.done ? '#4f6238' : (isTodayView && l.startMin > now ? '#8a3c2a' : '#8a4b28'), width: 90, textAlign: 'right', flexShrink: 0 }}>{l.done ? 'hecho ✓' : (isTodayView && l.startMin > now ? '⚠ hora futura' : 'trabajado')}</span>
-                  </div>
-                ))}
-                {epicDoneToday.map(t => (
-                  <div key={'epc' + t.task.id} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
-                    <span style={{ fontSize: 12, color: '#c2b9ab', width: 96, flexShrink: 0 }}>en Épicas</span>
-                    <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0 }} />
-                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</span>
-                    <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{t.epicaName}</span>
-                    <button onClick={() => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} title="Ver la tarea completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
-                    <button onClick={() => unmarkEpicDone(t)} title="No se trabajó / me equivoqué: quitarla del día (la reabre en Épicas)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer', flexShrink: 0 }}>Quitar</button>
-                    <button onClick={() => resumeActivity({ date: today, name: t.task.t || 'Tarea', area: 'trabajo', start: 0, dur: 0, epicaId: t.epicaId, taskId: t.task.id })} title="Volver a trabajar en esto ahora (se acumula)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>↻ Retomar</button>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: '#4f6238', width: 90, textAlign: 'right', flexShrink: 0 }}>hecho ✓</span>
-                  </div>
-                ))}
-                {daySubtasksDone.map(st => (
-                  <div key={'std' + st.key} onClick={() => { const tt = (allTasks || []).find(x => x.task.id === st.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da', cursor: 'pointer' }}>
-                    <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{clock(st.at)}</span>
-                    <span style={{ color: '#2E6E6E', fontSize: 15, flexShrink: 0 }}>✓</span>
-                    <span style={{ fontSize: 16, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.sub} <span style={{ fontSize: 13, color: '#a49b90' }}>· subtarea de {st.taskName}</span></span>
-                    <span style={{ fontSize: 13, color: '#a49b90', flexShrink: 0 }}>{st.epicaName}</span>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: '#2E6E6E', width: 90, textAlign: 'right', flexShrink: 0 }}>subtarea ✓</span>
-                  </div>
-                ))}
+                {diaRows.length > 0 && <WorkedTable rows={diaRows} />}
                 {isTodayView && V.upcoming.map((b, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: '1px solid #eee6da' }}>
                     <span style={{ fontSize: 14, color: '#8b8379', width: 96, fontVariantNumeric: 'tabular-nums' }}>{b.range}</span>
@@ -3043,6 +3028,59 @@ function MeetingDescription({ raw }: { raw: string }) {
 
 /** Agendar en el día: elige una TAREA de Épicas (de hoy) o una actividad libre, a una hora.
  *  Al llegar la hora, la app pregunta si la quieres iniciar. */
+/** Fila normalizada de la tabla del día (registro/hecho/subtarea). */
+type WorkedRow = {
+  key: string; sortTime: number; timeLabel: string; color?: string; icon?: string
+  name: string; sub?: string; durMin: number; durLabel: string
+  statusRank: number; statusLabel: string; statusColor: string
+  onClick?: () => void; actions?: ReactNode
+}
+type WorkedCol = 'time' | 'name' | 'dur' | 'status'
+/** Tabla ordenable de "lo que pasó en el día": encabezados clicables (Hora/Actividad/Duración/Estado). */
+function WorkedTable({ rows, compact = false, actionsLabel = 'acciones' }: { rows: WorkedRow[]; compact?: boolean; actionsLabel?: string }) {
+  const [col, setCol] = useState<WorkedCol>('time')
+  const [dir, setDir] = useState<1 | -1>(-1)
+  const click = (c: WorkedCol) => { if (c === col) setDir(d => (d === 1 ? -1 : 1)); else { setCol(c); setDir(c === 'time' ? -1 : 1) } }
+  const sorted = [...rows].sort((a, b) => {
+    let d = 0
+    if (col === 'name') d = a.name.localeCompare(b.name, 'es')
+    else if (col === 'dur') d = a.durMin - b.durMin
+    else if (col === 'status') d = (a.statusRank - b.statusRank) || (a.sortTime - b.sortTime)
+    else d = a.sortTime - b.sortTime
+    return d * dir || a.sortTime - b.sortTime
+  })
+  const arrow = (c: WorkedCol) => col === c ? (dir === 1 ? ' ↑' : ' ↓') : ''
+  const th: CSSProperties = { border: 'none', background: 'transparent', cursor: 'pointer', font: 'inherit', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600, padding: 0, textAlign: 'left', whiteSpace: 'nowrap' }
+  const timeW = compact ? 84 : 92, durW = compact ? 52 : 64, stW = compact ? 72 : 96, pad = compact ? '8px 0' : '13px 0', fs = compact ? 13.5 : 16
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Encabezados */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: compact ? 10 : 16, padding: compact ? '0 0 7px' : '0 0 9px', borderBottom: '1px solid #e7dfd2' }}>
+        <button onClick={() => click('time')} style={{ ...th, width: timeW, flexShrink: 0 }}>Hora{arrow('time')}</button>
+        {!compact && <span style={{ width: 8, flexShrink: 0 }} />}
+        <button onClick={() => click('name')} style={{ ...th, flex: 1, minWidth: 0 }}>Actividad{arrow('name')}</button>
+        <button onClick={() => click('dur')} style={{ ...th, width: durW, flexShrink: 0, textAlign: 'right' }}>Dur.{arrow('dur')}</button>
+        <button onClick={() => click('status')} style={{ ...th, width: stW, flexShrink: 0, textAlign: 'right' }}>Estado{arrow('status')}</button>
+        {!compact && <span style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: '#c9c0b3', fontWeight: 600 }}>{actionsLabel}</span>}
+      </div>
+      {sorted.map(r => (
+        <div key={r.key} onClick={r.onClick} title={r.onClick ? 'Abrir' : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: compact ? 10 : 16, padding: pad, borderBottom: '1px solid #eee6da', cursor: r.onClick ? 'pointer' : 'default' }}>
+          <span style={{ fontSize: compact ? 12.5 : 14, color: '#8b8379', width: timeW, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{r.timeLabel}</span>
+          {!compact && (r.icon
+            ? <span style={{ fontSize: 14, flexShrink: 0, color: r.color || '#8b8379', width: 8, textAlign: 'center' }}>{r.icon}</span>
+            : <span style={{ width: 8, height: 8, borderRadius: 999, background: r.color || '#8b8379', display: 'block', flexShrink: 0 }} />)}
+          <span style={{ fontSize: fs, flex: 1, minWidth: 0, color: '#6b645b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}{r.sub && <span style={{ fontSize: compact ? 12 : 13, color: '#a49b90' }}> · {r.sub}</span>}</span>
+          <span style={{ fontSize: compact ? 12.5 : 14, color: '#a49b90', width: durW, flexShrink: 0, textAlign: 'right' }}>{r.durLabel}</span>
+          <span style={{ fontSize: compact ? 12 : 13, fontWeight: 500, color: r.statusColor, width: stW, flexShrink: 0, textAlign: 'right' }}>{r.statusLabel}</span>
+          {!compact && r.actions && <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6, flexShrink: 0 }}>{r.actions}</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+const dtBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }
+
 /** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
  *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
 type PlanRoutine = { name: string; epicaName: string; color: string }
