@@ -1519,6 +1519,7 @@ export default function TiempoClient() {
       key: 'session', sortTime: 1e9, timeLabel: clock(sessStartMin) + '–' + clock(Math.round(now)), color: AREAS[data.session.area]?.color || '#c0392b', icon: '▶',
       name: data.session.name, durMin: sessElapsed, durLabel: hm(sessElapsed),
       statusLabel: 'en curso', statusColor: '#8a4b28', statusRank: -1,
+      onClick: data.session.taskId ? () => { const tt = (allTasks || []).find(x => x.task.id === data.session!.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) } : undefined,
       actions: (<>
         <input type="time" value={clock(sessStartMin)} onChange={e => setSessionStart(parse(e.target.value))} title="Corrige la hora en que empezaste" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '3px 6px', fontSize: 12, fontVariantNumeric: 'tabular-nums' }} />
         {data.session.taskId && <button onClick={() => { const tt = (allTasks || []).find(x => x.task.id === data.session!.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={dtBtn}>Ver</button>}
@@ -1694,7 +1695,7 @@ export default function TiempoClient() {
             blocks={data.blocks.filter(b => blockActiveOn(b, new Date(planDay + 'T12:00:00').getDay()))}
             meetings={meetings.filter(m => m.date === planDay)}
             now={now}
-            session={data.session && planDay === today ? { name: data.session.name, start: sessStartMin, dur: sessElapsed, area: data.session.area, taskId: data.session.taskId } : null}
+            session={data.session && planDay === today ? { name: data.session.name, start: sessStartMin, dur: sessElapsed, plannedDur: data.session.dur || 0, area: data.session.area, taskId: data.session.taskId } : null}
             onSessionStart={setSessionStart}
             onAdd={planAdd}
             onAddFree={planAddFree}
@@ -2400,8 +2401,9 @@ export default function TiempoClient() {
         // Acumulado de la tarea: lo YA registrado en sesiones previas + lo de esta sesión.
         const prior = priorForSession(s)
         const totalTask = prior + Math.max(0, el)
-        // Planeado: sólo si la tarea trae dificultad (estimación por dificultad). "si estaba planeada".
-        const planned = focusTask?.task.difficulty ? durByDiff(focusTask.task) : 0
+        // Planeado (cuánto se estima que dure): por dificultad de la tarea, o si no, la duración
+        // planeada de ESTA sesión (la que fijaste al empezar). Así siempre se ve "cuánto va a durar".
+        const planned = focusTask?.task.difficulty ? durByDiff(focusTask.task) : (s.dur || 0)
         const plannedPct = planned ? Math.min(100, Math.round((totalTask / planned) * 100)) : 0
         const overPlan = planned > 0 && totalTask > planned
         // Hora actual + (si la sesión tenía duración planeada) a qué hora terminaría.
@@ -3311,13 +3313,13 @@ const dtBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1
 /** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
  *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
 type PlanRoutine = { name: string; epicaName: string; color: string }
-type PlanSession = { name: string; start: number; dur: number; area: Area; taskId?: string }
+type PlanSession = { name: string; start: number; dur: number; plannedDur: number; area: Area; taskId?: string }
 type PlanDrag =
   | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'newfree'; name: string; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
-  | { kind: 'session'; grab: number; curMin: number; x: number; y: number }
+  | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
 function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, session, onSessionStart, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
@@ -3369,7 +3371,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
         if (!d) return d
         if (d.kind === 'new' || d.kind === 'newfree') return { ...d, moved: true, curMin: overGrid(e.clientX) ? m : null, x: e.clientX, y: e.clientY }
         if (d.kind === 'move') return { ...d, curMin: Math.max(gridStart, Math.min(gridEnd - d.dur, m - d.grab)), x: e.clientX, y: e.clientY }
-        if (d.kind === 'session') return { ...d, curMin: Math.max(gridStart, Math.min(Math.round(now), m - d.grab)), x: e.clientX, y: e.clientY }
+        if (d.kind === 'session') return { ...d, moved: true, curMin: Math.max(gridStart, Math.min(Math.round(now), m - d.grab)), x: e.clientX, y: e.clientY }
         return { ...d, curDur: Math.max(SNAP, Math.min(gridEnd - d.start, snap(m - d.start))), x: e.clientX, y: e.clientY }
       })
     }
@@ -3379,7 +3381,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
         if (d.kind === 'new') { if (d.moved && d.curMin != null) onAdd(d.task, d.curMin, d.dur); else { setSelFree(null); setSelTask(p => p === d.task.task.id ? null : (d.task.task.id || null)) } }
         else if (d.kind === 'newfree') { if (d.moved && d.curMin != null) onAddFree(d.name, d.curMin, d.dur); else { setSelTask(null); setSelFree(p => p === d.name ? null : d.name) } }
         else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
-        else if (d.kind === 'session') onSessionStart(d.curMin)
+        else if (d.kind === 'session') { if (d.curMin !== d.start0) onSessionStart(d.curMin); else if (session?.taskId) onOpenTask(session.taskId) }
         else onPatch(d.id, { dur: d.curDur })
       }
       setDrag(null)
@@ -3510,19 +3512,28 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
                 <span style={{ position: 'absolute', left: -46, top: -8, fontSize: 11, color: '#c0392b', fontWeight: 600 }}>{clock(Math.round(now))}</span>
               </div>
             )}
-            {/* Actividad EN CURSO: banda de start→ahora, arrastrable para corregir la hora de inicio */}
+            {/* Actividad EN CURSO. La banda cubre la EXTENSIÓN PLANEADA (start→start+planeado) para
+                ver "lo que estaba planificado"; adentro, relleno sólido de lo que ya llevas (start→ahora).
+                Clic = abre el popup de la tarea · arrastrar = corrige la hora de inicio. */}
             {session && (() => {
               const start = drag?.kind === 'session' ? drag.curMin : session.start
-              const endM = Math.max(start + SNAP, Math.round(now))
+              const nowM = Math.round(now)
+              const plannedEnd = session.plannedDur > 0 ? start + session.plannedDur : nowM
+              const endM = Math.max(start + SNAP, plannedEnd, nowM)   // llega a lo planeado o a ahora (si te pasaste)
+              const doneH = Math.max(0, Math.min(endM, nowM) - start) // lo transcurrido dentro de la banda
               return (
-                <div onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'session', grab: yToMin(e.clientY) - session.start, curMin: start, x: e.clientX, y: e.clientY }) }}
-                  onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${session.name} · en curso desde ${clock(start)} · ${hm(session.dur)} · arrastra para corregir el inicio` }) }}
+                <div onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'session', grab: yToMin(e.clientY) - session.start, start0: start, curMin: start, moved: false, x: e.clientX, y: e.clientY }) }}
+                  onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${session.name} · en curso · empezó ${clock(start)}${session.plannedDur > 0 ? ` · planeado ${hm(session.plannedDur)}` : ''} · llevas ${hm(session.dur)}` }) }}
                   onPointerLeave={() => setHover(null)}
-                  title="Actividad en curso — arrastra para corregir la hora en que empezaste"
-                  style={{ position: 'absolute', left: 2, right: 6, top: topOf(start), height: hOf(endM - start), background: 'rgba(192,57,43,.07)', border: '1.5px solid #c0392b', borderRadius: 10, padding: '5px 10px', cursor: 'grab', touchAction: 'none', zIndex: 26, overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: '#c0392b', flexShrink: 0 }}>▶ EN CURSO</span>
-                  <span style={{ fontSize: 11.5, color: '#8b8379', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}–{clock(Math.round(now))} · {hm(session.dur)}</span>
-                  <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.name}</span>
+                  title="Actividad en curso — clic para abrir · arrastra para corregir la hora en que empezaste"
+                  style={{ position: 'absolute', left: 2, right: 6, top: topOf(start), height: hOf(endM - start), background: 'rgba(192,57,43,.05)', border: '1.5px solid #c0392b', borderRadius: 10, cursor: 'grab', touchAction: 'none', zIndex: 26, overflow: 'hidden' }}>
+                  {/* relleno de lo transcurrido */}
+                  <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: hOf(doneH), background: 'rgba(192,57,43,.13)', pointerEvents: 'none' }} />
+                  <div style={{ position: 'relative', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: '#c0392b', flexShrink: 0 }}>▶ EN CURSO</span>
+                    <span style={{ fontSize: 11.5, color: '#8b8379', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}{session.plannedDur > 0 ? `–${clock(plannedEnd)} · planeado ${hm(session.plannedDur)}` : ''} · llevas {hm(session.dur)}</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.name}</span>
+                  </div>
                 </div>
               )
             })()}
