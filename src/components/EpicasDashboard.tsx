@@ -5660,16 +5660,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
     return (
       <div className="ep-md" style={{ display: 'flex', width: '100%', gap: 14, alignItems: 'stretch', minHeight: 420 }}>
-        <div className="ep-md-list" style={{ flex: '0 0 300px', maxWidth: 340, maxHeight: 680, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5, paddingRight: 2 }}>
+        <div className="ep-md-list" style={{ flex: '0 0 320px', maxWidth: 360, maxHeight: 'calc(100dvh - 88px)', position: 'sticky', top: 12, alignSelf: 'flex-start', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, paddingRight: 4 }}>
+          <div style={{ position: 'sticky', top: 0, zIndex: 1, background: 'linear-gradient(#F6F1E7, #F6F1E7 70%, rgba(246,241,231,0))', padding: '1px 2px 6px', font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>{rows.length} tarea{rows.length === 1 ? '' : 's'}</div>
           {rows.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '14px 6px' }}>Nada coincide con los filtros.</div>}
           {rows.map(({ e, t }) => {
             const on = !!valid && valid.eId === e.id && valid.tid === t.id
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
             return (
               <button key={planKey(e.id, t)} onClick={() => setMdSel({ eId: e.id, tid: t.id! })}
-                style={{ flexShrink: 0, textAlign: 'left', cursor: 'pointer', borderRadius: 11, padding: '10px 12px', border: on ? '1.5px solid #10233F' : '1px solid rgba(15,35,64,0.10)', background: on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                style={{ flexShrink: 0, textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '8px 11px', border: on ? '1.5px solid #10233F' : '1px solid rgba(15,35,64,0.10)', background: on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
                   <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
                   {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
