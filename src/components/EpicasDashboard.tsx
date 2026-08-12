@@ -2311,10 +2311,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       byDay.get(t.plan)!.push({ e, t, i })
     }))
     // Filtro y orden compartidos con la vista de día (planFilter / planSort)
-    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+    const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
-      : true
+      : true) && passWork(t, today)
     type WeekRow = { e: Epica; t: EpicaTask; i: number }
     const cmp = (a: WeekRow, b: WeekRow) => {
       // terminadas siempre al fondo de su columna
@@ -2645,10 +2645,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const inWeek = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= monday && t.plan <= sunday
     const weekEpics = activeEpics.filter(e => (e.tasks || []).some(inWeek))
     const effWeekEpica = weekEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
-    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+    const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
-      : true
+      : true) && passWork(t, today)
     const matchF = (e: Epica, t: EpicaTask) => (effWeekEpica === 'todas' || e.id === effWeekEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
@@ -2795,10 +2795,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const inHorizon = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd
     const horizonEpics = activeEpics.filter(e => (e.tasks || []).some(inHorizon))
     const effEpica = horizonEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
-    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+    const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
-      : true
+      : true) && passWork(t, today)
     const matchF = (e: Epica, t: EpicaTask) => (effEpica === 'todas' || e.id === effEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const firstWeekDays = Array.from({ length: 7 }, (_, k) => addDays(weekMondays[0], k))
@@ -2862,10 +2862,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const inHorizon = (t: EpicaTask) => !!t.plan && t.status !== ARCHIVED && t.plan >= hStart && t.plan <= hEnd
     const horizonEpics = activeEpics.filter(e => (e.tasks || []).some(inHorizon))
     const effEpica = horizonEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
-    const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+    const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
-      : true
+      : true) && passWork(t, today)
     type Row = { e: Epica; t: EpicaTask; i: number }
     const cmp = (a: Row, b: Row) => {
       const df = (a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)
@@ -3249,9 +3249,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       )}
     </div>
   )
-  const passPlanFilter = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+  const passPlanFilter = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
     : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
-    : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan) : true
+    : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan) : true) && passWork(t, today)
 
   /** Vista Calendario: retícula mensual con tarjetas por su día planeado; arrastra
    *  para reprogramar, clic para abrir. Marca las completadas (tachadas). */
@@ -3426,7 +3426,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const all: R[] = []
     activeEpics.forEach(e => {
       if (effResEpica !== 'todas' && e.id !== effResEpica) return
-      ;(e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED) all.push({ e, t, i }) })
+      ;(e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && passWork(t, today)) all.push({ e, t, i }) })
     })
 
     const committed = all.filter(x => inWeek(x.t.plan))                                   // lo planeado para la semana
@@ -4068,6 +4068,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
+          {/* Filtros por estado de trabajo del día — presentes en TODAS las vistas board */}
+          {board && renderWorkFilters(today)}
+
           {detalle || agenda ? (() => {
             // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
             // con el filtro de épica (chips), dificultad, "ocultar completadas" y un rango
@@ -4104,7 +4107,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{renderWorkFilters(today)}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
@@ -4640,6 +4643,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (bq && !(norm(t.t).includes(bq) || norm(e.name).includes(bq)
         || norm(t.note || '').includes(bq)
         || (t.subtasks || []).some(s => norm(s.t).includes(bq)))) return
+      if (!passWork(t, today)) return   // filtro por estado de trabajo de hoy
       rows.push({ e, t, i })
     }))
     const dirMul = backlogSort.dir === 'asc' ? 1 : -1
@@ -4869,6 +4873,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 })}
               </div>
             )}
+
+            {/* Filtros por estado de trabajo de hoy — también en el backlog */}
+            <div style={{ padding: '0 17px 6px' }}>{renderWorkFilters(today)}</div>
 
             {someSel && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 12px 10px', padding: '9px 12px', borderRadius: 12, background: '#16365F', color: '#fff' }}>
