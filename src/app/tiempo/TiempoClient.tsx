@@ -1711,7 +1711,8 @@ export default function TiempoClient() {
             tasks={planTasks}
             routines={planRoutines}
             scheduled={(data.scheduled || []).filter(s => (s.date || today) === planDay)}
-            worked={data.history.filter(h => h.date === planDay)}
+            worked={data.history.map((h, i) => ({ ...h, _idx: i })).filter(h => h.date === planDay)}
+            onEditWorked={(idx, patch) => saveHist(idx, patch)}
             blocks={data.blocks.filter(b => blockActiveOn(b, new Date(planDay + 'T12:00:00').getDay()))}
             meetings={meetings.filter(m => m.date === planDay)}
             now={now}
@@ -3348,10 +3349,12 @@ type PlanDrag =
   | { kind: 'newfree'; name: string; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'move'; id: string; dur: number; grab: number; curMin: number; x: number; y: number }
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
+  | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
-  tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: HistoryRow[]; blocks: Block[]; meetings: Meeting[]; now: number
+  tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
+  onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
   onAdd: (t: TodayTask, start: number, dur?: number) => void
   onAddFree: (name: string, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
@@ -3370,6 +3373,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
 }) {
   const [epFilter, setEpFilter] = useState<string | null>(null)
   const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en la rejilla → registrar algo ya hecho
+  // Editor de hora (lápiz) de cualquier tarjeta del calendario: agendada, hecha o la sesión en curso.
+  const [timeEdit, setTimeEdit] = useState<{ target: 'sched' | 'worked' | 'session'; ref: string; start: number; dur: number; live: boolean; name: string } | null>(null)
   const isToday = day === today
   const week = weekOfISO(day)
   const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
@@ -3415,6 +3420,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
         if (d.kind === 'new') { if (d.moved && d.curMin != null) onAdd(d.task, d.curMin, d.dur); else { setSelFree(null); setSelTask(p => p === d.task.task.id ? null : (d.task.task.id || null)) } }
         else if (d.kind === 'newfree') { if (d.moved && d.curMin != null) onAddFree(d.name, d.curMin, d.dur); else { setSelTask(null); setSelFree(p => p === d.name ? null : d.name) } }
         else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
+        else if (d.kind === 'wresize') onEditWorked(d.idx, { dur: d.curDur })
         else if (d.kind === 'session') { if (d.curMin !== d.start0) onSessionStart(d.curMin); else if (session?.taskId) onOpenTask(session.taskId) }
         else onPatch(d.id, { dur: d.curDur })
       }
@@ -3521,24 +3527,32 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
             {/* Divisor de carriles hecho | plan */}
             <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: '#f0e8db', pointerEvents: 'none' }} />
             {/* Actividades YA HECHAS ese día (registro real, carril izquierdo) */}
-            {worked.map((w, i) => {
-              const col = AREAS[w.area]?.color || '#7a9e6a'; const tall = w.dur * PXM >= 40
+            {worked.map(w => {
+              const col = AREAS[w.area]?.color || '#7a9e6a'
+              const dur = drag?.kind === 'wresize' && drag.idx === w._idx ? drag.curDur : w.dur
+              const tall = dur * PXM >= 40
               const future = isToday && w.start > now && !w.done
               const openable = !!w.taskId
+              const activeR = drag?.kind === 'wresize' && drag.idx === w._idx
               return (
-                <div key={'w' + i} title={`${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}${openable ? ' · clic para abrir' : ''}`}
-                  onClick={() => { if (openable) onOpenTask(w.taskId!) }}
-                  onPointerMove={e => setHover({ x: e.clientX, y: e.clientY, txt: `${w.name} · ${clock(w.start)}–${clock(w.start + w.dur)} · ${hm(w.dur)}` })}
+                <div key={'w' + w._idx} title={`${w.name} · ${clock(w.start)}–${clock(w.start + dur)} · ${hm(dur)}`}
+                  onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${w.name} · ${clock(w.start)}–${clock(w.start + dur)} · ${hm(dur)}` }) }}
                   onPointerLeave={() => setHover(null)}
-                  style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(w.dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden', cursor: openable ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(w.start), height: hOf(dur), background: future ? '#fbeeee' : '#eef3ea', border: `1px solid ${future ? '#e0a6a0' : '#c1d4b6'}`, borderLeft: `4px solid ${future ? '#c0392b' : col}`, borderRadius: 8, padding: tall ? '5px 8px' : '2px 8px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 2, boxShadow: activeR ? '0 6px 18px rgba(28,26,23,.16)' : 'none', zIndex: activeR ? 20 : 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    <span style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + w.dur)} · {hm(w.dur)}</span>
+                    <span style={{ fontSize: 11, color: future ? '#c0392b' : '#5c7a4e', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{future ? '⚠ ' : '✓ '}{clock(w.start)}–{clock(w.start + dur)} · {hm(dur)}</span>
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
+                      <button onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'worked', ref: String(w._idx), start: w.start, dur: w.dur, live: false, name: w.name }) }} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       <button onClick={e => { e.stopPropagation(); onResume(w) }} title="Volver a empezar" style={planBtn}>↻</button>
-                      {openable && <button onClick={e => { e.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver actividad" style={planBtn}>✎</button>}
+                      {openable && <button onClick={e => { e.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver la tarea" style={planBtn}>👁</button>}
                     </div>
                   </div>
                   {tall && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
+                  {/* Asa para redimensionar (agrandar/disminuir) */}
+                  <div onPointerDown={e => { e.stopPropagation(); setHover(null); setDrag({ kind: 'wresize', idx: w._idx, start: w.start, curDur: w.dur, x: e.clientX, y: e.clientY }) }}
+                    style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 12, cursor: 'ns-resize', touchAction: 'none', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 1 }}>
+                    <span style={{ width: 26, height: 3, borderRadius: 3, background: col, opacity: .5 }} />
+                  </div>
                 </div>
               )
             })}
@@ -3569,6 +3583,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
                     <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: '#c0392b', flexShrink: 0 }}>▶ EN CURSO</span>
                     <span style={{ fontSize: 11.5, color: '#8b8379', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{clock(start)}{session.plannedDur > 0 ? `–${clock(plannedEnd)} · planeado ${hm(session.plannedDur)}` : ''} · llevas {hm(session.dur)}</span>
                     <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.name}</span>
+                    <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name }) }} title="Editar la hora en que empezaste" style={{ ...planBtn, marginLeft: 'auto', color: '#c0392b' }}>✎</button>
                   </div>
                 </div>
               )
@@ -3591,7 +3606,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
                     <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title="Comenzar ahora" style={planBtn}>▶</button>
-                      {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver actividad" style={planBtn}>✎</button>}
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
+                      {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la tarea" style={planBtn}>👁</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>
                     </div>
                   </div>
@@ -3666,6 +3682,48 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, bl
         <div style={{ position: 'fixed', left: hover.x + 14, top: hover.y + 14, zIndex: 98, background: '#1c1a17', color: '#faf7f1', fontSize: 12, fontWeight: 500, padding: '6px 10px', borderRadius: 8, pointerEvents: 'none', maxWidth: 280, boxShadow: '0 4px 14px rgba(0,0,0,.25)' }}>{hover.txt}</div>
       )}
       {doneAt !== null && <PlanAddDone tasks={allOpenTasks} defaultStart={doneAt} onConfirm={p => { onAddDone(p); setDoneAt(null) }} onClose={() => setDoneAt(null)} />}
+      {timeEdit && <PlanTimeEdit edit={timeEdit} nowMin={Math.round(now)} onSave={(start, dur) => {
+        if (timeEdit.target === 'sched') onPatch(timeEdit.ref, { start, dur })
+        else if (timeEdit.target === 'worked') onEditWorked(Number(timeEdit.ref), { start, dur })
+        else onSessionStart(start)
+        setTimeEdit(null)
+      }} onClose={() => setTimeEdit(null)} />}
+    </div>
+  )
+}
+/** Editar hora de inicio y fin (o duración) de una tarjeta del calendario: agendada, hecha o la
+ *  sesión en curso (en curso, el fin es "ahora" y sólo se ajusta el inicio). */
+function PlanTimeEdit({ edit, nowMin, onSave, onClose }: {
+  edit: { target: 'sched' | 'worked' | 'session'; start: number; dur: number; live: boolean; name: string }
+  nowMin: number; onSave: (start: number, dur: number) => void; onClose: () => void
+}) {
+  const endInit = edit.live ? nowMin : edit.start + edit.dur
+  const [startStr, setStartStr] = useState(clock(edit.start))
+  const [endStr, setEndStr] = useState(clock(endInit))
+  const s = parse(startStr); let e = parse(endStr); if (e <= s) e += 1440
+  const dur = Math.max(5, e - s)
+  const save = () => onSave(s, dur)
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 15, fontVariantNumeric: 'tabular-nums' }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 96 }}>
+      <div onClick={ev => ev.stopPropagation()} role="dialog" aria-modal="true" style={{ width: 'min(400px,100%)', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 22, padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+          <span style={LBL}>editar hora</span>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        <span style={{ fontSize: 15, fontWeight: 500, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{edit.name}</span>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><span style={LBL}>empezó</span><input type="time" value={startStr} onChange={ev => setStartStr(ev.target.value)} style={field} /></div>
+          {edit.live
+            ? <span style={{ fontSize: 13, color: '#a49b90', paddingBottom: 11 }}>termina: <b>ahora</b> ({clock(nowMin)}) · llevas {hm(dur)}</span>
+            : <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><span style={LBL}>terminó</span><input type="time" value={endStr} onChange={ev => setEndStr(ev.target.value)} style={field} /></div>}
+        </div>
+        {!edit.live && <span style={{ fontSize: 13, color: '#a49b90' }}>duración: <b>{hm(dur)}</b></span>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+          <button onClick={save} style={{ flex: 1, textAlign: 'center', background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Guardar</button>
+          <button onClick={onClose} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Cancelar</button>
+        </div>
+      </div>
     </div>
   )
 }
