@@ -2658,7 +2658,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const byDayTotal = new Map<string, { e: Epica; t: EpicaTask }[]>()
     days.forEach(d => byDayTotal.set(d, []))
     activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.plan && byDayTotal.has(t.plan) && t.status !== ARCHIVED) byDayTotal.get(t.plan)!.push({ e, t }) }))
-    const filtering = effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas'
+    const filtering = effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas' || workFilter !== ''
     const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat()
