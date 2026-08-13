@@ -41,17 +41,18 @@ export async function GET() {
   for (const arr of byEpic.values()) arr.sort((a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9))
   const withTasks = (data || []).map(e => ({ ...e, tasks: byEpic.get(e.id) || [] }))
 
-  // ¿Existe ya la columna plan_hist? (select * la incluye como key si existe).
-  // El cliente sólo registra el historial de plan cuando es true, para no escribir
-  // plan_hist antes de correr la migración y romper el guardado.
-  const planHistReady = tareas.length ? ('plan_hist' in (tareas[0] as object)) : false
-  // Igual para `orden`: el cliente sólo estampa/manda `orden` cuando la columna existe.
-  const ordenReady = tareas.length ? ('orden' in (tareas[0] as object)) : false
-  // Sin tareas no se puede inspeccionar la fila: se asume READY (optimista) para no bloquear el
-  // recordatorio/comentario al crear la PRIMERA tarea si la migración ya está aplicada.
-  const remindReady = tareas.length ? ('remind_at' in (tareas[0] as object)) : true
-  const comentariosReady = tareas.length ? ('comentarios' in (tareas[0] as object)) : true
-  const resumenReady = tareas.length ? ('resumen' in (tareas[0] as object)) : false
+  // ¿Existen ya las columnas gateadas? Con filas basta inspeccionar la primera (select * las
+  // incluye como key). SIN filas (BD nueva o vaciada) hay que PROBAR la columna: un select de la
+  // columna falla (42703) si no existe y devuelve vacío si existe → evita falsos-negativos que
+  // bloqueaban orden/resumen/plan_hist tras correr la migración con la tabla vacía.
+  const colReady = async (col: string): Promise<boolean> => {
+    if (tareas.length) return col in (tareas[0] as object)
+    const { error } = await supabase.from('tareas').select(col).limit(1)
+    return !error
+  }
+  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady] = await Promise.all([
+    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'),
+  ])
 
   return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady })
 }

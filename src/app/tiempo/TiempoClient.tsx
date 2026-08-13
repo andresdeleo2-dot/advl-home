@@ -1078,7 +1078,7 @@ export default function TiempoClient() {
       const histStart = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
       const hist: HistoryRow = { date: histDay, name: s.name, area: s.area, start: histStart, dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
       save({ session: ns, history: dataRef.current.history.concat([hist]), ...extraPatch })
-      showUndo(`✓ Guardé ${hm(el)} de «${s.name}» y empecé «${ns.name}»`, () => save({ history: dataRef.current.history.filter(h => h !== hist) }))
+      showUndo(`✓ Guardé ${hm(el)} de «${s.name}» y empecé «${ns.name}»`, () => { save({ history: dataRef.current.history.filter(h => h !== hist) }); revertLogToEpica(hist, false) })
       if (s.taskId && s.epicaId) {
         const tt = tasksRef.current.find(x => x.task.id === s.taskId)
         if (tt) {
@@ -1120,6 +1120,25 @@ export default function TiempoClient() {
     const upd: EpicaTask = { ...tt.task, progressLog: log }
     syncTask(row.epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task: upd } : x))
+  }
+  // DESHACER un registro: quita su entrada de bitácora en Épicas (por logId) y, si el registro
+  // había marcado la tarea HECHA, la reabre — todo en UNA escritura. Antes el "Deshacer" del toast
+  // solo borraba la fila de history y dejaba la tarea con el tiempo (y a veces Terminada) en Épicas.
+  const revertLogToEpica = (row: HistoryRow, wasMarkedDone: boolean) => {
+    if (!row.taskId || !row.epicaId) return
+    const tt = tasksRef.current.find(x => x.task.id === row.taskId); if (!tt) return
+    let task = tt.task
+    if (row.logId) {
+      const cur = (task.progressLog as EpicaProgressEntry[] | undefined) || []
+      if (cur.some(l => l.logId === row.logId)) task = { ...task, progressLog: cur.filter(l => l.logId !== row.logId) }
+    }
+    if (wasMarkedDone) {
+      task = task.repeat
+        ? { ...task, repeatDone: (task.repeatDone || []).filter(d => d !== row.date && d !== task.plan) }
+        : { ...task, status: 'En curso', doneAt: undefined }
+    }
+    syncTask(row.epicaId, task)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task } : x))
   }
   // Registro de hoy (localStorage): editar entradas (auto-guardado, NO cierra el editor).
   const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
@@ -1248,7 +1267,7 @@ export default function TiempoClient() {
     const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, history: dataRef.current.history.concat([entry]) })
     setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
-    showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
+    showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, markDone) })
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
@@ -1642,7 +1661,7 @@ export default function TiempoClient() {
         setAllTasks(prev => (prev || []).map(x => x.task.id === p.taskId ? { ...x, task: upd } : x))
       }
     }
-    showUndo(`✓ Registré «${p.name || 'Actividad'}» (${hm(p.dur)})`, () => save({ history: dataRef.current.history.filter(h => h !== entry) }))
+    showUndo(`✓ Registré «${p.name || 'Actividad'}» (${hm(p.dur)})`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, false) })
   }
   // Rutinas diarias de Épicas (hábitos) para planificar en el Planificador.
   const planRoutines = epicasList.flatMap(e => (e.routines || []).map(r => ({ name: r.t, epicaName: e.name, color: e.color })))
@@ -2348,7 +2367,7 @@ export default function TiempoClient() {
         )}
       </div>
 
-      {editTask && <TaskDetail info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -3494,10 +3513,10 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           background: sel ? '#f5ece2' : '#faf7f1', border: `1px solid ${sel ? '#b4653a' : '#e7dfd2'}` }}>
         <span style={{ width: 9, height: 9, borderRadius: 999, background: t.color, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.task.t || 'Tarea'}</div>
+          <div style={{ fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word' }} title={t.task.t || 'Tarea'}>{t.task.t || 'Tarea'}</div>
           <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.epicaName}</div>
         </div>
-        <button onPointerDown={e => e.stopPropagation()} onClick={() => onStartTask(t)} title="Comenzar esta tarea ahora" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 9px', fontSize: 12, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶</button>
+        <button onPointerDown={e => e.stopPropagation()} onClick={() => onStartTask(t)} title="Comenzar esta tarea ahora" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 9px', fontSize: 12, color: '#8a4b28', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start' }}>▶</button>
         <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la actividad completa" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '4px 10px', fontSize: 12, color: '#6b645b', cursor: 'pointer', flexShrink: 0 }}>Ver</button>
         <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
       </div>
@@ -3764,7 +3783,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, cursor: 'grab', touchAction: 'none', background: sel ? '#f5ece2' : '#faf7f1', border: `1px solid ${sel ? '#b4653a' : '#e7dfd2'}` }}>
                     <span style={{ fontSize: 13, flexShrink: 0 }}>🔁</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
+                      <div style={{ fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word' }} title={r.name}>{r.name}</div>
                       <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.epicaName}</div>
                     </div>
                     <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
@@ -4428,11 +4447,14 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           </div>
           <div className="td-col">
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14 }}>
-            {t.status === 'Terminada' && <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Terminada el</NLbl><input type="date" value={t.doneAt || ''} onChange={e => setT({ ...t, doneAt: e.target.value || undefined })} style={{ ...nf, border: '1px solid rgba(62,142,142,0.4)', color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff' }} /></label>}
-            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" value={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
-            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Vence</NLbl><input type="date" value={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={nf} /></label>
+            {/* defaultValue (NO controlado): el reloj re-renderiza este editor cada seg y con `value`
+                pisaba la fecha nativa a medio escribir → parecía "no guardar". El `key` por tarea (arriba)
+                re-monta el editor al abrir otra, así defaultValue toma la fecha correcta. */}
+            {t.status === 'Terminada' && <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Terminada el</NLbl><input type="date" defaultValue={t.doneAt || ''} onChange={e => setT({ ...t, doneAt: e.target.value || undefined })} style={{ ...nf, border: '1px solid rgba(62,142,142,0.4)', color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff' }} /></label>}
+            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" defaultValue={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
+            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Vence</NLbl><input type="date" defaultValue={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={nf} /></label>
           </div>
-          <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" disabled={!remindReady} title={remindReady ? undefined : 'Corre sql/epicas-06-remind.sql en Supabase para usar recordatorios'} value={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%', opacity: remindReady ? 1 : 0.5 }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" disabled={!remindReady} title={remindReady ? undefined : 'Corre sql/epicas-06-remind.sql en Supabase para usar recordatorios'} defaultValue={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%', opacity: remindReady ? 1 : 0.5 }} /></label>
 
           <NLbl>Repetición</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -4440,7 +4462,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
               const on = u ? t.repeat?.unit === u : !t.repeat
               return <button key={u || 'no'} onClick={() => setT({ ...t, repeat: u ? { every: 1, unit: u } : undefined, ...(u ? {} : { repeatUntil: undefined }) })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? '1px solid #7A6FB0' : '1px solid rgba(15,35,64,0.14)', background: on ? 'rgba(122,111,176,0.12)' : '#fff', color: on ? '#5E5490' : 'rgba(20,35,61,0.55)' }}>{lbl}</button>
             })}
-            {t.repeat && <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}>hasta<input type="date" value={t.repeatUntil || ''} onChange={e => setT({ ...t, repeatUntil: e.target.value || undefined })} style={{ ...nf, padding: '6px 8px' }} /></label>}
+            {t.repeat && <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)' }}>hasta<input type="date" defaultValue={t.repeatUntil || ''} onChange={e => setT({ ...t, repeatUntil: e.target.value || undefined })} style={{ ...nf, padding: '6px 8px' }} /></label>}
           </div>
 
           <NLbl>Nota</NLbl>

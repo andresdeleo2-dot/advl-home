@@ -953,7 +953,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const seriesOver = !!t.repeatUntil && next > t.repeatUntil
       t.repeatDone = [...new Set([...(t.repeatDone || []), done])].slice(-60)   // dedup: un mismo día no cuenta 2 ciclos
       if (seriesOver) {
-        t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done; delete t.repeat
+        // Serie terminada: NO borres `repeat` (antes se perdía la definición para siempre). Se
+        // conserva para que reabrir la tarea la devuelva como recurrente; `repeatUntil` ya evita
+        // que se reprograme sola (no vuelve a caer como "hoy").
+        t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done
         return 'Hecha ✓ · serie terminada'
       }
       if (t.due && t.due === base) t.due = next       // la entrega acompaña al ciclo
@@ -985,8 +988,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   const uncompleteFromPlan = (e: Epica, i: number) => {
     const tasks = clone(e.tasks)
+    const wasDone = tasks[i].doneAt
     tasks[i].status = tasks[i].planPrev || 'Por hacer'
     delete tasks[i].doneAt; delete tasks[i].planPrev
+    // Reabrir un ciclo de una recurrente: saca ese día de repeatDone (no siga contando como cumplido).
+    if (wasDone && Array.isArray(tasks[i].repeatDone)) {
+      tasks[i].repeatDone = tasks[i].repeatDone!.filter(d => d !== wasDone)
+      if (!tasks[i].repeatDone!.length) delete tasks[i].repeatDone
+    }
     patchEpic(e.id, { tasks })
   }
 
@@ -1333,9 +1342,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     // Recuerda el estado previo al completar, para que "descompletar" desde el plan lo restaure
     if (v === 'Terminada' && tasks[ti].status !== 'Terminada') tasks[ti].planPrev = tasks[ti].status
+    const wasDone = tasks[ti].doneAt
     tasks[ti].status = v
     if (v === 'Terminada') { if (!tasks[ti].doneAt) tasks[ti].doneAt = todayISO() }
-    else { delete tasks[ti].doneAt; delete tasks[ti].planPrev }
+    else {
+      delete tasks[ti].doneAt; delete tasks[ti].planPrev
+      // Reabrir una recurrente cuya serie había terminado: saca ese día de repeatDone.
+      if (wasDone && Array.isArray(tasks[ti].repeatDone)) {
+        tasks[ti].repeatDone = tasks[ti].repeatDone!.filter(d => d !== wasDone)
+        if (!tasks[ti].repeatDone!.length) delete tasks[ti].repeatDone
+      }
+    }
     patchEpic(e.id, { tasks })
   }
   const setTaskDue = (e: Epica, ti: number, v: string) => {
