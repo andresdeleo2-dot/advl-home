@@ -947,6 +947,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return WEEK_EST_MIN(t.difficulty) }
       return 0
     },
+    taskFor: (taskId) => {
+      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return t }
+      return null
+    },
+    onPatchTask: (taskId, patch) => {
+      const ep = epicsRef.current.find(e => e.tasks.some(t => t.id === taskId)); if (!ep) return
+      const tasks = clone(ep.tasks)
+      const ti = tasks.findIndex(t => t.id === taskId); if (ti < 0) return
+      tasks[ti] = { ...tasks[ti], ...patch }
+      patchEpic(ep.id, { tasks })
+    },
     onToast: (msg) => showToast(msg),
   })
   // Keys de las filas REALMENTE visibles (en orden), leídas del DOM: así el reorden
@@ -2260,6 +2271,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, position: 'relative' }}>
+          {/* Arrancar el cronómetro de foco directo desde la fila (misma sesión que /tiempo) */}
+          {focus.session?.taskId === t.id
+            ? <span title="Sesión en curso con esta tarea" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: '800 10px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.12)', border: '1px solid rgba(62,142,142,0.35)', borderRadius: 99, padding: '4px 9px', whiteSpace: 'nowrap' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: '#2E6E6E', boxShadow: '0 0 0 3px rgba(62,142,142,0.2)' }} />en curso</span>
+            : <button onClick={ev => { ev.stopPropagation(); focus.begin({ name: t.t, epicaId: e.id, taskId: t.id!, dur: WEEK_EST_MIN(t.difficulty) }) }} aria-label="Empezar con cronómetro" title="Empezar ahora con cronómetro (el tiempo se registra en esta tarea)"
+                style={{ height: 30, width: 30, border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', borderRadius: 8, cursor: 'pointer', color: '#A87A2C', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, lineHeight: 1 }}>▶</button>}
           <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setPrioMenu(prioMenu === key ? null : key); setRowMenu(null) }} title={`Prioridad: ${ps.label}`} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}>
             <PrioBars p={t.priority} />
           </button>

@@ -8,6 +8,8 @@
    contenedor por callbacks, para no duplicar la lógica de tareas. */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { KEY, hm, clock, parse, iso, defaults, type AppData, type Session, type Area, type HistoryRow } from '@/lib/tiempo'
+import type { EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment } from '@/lib/supabase'
+import { safeUrl, uid as coreUid } from '@/components/epicas/core'
 
 const TS_KEY = KEY + '.ts'
 const SERIF = 'var(--tiempo-serif), Georgia, serif'
@@ -48,6 +50,10 @@ export type FocusHooks = {
   priorMinFor?: (taskId: string) => number
   /** Estimado de cuánto durará la tarea (por dificultad), en minutos. 0 = sin estimar. */
   plannedMinFor?: (taskId: string) => number
+  /** Tarea viva (subtareas/links/comentarios/fechas) para los paneles del Modo foco. */
+  taskFor?: (taskId: string) => EpicaTask | null
+  /** Aplica un parche a la tarea en foco (subtareas, fechas, links, comentarios…). */
+  onPatchTask?: (taskId: string, patch: Partial<EpicaTask>) => void
   /** Aviso ligero al descartar. */
   onToast?: (msg: string) => void
 }
@@ -205,6 +211,36 @@ export function useFocusSession(hooks: FocusHooks) {
     void phase
   }, [now, pomoOn, session])
 
+  // ── Edición de la tarea en foco (subtareas/fechas/links/comentarios) vía hooks ──
+  const focusTask = session?.taskId ? (hooksRef.current.taskFor?.(session.taskId) || null) : null
+  const patchFocus = (patch: Partial<EpicaTask>) => { if (session?.taskId) hooksRef.current.onPatchTask?.(session.taskId, patch) }
+  const toggleSub = (key: string) => {
+    if (!focusTask) return
+    const subs = (focusTask.subtasks || []).map(s => ((s.id || s.t) === key ? { ...s, done: !s.done, doneAt: !s.done ? new Date().toISOString() : undefined } : s))
+    patchFocus({ subtasks: subs })
+  }
+  const addSub = (text: string) => {
+    const t = text.trim(); if (!t || !focusTask) return
+    patchFocus({ subtasks: [...(focusTask.subtasks || []), { id: coreUid(), t, done: false }] })
+  }
+  const moveSub = (key: string, dir: -1 | 1) => {
+    if (!focusTask) return
+    const subs = [...(focusTask.subtasks || [])]
+    const pend = subs.map((s, i) => ({ s, i })).filter(x => !x.s.done)
+    const k = pend.findIndex(x => (x.s.id || x.s.t) === key); if (k < 0) return
+    const j = k + dir; if (j < 0 || j >= pend.length) return
+    const a = pend[k].i, b = pend[j].i; [subs[a], subs[b]] = [subs[b], subs[a]]
+    patchFocus({ subtasks: subs })
+  }
+  const addLink = (label: string, url: string) => {
+    const u = url.trim(), l = label.trim(); if ((!u && !l) || !focusTask) return
+    patchFocus({ links: [...(focusTask.links || []), { label: l, url: u }] })
+  }
+  const addComment = (text: string) => {
+    const t = text.trim(); if (!t || !focusTask) return
+    patchFocus({ comentarios: [...(focusTask.comentarios || []), { at: new Date().toISOString(), text: t }] })
+  }
+
   // ── View-model ──
   const paused = !!(session && session.pausedAt != null)
   const elapsed = session ? Math.max(0, sessionElapsed(session, now)) : 0
@@ -328,6 +364,29 @@ export function useFocusSession(hooks: FocusHooks) {
               {session.taskId && <button onClick={() => finish(true)} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
               <button onClick={cancel} title="Descartar sin registrar" style={{ border: '1px solid #3a352e', background: 'transparent', color: '#a49b90', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>Descartar</button>
             </div>
+
+            {/* Subtareas de la tarea en foco: márcalas conforme avanzas y agrega nuevas sin salir.
+                Se muestra SIEMPRE que la sesión venga de una tarea (aunque aún no tenga subtareas). */}
+            {focusTask && (
+              <FocusSubtasks
+                subs={focusTask.subtasks || []}
+                done={(focusTask.subtasks || []).filter(x => x.done).length}
+                onToggle={toggleSub}
+                onAdd={addSub}
+                onMove={moveSub}
+              />
+            )}
+            {focusTask && (
+              <FocusExtras
+                due={focusTask.due || ''}
+                plan={focusTask.plan || ''}
+                links={focusTask.links || []}
+                comentarios={focusTask.comentarios || []}
+                onPatch={patchFocus}
+                onAddLink={addLink}
+                onAddComment={addComment}
+              />
+            )}
           </div>
         )
       })()}
@@ -338,3 +397,112 @@ export function useFocusSession(hooks: FocusHooks) {
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
+
+/* Panel de subtareas del Modo foco: marca las hechas y agrega nuevas sin salir del foco.
+   (Mismo diseño que el de /tiempo; pendientes arriba —reordenables—, terminadas al fondo.) */
+function FocusSubtasks({ subs, done, onToggle, onAdd, onMove }: { subs: EpicaSubtask[]; done: number; onToggle: (key: string) => void; onAdd: (text: string) => void; onMove?: (key: string, dir: -1 | 1) => void }) {
+  const [txt, setTxt] = useState('')
+  const add = () => { const t = txt.trim(); if (!t) return; onAdd(t); setTxt('') }
+  const pend = subs.filter(s => !s.done)
+  const doneL = subs.filter(s => s.done)
+  const canMove = !!onMove && pend.length > 1
+  const arrowBtn: CSSProperties = { border: 'none', background: 'transparent', color: '#a49b90', cursor: 'pointer', fontSize: 9, lineHeight: 1, padding: '1px 3px' }
+  const row = (sub: EpicaSubtask, arrows: { up: boolean; down: boolean } | null) => { const key = sub.id || sub.t; return (
+    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', width: '100%' }}>
+      <button onClick={() => onToggle(key)} title={sub.done ? 'desmarcar' : 'marcar hecha'} style={{ flexShrink: 0, width: 21, height: 21, borderRadius: 6, border: sub.done ? 'none' : '1.5px solid #5a534a', background: sub.done ? '#6f8256' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0f0d0a', cursor: 'pointer' }}>{sub.done && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2"><path d="M20 6 9 17l-5-5" /></svg>}</button>
+      <span onClick={() => onToggle(key)} style={{ flex: 1, fontSize: 15, color: sub.done ? '#7d766c' : '#faf7f1', textDecoration: sub.done ? 'line-through' : 'none', cursor: 'pointer' }}>{sub.t || 'Subtarea'}</span>
+      {arrows && (
+        <span style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          <button onClick={() => onMove!(key, -1)} disabled={arrows.up} aria-label="Subir" title="Subir" style={{ ...arrowBtn, opacity: arrows.up ? 0.3 : 1, cursor: arrows.up ? 'default' : 'pointer' }}>▲</button>
+          <button onClick={() => onMove!(key, 1)} disabled={arrows.down} aria-label="Bajar" title="Bajar" style={{ ...arrowBtn, opacity: arrows.down ? 0.3 : 1, cursor: arrows.down ? 'default' : 'pointer' }}>▼</button>
+        </span>
+      )}
+    </div>
+  ) }
+  return (
+    <div style={{ width: 'min(520px, 92vw)', maxHeight: '34vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <span style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }}>subtareas</span>
+        {subs.length > 0 && <span style={{ fontSize: 12, color: done === subs.length ? '#a9c48c' : '#cdc4b8' }}>{done}/{subs.length} hechas</span>}
+      </div>
+      {subs.length === 0 && <span style={{ fontSize: 13.5, color: '#8b8379', padding: '0 4px 8px', lineHeight: 1.4 }}>Divide esta tarea en pasos para ir marcando qué haces.</span>}
+      {pend.map((sub, k) => row(sub, canMove ? { up: k === 0, down: k === pend.length - 1 } : null))}
+      {doneL.map(sub => row(sub, null))}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, borderTop: '1px solid #2a2620', paddingTop: 10 }}>
+        <input value={txt} onChange={e => setTxt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add() } }} placeholder="+ agregar subtarea" style={{ flex: 1, minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }} />
+        {txt.trim() && <button onClick={add} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Agregar</button>}
+      </div>
+    </div>
+  )
+}
+
+/* Fechas, enlaces y comentarios de la tarea en foco: editar sin salir del foco. */
+function FocusExtras({ due, plan, links, comentarios, onPatch, onAddLink, onAddComment }: { due: string; plan: string; links: EpicaTaskLink[]; comentarios: EpicaTaskComment[]; onPatch: (patch: Partial<EpicaTask>) => void; onAddLink: (label: string, url: string) => void; onAddComment: (text: string) => void }) {
+  const [showLinkAdd, setShowLinkAdd] = useState(false)
+  const [nlLabel, setNlLabel] = useState(''); const [nlUrl, setNlUrl] = useState('')
+  const [comment, setComment] = useState('')
+  const addLink = () => { if (!nlUrl.trim() && !nlLabel.trim()) return; onAddLink(nlLabel, nlUrl); setNlLabel(''); setNlUrl(''); setShowLinkAdd(false) }
+  const addComment = () => { const t = comment.trim(); if (!t) return; onAddComment(t); setComment('') }
+  const field: CSSProperties = { minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }
+  const addBtn: CSSProperties = { border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }
+  const secLbl: CSSProperties = { fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }
+  return (
+    <div style={{ width: 'min(520px, 92vw)', maxHeight: '38vh', overflowY: 'auto', background: 'rgba(255,255,255,0.04)', border: '1px solid #33302a', borderRadius: 18, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 14, marginTop: 4 }}>
+      {/* Fechas: cuándo se hace (plan) y cuándo se termina (vence) — editables aquí mismo */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        <span style={secLbl}>fechas</span>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 130 }}>
+            <span style={{ fontSize: 12, color: '#a49b90' }}>Hacer (plan)</span>
+            <input type="date" value={plan} onChange={e => onPatch({ plan: e.target.value })} style={{ ...field, colorScheme: 'dark' }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 130 }}>
+            <span style={{ fontSize: 12, color: '#a49b90' }}>Vence (se termina)</span>
+            <input type="date" value={due} onChange={e => onPatch({ due: e.target.value })} style={{ ...field, colorScheme: 'dark' }} />
+          </label>
+        </div>
+      </div>
+
+      {/* Enlaces */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={secLbl}>enlaces</span>
+          <button onClick={() => setShowLinkAdd(v => !v)} style={{ border: '1px solid #4a443c', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>{showLinkAdd ? 'cancelar' : '+ link'}</button>
+        </div>
+        {links.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {links.map((l, i) => (
+              <a key={i} href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 13, fontWeight: 500, color: '#E7C56B', background: 'rgba(231,197,107,0.10)', border: '1px solid #4a443c', borderRadius: 999, padding: '6px 12px', maxWidth: '100%' }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>🔗 {l.label || l.url}</span>
+              </a>
+            ))}
+          </div>
+        )}
+        {links.length === 0 && !showLinkAdd && <span style={{ fontSize: 13, color: '#8b8379' }}>Sin enlaces. Agrega uno con “+ link”.</span>}
+        {showLinkAdd && (
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+            <input value={nlLabel} onChange={e => setNlLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} placeholder="Etiqueta" style={{ ...field, flex: '0 0 120px', width: 120 }} />
+            <input value={nlUrl} onChange={e => setNlUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} placeholder="https://…" style={{ ...field, flex: 1 }} />
+            <button onClick={addLink} style={addBtn}>Agregar</button>
+          </div>
+        )}
+      </div>
+
+      {/* Comentarios */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid #2a2620', paddingTop: 12 }}>
+        <span style={secLbl}>comentarios</span>
+        {comentarios.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {comentarios.map((c, i) => (
+              <div key={i} style={{ fontSize: 13.5, color: '#e4ddd2', lineHeight: 1.5 }}><span style={{ color: '#8b8379' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · {new Date(c.at).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })} · </span>{c.text}</div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <textarea value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); addComment() } }} placeholder="Escribe un comentario…  (⌘/Ctrl + Enter para enviar)" rows={3} style={{ ...field, width: '100%', minHeight: 76, resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
+          {comment.trim() && <button onClick={addComment} style={{ ...addBtn, alignSelf: 'flex-end' }}>Comentar</button>}
+        </div>
+      </div>
+    </div>
+  )
+}
