@@ -48,6 +48,8 @@ export type FocusHooks = {
   onFinishTask?: (epicaId: string, taskId: string, info: FinishInfo) => void
   /** Minutos ya registrados antes en esa tarea (para "…de antes / en total"). */
   priorMinFor?: (taskId: string) => number
+  /** Minutos registrados HOY en esa tarea (sesiones previas de hoy, sin la actual). */
+  todayMinFor?: (taskId: string) => number
   /** Estimado de cuánto durará la tarea (por dificultad), en minutos. 0 = sin estimar. */
   plannedMinFor?: (taskId: string) => number
   /** Tarea viva (subtareas/links/comentarios/fechas) para los paneles del Modo foco. */
@@ -328,7 +330,7 @@ export function useFocusSession(hooks: FocusHooks) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 16, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.name}</span>
             <span style={{ fontFamily: SERIF, fontSize: 48, lineHeight: .9, opacity: paused ? 0.55 : 1 }}>{elapsedLabel}</span>
-            {priorMin > 0 && <span style={{ fontSize: 12, color: '#E7C56B' }}>+{hm(priorMin)} de antes · {hm(priorMin + elapsed)} en total en la tarea</span>}
+            {(priorMin > 0 || elapsed > 0) && (() => { const tp = session.taskId ? (hooksRef.current.todayMinFor?.(session.taskId) || 0) : 0; return <span style={{ fontSize: 12, color: '#E7C56B' }}>Hoy {hm(tp + elapsed)}{priorMin - tp > 0 ? ` · ${hm(priorMin + elapsed)} en total` : ''}</span> })()}
             <span style={{ fontSize: 12.5, color: '#cdc4b8', lineHeight: 1.45 }}>{note}</span>
           </div>
           <button onClick={() => setFocusOpen(true)} style={{ border: '1px solid #4a443c', background: 'rgba(231,197,107,0.10)', color: '#E7C56B', borderRadius: 999, padding: '9px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>🎯 Modo foco</button>
@@ -366,6 +368,11 @@ export function useFocusSession(hooks: FocusHooks) {
         const planPct = Math.min(100, planPctRaw)
         const overPlan = planBase > 0 && todayEl > planBase
         const totalTask = priorMin + todayEl
+        // HOY: sesiones previas de hoy (bitácora con d===hoy) + esta sesión. `priorMin` incluye TODOS
+        // los días; para aislar hoy, resto lo de hoy previo. Así diferenciamos "hoy" de "días previos".
+        const todayPrior = session.taskId ? (hooksRef.current.todayMinFor?.(session.taskId) || 0) : 0
+        const todayTotal = todayPrior + todayEl
+        const prevDays = Math.max(0, priorMin - todayPrior)
         const nowClock = clock(Math.round(now))
         const sitRemain = Math.max(0, planned - Math.max(0, el))
         const endClock = clock(Math.round(now) + sitRemain)
@@ -380,14 +387,17 @@ export function useFocusSession(hooks: FocusHooks) {
               <input type="time" value={clock(startMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
             </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: paused ? 0.5 : 1 }}>{elapsedLabel || '0m'}</span>
-            {(priorMin > 0 || planBase > 0) && (
+            {(priorMin > 0 || todayTotal > 0 || planBase > 0) && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, width: 'min(460px,90vw)', marginTop: -4 }}>
-                {/* Total en la tarea, DIFERENCIANDO lo de días previos de lo de hoy. */}
-                <span style={{ fontSize: 14.5, color: '#cdc4b8', textAlign: 'center' }}>
-                  {priorMin > 0
-                    ? <>En total <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(priorMin)} en días previos</span> + {hm(todayEl)} hoy</>
-                    : <>Llevas <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea</>}
+                {/* HOY primero (lo que se corre el día de la actividad); días previos y total aparte. */}
+                <span style={{ fontSize: 15, color: '#faf7f1', textAlign: 'center' }}>
+                  Hoy <b>{hm(todayTotal)}</b>{todayPrior > 0 ? <span style={{ fontSize: 12.5, color: '#8b8379' }}> ({hm(todayPrior)} antes hoy + {hm(todayEl)} ahora)</span> : ''}
                 </span>
+                {prevDays > 0 && (
+                  <span style={{ fontSize: 12.5, color: '#8b8379', textAlign: 'center' }}>
+                    En total <b style={{ color: '#cdc4b8' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(prevDays)} en días previos</span>
+                  </span>
+                )}
                 {/* Planeado vs usado (SÓLO del tiempo planeado), con % usado. */}
                 {planBase > 0 && (
                   <>

@@ -447,6 +447,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       }
       return 0
     },
+    todayMinFor: (taskId) => {
+      const d0 = todayISO()
+      for (const e of epicsRef.current) {
+        const t = e.tasks.find(x => x.id === taskId)
+        if (t) return (t.progressLog || []).reduce((s, l) => s + ((l.d === d0 && typeof (l as { min?: number }).min === 'number') ? (l as { min?: number }).min! : 0), 0)
+      }
+      return 0
+    },
     plannedMinFor: (taskId) => {
       for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return WEEK_EST_MIN(t.difficulty) }
       return 0
