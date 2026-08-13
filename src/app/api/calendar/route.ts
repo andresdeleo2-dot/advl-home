@@ -29,6 +29,9 @@ export async function GET() {
         `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events?singleEvents=true&orderBy=startTime&timeMin=${timeMin}&timeMax=${timeMax}&maxResults=250&key=${key}`,
         { next: { revalidate: 900 } }
       ).then(r => r.json())
+        // Un fetch que RECHAZA (red/DNS/timeout) reventaba Promise.all y tumbaba TODA la ruta
+        // (500), perdiendo también el calendario que sí respondió. Se aísla por calendario.
+        .catch((err: unknown) => ({ error: { message: String(err) } }))
     )
   )
 

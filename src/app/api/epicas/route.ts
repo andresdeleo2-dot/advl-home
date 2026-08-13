@@ -25,6 +25,7 @@ export async function GET() {
       .from('tareas')
       .select('*')
       .order('created_at', { ascending: true })
+      .order('id', { ascending: true })   // desempate ÚNICO: created_at se repite (migración por lote); sin esto una fila podía salir en 2 páginas o en ninguna
       .range(from, from + PAGE - 1)
     if (e2) return NextResponse.json({ ok: false, error: e2.message }, { status: 500 })
     tareas.push(...((page || []) as TareaRow[]))
@@ -71,10 +72,12 @@ export async function POST(req: Request) {
       source_table: body.source_table || null,
       source_sync: body.source_sync || null,
       epic_order: Number(body.epic_order) || 0,
-      kpis: body.kpis ?? [],
-      routines: body.routines ?? [],
+      // jsonb: forzar ARRAY. Un valor no-array (string/objeto) rompería normalize() en el
+      // cliente (.map) y dejaría /epicas con error permanente hasta reparar la fila a mano.
+      kpis: Array.isArray(body.kpis) ? body.kpis : [],
+      routines: Array.isArray(body.routines) ? body.routines : [],
       tasks: [],                     // legado: la columna queda vacía (respaldo histórico)
-      links: body.links ?? [],
+      links: Array.isArray(body.links) ? body.links : [],
     }
     const { data, error } = await supabase.from('epicas').insert(payload).select().single()
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })

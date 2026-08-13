@@ -15,6 +15,11 @@ export async function PUT(req: Request) {
   try {
     const body = await req.json()
     const p = body.data ?? {}
+    // El blob DEBE ser un objeto: un data string/número/array reemplazaría todo margen.v1
+    // (sesión + historial) por basura que TODOS los dispositivos adoptarían. Se rechaza.
+    if (typeof p !== 'object' || Array.isArray(p) || p === null) {
+      return NextResponse.json({ ok: false, error: 'data debe ser un objeto' }, { status: 400 })
+    }
     // 1) Preferir la función RPC: el ts lo asigna el SERVIDOR de forma atómica y monótona
     //    (evita carrera TOCTOU y reloj de cliente desfasado). Devuelve el ts asignado.
     const rpc = await supabase.rpc('tiempo_estado_put', { p_data: p })

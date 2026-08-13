@@ -13,9 +13,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       'name', 'color', 'description', 'status', 'categoria', 'archived',
       'source_table', 'source_sync', 'epic_order', 'kpis', 'routines', 'links',
     ]
+    // Estas columnas jsonb DEBEN ser arrays: un valor no-array rompería normalize() (.map) en
+    // el cliente y dejaría /epicas con error permanente. Se rechaza el write en ese caso.
+    const arrayCols = ['kpis', 'routines', 'links']
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
     for (const key of allowed) {
-      if (key in body) payload[key] = body[key]
+      if (!(key in body)) continue
+      if (arrayCols.includes(key) && !Array.isArray(body[key])) {
+        return NextResponse.json({ ok: false, error: `${key} debe ser un arreglo` }, { status: 400 })
+      }
+      payload[key] = body[key]
     }
     // Si sólo venían tareas, no hay nada que actualizar en la épica
     if (Object.keys(payload).length === 1) return NextResponse.json({ ok: true, data: null })

@@ -15,6 +15,7 @@ export async function GET() {
       .select('*')
       .order('section_order', { ascending: true })
       .order('item_order', { ascending: true })
+      .order('id', { ascending: true })   // desempate ÚNICO (section_order/item_order se repiten) para paginar sin huecos/duplicados
       .range(from, from + PAGE - 1)
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     data.push(...((page || []) as Item[]))
