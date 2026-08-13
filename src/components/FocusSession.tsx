@@ -54,6 +54,8 @@ export type FocusHooks = {
   taskFor?: (taskId: string) => EpicaTask | null
   /** Aplica un parche a la tarea en foco (subtareas, fechas, links, comentarios…). */
   onPatchTask?: (taskId: string, patch: Partial<EpicaTask>) => void
+  /** Si la sesión vino de una rutina diaria, marca su día como hecho al terminar. */
+  onFinishRoutine?: (epicaId: string, rIdx: number, day: string) => void
   /** Aviso ligero al descartar. */
   onToast?: (msg: string) => void
 }
@@ -93,27 +95,38 @@ export function useFocusSession(hooks: FocusHooks) {
       if (!j?.ok || !j.ready) return
       const serverTs = Number(j.ts) || 0
       const localTs = Number(localStorage.getItem(TS_KEY) || 0)
-      if (serverTs > localTs && !dataRef.current.session) {
-        const merged = Object.assign(defaults(), j.data || {})
+      if (serverTs > localTs) {
+        // Adopta lo del server, PERO conserva una sesión local viva (no la pises); así un blob
+        // viejo de este equipo no borra history/blocks más nuevos de otro dispositivo.
+        const sv = Object.assign(defaults(), j.data || {})
+        const merged: AppData = { ...sv, session: dataRef.current.session ?? sv.session }
         dataRef.current = merged; setData(merged)
         try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
       }
     }).catch(() => {}).finally(() => { clearTimeout(readyFallback); markReady() })
 
     // Otra pestaña (p.ej. /tiempo) cambió el estado → recárgalo (mantiene ambas en sync).
+    // Si el blob entrante NO trae sesión pero aquí hay una VIVA que este tab controla, conserva
+    // la local: evita que un save rancio de la pestaña /tiempo mate el cronómetro en curso.
     const onStorage = (e: StorageEvent) => {
       if (e.key !== KEY || !e.newValue) return
-      try { const nd = Object.assign(defaults(), JSON.parse(e.newValue)); dataRef.current = nd; setData(nd) } catch {}
+      try {
+        const inc = Object.assign(defaults(), JSON.parse(e.newValue)) as AppData
+        const keepLocal = dataRef.current.session && !inc.session
+        const nd: AppData = keepLocal ? { ...inc, session: dataRef.current.session } : inc
+        dataRef.current = nd; setData(nd)
+      } catch {}
     }
-    // Al enfocar, si aquí no hay sesión, adopta la del servidor (una iniciada en otro lado).
+    // Al enfocar, adopta lo del servidor si es más nuevo, conservando la sesión local viva.
     const adopt = () => {
-      if (document.visibilityState !== 'visible' || dataRef.current.session) return
+      if (document.visibilityState !== 'visible') return
       fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
-        if (!j?.ok || !j.ready || dataRef.current.session) return
+        if (!j?.ok || !j.ready) return
         const serverTs = Number(j.ts) || 0
         const localTs = Number(localStorage.getItem(TS_KEY) || 0)
         if (serverTs > localTs) {
-          const merged = Object.assign(defaults(), j.data || {})
+          const sv = Object.assign(defaults(), j.data || {})
+          const merged: AppData = { ...sv, session: dataRef.current.session ?? sv.session }
           dataRef.current = merged; setData(merged)
           try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
         }
@@ -128,9 +141,19 @@ export function useFocusSession(hooks: FocusHooks) {
   }, [])
 
   // Persiste un cambio: localStorage instantáneo + PUT al servidor (debounce). Preserva el resto
-  // de AppData (bloques, historial…) porque parte de dataRef ya cargado.
+  // de AppData (bloques, historial…) porque parte de dataRef ya cargado. Normaliza igual que
+  // /tiempo (poda history a 84 días si crece, descarta scheduled pasados y backToTasks viejos)
+  // para no reinflar el blob cuando la sesión se controla sólo desde /epicas.
   const save = useCallback((patch: Partial<AppData>) => {
-    const nd = { ...dataRef.current, ...patch }
+    const merged = { ...dataRef.current, ...patch }
+    const today0 = iso(new Date())
+    const cutoff = iso(new Date(Date.now() - 84 * 86400000))
+    const nd: AppData = {
+      ...merged,
+      history: merged.history.length > 500 ? merged.history.filter(h => h.date >= cutoff) : merged.history,
+      scheduled: (merged.scheduled || []).filter(s => !s.date || s.date >= today0),
+      backToTasks: (merged.backToTasks || []).filter(k => k.startsWith(today0 + '·')),
+    }
     dataRef.current = nd; setData(nd)
     try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(Date.now())) } catch {}
     pendingPush.current = nd
@@ -143,9 +166,10 @@ export function useFocusSession(hooks: FocusHooks) {
   }, [])
 
   // Registra a Épicas el tiempo de una sesión ligada a una tarea (bitácora + opcional terminar).
-  const logToEpica = useCallback((s: NonNullable<Session>, minutes: number, day: string, markDone: boolean) => {
+  // El MISMO logId liga el registro de margen.v1 con la entrada de bitácora (para editar/borrar en sync).
+  const logToEpica = useCallback((s: NonNullable<Session>, minutes: number, day: string, markDone: boolean, logId: string) => {
     if (!s.taskId || !s.epicaId) return
-    hooksRef.current.onFinishTask?.(s.epicaId, s.taskId, { minutes, day, logId: uid(), note: `⏱ ${hm(minutes)} trabajado`, markDone })
+    hooksRef.current.onFinishTask?.(s.epicaId, s.taskId, { minutes, day, logId, note: `⏱ ${hm(minutes)} trabajado`, markDone })
   }, [])
 
   const begin = useCallback((a: BeginArgs): boolean => {
@@ -155,13 +179,17 @@ export function useFocusSession(hooks: FocusHooks) {
     const s = dataRef.current.session
     if (s) {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
-      if (!window.confirm(`Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`)) return false
+      const msg = el > 480
+        ? `«${s.name}» lleva ${hm(el)} — parece que el cronómetro se quedó corriendo. Si acepto GUARDO todo ese tiempo y empiezo «${ns.name}». Cancela si no trabajaste todo eso.`
+        : `Tienes «${s.name}» en curso (${hm(el)}). ¿La guardo y empiezo «${ns.name}»?`
+      if (!window.confirm(msg)) return false
+      const logId = uid()
       const startD = s.startedAt != null ? new Date(s.startedAt) : null
       const histDay = startD ? iso(startD) : iso(new Date())
       const histStart = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
-      const hist: HistoryRow = { date: histDay, name: s.name, area: s.area, start: histStart, dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId: uid() } : {}) }
+      const hist: HistoryRow = { date: histDay, name: s.name, area: s.area, start: histStart, dur: el, done: s.taskId ? false : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
       save({ session: ns, history: dataRef.current.history.concat([hist]) })
-      logToEpica(s, el, histDay, false)
+      logToEpica(s, el, histDay, false, logId)
     } else {
       save({ session: ns })
     }
@@ -177,7 +205,13 @@ export function useFocusSession(hooks: FocusHooks) {
     const m = Math.max(0, Math.min(1439, Math.round(startMin)))
     const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
     if (d.getTime() > Date.now()) return
-    save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
+    if (s.pausedAt != null) {
+      // Estaba EN PAUSA: no la reanudes; banca el transcurrido corregido (ahora − nuevo inicio).
+      const banked = Math.max(0, (Date.now() - d.getTime()) / 60000)
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked } })
+    } else {
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
+    }
   }, [save])
   const cancel = useCallback(() => { const s = dataRef.current.session; save({ session: null }); setFocusOpen(false); if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save])
   const finish = useCallback((markDone = false) => {
@@ -186,13 +220,16 @@ export function useFocusSession(hooks: FocusHooks) {
     if (elapsed > 480 && !window.confirm(`Llevas ${hm(elapsed)} en «${s.name}». Parece que el cronómetro se quedó corriendo. ¿Registrar TODO ese tiempo?\n\nAceptar = registrarlo · Cancelar = descartarlo sin registrar.`)) {
       save({ session: null }); setFocusOpen(false); hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`); return
     }
+    const logId = uid()
     const startD = s.startedAt != null ? new Date(s.startedAt) : null
     const entryDay = startD ? iso(startD) : iso(new Date())
     const startMin = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
-    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId: uid() } : {}) }
+    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, history: dataRef.current.history.concat([entry]) })
     setFocusOpen(false)
-    logToEpica(s, elapsed, entryDay, markDone)
+    logToEpica(s, elapsed, entryDay, markDone, logId)
+    // Si la sesión venía de una rutina, marca su día como hecho (llena el chip de hoy).
+    if (s.routineRef) hooksRef.current.onFinishRoutine?.(s.routineRef.epicaId, s.routineRef.rIdx, iso(new Date()))
     hooksRef.current.onToast?.(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`)
   }, [now, save, logToEpica])
 
@@ -210,6 +247,18 @@ export function useFocusSession(hooks: FocusHooks) {
     }
     void phase
   }, [now, pomoOn, session])
+
+  // Fin de bloque: cuando la sesión CON duración planeada cumple su dur, avisa una vez (beep+notif).
+  const endNotified = useRef<number | null>(null)
+  useEffect(() => {
+    const s = session
+    if (!s || !s.dur || s.pausedAt != null) return
+    const key = s.origStart ?? s.start
+    if (sessionElapsed(s, now) >= s.dur && endNotified.current !== key) {
+      endNotified.current = key
+      beep(); notify('⏱ Terminó tu bloque', `Planeaste ${hm(s.dur)} para «${s.name}».`)
+    }
+  }, [now, session])
 
   // ── Edición de la tarea en foco (subtareas/fechas/links/comentarios) vía hooks ──
   const focusTask = session?.taskId ? (hooksRef.current.taskFor?.(session.taskId) || null) : null
@@ -393,7 +442,9 @@ export function useFocusSession(hooks: FocusHooks) {
     </>
   )
 
-  return { session, active: !!session, begin, card }
+  // `busy` = el overlay de Modo foco está abierto (editando subtareas/extras): el contenedor
+  // debe pausar sus refrescos (loadEpics) para no revertir esas ediciones en vuelo.
+  return { session, active: !!session, busy: focusOpen, begin, card }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

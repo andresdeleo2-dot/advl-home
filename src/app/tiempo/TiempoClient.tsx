@@ -318,11 +318,24 @@ export default function TiempoClient() {
     }
     const onVis = () => { if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
     const onFocus = () => { if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
+    // OTRA pestaña del MISMO navegador (p.ej. el widget de foco en /epicas) cambió margen.v1 →
+    // adóptalo en memoria. Sin esto, esta pestaña quedaba ciega y su próximo save() pisaba la
+    // sesión/el historial escritos desde /epicas. No adopta con un editor abierto (edición por índice).
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== KEY || !e.newValue || editorOpenRef.current) return
+      try {
+        const inc = Object.assign(defaults(), JSON.parse(e.newValue))
+        // Conserva una sesión local viva si el blob entrante no trae ninguna (no matar un cronómetro).
+        const keep = dataRef.current.session && !inc.session
+        setData(keep ? { ...inc, session: dataRef.current.session } : inc)
+      } catch {}
+    }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onFocus)
+    window.addEventListener('storage', onStorage)
     // Poll "en vivo": cada 25s (salvo con un editor abierto) refleja cambios de Épicas sin recargar.
     const id = setInterval(() => { if (canRefresh()) refreshTasks() }, 25000)
-    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus) }
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus); window.removeEventListener('storage', onStorage) }
   }, [refreshTasks, loadMeetings])
 
   // Tareas del día visible (plan === día, o recurrente que aplica ese día).
@@ -888,7 +901,9 @@ export default function TiempoClient() {
     for (const h of (data.history || [])) { if (week.includes(h.date) && h.area !== 'sueno') byArea[h.area] = (byArea[h.area] || 0) + h.dur }
     const areaRank = (Object.entries(byArea) as [Area, number][]).sort((a, b) => b[1] - a[1])
     const totalNonSleep = areaRank.reduce((s, [, m]) => s + m, 0)
-    const doneCount = (data.history || []).filter(h => week.includes(h.date) && h.done).length
+    // Tareas terminadas: cuenta TAREAS distintas cerradas (no filas de historial). Varias sesiones
+    // de la misma tarea contaban N veces, y las actividades libres (siempre done:true) inflaban el número.
+    const doneCount = new Set((data.history || []).filter(h => week.includes(h.date) && h.done && h.taskId).map(h => h.taskId)).size
     // Racha: días consecutivos HASTA HOY con algo de trabajo registrado (mira hacia atrás desde hoy).
     let streak = 0
     for (let i = 0; i < 60; i++) {
@@ -1423,7 +1438,13 @@ export default function TiempoClient() {
     const m = Math.max(0, Math.min(1439, Math.round(startMin)))
     const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
     if (d.getTime() > Date.now()) return   // no dejar un inicio en el futuro
-    save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
+    if (s.pausedAt != null) {
+      // Estaba EN PAUSA: no la reanudes. Banca el transcurrido corregido (ahora − nuevo inicio).
+      const banked = Math.max(0, (Date.now() - d.getTime()) / 60000)
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked } })
+    } else {
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
+    }
   }
   // Inicio (minuto del día) y transcurrido de la sesión en curso, para pintarla en el Planificador/"el día".
   const sessStartMin = data.session ? (data.session.startedAt != null ? (() => { const d = new Date(data.session.startedAt!); return d.getHours() * 60 + d.getMinutes() })() : Math.round(data.session.origStart ?? data.session.start)) : 0
@@ -1659,11 +1680,14 @@ export default function TiempoClient() {
     const cycle = Math.floor(el / 30), pos = el % 30
     // Detección de FLANCO (no ventana estrecha): si la pestaña está en 2º plano el tick se
     // estrangula y `pos` puede saltarse [25,25.7); el Set por ciclo ya garantiza un solo aviso.
+    // Llave ESTABLE por ciclo: usa origStart (no s.start, que cambia al reanudar) para no
+    // re-disparar el aviso del ciclo en curso cada vez que pausas/reanudas.
+    const base = s.origStart ?? s.start
     if (pos >= 25) {
-      const key = `${s.start}·${cycle}·break`
+      const key = `${base}·${cycle}·break`
       if (!pomoNotified.current.has(key)) { pomoNotified.current.add(key); beep(); notify('Descanso 🌿', 'Llevas 25 min de foco. Tómate 5 para respirar.') }
     } else if (cycle >= 1) {
-      const key = `${s.start}·${cycle}·work`
+      const key = `${base}·${cycle}·work`
       if (!pomoNotified.current.has(key)) { pomoNotified.current.add(key); beep(); notify('De vuelta al foco 🎯', 'Se acabó el descanso. Otro bloque de 25 min.') }
     }
   }, [now, pomoOn, data.session])
@@ -1712,7 +1736,7 @@ export default function TiempoClient() {
             tasks={planTasks}
             routines={planRoutines}
             scheduled={(data.scheduled || []).filter(s => (s.date || today) === planDay)}
-            worked={data.history.map((h, i) => ({ ...h, _idx: i })).filter(h => h.date === planDay)}
+            worked={data.history.map((h, i) => ({ ...h, _idx: i })).filter(h => h.date === planDay && h.area !== 'sueno')}
             onEditWorked={(idx, patch) => saveHist(idx, patch)}
             blocks={data.blocks.filter(b => blockActiveOn(b, new Date(planDay + 'T12:00:00').getDay()))}
             meetings={meetings.filter(m => m.date === planDay)}

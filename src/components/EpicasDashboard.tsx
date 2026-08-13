@@ -408,7 +408,75 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Gestión de foco de los modales: al abrir uno, el foco entra al panel y Tab queda
   // atrapado dentro; al cerrarlo, vuelve al elemento que lo abrió. Antes el foco se
   // quedaba detrás del backdrop y con Tab se navegaba el contenido tapado.
-  const anyModal = !!(editing || taskEdit || taskView || routineStat || pickerOpen)
+  /* ─── Sesión de foco (mismo widget/estado que /tiempo, aquí dentro de Épicas) ───
+     La sesión vive en `margen.v1` (localStorage + /api/tiempo-estado): es LA MISMA que
+     en /tiempo. Al terminar, escribimos el tiempo a la bitácora de la tarea (y la
+     cerramos si "✓ y hecha") con las mismas rutas de Épicas.
+     Se declara ANTES de anyModal para poder pausar el refresco mientras el Modo foco edita. */
+  const focus = useFocusSession({
+    onFinishTask: (epicaId, taskId, info) => {
+      // Resolver por taskId en TODAS las épicas: la tarea pudo moverse de épica durante la sesión.
+      const ep = epicsRef.current.find(e => e.tasks.some(t => t.id === taskId)); if (!ep) return
+      const tasks = clone(ep.tasks)
+      const ti = tasks.findIndex(t => t.id === taskId); if (ti < 0) return
+      const entry = { d: info.day, note: info.note, pct: tasks[ti].progress, min: info.minutes, logId: info.logId } as EpicaProgressEntry
+      tasks[ti].progressLog = [...(tasks[ti].progressLog || []), entry]
+      if (info.markDone) applyComplete(tasks[ti])
+      patchEpic(ep.id, { tasks })
+    },
+    onFinishRoutine: (epicaId, rIdx, day) => {
+      const ep = epicsRef.current.find(e => e.id === epicaId); if (!ep) return
+      const routines = clone(ep.routines); const r = routines[rIdx]; if (!r) return
+      const monday = mondayISO(day); const di = (new Date(day + 'T00:00:00').getDay() + 6) % 7
+      if (!r.weeks) r.weeks = {}
+      const wk = (r.weeks[monday] && r.weeks[monday].length === 7) ? [...r.weeks[monday]] : [false, false, false, false, false, false, false]
+      wk[di] = true            // idempotente: marcar hecho, nunca desmarcar
+      r.weeks[monday] = wk
+      if (monday === mondayISO(todayISO())) r.days = wk
+      patchEpic(ep.id, { routines })
+    },
+    priorMinFor: (taskId) => {
+      for (const e of epicsRef.current) {
+        const t = e.tasks.find(x => x.id === taskId)
+        if (t) return (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
+      }
+      return 0
+    },
+    plannedMinFor: (taskId) => {
+      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return WEEK_EST_MIN(t.difficulty) }
+      return 0
+    },
+    taskFor: (taskId) => {
+      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return t }
+      return null
+    },
+    onPatchTask: (taskId, patch) => {
+      // Gates: no escribir columnas cuya migración no esté corrida (un 500 revierte TODO el write).
+      if ('comentarios' in patch && !comentariosReady.current) { showToast('Corre sql/epicas-07-comentarios.sql para usar comentarios', true); return }
+      if ('resumen' in patch && !resumenReady.current) { showToast('Corre la migración de `resumen` para editarlo aquí', true); return }
+      if ('remindAt' in patch && !remindReady.current) { showToast('Corre sql/epicas-06-remind.sql para recordatorios', true); return }
+      const ep = epicsRef.current.find(e => e.tasks.some(t => t.id === taskId)); if (!ep) return
+      const tasks = clone(ep.tasks)
+      const ti = tasks.findIndex(t => t.id === taskId); if (ti < 0) return
+      tasks[ti] = { ...tasks[ti], ...patch }
+      // Cambiar la fecha "Hacer" (plan) debe reasignar planOrder/priority/estado como las demás rutas.
+      if ('plan' in patch) {
+        const plan = patch.plan || ''
+        if (plan) {
+          if (!tasks[ti].priority) tasks[ti].priority = prioFromDue(tasks[ti].due)
+          if (ep.tasks[ti].plan !== plan || tasks[ti].planOrder == null) tasks[ti].planOrder = maxPlanOrderFor(plan) + 1000
+          applyPlanStatus(tasks[ti], plan)
+        } else {
+          delete tasks[ti].plan; delete tasks[ti].priority; delete tasks[ti].planOrder
+          applyPlanStatus(tasks[ti], '')
+        }
+      }
+      patchEpic(ep.id, { tasks })
+    },
+    onToast: (msg) => showToast(msg),
+  })
+
+  const anyModal = !!(editing || taskEdit || taskView || routineStat || pickerOpen || focus.busy)
   useEffect(() => { modalOpenRef.current = anyModal }, [anyModal])
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -883,7 +951,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const base = t.plan || done
       const next = nextOccurrence(base, t.repeat, done)
       const seriesOver = !!t.repeatUntil && next > t.repeatUntil
-      t.repeatDone = [...(t.repeatDone || []), done].slice(-60)
+      t.repeatDone = [...new Set([...(t.repeatDone || []), done])].slice(-60)   // dedup: un mismo día no cuenta 2 ciclos
       if (seriesOver) {
         t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done; delete t.repeat
         return 'Hecha ✓ · serie terminada'
@@ -922,44 +990,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(e.id, { tasks })
   }
 
-  /* ─── Sesión de foco (mismo widget/estado que /tiempo, aquí dentro de Épicas) ───
-     La sesión vive en `margen.v1` (localStorage + /api/tiempo-estado): es LA MISMA que
-     en /tiempo. Al terminar, escribimos el tiempo a la bitácora de la tarea (y la
-     cerramos si "✓ y hecha") con las mismas rutas de Épicas. */
-  const focus = useFocusSession({
-    onFinishTask: (epicaId, taskId, info) => {
-      const ep = epicsRef.current.find(e => e.id === epicaId); if (!ep) return
-      const ti = ep.tasks.findIndex(t => t.id === taskId); if (ti < 0) return
-      const tasks = clone(ep.tasks)
-      const entry = { d: info.day, note: info.note, pct: tasks[ti].progress, min: info.minutes, logId: info.logId } as EpicaProgressEntry
-      tasks[ti].progressLog = [...(tasks[ti].progressLog || []), entry]
-      if (info.markDone) applyComplete(tasks[ti])
-      patchEpic(ep.id, { tasks })
-    },
-    priorMinFor: (taskId) => {
-      for (const e of epicsRef.current) {
-        const t = e.tasks.find(x => x.id === taskId)
-        if (t) return (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
-      }
-      return 0
-    },
-    plannedMinFor: (taskId) => {
-      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return WEEK_EST_MIN(t.difficulty) }
-      return 0
-    },
-    taskFor: (taskId) => {
-      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return t }
-      return null
-    },
-    onPatchTask: (taskId, patch) => {
-      const ep = epicsRef.current.find(e => e.tasks.some(t => t.id === taskId)); if (!ep) return
-      const tasks = clone(ep.tasks)
-      const ti = tasks.findIndex(t => t.id === taskId); if (ti < 0) return
-      tasks[ti] = { ...tasks[ti], ...patch }
-      patchEpic(ep.id, { tasks })
-    },
-    onToast: (msg) => showToast(msg),
-  })
   // Keys de las filas REALMENTE visibles (en orden), leídas del DOM: así el reorden
   // respeta cualquier filtro activo (dayEpica/planFilter) en vez de usar planPend crudo.
   const visiblePlanKeys = () =>
@@ -2451,7 +2481,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
-      {boardView === 'tabla' ? renderDayTable([...byDay.values()].flat().filter(x => passF(x.t))) : (() => {
+      {boardView === 'tabla' ? renderDayTable([...byDay.values()].flat().filter(x => passF(x.t) && !(boardHideDone && x.t.status === 'Terminada'))) : (() => {
       // Rutinas ("las diarias") + tablero en UN solo contenedor, para que las celdas
       // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
       // nombra las rutinas; cada columna trae sus celdas de ese día arriba.
@@ -2545,7 +2575,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
                 <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
                 {list.length > 0 && (
-                  <span style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: allDone ? 'rgba(62,142,142,0.14)' : 'rgba(194,147,58,0.14)', color: allDone ? '#2E6E6E' : '#A87A2C' }}>{allDone ? '✓' : `${done}/${list.length}`}</span>
+                  <span style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: allDone ? 'rgba(62,142,142,0.14)' : 'rgba(194,147,58,0.14)', color: allDone ? '#2E6E6E' : '#A87A2C' }}>{allDone ? '✓' : `${done}/${full.length}`}</span>
                 )}
                 {dayMin > 0 && (
                   <span title={`≈ ${dayHrs} de trabajo estimado por dificultad${overloaded ? ' · demasiado, reparte algunas' : ''}`} style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: overloaded ? 'rgba(176,82,46,0.14)' : 'rgba(15,35,64,0.06)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>~{dayHrs}</span>
@@ -2978,7 +3008,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )}
       </div>
 
-      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items), { groupByWeek: true }) : (() => {
+      {boardView === 'tabla' ? renderDayTable(cols.flatMap(c => c.items).filter(x => !(boardHideDone && x.t.status === 'Terminada')), { groupByWeek: true }) : (() => {
       // Pocas semanas (2/3 sem): las columnas llenan el ancho. Muchas (mes): ancho
       // fijo y scroll horizontal, para que no se aplasten.
       const wide = cols.length <= 3
@@ -3483,7 +3513,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const all: R[] = []
     activeEpics.forEach(e => {
       if (effResEpica !== 'todas' && e.id !== effResEpica) return
-      ;(e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && passWork(t, today)) all.push({ e, t, i }) })
+      ;(e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED) all.push({ e, t, i }) })
     })
 
     const committed = all.filter(x => inWeek(x.t.plan))                                   // lo planeado para la semana
@@ -4125,8 +4155,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {/* Filtros por estado de trabajo del día — presentes en TODAS las vistas board */}
-          {board && renderWorkFilters(today)}
+          {/* Filtros por estado de trabajo del día — presentes en las vistas board (salvo Resumen,
+              que es un digest semanal y filtrarlo por "trabajo de hoy" vaciaría sus KPIs). */}
+          {board && !resumen && renderWorkFilters(today)}
 
           {detalle || agenda ? (() => {
             // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
@@ -4142,7 +4173,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const inRange = (t: EpicaTask) => mdRange === 'todas' ? true : (!!t.plan && t.plan >= rStartUse && t.plan <= rEnd)
             const weekDays = Array.from({ length: 7 }, (_, k) => addDays(rStart, k))   // L-D de esta semana
             const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
-              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif) && !(boardHideDone && x.t.status === 'Terminada') && inRange(x.t) && (!mdDay || x.t.plan === mdDay) && passWork(x.t, today))
+              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif) && !(boardHideDone && x.t.status === 'Terminada') && (mdDay ? x.t.plan === mdDay : inRange(x.t)) && passWork(x.t, mdDay || today))
             const rangeChips = (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 8px' }}>
