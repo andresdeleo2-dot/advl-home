@@ -72,6 +72,7 @@ export function useFocusSession(hooks: FocusHooks) {
   const pendingPush = useRef<AppData | null>(null)
   const readyRef = useRef(false)   // ya reconciliamos con el servidor: recién ahí se permite ARRANCAR una sesión (evita pisar los datos reales de /tiempo)
   const phaseNotified = useRef<number>(-1)
+  const pomoStartElRef = useRef(0)   // minutos de sesión transcurridos cuando se PRENDIÓ el Pomodoro (los ciclos cuentan desde ahí, no desde el inicio de la sesión)
 
   const session = data.session
 
@@ -236,16 +237,14 @@ export function useFocusSession(hooks: FocusHooks) {
   // Pomodoro: avisa (beep + notificación) en cada cambio foco↔descanso.
   useEffect(() => {
     if (!pomoOn || !session || session.pausedAt != null) { phaseNotified.current = -1; return }
-    const el = sessionElapsed(session, now)
-    const phase = Math.floor(el / 25) + (el % 30 >= 25 ? 0.5 : 0)   // marca cambios cada bloque
-    const pos = el % 30, inBreak = pos >= 25
-    const marker = Math.floor(el / 30) * 2 + (inBreak ? 1 : 0)
+    const pel = Math.max(0, sessionElapsed(session, now) - pomoStartElRef.current)   // tiempo DESDE que se prendió el Pomodoro
+    const pos = pel % 30, inBreak = pos >= 25
+    const marker = Math.floor(pel / 30) * 2 + (inBreak ? 1 : 0)
     if (phaseNotified.current === -1) { phaseNotified.current = marker; return }
     if (marker !== phaseNotified.current) {
       phaseNotified.current = marker
       beep(); notify(inBreak ? '🌿 Descanso' : '🎯 A enfocar', inBreak ? '5 minutos de descanso.' : 'Nuevo bloque de foco.')
     }
-    void phase
   }, [now, pomoOn, session])
 
   // Fin de bloque: cuando la sesión CON duración planeada cumple su dur, avisa una vez (beep+notif).
@@ -351,17 +350,21 @@ export function useFocusSession(hooks: FocusHooks) {
       {/* Modo foco: overlay a pantalla completa */}
       {focusOpen && (() => {
         const el = elapsed
-        const pos = el % 30, inBreak = pos >= 25
+        // Pomodoro: cuenta desde que lo PRENDISTE (no desde el inicio de la sesión).
+        const pomoEl = Math.max(0, el - pomoStartElRef.current)
+        const pos = pomoEl % 30, inBreak = pos >= 25
         const phaseRemain = Math.max(0, inBreak ? 30 - pos : 25 - pos)
         const phasePct = inBreak ? ((pos - 25) / 5) * 100 : (pos / 25) * 100
-        const cyc = Math.floor(el / 30) + 1
-        // "Hoy" vs "total": el plan de HOY es la duración de ESTA sesión (session.dur); los otros
-        // tiempos (días previos) van aparte. El % es de lo invertido HOY sobre lo planeado hoy.
-        const todayPlanned = planned            // session.dur = lo planeado para hoy
+        const cyc = Math.floor(pomoEl / 30) + 1
+        // Planeado vs usado (SÓLO sobre el tiempo planeado): el plan es la duración de esta sesión
+        // (session.dur) o, si no la fijaste, el estimado por dificultad de la tarea. El % es lo usado
+        // hoy sobre ese plan. Los tiempos de días previos van aparte (línea "En total").
+        const estTask = session.taskId ? (hooksRef.current.plannedMinFor?.(session.taskId) || 0) : 0
+        const planBase = planned > 0 ? planned : estTask
         const todayEl = Math.max(0, el)
-        const todayPctRaw = todayPlanned > 0 ? Math.round((todayEl / todayPlanned) * 100) : 0
-        const todayPct = Math.min(100, todayPctRaw)
-        const overToday = todayPlanned > 0 && todayEl > todayPlanned
+        const planPctRaw = planBase > 0 ? Math.round((todayEl / planBase) * 100) : 0
+        const planPct = Math.min(100, planPctRaw)
+        const overPlan = planBase > 0 && todayEl > planBase
         const totalTask = priorMin + todayEl
         const nowClock = clock(Math.round(now))
         const sitRemain = Math.max(0, planned - Math.max(0, el))
@@ -377,7 +380,7 @@ export function useFocusSession(hooks: FocusHooks) {
               <input type="time" value={clock(startMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
             </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: paused ? 0.5 : 1 }}>{elapsedLabel || '0m'}</span>
-            {(priorMin > 0 || todayPlanned > 0) && (
+            {(priorMin > 0 || planBase > 0) && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, width: 'min(460px,90vw)', marginTop: -4 }}>
                 {/* Total en la tarea, DIFERENCIANDO lo de días previos de lo de hoy. */}
                 <span style={{ fontSize: 14.5, color: '#cdc4b8', textAlign: 'center' }}>
@@ -385,14 +388,14 @@ export function useFocusSession(hooks: FocusHooks) {
                     ? <>En total <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(priorMin)} en días previos</span> + {hm(todayEl)} hoy</>
                     : <>Llevas <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea</>}
                 </span>
-                {/* HOY: lo invertido hoy vs lo planeado para hoy (session), con % de avance de hoy. */}
-                {todayPlanned > 0 && (
+                {/* Planeado vs usado (SÓLO del tiempo planeado), con % usado. */}
+                {planBase > 0 && (
                   <>
                     <div style={{ width: '100%', height: 7, background: '#2a251f', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.max(3, todayPct)}%`, height: '100%', background: overToday ? 'linear-gradient(90deg,#C2933A,#d98a55)' : 'linear-gradient(90deg,#6f8256,#8fae74)', borderRadius: 999, transition: 'width .4s' }} />
+                      <div style={{ width: `${Math.max(3, planPct)}%`, height: '100%', background: overPlan ? 'linear-gradient(90deg,#C2933A,#d98a55)' : 'linear-gradient(90deg,#6f8256,#8fae74)', borderRadius: 999, transition: 'width .4s' }} />
                     </div>
-                    <span style={{ fontSize: 12.5, color: overToday ? '#d98a55' : '#8b8379' }}>
-                      Hoy: planeado <b style={{ color: '#cdc4b8' }}>{hm(todayPlanned)}</b> · {overToday ? `te pasaste ${hm(todayEl - todayPlanned)}` : `llevas ${hm(todayEl)}`} <b style={{ color: overToday ? '#d98a55' : '#8fae74' }}>({todayPctRaw}%)</b>
+                    <span style={{ fontSize: 12.5, color: overPlan ? '#d98a55' : '#8b8379' }}>
+                      Planeado <b style={{ color: '#cdc4b8' }}>{hm(planBase)}</b>{planned <= 0 && estTask > 0 ? ' (est.)' : ''} · usado hoy <b style={{ color: '#cdc4b8' }}>{hm(todayEl)}</b> {overPlan ? `· te pasaste ${hm(todayEl - planBase)}` : ''}<b style={{ color: overPlan ? '#d98a55' : '#8fae74' }}> ({planPctRaw}%)</b>
                     </span>
                   </>
                 )}
@@ -413,7 +416,7 @@ export function useFocusSession(hooks: FocusHooks) {
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center', marginTop: 6 }}>
-              <button onClick={() => setPomoOn(v => !v)} title="Pomodoro: 25 min de foco + 5 de descanso, con aviso en cada cambio." style={{ border: `1px solid ${pomoOn ? '#C2933A' : '#3a352e'}`, background: pomoOn ? 'rgba(231,197,107,0.12)' : 'transparent', color: pomoOn ? '#E7C56B' : '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>🍅 Pomodoro {pomoOn ? 'activado' : 'apagado'}</button>
+              <button onClick={() => { if (!pomoOn) { pomoStartElRef.current = elapsed; phaseNotified.current = -1 } setPomoOn(v => !v) }} title="Pomodoro: 25 min de foco + 5 de descanso, contando desde que lo prendes." style={{ border: `1px solid ${pomoOn ? '#C2933A' : '#3a352e'}`, background: pomoOn ? 'rgba(231,197,107,0.12)' : 'transparent', color: pomoOn ? '#E7C56B' : '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>🍅 Pomodoro {pomoOn ? 'activado' : 'apagado'}</button>
               <button onClick={paused ? resumeSession : pauseSession} style={{ border: 'none', background: paused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: paused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>{paused ? '▶ Reanudar' : '⏸ Pausar'}</button>
               {!isOpen && <button onClick={extend} style={{ border: '1px solid #3a352e', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>+15m</button>}
               <button onClick={() => finish(false)} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Terminar</button>
