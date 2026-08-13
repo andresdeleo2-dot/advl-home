@@ -16,43 +16,50 @@ export async function POST(req: Request) {
     const epicaId: string = body.epicaId
     if (!epicaId) return NextResponse.json({ ok: false, error: 'epicaId es obligatorio' }, { status: 400 })
 
-    const create: EpicaTask[] = Array.isArray(body.create) ? body.create : []
+    let create: EpicaTask[] = Array.isArray(body.create) ? body.create : []
     let update: EpicaTask[] = Array.isArray(body.update) ? body.update : []
     const remove: string[] = Array.isArray(body.remove) ? body.remove : []
     const conflicts: string[] = []
 
-    // Choque: comparar el updated_at que trae el cliente contra el de la BD
-    if (update.length) {
-      const ids = update.map(t => t.id).filter(Boolean) as string[]
-      const { data: cur } = await supabase.from('tareas').select('id,updated_at').in('id', ids)
-      const dbStamp = new Map((cur || []).map(r => [r.id as string, r.updated_at as string]))
-      update = update.filter(t => {
-        const db = t.id ? dbStamp.get(t.id) : undefined
-        if (!db) {
-          // No existe en BD. Si el cliente la tenía cargada (updatedAt), fue BORRADA en
-          // otra pestaña → conflicto: NO la resucites con el upsert. Sin base → se permite.
-          if (t.updatedAt) { conflicts.push(t.id!); return false }
-          return true
-        }
-        // Base más vieja que la BD → otra pestaña ganó: se reporta y no se escribe.
-        if (t.updatedAt && new Date(db).getTime() > new Date(t.updatedAt).getTime()) { conflicts.push(t.id!); return false }
-        return true
-      })
+    // Choque: comparar el updated_at que trae el cliente contra el de la BD. Se aplica a UPDATE y
+    // también a CREATE (mover una tarea entre épicas viaja como create con su updatedAt): así una
+    // edición reciente en otra pestaña no se pisa con la versión vieja del que mueve.
+    const allIds = [...create, ...update].map(t => t.id).filter(Boolean) as string[]
+    const dbStamp = new Map<string, string>()
+    if (allIds.length) {
+      const { data: cur } = await supabase.from('tareas').select('id,updated_at').in('id', allIds)
+      for (const r of cur || []) dbStamp.set(r.id as string, r.updated_at as string)
     }
+    // La BD tiene una versión MÁS NUEVA que la base del cliente → otra pestaña ganó.
+    const staleClash = (t: EpicaTask) => { const db = t.id ? dbStamp.get(t.id) : undefined; return !!(db && t.updatedAt && new Date(db).getTime() > new Date(t.updatedAt).getTime()) }
+    update = update.filter(t => {
+      const db = t.id ? dbStamp.get(t.id) : undefined
+      // No existe en BD. Si el cliente la tenía cargada (updatedAt), fue BORRADA en otra pestaña →
+      // conflicto: NO la resucites. Sin base → se permite.
+      if (!db) { if (t.updatedAt) { conflicts.push(t.id!); return false } return true }
+      if (staleClash(t)) { conflicts.push(t.id!); return false }
+      return true
+    })
+    // CREATE: una tarea NUEVA (sin updatedAt) siempre pasa. Una MOVIDA (existe en BD) cuyo updatedAt
+    // quedó viejo respecto a la BD → otra pestaña la editó → conflicto (no la pises con lo viejo).
+    create = create.filter(t => { if (staleClash(t)) { conflicts.push(t.id!); return false } return true })
 
-    if (remove.length) {
-      const { error } = await supabase.from('tareas').delete().in('id', remove).eq('epica_id', epicaId)
-      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-    }
+    // ORDEN: create/update PRIMERO, remove AL FINAL. Antes el delete se commiteaba primero y, si el
+    // create/update fallaba después (error transitorio/valor inválido), la tarea quedaba borrada en
+    // la BD pero "viva" en la UI (revert local) → desaparecía al recargar. Ahora, si algo falla
+    // antes del remove, retornamos y el borrado no se aplica.
     if (create.length) {
-      // upsert (no insert plano) para ser IDEMPOTENTE: si el id ya existe (mover tarea
-      // entre épicas con dos patch en carrera, o un reintento tras fallo parcial) no choca
-      // la PK; reasigna epica_id. El .eq('epica_id') del delete evita borrar la ya movida.
+      // upsert (no insert plano) para ser IDEMPOTENTE: si el id ya existe (mover tarea entre épicas
+      // o reintento tras fallo parcial) no choca la PK; reasigna epica_id.
       const { error } = await supabase.from('tareas').upsert(create.map(t => taskToRow(t, epicaId)), { onConflict: 'id' })
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
     if (update.length) {
       const { error } = await supabase.from('tareas').upsert(update.map(t => taskToRow(t, epicaId)), { onConflict: 'id' })
+      if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    }
+    if (remove.length) {
+      const { error } = await supabase.from('tareas').delete().in('id', remove).eq('epica_id', epicaId)
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
 

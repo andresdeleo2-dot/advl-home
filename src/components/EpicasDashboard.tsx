@@ -478,6 +478,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   const anyModal = !!(editing || taskEdit || taskView || routineStat || pickerOpen || focus.busy)
   useEffect(() => { modalOpenRef.current = anyModal }, [anyModal])
+
+  /* "¿Qué hago ahora?": elige la MEJOR siguiente tarea del día (vencidas primero, luego prioridad,
+     entrega y orden manual) y arranca el cronómetro de foco en ella. Cierra el ciclo elegir→hacer. */
+  const pickNextNow = () => {
+    const pool = planPend.length ? planPend
+      : activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => x.t.plan === today && x.t.status !== 'Terminada' && x.t.status !== ARCHIVED)
+    if (!pool.length) { showToast('No hay tareas pendientes para hoy', true); return }
+    const overdue = (t: EpicaTask) => { const d = daysUntil(t.due); return d != null && d < 0 ? 0 : 1 }
+    const pick = [...pool].sort((a, b) =>
+      overdue(a.t) - overdue(b.t)
+      || (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media'])
+      || (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
+      || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
+    )[0]
+    if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: WEEK_EST_MIN(pick.t.difficulty) })) showToast(`▶ A darle: «${pick.t.t}»`)
+  }
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!anyModal) {
@@ -816,6 +832,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     let m = 0
     epicsRef.current.forEach(e => (e.tasks || []).forEach(t => { if (t.plan === dateISO) m = Math.max(m, t.planOrder ?? 0) }))
     return m
+  }
+  // Minutos reales invertidos (suma de la bitácora) y estimado por dificultad (feature "estimado vs real").
+  const investedMinOf = (t: EpicaTask): number => (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
+  const lastProgressDay = (t: EpicaTask): string => (t.progressLog || []).reduce((m, l) => (l.d > m ? l.d : m), '')
+  // TAREA ESTANCADA: no terminada y (reprogramada ≥3 veces  ·  o con avance previo pero ≥5 días sin
+  // tocarla  ·  o simplemente ≥8 días desde su último avance/creación). Devuelve el motivo o null.
+  const stuckReason = (t: EpicaTask): string | null => {
+    if (t.status === 'Terminada' || t.status === ARCHIVED) return null
+    const resched = new Set(t.planHist || []).size
+    const last = lastProgressDay(t) || t.createdAt || ''
+    const daysSince = last ? Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(last + 'T00:00:00').getTime()) / 86400000) : 0
+    const worked = investedMinOf(t) > 0 || (t.progressLog || []).length > 0
+    if (resched >= 3) return `Reprogramada ${resched} veces — quizá conviene dividirla o soltarla`
+    if (worked && daysSince >= 5) return `${daysSince} días sin avanzar desde el último toque`
+    if (daysSince >= 8) return `${daysSince} días sin movimiento`
+    return null
   }
   // Días que llevas con una tarea (desde que la creaste; si no hay fecha de creación, desde que la planeaste).
   const diasCon = (t: EpicaTask): number => {
@@ -2272,6 +2304,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <span style={{ padding: '2px 8px', borderRadius: 99, font: '700 10.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}` }}>{t.due ? fmtDue(t.due) : 'sin fecha'}</span>
             {t.difficulty && (() => { const ds = difStyle(t.difficulty); return (
               <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
+            )})()}
+            {/* Estimado por dificultad vs real invertido (bitácora). Sólo cuando hay algo que comparar. */}
+            {(() => { const est = WEEK_EST_MIN(t.difficulty), real = investedMinOf(t); if (!est && !real) return null; const over = est > 0 && real > est; const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`; return (
+              <span title={`Estimado por dificultad ${est ? hmm(est) : '—'} · llevas ${hmm(real)} invertidos${over ? ` (${hmm(real - est)} de más)` : ''}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: over ? '#B0522E' : 'rgba(20,35,61,0.5)', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(15,35,64,0.05)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(15,35,64,0.1)'}`, borderRadius: 99, padding: '1px 7px' }}>⏳ {est ? hmm(est) : '—'}{real > 0 ? ` / ${hmm(real)}` : ''}</span>
+            )})()}
+            {/* Tarea estancada: reprogramada muchas veces o días sin avanzar. */}
+            {(() => { const r = stuckReason(t); if (!r) return null; return (
+              <span title={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 800, color: '#A15B2E', background: 'rgba(176,110,58,0.12)', border: '1px solid rgba(176,110,58,0.4)', borderRadius: 99, padding: '1px 8px' }}>🐌 estancada</span>
             )})()}
             {t.plan && t.plan < today && (
               <span title={`Se planeó para el ${fmtDue(t.plan)} y sigue pendiente`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, color: '#B0522E', background: 'rgba(176,82,46,0.10)', border: '1px solid rgba(176,82,46,0.4)', borderRadius: 99, padding: '1px 8px' }}>⏳ de días anteriores</span>
@@ -4167,6 +4207,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               )}
               {/* Dos caminos distintos: traer algo que ya existe, o crear algo nuevo. */}
+              {!board && planPend.length > 0 && !focus.active && (
+                <button onClick={pickNextNow} title="Elige la mejor siguiente tarea de hoy y arranca el cronómetro" style={{ border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 10, padding: '9px 15px', font: '800 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>⚡ ¿Qué ahora?</button>
+              )}
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
               <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>

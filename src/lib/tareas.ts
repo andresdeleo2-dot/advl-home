@@ -96,7 +96,8 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     prioridad: t.priority ?? null,
     dificultad: t.difficulty ?? null,
     nota: t.note ?? null,
-    avance: typeof t.progress === 'number' ? t.progress : null,
+    // Clamp 0-100: la columna tiene CHECK; un valor fuera de rango abortaba TODO el sync.
+    avance: typeof t.progress === 'number' ? Math.max(0, Math.min(100, Math.round(t.progress))) : null,
     plan: dateOrNull(t.plan),
     plan_order: typeof t.planOrder === 'number' ? t.planOrder : null,
     vence: dateOrNull(t.due),

@@ -11,11 +11,21 @@ async function getEpicas(): Promise<Epica[]> {
     .select('*')
     .order('epic_order', { ascending: true })
     .order('created_at', { ascending: true })
-  // Las tareas viven en su propia tabla: se adjuntan a cada épica
-  const { data: tareas } = await supabase
-    .from('tareas')
-    .select('*')
-    .order('created_at', { ascending: true })
+  // Las tareas viven en su propia tabla: se adjuntan a cada épica.
+  // PAGINADO igual que /api/epicas: PostgREST corta en 1000; sin esto el SSR entregaba un
+  // snapshot truncado (faltaban las tareas más nuevas) hasta que loadEpics del cliente terminara.
+  const tareas: TareaRow[] = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data: page } = await supabase
+      .from('tareas')
+      .select('*')
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    tareas.push(...((page || []) as TareaRow[]))
+    if (!page || page.length < PAGE) break
+  }
   const byEpic = new Map<string, EpicaTask[]>()
   for (const r of (tareas || []) as TareaRow[]) {
     if (!byEpic.has(r.epica_id)) byEpic.set(r.epica_id, [])
