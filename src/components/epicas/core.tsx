@@ -105,14 +105,18 @@ export const REPEAT_TONE = { c: '#7A6FB0', bg: 'rgba(122,111,176,0.10)', border:
  *  = planOrder a asignar en el día destino. Espeja la lógica de completeFromPlan de Épicas para que
  *  completar desde /tiempo NO deje la serie pegada (misma reprogramación en ambos lados). */
 export function completeRecurring(t: EpicaTask, doneISO: string, planOrderFor: (day: string) => number): EpicaTask {
+  // FUENTE ÚNICA de la política de completar (Épicas y /tiempo delegan aquí):
+  //  · No recurrente → Terminada (sin tocar repeatDone).
+  //  · Recurrente y la serie sigue → reprograma al próximo día, vuelve al estado de reposo, limpia
+  //    avance; el día cumplido entra a repeatDone (DEDUP: un día no cuenta 2 ciclos).
+  //  · Recurrente y la serie terminó (pasó repeatUntil) → Terminada, PERO conserva `repeat` (reabrir
+  //    la devuelve recurrente; antes se borraba y se perdía la definición).
+  if (!t.repeat) return { ...t, planPrev: t.status, status: 'Terminada', doneAt: doneISO }
   const base = /^\d{4}-\d{2}-\d{2}$/.test(t.plan || '') ? t.plan! : doneISO
-  const rd = [...(t.repeatDone || []), doneISO].slice(-60)
-  if (!t.repeat) return { ...t, repeatDone: rd, planPrev: t.status, status: 'Terminada', doneAt: doneISO }
+  const rd = [...new Set([...(t.repeatDone || []), doneISO])].slice(-60)
   const next = nextOccurrence(base, t.repeat, doneISO)
   if (t.repeatUntil && next > t.repeatUntil) {
-    const done: EpicaTask = { ...t, repeatDone: rd, planPrev: t.status, status: 'Terminada', doneAt: doneISO }
-    delete (done as { repeat?: unknown }).repeat
-    return done
+    return { ...t, repeatDone: rd, planPrev: t.status, status: 'Terminada', doneAt: doneISO }
   }
   const nt: EpicaTask = { ...t, repeatDone: rd, plan: next, planOrder: planOrderFor(next), status: t.planStatusPrev || 'Por hacer' }
   if (t.due && t.due === base) nt.due = next

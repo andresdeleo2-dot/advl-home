@@ -57,6 +57,7 @@ import {
   monthLabel,
   monthWeekMondays,
   nextOccurrence,
+  completeRecurring,
   norm,
   normalize,
   pctOf,
@@ -235,6 +236,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
   const comentariosReady = useRef(false) // true si la columna comentarios existe
   const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
+  const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
@@ -261,6 +263,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       remindReady.current = !!j.remindReady
       comentariosReady.current = !!j.comentariosReady
       resumenReady.current = !!j.resumenReady
+      weekBudgetReady.current = !!j.weekBudgetReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -496,13 +499,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )[0]
     if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: WEEK_EST_MIN(pick.t.difficulty) })) showToast(`▶ A darle: «${pick.t.t}»`)
   }
-  // Presupuesto semanal por épica (horas/semana), guardado en localStorage (sin migración).
+  // Presupuesto semanal por épica (horas/semana). Si la columna week_budget existe (migración
+  // corrida), se guarda en Supabase y SINCRONIZA entre dispositivos; si no, cae a localStorage.
   useEffect(() => { try { const raw = localStorage.getItem('advl_epicas_budget'); if (raw) setEpicBudgets(JSON.parse(raw)) } catch { /* noop */ } }, [])
-  const setEpicBudget = (id: string, hours: number) => setEpicBudgets(prev => {
-    const next = { ...prev }; if (hours > 0) next[id] = hours; else delete next[id]
-    try { localStorage.setItem('advl_epicas_budget', JSON.stringify(next)) } catch { /* noop */ }
-    return next
-  })
+  const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
+  const setEpicBudget = (id: string, hours: number) => {
+    const h = hours > 0 ? Math.round(hours) : 0
+    if (weekBudgetReady.current) { patchEpic(id, { week_budget: h > 0 ? h : null }); return }
+    setEpicBudgets(prev => {
+      const next = { ...prev }; if (h > 0) next[id] = h; else delete next[id]
+      try { localStorage.setItem('advl_epicas_budget', JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+  }
   // Minutos invertidos esta semana (L-D) en las tareas de una épica (suma de la bitácora).
   const investedThisWeek = (e: Epica): number => {
     const mon = mondayISO(today), sun = addDays(mon, 6)
@@ -1004,30 +1013,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  REPROGRAMA a su siguiente ocurrencia (en vez de terminarla) y apunta el ciclo cumplido; si no,
    *  la marca Terminada. Devuelve el mensaje de toast de la recurrencia, o null. ÚNICO lugar con la
    *  lógica de recurrencia al completar: TODOS los caminos de "Terminar" pasan por aquí. */
+  // Completa una tarea IN SITU delegando en completeRecurring (fuente única compartida con /tiempo,
+  // así "✓ y hecha" hace lo MISMO se termine desde Épicas o desde Tiempo). Devuelve el mensaje.
   const applyComplete = (t: EpicaTask): string | null => {
     if (t.status === 'Terminada') return null
     const done = todayISO()
-    if (t.repeat) {
-      const base = t.plan || done
-      const next = nextOccurrence(base, t.repeat, done)
-      const seriesOver = !!t.repeatUntil && next > t.repeatUntil
-      t.repeatDone = [...new Set([...(t.repeatDone || []), done])].slice(-60)   // dedup: un mismo día no cuenta 2 ciclos
-      if (seriesOver) {
-        // Serie terminada: NO borres `repeat` (antes se perdía la definición para siempre). Se
-        // conserva para que reabrir la tarea la devuelva como recurrente; `repeatUntil` ya evita
-        // que se reprograme sola (no vuelve a caer como "hoy").
-        t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done
-        return 'Hecha ✓ · serie terminada'
-      }
-      if (t.due && t.due === base) t.due = next       // la entrega acompaña al ciclo
-      t.plan = next
-      t.planOrder = maxPlanOrderFor(next) + 1000
-      t.status = t.planStatusPrev || 'Por hacer'      // vuelve a su estado de reposo
-      delete t.planStatusPrev; delete t.doneAt; delete t.progress
-      return `Hecha ✓ · vuelve ${relLong(next).toLowerCase()}`
-    }
-    t.planPrev = t.status; t.status = 'Terminada'; t.doneAt = done
-    return null
+    const wasRepeat = !!t.repeat
+    const res = completeRecurring(t, done, d => maxPlanOrderFor(d) + 1000)
+    Object.assign(t, res)
+    // Object.assign no borra las claves que completeRecurring quitó (rama reprogramación).
+    for (const k of ['doneAt', 'progress', 'planStatusPrev'] as const) if (!(k in res)) delete t[k]
+    if (!wasRepeat) return null
+    if (t.status === 'Terminada') return 'Hecha ✓ · serie terminada'
+    return `Hecha ✓ · vuelve ${relLong(t.plan || done).toLowerCase()}`
   }
   /** Completar desde el plan/tablero, con toast + deshacer para la recurrencia. */
   const completeFromPlan = (e: Epica, i: number) => {
@@ -1730,6 +1728,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // "Editar" se restaura para no empezar de cero. Al guardar/eliminar se descarta. ──
   const DRAFT_CACHE_KEY = 'advl_epicas_draftcache'
   const draftCacheRef = useRef<Record<string, { draft: EpicaTask; target: string }>>({})
+  const editOpenSnapshotRef = useRef<EpicaTask | null>(null)   // tarea tal cual estaba al ABRIR el editor (para saber qué campos tocó el editor y no pisar cambios concurrentes del Modo foco)
+  // Campos que el editor de tarea GESTIONA (para el dirty-check y para no pisar lo demás). Excluye
+  // volátiles (updatedAt/progressLog/comentarios/remindAt) que cambian por sync/sesión aunque no edites.
+  const EDITOR_FIELDS: (keyof EpicaTask)[] = ['t', 'status', 'due', 'note', 'resumen', 'links', 'priority', 'difficulty', 'plan', 'subtasks', 'progress', 'repeat', 'repeatUntil']
+  const editorSlice = (t: EpicaTask | null) => { if (!t) return ''; const o: Record<string, unknown> = {}; for (const k of EDITOR_FIELDS) if (t[k] !== undefined) o[k] = t[k]; return JSON.stringify(o) }
   useEffect(() => { try { const r = localStorage.getItem(DRAFT_CACHE_KEY); if (r) draftCacheRef.current = JSON.parse(r) } catch { /* noop */ } }, [])
   const persistDrafts = () => { try { localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(draftCacheRef.current)) } catch { /* noop */ } }
   const baselineDraft = (epicId: string, tid: string): EpicaTask | null => {
@@ -1740,9 +1743,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const found = tid ? findTask(epicId, tid) : null
     if (found && tid) {
       const base = { ...clone(found.t), links: found.t.links || [] }
+      editOpenSnapshotRef.current = clone(base)   // referencia de "qué había al abrir"
       const cached = draftCacheRef.current[`${epicId}:${tid}`]
-      // Hay un borrador sin guardar y distinto de la tarea → restaurarlo
-      if (cached && JSON.stringify(cached.draft) !== JSON.stringify(base)) {
+      // Hay un borrador sin guardar y distinto de la tarea (SÓLO en campos del editor) → restaurarlo.
+      if (cached && editorSlice(cached.draft) !== editorSlice(base)) {
         setTaskDraft(cached.draft)
         setTaskEditTarget(cached.target || epicId)
         setTaskEdit({ epicId, tid })
@@ -1751,6 +1755,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       }
       setTaskDraft(base)
     } else {
+      editOpenSnapshotRef.current = null
       setTaskDraft({ t: '', status: 'Por hacer', due: '', note: '', links: [], ...seed })
     }
     setTaskEdit({ epicId, tid })
@@ -1777,9 +1782,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (opts && opts.discard === true) {
         delete draftCacheRef.current[key]   // se guardó/eliminó: descartar borrador
       } else {
-        // Cierre "accidental": si hay cambios sin guardar, se conserva el borrador
+        // Cierre "accidental": si hay cambios sin guardar EN CAMPOS DEL EDITOR, se conserva el
+        // borrador. Compara sólo esos campos (no updatedAt/progressLog/comentarios/remindAt, que
+        // cambian por sync o por la sesión de foco aunque no hayas editado → borrador espurio).
         const base = baselineDraft(cur.epicId, cur.tid)
-        if (base && JSON.stringify(taskDraft) !== JSON.stringify(base)) draftCacheRef.current[key] = { draft: taskDraft, target: taskEditTarget }
+        if (base && editorSlice(taskDraft) !== editorSlice(base)) draftCacheRef.current[key] = { draft: taskDraft, target: taskEditTarget }
         else delete draftCacheRef.current[key]
       }
       persistDrafts()
@@ -1792,9 +1799,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Índice actual resuelto por id: nunca apunta a otra tarea aunque el array haya cambiado
     const cur = taskEdit.tid ? findTask(taskEdit.epicId, taskEdit.tid) : null
     const curIdx = cur?.i ?? null
-    const links = (taskDraft.links || []).map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.label || l.url)
     // Preserva campos del plan (plan/priority/planOrder/planPrev) al reescribir la tarea
     const orig: Partial<EpicaTask> = cur?.t || {}
+    // ¿El EDITOR tocó este campo (vs cómo estaba al abrir)? Si NO, conserva el valor FRESCO de `orig`
+    // (que ya trae los cambios hechos en paralelo desde el Modo foco). Evita pisar subtareas/links/
+    // avance que marcaste en el overlay mientras el editor estaba abierto.
+    const openSnap = editOpenSnapshotRef.current
+    const draftChanged = (k: keyof EpicaTask) => !openSnap || JSON.stringify(taskDraft[k] ?? null) !== JSON.stringify(openSnap[k] ?? null)
+    const links = draftChanged('links')
+      ? (taskDraft.links || []).map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.label || l.url)
+      : ((orig.links as EpicaTaskLink[] | undefined) || [])
     const t: EpicaTask = { ...orig, t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: sanitizeHtml(taskDraft.note), links }
     if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
     else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
@@ -1811,12 +1825,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (!t.priority) t.priority = prioFromDue(t.due)
     } else { delete t.plan; delete t.planOrder }   // se despega del plan (conserva priority por si se re-planea)
     if (t.status !== 'Terminada') applyPlanStatus(t, newPlan)   // plan de hoy ⇒ En curso
-    // Subtareas y avance manual editados en el modal. PRESERVA id/progress/note/links
-    // (antes se aplanaban a {t,done} y se perdían los datos del popup de subtarea).
-    const subs = (taskDraft.subtasks || []).map(s => ({ ...s, t: (s.t || '').trim(), done: !!s.done })).filter(s => s.t)
-    if (subs.length) t.subtasks = subs; else delete t.subtasks
-    if (typeof taskDraft.progress === 'number' && taskDraft.progress > 0) t.progress = Math.max(0, Math.min(100, taskDraft.progress)); else delete t.progress
-    if ((orig.progress ?? 0) !== (t.progress ?? 0)) upsertProgressPct(t, t.progress ?? 0)   // registra el cambio de avance de hoy
+    // Subtareas: sólo reescribe desde el borrador si el editor las tocó; si no, conserva las frescas
+    // (con lo que hayas marcado en el Modo foco). PRESERVA id/progress/note/links de cada subtarea.
+    if (draftChanged('subtasks')) {
+      const subs = (taskDraft.subtasks || []).map(s => ({ ...s, t: (s.t || '').trim(), done: !!s.done })).filter(s => s.t)
+      if (subs.length) t.subtasks = subs; else delete t.subtasks
+    }   // else: t.subtasks ya viene de orig (fresco)
+    // Avance: igual, sólo si el editor lo cambió.
+    if (draftChanged('progress')) {
+      if (typeof taskDraft.progress === 'number' && taskDraft.progress > 0) t.progress = Math.max(0, Math.min(100, taskDraft.progress)); else delete t.progress
+      if ((orig.progress ?? 0) !== (t.progress ?? 0)) upsertProgressPct(t, t.progress ?? 0)   // registra el cambio de avance de hoy
+    }
     // Recurrencia: se guarda sólo si sigue activa, y `hasta` sólo si hay recurrencia
     if (taskDraft.repeat) {
       t.repeat = { every: Math.max(1, Math.round(taskDraft.repeat.every || 1)), unit: taskDraft.repeat.unit }
@@ -6166,7 +6185,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
               {/* Presupuesto semanal de horas: invertido esta semana (bitácora) vs meta editable. */}
               {(() => {
-                const goalH = epicBudgets[featured.id] || 0
+                const goalH = budgetOf(featured)
                 const invMin = investedThisWeek(featured)
                 const invH = invMin / 60
                 const pct = goalH > 0 ? Math.min(100, (invH / goalH) * 100) : 0

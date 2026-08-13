@@ -106,4 +106,5 @@ export type Epica = {
   routines: EpicaRoutine[]
   tasks: EpicaTask[]
   links: EpicaLink[]
+  week_budget?: number | null   // meta de horas/semana (presupuesto de tiempo). Requiere sql/epicas-08-week-budget.sql
 }

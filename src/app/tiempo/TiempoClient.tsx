@@ -1204,7 +1204,7 @@ export default function TiempoClient() {
   // Al guardar el registro con el check "se terminó" cambiado, sincroniza a Épicas.
   const syncHistDone = (row: AppData['history'][number], done: boolean) => {
     if (!row.taskId || !row.epicaId) return
-    if (done) markEpicTaskDone(row.epicaId, row.taskId, row.date)
+    if (done) markEpicTaskDone(row.epicaId, row.taskId)
     else reopenByTask(row.epicaId, row.taskId)
   }
 
@@ -1220,18 +1220,15 @@ export default function TiempoClient() {
   // Al COMPLETAR una recurrente: los hábitos DIARIOS solo marcan el día en repeatDone (reaparecen
   // mañana solos); los SEMANALES/MENSUALES se REPROGRAMAN a su próxima fecha (como en Épicas), si no
   // se quedaban pegados con plan=hoy y no volvían a salir nunca.
-  const completeTaskFields = (task: EpicaTask, day2: string): EpicaTask => {
-    const rd = task.repeatDone || []
-    if (task.repeat && task.repeat.unit !== 'dia') return completeRecurring(task, day2, nextPlanOrderFor)
-    if (task.repeat) return { ...task, repeatDone: rd.includes(day2) ? rd : [...rd, day2] }
-    return { ...task, status: 'Terminada', doneAt: day2 }
-  }
+  // Completar una tarea: delega TODO en completeRecurring (fuente única compartida con Épicas), así
+  // "✓ y hecha" hace lo MISMO se termine desde /tiempo o desde /epicas — incl. hábitos DIARIOS
+  // (antes /tiempo sólo marcaba repeatDone y no reprogramaba, divergiendo de Épicas).
+  const completeTaskFields = (task: EpicaTask): EpicaTask => completeRecurring(task, iso(new Date()), nextPlanOrderFor)
   // Marca hecha en Épicas (ver completeTaskFields para la lógica de recurrencia).
-  const markEpicTaskDone = (epicaId: string, taskId: string, day: string = iso(new Date())) => {
+  const markEpicTaskDone = (epicaId: string, taskId: string) => {
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
-    const day2 = doneDayFor(tt.task, day)
-    const upd: EpicaTask = completeTaskFields(tt.task, day2)
+    const upd: EpicaTask = completeTaskFields(tt.task)
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
@@ -1273,7 +1270,7 @@ export default function TiempoClient() {
       if (tt) {
         const log = [...((tt.task.progressLog as EpicaProgressEntry[]) || []), { d: entryDay, note: `⏱ ${hm(elapsed)} trabajado`, pct: tt.task.progress, min: elapsed, logId } as EpicaProgressEntry]
         const withLog: EpicaTask = { ...tt.task, progressLog: log }
-        const upd: EpicaTask = markDone ? completeTaskFields(withLog, doneDayFor(tt.task, today)) : withLog
+        const upd: EpicaTask = markDone ? completeTaskFields(withLog) : withLog
         syncTask(s.epicaId, upd)
         setAllTasks(prev => (prev || []).map(x => x.task.id === s.taskId ? { ...x, task: upd } : x))
         if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
@@ -4324,13 +4321,9 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   // Marcar terminada desde aquí: guarda TODO (edits + terminada en la fecha "hacer") en una escritura y cierra.
   const markDoneHere = () => {
     if (saveT.current) { clearTimeout(saveT.current); saveT.current = null }
-    const base = withNote(); const day = doneDayFor(base, iso(new Date()))
-    // Recurrente semanal/mensual → reprograma; diaria → repeatDone; normal → Terminada.
-    const done: EpicaTask = base.repeat
-      ? (base.repeat.unit !== 'dia'
-          ? completeRecurring(base, day, nextPlanOrder)
-          : { ...base, repeatDone: (base.repeatDone || []).includes(day) ? base.repeatDone! : [...(base.repeatDone || []), day] })
-      : { ...base, status: 'Terminada', doneAt: day }
+    const base = withNote()
+    // Fuente única: completeRecurring decide todo (recurrente→reprograma o cierra serie, normal→Terminada).
+    const done: EpicaTask = completeRecurring(base, iso(new Date()), nextPlanOrder)
     onAutoSave(epId, done); onClose()
   }
 
@@ -4393,9 +4386,10 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           <NLbl>Estado</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT(p => {
-              // Terminar una RECURRENTE marca el día en repeatDone (sigue repitiéndose), no la cierra.
-              if (s === 'Terminada' && p.repeat) { const day = doneDayFor(p, iso(new Date())); return { ...p, repeatDone: (p.repeatDone || []).includes(day) ? p.repeatDone : [...(p.repeatDone || []), day] } }
-              return { ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || doneDayFor(p, iso(new Date()))) : undefined }
+              // "Terminada" pasa por la fuente única (completeRecurring): recurrente → reprograma /
+              // cierra serie; normal → Terminada hoy. Igual que en Épicas.
+              if (s === 'Terminada' && p.status !== 'Terminada') return completeRecurring(p, iso(new Date()), nextPlanOrder)
+              return { ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || iso(new Date())) : undefined }
             })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
           </div>
 
