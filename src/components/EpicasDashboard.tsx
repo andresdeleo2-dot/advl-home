@@ -6,6 +6,7 @@ import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
+import { useFocusSession } from './FocusSession'
 import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
@@ -920,6 +921,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     delete tasks[i].doneAt; delete tasks[i].planPrev
     patchEpic(e.id, { tasks })
   }
+
+  /* ─── Sesión de foco (mismo widget/estado que /tiempo, aquí dentro de Épicas) ───
+     La sesión vive en `margen.v1` (localStorage + /api/tiempo-estado): es LA MISMA que
+     en /tiempo. Al terminar, escribimos el tiempo a la bitácora de la tarea (y la
+     cerramos si "✓ y hecha") con las mismas rutas de Épicas. */
+  const focus = useFocusSession({
+    onFinishTask: (epicaId, taskId, info) => {
+      const ep = epicsRef.current.find(e => e.id === epicaId); if (!ep) return
+      const ti = ep.tasks.findIndex(t => t.id === taskId); if (ti < 0) return
+      const tasks = clone(ep.tasks)
+      const entry = { d: info.day, note: info.note, pct: tasks[ti].progress, min: info.minutes, logId: info.logId } as EpicaProgressEntry
+      tasks[ti].progressLog = [...(tasks[ti].progressLog || []), entry]
+      if (info.markDone) applyComplete(tasks[ti])
+      patchEpic(ep.id, { tasks })
+    },
+    priorMinFor: (taskId) => {
+      for (const e of epicsRef.current) {
+        const t = e.tasks.find(x => x.id === taskId)
+        if (t) return (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
+      }
+      return 0
+    },
+    plannedMinFor: (taskId) => {
+      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return WEEK_EST_MIN(t.difficulty) }
+      return 0
+    },
+    onToast: (msg) => showToast(msg),
+  })
   // Keys de las filas REALMENTE visibles (en orden), leídas del DOM: así el reorden
   // respeta cualquier filtro activo (dayEpica/planFilter) en vez de usar planPend crudo.
   const visiblePlanKeys = () =>
@@ -5671,9 +5700,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap', flexShrink: 0, background: '#fff' }}>
                   <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
                   <span style={{ flex: 1 }} />
-                  {/* Comenzar ahora: abre Tiempo, la agrega al día y arranca el cronómetro ligado a esta tarea */}
-                  <button onClick={() => { window.location.href = '/tiempo?start=' + encodeURIComponent(t.id!) }}
-                    title="Empezar ahora con cronómetro en Tiempo (la agrega a tu día; el tiempo se registra en esta tarea)"
+                  {/* Comenzar ahora: arranca el cronómetro ligado a esta tarea AQUÍ (widget de foco).
+                      Es la misma sesión que /tiempo (estado compartido); el tiempo se registra en la tarea. */}
+                  <button onClick={() => { if (focus.begin({ name: t.t, epicaId: ep.id, taskId: t.id!, dur: WEEK_EST_MIN(t.difficulty) })) opts.onClose() }}
+                    title="Empezar ahora con cronómetro (la misma sesión que en Tiempo; el tiempo se registra en esta tarea)"
                     style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 800, border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.12)', color: '#8a5a12' }}>▶ Comenzar</button>
                   {/* Marcar terminada (o reabrir) — acción principal, siempre a la vista */}
                   {(() => {
@@ -5843,6 +5873,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   return (
     <div style={{ minHeight: '100%' }}>
+      {focus.card}
       <TopBar sourceCount={sourceCount} onNew={openNew} />
 
       <div className="ep-shell" style={{ maxWidth: 1360, margin: '0 auto', padding: '22px 18px 60px' }}>
