@@ -355,11 +355,14 @@ export function useFocusSession(hooks: FocusHooks) {
         const phaseRemain = Math.max(0, inBreak ? 30 - pos : 25 - pos)
         const phasePct = inBreak ? ((pos - 25) / 5) * 100 : (pos / 25) * 100
         const cyc = Math.floor(el / 30) + 1
-        const plannedTask = session.taskId ? (hooksRef.current.plannedMinFor?.(session.taskId) || 0) : 0
-        const plannedEff = plannedTask || planned
-        const totalTask = priorMin + Math.max(0, el)
-        const plannedPct = plannedEff ? Math.min(100, Math.round((totalTask / plannedEff) * 100)) : 0
-        const overPlan = plannedEff > 0 && totalTask > plannedEff
+        // "Hoy" vs "total": el plan de HOY es la duración de ESTA sesión (session.dur); los otros
+        // tiempos (días previos) van aparte. El % es de lo invertido HOY sobre lo planeado hoy.
+        const todayPlanned = planned            // session.dur = lo planeado para hoy
+        const todayEl = Math.max(0, el)
+        const todayPctRaw = todayPlanned > 0 ? Math.round((todayEl / todayPlanned) * 100) : 0
+        const todayPct = Math.min(100, todayPctRaw)
+        const overToday = todayPlanned > 0 && todayEl > todayPlanned
+        const totalTask = priorMin + todayEl
         const nowClock = clock(Math.round(now))
         const sitRemain = Math.max(0, planned - Math.max(0, el))
         const endClock = clock(Math.round(now) + sitRemain)
@@ -374,19 +377,23 @@ export function useFocusSession(hooks: FocusHooks) {
               <input type="time" value={clock(startMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
             </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: paused ? 0.5 : 1 }}>{elapsedLabel || '0m'}</span>
-            {(priorMin > 0 || plannedEff > 0) && (
+            {(priorMin > 0 || todayPlanned > 0) && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, width: 'min(460px,90vw)', marginTop: -4 }}>
+                {/* Total en la tarea, DIFERENCIANDO lo de días previos de lo de hoy. */}
                 <span style={{ fontSize: 14.5, color: '#cdc4b8', textAlign: 'center' }}>
                   {priorMin > 0
-                    ? <>En total <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(priorMin)} antes</span> + {hm(Math.max(0, el))} ahora</>
+                    ? <>En total <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(priorMin)} en días previos</span> + {hm(todayEl)} hoy</>
                     : <>Llevas <b style={{ color: '#faf7f1' }}>{hm(totalTask)}</b> en la tarea</>}
                 </span>
-                {plannedEff > 0 && (
+                {/* HOY: lo invertido hoy vs lo planeado para hoy (session), con % de avance de hoy. */}
+                {todayPlanned > 0 && (
                   <>
                     <div style={{ width: '100%', height: 7, background: '#2a251f', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.max(3, plannedPct)}%`, height: '100%', background: overPlan ? 'linear-gradient(90deg,#C2933A,#d98a55)' : 'linear-gradient(90deg,#6f8256,#8fae74)', borderRadius: 999, transition: 'width .4s' }} />
+                      <div style={{ width: `${Math.max(3, todayPct)}%`, height: '100%', background: overToday ? 'linear-gradient(90deg,#C2933A,#d98a55)' : 'linear-gradient(90deg,#6f8256,#8fae74)', borderRadius: 999, transition: 'width .4s' }} />
                     </div>
-                    <span style={{ fontSize: 12.5, color: overPlan ? '#d98a55' : '#8b8379' }}>{overPlan ? `Planeado ${hm(plannedEff)} · te pasaste ${hm(totalTask - plannedEff)}` : `Planeado ${hm(plannedEff)} · quedan ${hm(plannedEff - totalTask)} (${plannedPct}%)`}</span>
+                    <span style={{ fontSize: 12.5, color: overToday ? '#d98a55' : '#8b8379' }}>
+                      Hoy: planeado <b style={{ color: '#cdc4b8' }}>{hm(todayPlanned)}</b> · {overToday ? `te pasaste ${hm(todayEl - todayPlanned)}` : `llevas ${hm(todayEl)}`} <b style={{ color: overToday ? '#d98a55' : '#8fae74' }}>({todayPctRaw}%)</b>
+                    </span>
                   </>
                 )}
               </div>
