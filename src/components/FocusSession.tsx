@@ -27,6 +27,14 @@ const sessionElapsed = (s: { start: number; pausedAccum?: number; pausedAt?: num
 // ¿La sesión local ya terminó en OTRA pestaña/dispositivo? (el tombstone entrante es más nuevo que
 // el inicio de esta sesión). Si sí, NO la conserves al adoptar: evita doble registro y resurrección.
 const localEnded = (localSess: Session, incomingEnd?: number) => !!localSess && (incomingEnd || 0) > (localSess.startedAt || 0)
+// Elige QUÉ sesión conservar al mezclar con un blob entrante: si ambas traen sesión, gana la de `mod`
+// más nuevo (así un pause/resume reciente no lo pisa una copia rancia de otra pestaña); si sólo la
+// local, se conserva salvo tombstone; si sólo la entrante, se adopta.
+const chooseSession = (local: Session, inc: AppData): Session => {
+  if (local && inc.session) return (local.mod || 0) >= (inc.session.mod || 0) ? local : inc.session
+  if (local && !inc.session) return localEnded(local, inc.sessionEnd) ? null : local
+  return inc.session
+}
 function beep() {
   try {
     const AC: typeof AudioContext | undefined = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -106,8 +114,7 @@ export function useFocusSession(hooks: FocusHooks) {
         // Adopta lo del server, PERO conserva una sesión local viva (no la pises); así un blob
         // viejo de este equipo no borra history/blocks más nuevos de otro dispositivo.
         const sv = Object.assign(defaults(), j.data || {})
-        const keep = dataRef.current.session && !localEnded(dataRef.current.session, sv.sessionEnd)
-        const merged: AppData = { ...sv, session: keep ? dataRef.current.session : sv.session }
+        const merged: AppData = { ...sv, session: chooseSession(dataRef.current.session, sv) }
         dataRef.current = merged; setData(merged)
         try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
       }
@@ -120,8 +127,7 @@ export function useFocusSession(hooks: FocusHooks) {
       if (e.key !== KEY || !e.newValue) return
       try {
         const inc = Object.assign(defaults(), JSON.parse(e.newValue)) as AppData
-        const keepLocal = dataRef.current.session && !inc.session && !localEnded(dataRef.current.session, inc.sessionEnd)
-        const nd: AppData = keepLocal ? { ...inc, session: dataRef.current.session } : inc
+        const nd: AppData = { ...inc, session: chooseSession(dataRef.current.session, inc) }
         dataRef.current = nd; setData(nd)
       } catch {}
     }
@@ -134,8 +140,7 @@ export function useFocusSession(hooks: FocusHooks) {
         const localTs = Number(localStorage.getItem(TS_KEY) || 0)
         if (serverTs > localTs) {
           const sv = Object.assign(defaults(), j.data || {})
-          const keep = dataRef.current.session && !localEnded(dataRef.current.session, sv.sessionEnd)
-          const merged: AppData = { ...sv, session: keep ? dataRef.current.session : sv.session }
+          const merged: AppData = { ...sv, session: chooseSession(dataRef.current.session, sv) }
           dataRef.current = merged; setData(merged)
           try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
         }
@@ -185,7 +190,7 @@ export function useFocusSession(hooks: FocusHooks) {
     if (!readyRef.current) { hooksRef.current.onToast?.('Cargando tu estado… intenta de nuevo en un segundo'); return false }
     pomoStartElRef.current = 0; setPomoOn(false)   // Pomodoro arranca limpio para la nueva sesión (no hereda el baseline de la anterior)
     const t0 = Date.now()
-    const ns: NonNullable<Session> = { name: a.name || 'Tarea', area: a.area || 'trabajo', start: Math.round(now), dur: a.dur || 0, epicaId: a.epicaId, taskId: a.taskId, origStart: Math.round(now), startedAt: t0, segAt: t0 }
+    const ns: NonNullable<Session> = { name: a.name || 'Tarea', area: a.area || 'trabajo', start: Math.round(now), dur: a.dur || 0, epicaId: a.epicaId, taskId: a.taskId, origStart: Math.round(now), startedAt: t0, segAt: t0, mod: t0, segs: [] }
     const s = dataRef.current.session
     if (s) {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
@@ -207,9 +212,9 @@ export function useFocusSession(hooks: FocusHooks) {
     return true
   }, [now, save, logToEpica])
 
-  const pauseSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt != null) return; const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now) } }) }, [now, save])
-  const resumeSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined } }) }, [now, save])
-  const extend = useCallback(() => { const s = dataRef.current.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }, [save])
+  const pauseSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt != null) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }, [now, save])
+  const resumeSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }, [now, save])
+  const extend = useCallback(() => { const s = dataRef.current.session; if (s) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }, [save])
   const setSessionStart = useCallback((startMin: number) => {
     const s = dataRef.current.session; if (!s) return
     const m = Math.max(0, Math.min(1439, Math.round(startMin)))
@@ -220,9 +225,9 @@ export function useFocusSession(hooks: FocusHooks) {
       // recalcules ahora−inicio: eso contaría el hueco de la pausa como trabajado).
       const oldStartMs = s.startedAt ?? d.getTime()
       const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked } })
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now() } })
     } else {
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
     }
   }, [save])
   const cancel = useCallback(() => { const s = dataRef.current.session; save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save])
@@ -236,7 +241,12 @@ export function useFocusSession(hooks: FocusHooks) {
     const startD = s.startedAt != null ? new Date(s.startedAt) : null
     const entryDay = startD ? iso(startD) : iso(new Date())
     const startMin = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
-    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
+    // Segmentos trabajados (para dibujar el registro con huecos donde pausaste). Sólo si hubo pausa.
+    const toMin = (ms: number) => { const dt = new Date(ms); return dt.getHours() * 60 + dt.getMinutes() }
+    const openStart = s.segAt ?? s.startedAt
+    const allSegs: [number, number][] = [...(s.segs || []), ...(s.pausedAt == null && openStart != null ? [[openStart, Date.now()] as [number, number]] : [])]
+    const segments = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : undefined
+    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0
     logToEpica(s, elapsed, entryDay, markDone, logId)

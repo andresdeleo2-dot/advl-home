@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
@@ -325,13 +325,15 @@ export default function TiempoClient() {
       if (e.key !== KEY || !e.newValue || editorOpenRef.current) return
       try {
         const inc = Object.assign(defaults(), JSON.parse(e.newValue))
-        // Conserva una sesión local viva si el blob entrante no trae ninguna… SALVO que traiga un
-        // tombstone (sessionEnd) más nuevo que el inicio de la sesión local: eso significa que la
-        // MISMA sesión ya se terminó en la otra pestaña → adopta el null (no la termines dos veces).
+        // Elige la sesión a conservar: si AMBAS traen una, gana la de `mod` más nuevo (así un
+        // pause/resume reciente en la otra pestaña —o aquí— no lo pisa una copia rancia). Si sólo la
+        // local, se conserva salvo tombstone (ya terminó en otro lado). Si sólo la entrante, se adopta.
         const localSess = dataRef.current.session
         const endedElsewhere = !!localSess && (Number(inc.sessionEnd) || 0) > (localSess.startedAt || 0)
-        const keep = localSess && !inc.session && !endedElsewhere
-        setData(keep ? { ...inc, session: localSess } : inc)
+        const sess = (localSess && inc.session)
+          ? ((localSess.mod || 0) >= (inc.session.mod || 0) ? localSess : inc.session)
+          : (localSess && !inc.session) ? (endedElsewhere ? null : localSess) : inc.session
+        setData({ ...inc, session: sess })
       } catch {}
     }
     document.addEventListener('visibilitychange', onVis)
@@ -1072,7 +1074,7 @@ export default function TiempoClient() {
   // sacar un bloque de agendados). Devuelve true si arrancó (false si el usuario canceló).
   const beginSession = (nsIn: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
     const t0ms = Date.now()
-    const ns = { ...nsIn, origStart: nsIn.start, startedAt: t0ms, segAt: t0ms }   // ancla al reloj real
+    const ns = { ...nsIn, origStart: nsIn.start, startedAt: t0ms, segAt: t0ms, mod: t0ms, segs: [] as [number, number][] }   // ancla al reloj real
     const s = data.session
     if (s) {
       const el = Math.max(1, Math.round(sessionElapsed(s, now)))
@@ -1273,7 +1275,12 @@ export default function TiempoClient() {
     const startD = s.startedAt != null ? new Date(s.startedAt) : null
     const entryDay = startD ? iso(startD) : today
     const startMin = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
-    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
+    // Segmentos trabajados (para dibujar el registro con huecos donde pausaste). Sólo si hubo pausa.
+    const toMin = (ms: number) => { const dt = new Date(ms); return dt.getHours() * 60 + dt.getMinutes() }
+    const openStart = s.segAt ?? s.startedAt
+    const allSegs: [number, number][] = [...(s.segs || []), ...(s.pausedAt == null && openStart != null ? [[openStart, Date.now()] as [number, number]] : [])]
+    const segments = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : undefined
+    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
     showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, markDone) })
@@ -1406,7 +1413,7 @@ export default function TiempoClient() {
     setAllTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task }])
     setEditTask(null)
   }
-  const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15 } }) }
+  const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }
   // Marca/desmarca una subtarea de la tarea en foco (desde el Modo foco): fija/limpia doneAt y
   // sincroniza a Épicas para que se vea completada en todos lados (incl. "subtareas completadas hoy").
   const toggleSubtaskOf = (taskId: string, epicaId: string, subKey: string) => {
@@ -1466,8 +1473,8 @@ export default function TiempoClient() {
   }
   const cancel = () => save({ session: null, sessionEnd: Date.now() })
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
-  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now) } }) }
-  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined } }) }
+  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }
+  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }
   // Corregir la hora en que empezó la actividad en curso (desde el Planificador o "el día"): reancla
   // el inicio real a esa hora de HOY, así el transcurrido pasa a ser "ahora − ese inicio".
   const setSessionStart = (startMin: number) => {
@@ -1480,9 +1487,9 @@ export default function TiempoClient() {
       // recalcules ahora−inicio: contaría el hueco de la pausa como trabajado).
       const oldStartMs = s.startedAt ?? d.getTime()
       const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked } })
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now() } })
     } else {
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
     }
   }
   // Inicio (minuto del día) y transcurrido de la sesión en curso, para pintarla en el Planificador/"el día".
@@ -3661,6 +3668,31 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const future = isToday && w.start > now && !w.done
               const openable = !!w.taskId
               const activeR = drag?.kind === 'wresize' && drag.idx === w._idx
+              // Sesión con PAUSAS: se dibuja un bloque por intervalo trabajado (con el hueco de la
+              // pausa libre) en vez de un bloque continuo que ocupaba también el tiempo en pausa.
+              const segs = (w.segments && w.segments.length > 1 && drag?.kind !== 'wresize') ? w.segments : null
+              if (segs) {
+                return (
+                  <Fragment key={'w' + w._idx}>
+                    {segs.map(([ss, se], si) => { const sd = Math.max(1, se - ss); const first = si === 0; const big = sd * PXM >= 30
+                      return (
+                        <div key={si} title={`${w.name} · trabajado ${clock(ss)}–${clock(se)}${first ? ` · total ${hm(dur)}` : ''}`}
+                          onPointerMove={ev => { if (!drag) setHover({ x: ev.clientX, y: ev.clientY, txt: `${w.name} · ${clock(ss)}–${clock(se)}` }) }} onPointerLeave={() => setHover(null)}
+                          style={{ position: 'absolute', left: 2, width: 'calc(50% - 8px)', top: topOf(ss), height: hOf(sd), background: '#eef3ea', border: '1px solid #c1d4b6', borderLeft: `4px solid ${col}`, borderRadius: 8, padding: big ? '4px 8px' : '1px 8px', overflow: 'hidden', zIndex: 4 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                            <span style={{ fontSize: 11, color: '#5c7a4e', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>✓ {clock(ss)}–{clock(se)}</span>
+                            {first && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
+                              <button onClick={ev => { ev.stopPropagation(); onResume(w) }} title="Volver a empezar" style={planBtn}>↻</button>
+                              {openable && <button onClick={ev => { ev.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver la tarea" style={planBtn}>👁</button>}
+                            </div>}
+                          </div>
+                          {first && big && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
+                        </div>
+                      )
+                    })}
+                  </Fragment>
+                )
+              }
               return (
                 <div key={'w' + w._idx} title={`${w.name} · ${clock(w.start)}–${clock(w.start + dur)} · ${hm(dur)}`}
                   onPointerEnter={() => { if (!tall) showActBar({ kind: 'worked', ref: String(w._idx), top: topOf(w.start), lane: 'left' }) }}

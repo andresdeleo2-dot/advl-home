@@ -13,8 +13,13 @@ export type Block = { id: string; name: string; area: Area; start: number; dur: 
  *  anteriores; si `pausedAt` está presente, la sesión está EN PAUSA (el reloj no corre). */
 // startedAt = ms del inicio REAL original (no cambia al reanudar; para la hora/día del registro).
 // segAt = ms del inicio del segmento en curso (se reinicia al reanudar; para el transcurrido real).
-export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; pausedAccum?: number; pausedAt?: number; origStart?: number; startedAt?: number; segAt?: number; routineRef?: { epicaId: string; rIdx: number } } | null
-export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean; logId?: string }
+// mod = ms de la última modificación de la sesión (para que, entre pestañas/dispositivos, gane la
+// copia MÁS reciente y no se pierda un pause/resume). segs = intervalos de trabajo YA cerrados (ms
+// [inicio,fin]); el intervalo abierto va de segAt a ahora. Sirven para pintar los huecos de pausa.
+export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; pausedAccum?: number; pausedAt?: number; origStart?: number; startedAt?: number; segAt?: number; routineRef?: { epicaId: string; rIdx: number }; mod?: number; segs?: [number, number][] } | null
+// segments = intervalos trabajados en MINUTOS del día [inicio,fin] (para dibujar el registro con
+// huecos donde pausaste). Ausente = bloque continuo (start..start+dur), como siempre.
+export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean; logId?: string; segments?: [number, number][] }
 
 /** Tarea de Épicas (o actividad libre) agendada para HOY a una hora concreta. Al llegar
  *  la hora, la app pregunta si la quieres iniciar. Vive sólo en el estado de Tiempo. */
