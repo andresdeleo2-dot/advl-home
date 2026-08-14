@@ -1165,9 +1165,26 @@ export default function TiempoClient() {
     const row = dataRef.current.history[idx]
     // Si cambian el inicio o la duración, los `segments` (bloques por intervalo) dejan de cuadrar →
     // se limpian y el registro vuelve a un bloque continuo con la nueva hora/duración.
-    const p = (patch.start != null || patch.dur != null) ? { ...patch, segments: undefined } : patch
+    // Si cambian inicio/duración SIN traer segments explícitos, los segments viejos dejan de cuadrar
+    // → se limpian. Si el patch trae `segments` (p.ej. al marcar una pausa), se respetan.
+    const p = ((patch.start != null || patch.dur != null) && !('segments' in patch)) ? { ...patch, segments: undefined } : patch
     save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, ...p } : h) })
     if (row && typeof patch.dur === 'number' && patch.dur !== row.dur) adjustEpicLog(row, patch.dur)
+  }
+  // Marcar A MANO una pausa en un registro viejo (que quedó continuo): parte el bloque en
+  // [inicio→pausa] y [reanudó→fin], deja el hueco libre y descuenta la pausa de la duración.
+  const applyPauseToHist = (idx: number, pauseStart: number, pauseResume: number) => {
+    const row = dataRef.current.history[idx]; if (!row) return
+    const S = row.start, E = row.start + row.dur
+    const p1 = Math.max(S, Math.min(E, pauseStart)), p2 = Math.max(S, Math.min(E, pauseResume))
+    if (!(p1 > S && p2 > p1 && p2 < E)) return   // pausa inválida (fuera del rango del registro)
+    const segments: [number, number][] = [[S, p1], [p2, E]]
+    const newDur = (p1 - S) + (E - p2)   // trabajado = total − pausa
+    save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, segments, dur: newDur } : h) })
+    adjustEpicLog(row, newDur)   // corrige también los minutos en la bitácora de Épicas
+  }
+  const clearHistPause = (idx: number) => {
+    save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, segments: undefined } : h) })
   }
   // Toast "deshacer": guarda una acción de restauración por ~6s.
   const showUndo = (msg: string, fn: () => void) => {
@@ -2421,7 +2438,7 @@ export default function TiempoClient() {
       </div>
 
       {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
-      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onClose={() => setHistIdx(null)} />}
+      {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onPause={applyPauseToHist} onClearPause={clearHistPause} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
       {costOpen && !V.hasSession && (
@@ -4662,15 +4679,22 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
 }
 
 /** Editor de una entrada del registro de hoy (localStorage). */
-function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onResume, onClose }: {
+function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onResume, onPause, onClearPause, onClose }: {
   row: AppData['history'][number]; idx: number
   onSave: (idx: number, patch: Partial<AppData['history'][number]>) => void; onDelete: (idx: number) => void; onReopen: (idx: number) => void
-  onSyncDone: (row: AppData['history'][number], done: boolean) => void; onResume: (row: AppData['history'][number]) => void; onClose: () => void
+  onSyncDone: (row: AppData['history'][number], done: boolean) => void; onResume: (row: AppData['history'][number]) => void
+  onPause: (idx: number, pauseStart: number, pauseResume: number) => void; onClearPause: (idx: number) => void; onClose: () => void
 }) {
   const [r, setR] = useState(row)
-  // Auto-guardado (debounce): cada cambio se guarda solo, sin picar "Guardar".
-  useEffect(() => { const id = setTimeout(() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false }), 450); return () => clearTimeout(id) }, [r])   // eslint-disable-line react-hooks/exhaustive-deps
-  const flush = () => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false })
+  const hasPause = !!(r.segments && r.segments.length > 1)
+  const [pauseOpen, setPauseOpen] = useState(false)
+  const [pStart, setPStart] = useState(r.start + Math.round(r.dur / 2))   // por defecto, a media sesión
+  const [pEnd, setPEnd] = useState(r.start + Math.round(r.dur / 2) + 30)
+  const pauseValid = pStart > r.start && pEnd > pStart && pEnd < r.start + r.dur
+  // Auto-guardado (debounce): cada cambio se guarda solo, sin picar "Guardar". Incluye `segments`
+  // (para conservar o limpiar la pausa según el estado local `r`).
+  useEffect(() => { const id = setTimeout(() => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false, segments: r.segments }), 450); return () => clearTimeout(id) }, [r])   // eslint-disable-line react-hooks/exhaustive-deps
+  const flush = () => onSave(idx, { name: r.name, area: r.area, start: r.start, dur: r.dur, done: r.done !== false, segments: r.segments })
   const close = () => { flush(); onClose() }
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])
   const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, color: '#1c1a17', boxSizing: 'border-box' }
@@ -4686,14 +4710,39 @@ function HistoryEditor({ row, idx, onSave, onDelete, onReopen, onSyncDone, onRes
           {(Object.keys(AREAS) as Area[]).map(k => <option key={k} value={k}>{AREAS[k].label}</option>)}
         </select>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => { const s = parse(e.target.value); setR(p => { const end = p.start + p.dur; let nd = end - s; if (nd < 1) nd += 1440; return { ...p, start: s, dur: Math.max(1, nd) } }) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>terminó</span><input type="time" value={clock(r.start + r.dur)} onChange={e => { let end = parse(e.target.value); if (end <= r.start) end += 1440; setR(p => ({ ...p, dur: Math.max(1, end - p.start) })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración · {hm(r.dur)}</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1) })} style={{ ...field, width: 92 }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>empezó</span><input type="time" value={clock(r.start)} onChange={e => { const s = parse(e.target.value); setR(p => { const end = p.start + p.dur; let nd = end - s; if (nd < 1) nd += 1440; return { ...p, start: s, dur: Math.max(1, nd), segments: undefined } }) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>terminó</span><input type="time" value={clock(r.start + r.dur)} onChange={e => { let end = parse(e.target.value); if (end <= r.start) end += 1440; setR(p => ({ ...p, dur: Math.max(1, end - p.start), segments: undefined })) }} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>duración · {hm(r.dur)}</span><input type="number" min={1} max={1440} step={5} value={r.dur} onChange={e => setR({ ...r, dur: Math.max(1, Number(e.target.value) || 1), segments: undefined })} style={{ ...field, width: 92 }} /></label>
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14, cursor: 'pointer' }}>
           <input type="checkbox" checked={r.done !== false} onChange={e => { const v = e.target.checked; setR({ ...r, done: v }); if (row.taskId) onSyncDone(row, v) }} />
           Se terminó la actividad {r.done === false && <span style={{ color: '#8a4b28' }}>· solo se le invirtió tiempo</span>}
         </label>
+
+        {/* ¿Tenía una pausa? Parte el registro en dos bloques (deja el hueco libre) y descuenta la pausa. */}
+        <div style={{ borderTop: '1px solid #ebe3d6', paddingTop: 12 }}>
+          {hasPause ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: '#5c7a4e', fontWeight: 600 }}>✓ Con pausa · {(r.segments || []).length} bloques</span>
+              <button onClick={() => { onClearPause(idx); setR(p => ({ ...p, segments: undefined })) }} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a4b28', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' }}>Quitar pausa</button>
+            </div>
+          ) : !pauseOpen ? (
+            <button onClick={() => { setPStart(r.start + Math.round(r.dur / 2)); setPEnd(r.start + Math.round(r.dur / 2) + 30); setPauseOpen(true) }} style={{ border: '1px solid #e2d9cb', background: '#faf7f1', color: '#8a4b28', borderRadius: 999, padding: '9px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>🕐 Tenía una pausa…</button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              <span style={{ fontSize: 12.5, color: '#8b8379' }}>Marca cuándo pausaste y cuándo reanudaste (dentro de {clock(r.start)}–{clock(r.start + r.dur)}). Se descuenta de la duración y el hueco queda libre.</span>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>pausé a las</span><input type="time" value={clock(pStart)} onChange={e => setPStart(parse(e.target.value))} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><span style={{ ...LBL, letterSpacing: '.1em' }}>reanudé a las</span><input type="time" value={clock(pEnd)} onChange={e => setPEnd(parse(e.target.value))} style={{ ...field, fontVariantNumeric: 'tabular-nums' }} /></label>
+              </div>
+              <span style={{ fontSize: 12.5, color: pauseValid ? '#5c7a4e' : '#b4653a' }}>{pauseValid ? `Quedará: trabajado ${hm((pStart - r.start) + (r.start + r.dur - pEnd))} · pausa ${hm(pEnd - pStart)}` : 'La pausa debe caer dentro del registro (reanudar después de pausar).'}</span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button disabled={!pauseValid} onClick={() => { onPause(idx, pStart, pEnd); const S = r.start, E = r.start + r.dur; setR(p => ({ ...p, dur: (pStart - S) + (E - pEnd), segments: [[S, pStart], [pEnd, E]] })); setPauseOpen(false) }} style={{ border: 'none', background: pauseValid ? '#1c1a17' : '#cfc6b8', color: '#faf7f1', borderRadius: 999, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: pauseValid ? 'pointer' : 'default' }}>Aplicar pausa</button>
+                <button onClick={() => setPauseOpen(false)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#6b645b', borderRadius: 999, padding: '9px 14px', fontSize: 13, cursor: 'pointer' }}>Cancelar</button>
+              </div>
+            </div>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
           <button onClick={close} style={{ flex: 1, minWidth: 120, background: '#1c1a17', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 13, fontSize: 15, fontWeight: 500, cursor: 'pointer' }}>Listo</button>
           <button onClick={() => onDelete(idx)} style={{ border: '1px solid #e2d9cb', background: 'transparent', color: '#8a3c2a', borderRadius: 999, padding: '13px 18px', fontSize: 14, cursor: 'pointer' }}>Borrar</button>
