@@ -4390,9 +4390,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && !focus.active && (
                 <button onClick={pickNextNow} title="Elige la mejor siguiente tarea de hoy y arranca el cronómetro" style={{ border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 10, padding: '9px 15px', font: '800 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>⚡ ¿Qué ahora?</button>
               )}
-              {!board && isToday && (planItems.length > 0 || arrastradas.length > 0) && (
-                <button onClick={() => setDayCloseOpen(true)} title="Resumen del día, mover pendientes y arrastre a otros días" style={{ border: arrastradas.length > 0 ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: arrastradas.length > 0 ? 'rgba(176,82,46,0.06)' : '#fff', color: arrastradas.length > 0 ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día{arrastradas.length > 0 ? ` · ${arrastradas.length} arrastre` : ''}</button>
-              )}
+              {!board && ((isToday && (planItems.length > 0 || arrastradas.length > 0)) || (viewDate < today && planPend.length > 0)) && (() => {
+                const pastPend = viewDate < today && planPend.length > 0
+                const warn = arrastradas.length > 0 || pastPend
+                return (
+                <button onClick={() => setDayCloseOpen(true)} title={pastPend ? 'Este día quedó sin cerrar — mueve sus pendientes a hoy u otro día' : 'Resumen del día, mover pendientes y arrastre a otros días'} style={{ border: warn ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: warn ? 'rgba(176,82,46,0.06)' : '#fff', color: warn ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día{pastPend ? ` · ${planPend.length} sin cerrar` : arrastradas.length > 0 ? ` · ${arrastradas.length} arrastre` : ''}</button>
+                )
+              })()}
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
               <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
@@ -7492,8 +7496,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
       {dayCloseOpen && (() => {
-        const workedToday = (t: EpicaTask) => (t.progressLog || []).some(x => x.d === today)
-        const minToday = (t: EpicaTask) => (t.progressLog || []).filter(x => x.d === today).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+        const refDay = viewDate                 // el día que se está cerrando (hoy o uno pasado)
+        const refIsToday = refDay === today
+        const workedToday = (t: EpicaTask) => (t.progressLog || []).some(x => x.d === refDay)
+        const minToday = (t: EpicaTask) => (t.progressLog || []).filter(x => x.d === refDay).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
         const open = planPend.filter(x => workedToday(x.t))
         const untouched = planPend.filter(x => !workedToday(x.t))
         const totalMin = planItems.reduce((s, x) => s + minToday(x.t), 0)
@@ -7519,8 +7525,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
                   <div>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>Cierre del día</div>
-                    <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cap(new Date(today + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
-                    {totalMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(totalMin)} de trabajo registrado hoy</div>}
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cap(new Date(refDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
+                    {!refIsToday && <div style={{ marginTop: 6, fontSize: 11.5, color: '#B0522E', fontWeight: 700 }}>Este día quedó sin cerrar</div>}
+                    {totalMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(totalMin)} de trabajo registrado {refIsToday ? 'hoy' : 'ese día'}</div>}
                   </div>
                   <button aria-label="Cerrar" onClick={() => setDayCloseOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
@@ -7557,12 +7564,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 )}
                 {planPend.length > 0 && (
                   <div style={{ marginTop: 18 }}>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} de {isToday ? 'hoy' : 'este día'} a…</div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} de {refIsToday ? 'hoy' : 'este día'} a…</div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {Array.from({ length: 8 }, (_, k) => addDays(today, k + 1)).map(d => {
-                        const isTom = d === addDays(today, 1)
-                        const lbl = isTom ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
-                        return <button key={d} onClick={() => moveTodayPendingTo(d)} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: isTom ? 'none' : '1px solid rgba(15,35,64,0.14)', background: isTom ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: isTom ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
+                      {Array.from({ length: 8 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
+                        const first = d === addDays(today, refIsToday ? 1 : 0)
+                        const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
+                        return <button key={d} onClick={() => moveTodayPendingTo(d)} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
                       })}
                     </div>
                   </div>
