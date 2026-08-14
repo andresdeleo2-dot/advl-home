@@ -11,6 +11,7 @@ import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
+import BirthdayCelebration from './BirthdayCelebration'
 import WeatherWidget from './WeatherWidget'
 import QuoteWidget from './QuoteWidget'
 import TimerWidget from './TimerWidget'
@@ -354,6 +355,8 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           </div>
         </div>
       </header>
+
+      <BirthdayCelebration />
 
       <div className="mx-auto flex max-w-[1500px] flex-col gap-6 px-5 py-5 lg:flex-row lg:items-start">
         <main className="min-w-0 flex-1">

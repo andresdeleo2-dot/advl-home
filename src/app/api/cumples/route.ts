@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   const { data, error } = await supabase
     .from('personas')
-    .select('id, nombre, apodo, cumple')
+    .select('id, nombre, apodo, cumple, excepcional, foto, celular')
     .not('cumple', 'is', null)
     // No felicitar a quien falleció (mismo criterio que mi-vida). El filtro va
     // en la consulta para no mandar esos registros al navegador siquiera.

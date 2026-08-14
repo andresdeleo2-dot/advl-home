@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
+import BirthdayCelebration from './BirthdayCelebration'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 
 /* Header de marca compartido (banda navy con logo, relojes/clima, Widgets y Especiales).
@@ -50,6 +51,7 @@ export default function SiteHeader({
           </div>
         </div>
       </header>
+      <BirthdayCelebration />
     </>
   )
 }

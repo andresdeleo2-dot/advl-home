@@ -135,6 +135,30 @@ body {
 .ep-live { animation: epPulse 2.4s ease-out infinite; }
 .ep-pop  { animation: epPop .3s ease both; }
 .ep-modal { animation: epPop .25s ease both; }
+
+/* ===== Fiesta de cumpleaños (confeti, brillos, realces) ===== */
+@keyframes confFall { from { transform: translateY(-12vh); } to { transform: translateY(114vh); } }
+@keyframes confSpin {
+  0%   { transform: translateX(calc(var(--sway) * -1)) rotateZ(0deg) rotateY(0deg); }
+  50%  { transform: translateX(var(--sway)) rotateZ(180deg) rotateY(180deg); }
+  100% { transform: translateX(calc(var(--sway) * -1)) rotateZ(360deg) rotateY(360deg); }
+}
+@keyframes fiestaShimmer { from { background-position: 0% 50%; } to { background-position: -200% 50%; } }
+@keyframes fiestaBob { 0%,100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-3px) rotate(6deg); } }
+@keyframes fiestaGlow {
+  0%,100% { box-shadow: 0 0 0 0 rgba(231,197,107,0), 0 10px 26px -8px rgba(194,147,58,.35); }
+  50%     { box-shadow: 0 0 0 4px rgba(231,197,107,.4), 0 16px 40px -8px rgba(194,147,58,.6); }
+}
+@keyframes fiestaIn { from { opacity: 0; transform: translateY(-10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes fiestaFloat { 0% { opacity: 0; transform: translateY(4px) scale(.9); } 15% { opacity: 1; } 100% { opacity: 0; transform: translateY(-22px) scale(1.15); } }
+
+.fiesta-shimmer { background-size: 200% 100%; animation: fiestaShimmer 2.8s linear infinite; }
+.fiesta-bob { display: inline-block; animation: fiestaBob 1.5s ease-in-out infinite; transform-origin: 50% 90%; }
+.fiesta-glow { animation: fiestaGlow 2.2s ease-in-out infinite; }
+.fiesta-in { animation: fiestaIn .45s ease both; }
+@media (prefers-reduced-motion: reduce) {
+  .fiesta-shimmer, .fiesta-bob, .fiesta-glow { animation: none; }
+}
 /* Editor de tarea a 2 columnas en pantallas anchas (se apila en móvil). Compartido Tiempo/Épicas. */
 .td-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 34px; align-items: start; }
 .td-grid > .td-col { min-width: 0; display: flex; flex-direction: column; }

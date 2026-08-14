@@ -57,15 +57,15 @@ export default function ExcepcionalesWidget() {
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button onClick={() => setOpen(o => !o)} aria-expanded={open} title="Fechas a recordar (momentos ✦)"
-        className={hoyMismo ? undefined : 'band-glass band-glass-hover'}
+        className={hoyMismo ? 'fiesta-shimmer' : 'band-glass band-glass-hover'}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px',
           fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', maxWidth: 230,
           ...(hoyMismo
-            ? { background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', boxShadow: '0 8px 16px -8px rgba(194,147,58,.85)' }
+            ? { background: 'linear-gradient(110deg,#E7C56B,#C2933A,#F1DB92,#C2933A,#E7C56B)', backgroundSize: '200% 100%', color: '#1B1305', border: 'none', boxShadow: '0 8px 18px -6px rgba(194,147,58,.9)' }
             : { color: 'rgba(255,255,255,0.85)' }),
         }}>
-        <span style={{ fontSize: 13, lineHeight: 1, color: hoyMismo ? '#1B1305' : '#E7C56B' }}>✦</span>
+        <span className={hoyMismo ? 'fiesta-bob' : undefined} style={{ fontSize: 13, lineHeight: 1, color: hoyMismo ? '#1B1305' : '#E7C56B' }}>✦</span>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 700 }}>{prox.titulo}</span>
         <span style={{ flex: 'none', opacity: 0.8 }}>· {prox.days <= 14 ? rel(prox.days) : `${prox.dia} ${MES3[prox.mes]}`}</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flex: 'none', opacity: 0.6, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
