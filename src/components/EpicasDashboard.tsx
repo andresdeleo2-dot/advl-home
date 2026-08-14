@@ -1591,6 +1591,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[ti].t = t
     patchEpic(e.id, { tasks })
   }
+  // Repetición editable inline en el detalle (mismos presets que el editor). null = no se repite.
+  const setTaskRepeat = (e: Epica, ti: number, repeat: EpicaRepeat | null) => {
+    const tasks = clone(e.tasks)
+    if (repeat) tasks[ti].repeat = repeat
+    else { delete tasks[ti].repeat; delete tasks[ti].repeatUntil }
+    patchEpic(e.id, { tasks })
+  }
   // Mueve una tarea a otra épica (saca de la actual, agrega a la destino). Limpia la selección (los índices cambian).
   const moveTaskToEpica = (fromE: Epica, i: number, toEId: string) => {
     if (fromE.id === toEId) return
@@ -5679,7 +5686,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
-                    <div className="serif" style={{ fontWeight: 600, fontSize: 27, lineHeight: 1.05, color: '#10233F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</div>
+                    <input key={`title:${t.id}`} defaultValue={t.t} aria-label="Título de la tarea"
+                      onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); (ev.currentTarget as HTMLInputElement).blur() } }}
+                      onFocus={ev => { ev.currentTarget.style.background = '#fff'; ev.currentTarget.style.borderColor = 'rgba(15,35,64,0.18)' }}
+                      onBlur={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; const v = ev.currentTarget.value.trim(); if (v && v !== t.t) setTaskTitle(ep, i, v); else ev.currentTarget.value = t.t }}
+                      className="serif" style={{ display: 'block', width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 8, padding: '3px 7px', margin: '-3px -7px', fontWeight: 600, fontSize: 27, lineHeight: 1.1, color: '#10233F', background: 'transparent', outline: 'none', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }} />
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
                       {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
                       {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
@@ -5742,6 +5753,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
+                {/* Cuerpo en dos columnas (como el detalle de Tiempo); se colapsa a una en pantallas angostas */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: '0 26px', alignItems: 'start' }}>
+                <div style={{ minWidth: 0 }}>
                 {/* Estado (editable) */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={eb}>Estado</div>
@@ -5858,6 +5872,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
+                </div>
+                <div style={{ minWidth: 0 }}>
                 {/* Fechas (editables) */}
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
                   {t.status === 'Terminada' && <div><div style={eb}>Terminada el</div><input type="date" value={t.doneAt || ''} onChange={e => setTaskDoneAt(ep, i, e.target.value)} style={{ border: '1px solid rgba(62,142,142,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff', outline: 'none' }} /></div>}
@@ -5872,6 +5888,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       {t.remindAt && <button onClick={() => setTaskRemind(ep, i, '')} title="Quitar recordatorio" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 14 }}>✕</button>}
                     </div>
                   </div>
+                </div>
+
+                {/* Repetición (editable inline) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Repetición</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {([['No se repite', null], ['Cada día', { every: 1, unit: 'dia' }], ['Cada semana', { every: 1, unit: 'semana' }], ['Cada mes', { every: 1, unit: 'mes' }]] as [string, EpicaRepeat | null][]).map(([lbl, rp]) => {
+                      const on = rp ? (!!t.repeat && t.repeat.unit === rp.unit) : !t.repeat
+                      return <button key={lbl} onClick={() => setTaskRepeat(ep, i, rp)} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? '1px solid #7A6FB0' : '1px solid rgba(15,35,64,0.14)', background: on ? 'rgba(122,111,176,0.10)' : '#fff', color: on ? '#5F5596' : 'rgba(20,35,61,0.55)' }}>{lbl}</button>
+                    })}
+                  </div>
+                  {t.repeat && ((t.repeat.every ?? 1) > 1 || t.repeatUntil) && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: '#7A6FB0', fontWeight: 600 }}>↻ {repeatLabel(t.repeat)}{t.repeatUntil ? ` · hasta ${fmtDue(t.repeatUntil)}` : ''} <span style={{ color: 'rgba(20,35,61,0.4)' }}>· frecuencia avanzada en “Editar”</span></div>
+                  )}
                 </div>
 
                 {/* Subtareas — editables aquí mismo, sin abrir "Editar" */}
@@ -6018,11 +6048,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       style={{ flexShrink: 0, cursor: newComment.trim() ? 'pointer' : 'default', borderRadius: 9, padding: '9px 14px', fontSize: 12.5, fontWeight: 800, border: 'none', background: newComment.trim() ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : 'rgba(15,35,64,0.08)', color: newComment.trim() ? '#1B1305' : 'rgba(20,35,61,0.4)' }}>Comentar</button>
                   </div>
                 </div>
+                </div>
+                </div>
 
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 26px', borderTop: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap', flexShrink: 0, background: '#fff' }}>
-                  <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Edita título, nota y subtareas en “Editar”.</span>
+                  <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>Todo se guarda solo ✓</span>
                   <span style={{ flex: 1 }} />
                   {/* Comenzar ahora: arranca el cronómetro ligado a esta tarea AQUÍ (widget de foco).
                       Es la misma sesión que /tiempo (estado compartido); el tiempo se registra en la tarea. */}
@@ -6045,8 +6077,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       </button>
                     )
                   })()}
+                  {t.plan === today && t.status !== 'Terminada' && (
+                    <button onClick={() => setTaskPlan(ep, i, '')} title="Quitar esta tarea del plan de hoy (no la borra ni la termina)" style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', borderRadius: 11, padding: '11px 16px', fontSize: 13, fontWeight: 700 }}>Quitar de hoy</button>
+                  )}
                   <button onClick={() => opts.onClose()} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cerrar</button>
-                  <button onClick={openEditFromView} style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
+                  <button onClick={openEditFromView} title="Editor completo: nota con formato, mover de épica, fin de la serie…" style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
                 </div>
             </div>
     )
