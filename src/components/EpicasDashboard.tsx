@@ -155,6 +155,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [workFilter, setWorkFilter] = useState<'' | 'plan' | 'openworked' | 'unworked'>('')  // filtro por estado de trabajo del día (Día/Detalle): planeadas · trabajadas sin terminar · sin trabajar
   const [dayCloseOpen, setDayCloseOpen] = useState(false)          // modal "Cerrar el día" (retro rápida del día)
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
+  const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
+  const [diaryEpica, setDiaryEpica] = useState<string>('todas')    // filtro de épica del diario
   const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
   const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
   const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
@@ -527,6 +529,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const mon = mondayISO(today), sun = addDays(mon, 6)
     return (e.tasks || []).reduce((s, t) => s + (t.progressLog || []).reduce((a, l) => a + ((l.d >= mon && l.d <= sun && typeof (l as { min?: number }).min === 'number') ? (l as { min?: number }).min! : 0), 0), 0)
   }
+  // Salud de la épica: último día con actividad (avance/cierre/ciclo recurrente) en cualquiera de sus tareas.
+  const epicLastActivity = (e: Epica): string => {
+    let m = ''
+    for (const t of e.tasks || []) {
+      if (t.status === ARCHIVED) continue
+      for (const l of t.progressLog || []) if (l.d > m) m = l.d
+      if (t.doneAt && t.doneAt > m) m = t.doneAt
+      for (const d of t.repeatDone || []) if (d > m) m = d
+    }
+    return m
+  }
+  const daysSinceISO = (d: string): number | null => d ? Math.max(0, Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(d + 'T00:00:00').getTime()) / 86400000)) : null
   // Cierre del día: mueve TODAS las pendientes de hoy a otro día (por defecto mañana).
   const moveTodayPendingTo = (dayISO: string) => {
     const byE = new Map<string, number[]>()
@@ -753,6 +767,31 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Derivados de filtros (activas / archivadas / categoría) ─ */
   const activeEpics = useMemo(() => epics.filter(e => !e.archived), [epics])
+  // CALIBRACIÓN de estimados: sobre tareas TERMINADAS con dificultad y tiempo real (bitácora), saca
+  // un factor real/estimado por dificultad. Factor >1 = sueles tardar más de lo estimado.
+  const calibration = useMemo(() => {
+    const acc: Record<string, { real: number; est: number; n: number }> = { facil: { real: 0, est: 0, n: 0 }, media: { real: 0, est: 0, n: 0 }, dificil: { real: 0, est: 0, n: 0 } }
+    for (const e of activeEpics) for (const t of e.tasks || []) {
+      const dif = t.difficulty; if (!dif || t.status !== 'Terminada') continue
+      const real = (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
+      if (real <= 0) continue
+      acc[dif].real += real; acc[dif].est += WEEK_EST_MIN(dif); acc[dif].n++
+    }
+    const factor = (d: string) => acc[d].est > 0 ? acc[d].real / acc[d].est : 0
+    const totalN = acc.facil.n + acc.media.n + acc.dificil.n
+    return { factor, n: (d: string) => acc[d].n, totalN }
+  }, [activeEpics])
+  // Entradas del DIARIO: todas las notas de avance + comentarios de todas las tareas, cronológico.
+  const diaryEntries = useMemo(() => {
+    type D = { at: string; day: string; kind: 'nota' | 'comentario'; text: string; eId: string; eName: string; color: string; tid: string; tName: string }
+    const out: D[] = []
+    for (const e of activeEpics) for (const t of e.tasks || []) {
+      if (!t.id) continue
+      for (const l of t.progressLog || []) if (l.note && l.note.trim() && !l.note.startsWith('⏱')) out.push({ at: l.d + 'T12:00', day: l.d, kind: 'nota', text: l.note, eId: e.id, eName: e.name, color: e.color, tid: t.id, tName: t.t })
+      for (const c of t.comentarios || []) out.push({ at: c.at, day: (c.at || '').slice(0, 10), kind: 'comentario', text: c.text, eId: e.id, eName: e.name, color: e.color, tid: t.id, tName: t.t })
+    }
+    return out.sort((a, b) => b.at.localeCompare(a.at))
+  }, [activeEpics])
   const archivedCount = useMemo(() => epics.filter(e => e.archived).length, [epics])
   const categorias = useMemo(() => {
     const m: Record<string, number> = {}
@@ -6535,6 +6574,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
           <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{rest.length}</span>
           <h2 style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', margin: 0 }}>Todas las épicas</h2>
+          {/* Calibración de estimados: cuánto sueles tardar vs lo estimado, por dificultad. */}
+          {calibration.totalN >= 3 && (() => {
+            const parts = ([['dificil', 'D'], ['media', 'M'], ['facil', 'F']] as const).filter(([d]) => calibration.n(d) >= 1 && calibration.factor(d) > 0)
+            if (!parts.length) return null
+            return (
+              <span title="Real ÷ estimado sobre tus tareas terminadas. >1 = sueles tardar más." style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 99, padding: '3px 10px', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)' }}>
+                <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: '#A87A2C' }}>Calibración</span>
+                {parts.map(([d, lbl]) => { const f = calibration.factor(d); return <span key={d} style={{ fontSize: 10.5, fontWeight: 800, color: f > 1.15 ? '#B0522E' : f < 0.85 ? '#2E6E6E' : 'rgba(20,35,61,0.6)' }}>{lbl} {Math.round(f * 10) / 10}×</span> })}
+              </span>
+            )
+          })()}
+          <button onClick={() => setDiaryOpen(true)} title="Diario de trabajo: tus notas de avance y comentarios en orden" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>📖 Diario</button>
           <span style={{ height: 1, flex: 1, minWidth: 40, background: 'rgba(15,35,64,0.09)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {/* Vista Lista | Tabla de las épicas */}
@@ -6566,6 +6617,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {rest.map(e => {
             const st = statusStyle(e.status); const pct = pctOf(e); const pend = epicDay ? scopedPend(e) : pendCount(e)
             const k0 = e.kpis[0]
+            // Salud: días sin tocar el frente + horas de la semana vs presupuesto.
+            const lastDays = daysSinceISO(epicLastActivity(e))
+            const stale = pend > 0 && e.status !== 'En pausa' && (lastDays == null || lastDays >= 10)
+            const weekMin = investedThisWeek(e); const budgetH = budgetOf(e)
+            const wk = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
             return (
               <div key={e.id} {...clickable(() => setFeaturedId(e.id), `Ver épica ${e.name}`)} className="glass glass-hover ep-row" style={{ display: 'flex', alignItems: 'center', gap: 14, borderRadius: 14, padding: compact ? '11px 16px' : '15px 18px', cursor: 'pointer' }}>
                 <span className="ep-row-bar" style={{ width: 4, alignSelf: 'stretch', borderRadius: 99, background: e.color, flexShrink: 0 }} />
@@ -6578,6 +6634,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{pend > 0 ? `${pend} ${epicDay ? 'en el rango' : 'tareas activas'}` : (epicDay ? 'nada en el rango' : 'Al corriente')}</span>
+                    {stale && <span title={lastDays == null ? 'Sin actividad registrada' : `Último avance hace ${lastDays} días`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 800, color: '#B0522E', background: 'rgba(176,82,46,0.10)', border: '1px solid rgba(176,82,46,0.35)', borderRadius: 99, padding: '1px 8px' }}>🕸 {lastDays == null ? 'sin tocar' : `${lastDays}d sin tocar`}</span>}
+                    {weekMin > 0 && <span title={`Invertido esta semana${budgetH > 0 ? ` · meta ${budgetH}h` : ''}`} style={{ fontSize: 10, fontWeight: 700, color: (budgetH > 0 && weekMin >= budgetH * 60) ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>⏱ {wk(weekMin)}{budgetH > 0 ? `/${budgetH}h` : ''}</span>}
                     {e.routines.length > 0 && <span style={{ fontSize: 10.5, color: '#2E6E6E', fontWeight: 600 }}>↻ {e.routines.length} rutinas</span>}
                     {e.source_table && <><span style={{ height: 5, width: 5, borderRadius: 99, background: '#3E8E8E' }} /><span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}>{e.source_table}</span></>}
                   </div>
@@ -7168,6 +7226,56 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
+      {diaryOpen && (() => {
+        const eps = Array.from(new Map(diaryEntries.map(d => [d.eId, { id: d.eId, name: d.eName, color: d.color }])).values())
+        const rows = diaryEntries.filter(d => diaryEpica === 'todas' || d.eId === diaryEpica)
+        const fmtDay = (day: string) => { const dd = daysSinceISO(day); return dd === 0 ? 'Hoy' : dd === 1 ? 'Ayer' : cap(new Date(day + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })) }
+        let lastDay = ''
+        return (
+          <div onClick={() => setDiaryOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Diario de trabajo" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 80px)' }}>
+              <div style={{ height: 4, background: 'linear-gradient(90deg,#C2933A,#3E8E8E)' }} />
+              <div style={{ padding: '18px 22px 10px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>📖 Diario de trabajo</div>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>Tus notas y comentarios</div>
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setDiaryOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+                {eps.length > 1 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button onClick={() => setDiaryEpica('todas')} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: diaryEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: diaryEpica === 'todas' ? '#10233F' : '#fff', color: diaryEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
+                    {eps.map(ep => { const on = diaryEpica === ep.id; return <button key={ep.id} onClick={() => setDiaryEpica(on ? 'todas' : ep.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)', background: on ? hexA(ep.color, 0.12) : '#fff', color: on ? ep.color : 'rgba(20,35,61,0.6)' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: ep.color }} />{ep.name}</button> })}
+                  </div>
+                )}
+              </div>
+              <div style={{ overflowY: 'auto', padding: '0 22px 20px' }}>
+                {rows.length === 0 && <div style={{ padding: '24px 4px', textAlign: 'center', fontSize: 13, color: 'rgba(20,35,61,0.5)' }}>Aún no hay notas ni comentarios. Escríbelos al avanzar en una tarea o desde el Modo foco.</div>}
+                {rows.map((d, i) => {
+                  const showDay = d.day !== lastDay; lastDay = d.day
+                  return (
+                    <div key={i}>
+                      {showDay && <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#A87A2C', margin: '14px 0 6px' }}>{fmtDay(d.day)}</div>}
+                      <div onClick={() => { setDiaryOpen(false); setTaskView({ eId: d.eId, tid: d.tid }) }} style={{ display: 'flex', gap: 9, padding: '8px 4px', cursor: 'pointer', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+                        <span style={{ flexShrink: 0, width: 7, height: 7, borderRadius: 99, background: d.color, marginTop: 5 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13.5, color: '#14233D', lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(d.text) }} />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontSize: 10.5, color: 'rgba(20,35,61,0.5)', flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 700, color: d.kind === 'comentario' ? '#7A6FB0' : '#2E6E6E' }}>{d.kind === 'comentario' ? '💬 comentario' : '✎ avance'}</span>
+                            <span>· {d.tName}</span>
+                            <span style={{ color: 'rgba(20,35,61,0.4)' }}>· {d.eName}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {dayCloseOpen && (() => {
         const workedToday = (t: EpicaTask) => (t.progressLog || []).some(x => x.d === today)
         const minToday = (t: EpicaTask) => (t.progressLog || []).filter(x => x.d === today).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
