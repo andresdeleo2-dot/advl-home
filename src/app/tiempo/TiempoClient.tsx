@@ -1831,6 +1831,13 @@ export default function TiempoClient() {
                   </div>
                   {(data.focusGoal ?? 0) > 0 && (() => {
                     const goal = data.focusGoal!, pct = Math.min(100, Math.round((dayWorkedMin / goal) * 100)), met = dayWorkedMin >= goal
+                    // Racha de días CUMPLIENDO la meta (hasta hoy, o ayer si hoy aún no) + esta semana.
+                    const workOn = (day: string) => (data.history || []).filter(h => h.date === day && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+                    const t0 = iso(new Date())
+                    let streak = 0
+                    for (let k = workOn(t0) >= goal ? 0 : 1; k < 400; k++) { if (workOn(addDaysISO(t0, -k)) >= goal) streak++; else break }
+                    let weekMet = 0, weekElapsed = 0
+                    for (const d of weekOfISO(t0)) { if (d > t0) break; weekElapsed++; if (workOn(d) >= goal) weekMet++ }
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -1839,6 +1846,10 @@ export default function TiempoClient() {
                         </div>
                         <div style={{ height: 8, background: '#efe7d9', borderRadius: 999, overflow: 'hidden' }}>
                           <div style={{ width: `${pct}%`, height: '100%', background: met ? 'linear-gradient(90deg,#6f8256,#8fae74)' : 'linear-gradient(90deg,#b4653a,#d98a55)', borderRadius: 999, transition: 'width .4s' }} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          {streak > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: streak >= 5 ? '#b4653a' : '#8a4b28' }}>🔥 Racha {streak} {streak === 1 ? 'día' : 'días'}</span>}
+                          <span style={{ fontSize: 12, color: '#8b8379' }}>Esta semana <b style={{ color: '#4f6238' }}>{weekMet}</b>/{weekElapsed} días cumplidos</span>
                         </div>
                         {!met && <span style={{ fontSize: 12.5, color: '#8b8379' }}>Te faltan {hm(goal - dayWorkedMin)} para tu meta de hoy.</span>}
                       </div>

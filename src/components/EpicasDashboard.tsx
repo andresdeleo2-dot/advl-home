@@ -157,6 +157,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
   const [diaryEpica, setDiaryEpica] = useState<string>('todas')    // filtro de épica del diario
+  const [objsOpen, setObjsOpen] = useState(false)                  // modal "Objetivos en riesgo"
+  const [weekCloseOpen, setWeekCloseOpen] = useState(false)        // modal "Cerrar la semana"
   const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
   const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
   const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
@@ -600,6 +602,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         if (movePick) { setMovePick(null); return }
         if (pickerOpen) { setPickerOpen(false); return }
         if (routineStat) { setRoutineStat(null); return }
+        if (diaryOpen) { setDiaryOpen(false); return }
+        if (objsOpen) { setObjsOpen(false); return }
+        if (weekCloseOpen) { setWeekCloseOpen(false); return }
+        if (dayCloseOpen) { setDayCloseOpen(false); return }
         // Estos cuatro no cerraban con Escape: en un modal a pantalla completa
         // la tecla simplemente no hacía nada.
         if (taskEdit) { setTaskEdit(null); return }
@@ -609,7 +615,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop])
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, dayCloseOpen])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -792,6 +798,48 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     return out.sort((a, b) => b.at.localeCompare(a.at))
   }, [activeEpics])
+  // OBJETIVOS EN RIESGO: reúne los KPIs medibles de todas las épicas y los ordena por riesgo
+  // (vencidos primero, luego por cercanía de fecha y menor avance). Deja fuera los ya cumplidos.
+  const objetivosAll = useMemo(() => {
+    const out: { e: Epica; k: EpicaMilestone; pct: number; cur: number; target: number; hasMeta: boolean; days: number | null; risk: number }[] = []
+    for (const e of activeEpics) for (const k of e.kpis || []) {
+      if (milestoneDone(k, e)) continue
+      const mp = milestoneProgress(k, e)
+      const days = k.due ? daysUntil(k.due) : null
+      // Riesgo: vencido y sin cumplir = 0 (peor); si no, "días para vencer − colchón por avance".
+      const risk = (days != null && days < 0) ? -1000 + days : (days == null ? 900 - mp.pct * 200 : days + (1 - mp.pct) * -30)
+      out.push({ e, k, pct: mp.pct, cur: mp.cur, target: mp.target, hasMeta: mp.hasMeta, days, risk })
+    }
+    return out.sort((a, b) => a.risk - b.risk)
+  }, [activeEpics])
+  // Semana en curso (para "Cerrar la semana"): comprometido, cerrado y lo que se arrastra.
+  const weekSummary = useMemo(() => {
+    const mon = mondayISO(today), sun = addDays(mon, 6)
+    const inWk = (d?: string) => !!d && d >= mon && d <= sun
+    const committed: { e: Epica; t: EpicaTask; i: number }[] = []
+    const closed: { e: Epica; t: EpicaTask }[] = []
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
+      if (t.status === ARCHIVED) return
+      if (inWk(t.plan) && t.status !== 'Terminada') committed.push({ e, t, i })
+      if (inWk(t.doneAt) || (t.repeatDone || []).some(d => inWk(d))) closed.push({ e, t })
+    }))
+    return { mon, committed, closedN: closed.length }
+  }, [activeEpics, today])
+  // Cerrar la semana: mueve lo comprometido NO terminado al lunes de la próxima semana.
+  const moveWeekPendingToNext = () => {
+    const next = addDays(weekSummary.mon, 7)
+    const byE = new Map<string, number[]>()
+    weekSummary.committed.forEach(x => { const a = byE.get(x.e.id) || []; a.push(x.i); byE.set(x.e.id, a) })
+    let n = 0, base = maxPlanOrderFor(next)
+    byE.forEach((idxs, eId) => {
+      const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
+      const tasks = clone(fresh.tasks)
+      idxs.forEach(i => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; t.plan = next; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base; applyPlanStatus(t, next); n++ })
+      patchEpic(eId, { tasks })
+    })
+    setWeekCloseOpen(false)
+    if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a la próxima semana`)
+  }
   const archivedCount = useMemo(() => epics.filter(e => e.archived).length, [epics])
   const categorias = useMemo(() => {
     const m: Record<string, number> = {}
@@ -6585,6 +6633,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </span>
             )
           })()}
+          {objetivosAll.length > 0 && <button onClick={() => setObjsOpen(true)} title="Objetivos de todas las épicas ordenados por riesgo" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>🎯 Objetivos{objetivosAll.some(o => o.days != null && o.days < 0) ? <span style={{ color: '#B0522E' }}> ●</span> : ''}</button>}
+          <button onClick={() => setWeekCloseOpen(true)} title="Cerrar la semana: resumen y mover el arrastre a la próxima" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>🗓 Cerrar semana</button>
           <button onClick={() => setDiaryOpen(true)} title="Diario de trabajo: tus notas de avance y comentarios en orden" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>📖 Diario</button>
           <span style={{ height: 1, flex: 1, minWidth: 40, background: 'rgba(15,35,64,0.09)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -7226,6 +7276,78 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
+      {objsOpen && (() => {
+        const riskTag = (o: typeof objetivosAll[number]) => o.days != null && o.days < 0 ? { t: `venció hace ${-o.days}d`, c: '#B0522E', bg: 'rgba(176,82,46,0.1)' } : o.days != null && o.days <= 14 ? { t: `en ${o.days}d`, c: '#A87A2C', bg: 'rgba(194,147,58,0.12)' } : o.days != null ? { t: fmtDue(o.k.due!), c: 'rgba(20,35,61,0.55)', bg: 'rgba(15,35,64,0.05)' } : { t: 'sin fecha', c: 'rgba(20,35,61,0.45)', bg: 'rgba(15,35,64,0.04)' }
+        return (
+          <div onClick={() => setObjsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Objetivos en riesgo" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 80px)' }}>
+              <div style={{ height: 4, background: 'linear-gradient(90deg,#B0522E,#C2933A)' }} />
+              <div style={{ padding: '18px 22px 12px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                <div>
+                  <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>🎯 Objetivos</div>
+                  <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>Ordenados por riesgo</div>
+                </div>
+                <button aria-label="Cerrar" onClick={() => setObjsOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+              </div>
+              <div style={{ overflowY: 'auto', padding: '0 22px 20px' }}>
+                {objetivosAll.map((o, i) => { const rt = riskTag(o)
+                  return (
+                    <div key={i} onClick={() => { setObjsOpen(false); setFeaturedId(o.e.id) }} style={{ display: 'flex', gap: 10, padding: '10px 4px', cursor: 'pointer', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+                      <span style={{ flexShrink: 0, width: 8, height: 8, borderRadius: 99, background: o.e.color, marginTop: 5 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 13.5, fontWeight: 600, color: '#16365F' }}>{o.k.t}</span>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: rt.c, background: rt.bg, borderRadius: 99, padding: '1px 8px' }}>{rt.t}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+                          <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${o.pct * 100}%`, height: '100%', background: o.e.color }} /></span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)', whiteSpace: 'nowrap' }}>{o.hasMeta ? `${o.cur}/${o.target}` : `${Math.round(o.pct * 100)}%`}</span>
+                          <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.4)' }}>{o.e.name}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+      {weekCloseOpen && (() => {
+        const pend = weekSummary.committed.length
+        const staleEps = activeEpics.filter(e => pendCount(e) > 0 && e.status !== 'En pausa' && (() => { const d = daysSinceISO(epicLastActivity(e)); return d == null || d >= 10 })())
+        return (
+          <div onClick={() => setWeekCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cerrar la semana" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
+              <div style={{ padding: '18px 22px 22px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>🗓 Cerrar la semana</div>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>{weekRangeLabel(weekSummary.mon)}</div>
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setWeekCloseOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
+                  <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E6E6E' }}>✓ {weekSummary.closedN}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cerradas esta semana</div></div>
+                  <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: pend ? '#A87A2C' : '#2E6E6E' }}>↻ {pend}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>comprometidas sin cerrar</div></div>
+                </div>
+                {staleEps.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#B0522E', marginBottom: 6 }}>Frentes desatendidos</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {staleEps.map(e => { const d = daysSinceISO(epicLastActivity(e)); return <button key={e.id} onClick={() => { setWeekCloseOpen(false); setFeaturedId(e.id) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: `1px solid ${hexA(e.color, 0.4)}`, background: hexA(e.color, 0.08), color: '#16365F' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}<span style={{ color: '#B0522E' }}>{d == null ? '·—' : `·${d}d`}</span></button> })}
+                    </div>
+                  </div>
+                )}
+                {pend > 0
+                  ? <button onClick={moveWeekPendingToNext} style={{ ...goldBtn, width: '100%', marginTop: 18, padding: '12px' }}>Mover {pend} a la próxima semana →</button>
+                  : <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo comprometido ✦</div>}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {diaryOpen && (() => {
         const eps = Array.from(new Map(diaryEntries.map(d => [d.eId, { id: d.eId, name: d.eName, color: d.color }])).values())
         const rows = diaryEntries.filter(d => diaryEpica === 'todas' || d.eId === diaryEpica)
