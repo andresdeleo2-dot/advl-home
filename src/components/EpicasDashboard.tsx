@@ -547,20 +547,30 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return m
   }
   const daysSinceISO = (d: string): number | null => d ? Math.max(0, Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(d + 'T00:00:00').getTime()) / 86400000)) : null
-  // Cierre del día: mueve TODAS las pendientes de hoy a otro día (por defecto mañana).
-  const moveTodayPendingTo = (dayISO: string) => {
+  // Mueve una LISTA de tareas (por épica+índice) a un día, con planOrder corrido único entre épicas.
+  const moveTasksTo = (list: { e: Epica; i: number }[], dayISO: string): number => {
     const byE = new Map<string, number[]>()
-    planPend.forEach(x => { const a = byE.get(x.e.id) || []; a.push(x.i); byE.set(x.e.id, a) })
-    let n = 0
-    let base = maxPlanOrderFor(dayISO)   // contador ÚNICO corrido entre épicas (maxPlanOrderFor lee epicsRef que no se actualiza dentro del loop → todas colisionaban en 1000)
+    list.forEach(x => { const a = byE.get(x.e.id) || []; a.push(x.i); byE.set(x.e.id, a) })
+    let n = 0, base = maxPlanOrderFor(dayISO)
     byE.forEach((idxs, eId) => {
       const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
       const tasks = clone(fresh.tasks)
       idxs.forEach(i => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; t.plan = dayISO; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base; applyPlanStatus(t, dayISO); n++ })
       patchEpic(eId, { tasks })
     })
+    return n
+  }
+  // Cierre del día: mueve las pendientes del día en vista a otro día.
+  const moveTodayPendingTo = (dayISO: string) => {
+    const n = moveTasksTo(planPend.map(x => ({ e: x.e, i: x.i })), dayISO)
     setDayCloseOpen(false)
     if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(dayISO).toLowerCase()}`)
+  }
+  // Cerrar días anteriores: mueve el ARRASTRE (pendientes de días pasados) a un día.
+  const moveArrastradasTo = (dayISO: string) => {
+    const n = moveTasksTo(arrastradas.map(x => ({ e: x.e, i: x.i })), dayISO)
+    setDayCloseOpen(false)
+    if (n) showToast(`Moví ${n} ${n === 1 ? 'arrastrada' : 'arrastradas'} a ${relLong(dayISO).toLowerCase()}`)
   }
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -2527,6 +2537,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             ? <span title="Sesión en curso con esta tarea" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: '800 10px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.12)', border: '1px solid rgba(62,142,142,0.35)', borderRadius: 99, padding: '4px 9px', whiteSpace: 'nowrap' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: '#2E6E6E', boxShadow: '0 0 0 3px rgba(62,142,142,0.2)' }} />en curso</span>
             : <button onClick={ev => { ev.stopPropagation(); focus.begin({ name: t.t, epicaId: e.id, taskId: t.id!, dur: WEEK_EST_MIN(t.difficulty) }) }} aria-label="Empezar con cronómetro" title="Empezar ahora con cronómetro (el tiempo se registra en esta tarea)"
                 style={{ height: 30, width: 30, border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', borderRadius: 8, cursor: 'pointer', color: '#A87A2C', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, lineHeight: 1 }}>▶</button>}
+          {/* Cambiar la fecha "Hacer" con calendario, SIN abrir la tarea */}
+          <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setCalMonth((t.plan || viewDate).slice(0, 7)); setMovePick(movePick && movePick.tid === t.id ? null : { eId: e.id, tid: t.id! }); setRowMenu(null); setPrioMenu(null) }} aria-label="Cambiar fecha" title="Cambiar el día (calendario)" style={{ height: 30, width: 30, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, lineHeight: 1 }}>📅</button>
           <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setPrioMenu(prioMenu === key ? null : key); setRowMenu(null) }} title={`Prioridad: ${ps.label}`} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}>
             <PrioBars p={t.priority} />
           </button>
@@ -4378,8 +4390,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && !focus.active && (
                 <button onClick={pickNextNow} title="Elige la mejor siguiente tarea de hoy y arranca el cronómetro" style={{ border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 10, padding: '9px 15px', font: '800 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>⚡ ¿Qué ahora?</button>
               )}
-              {!board && isToday && planItems.length > 0 && (
-                <button onClick={() => setDayCloseOpen(true)} title="Resumen del día y mover lo pendiente a mañana" style={{ border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día</button>
+              {!board && isToday && (planItems.length > 0 || arrastradas.length > 0) && (
+                <button onClick={() => setDayCloseOpen(true)} title="Resumen del día, mover pendientes y arrastre a otros días" style={{ border: arrastradas.length > 0 ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: arrastradas.length > 0 ? 'rgba(176,82,46,0.06)' : '#fff', color: arrastradas.length > 0 ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día{arrastradas.length > 0 ? ` · ${arrastradas.length} arrastre` : ''}</button>
               )}
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
               <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
@@ -7530,9 +7542,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {untouched.length > 8 && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)', padding: '4px 4px 0' }}>+{untouched.length - 8} más</div>}
                   </div>
                 )}
+                {/* ARRASTRE: pendientes de días anteriores que no cerraste. Reasígnalas de un toque. */}
+                {arrastradas.length > 0 && (
+                  <div style={{ marginTop: 18, borderRadius: 12, background: 'rgba(176,82,46,0.05)', border: '1px solid rgba(176,82,46,0.25)', padding: '11px 13px' }}>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: '#B0522E', marginBottom: 8 }}>⏳ Arrastre de días anteriores · mover {arrastradas.length} a…</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {Array.from({ length: 8 }, (_, k) => addDays(today, k)).map(d => {
+                        const isTd = d === today
+                        const lbl = isTd ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
+                        return <button key={d} onClick={() => moveArrastradasTo(d)} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: isTd ? 'none' : '1px solid rgba(176,82,46,0.3)', background: isTd ? 'linear-gradient(135deg,#c9713f,#B0522E)' : '#fff', color: isTd ? '#fff' : '#B0522E' }}>{lbl}</button>
+                      })}
+                    </div>
+                  </div>
+                )}
                 {planPend.length > 0 && (
                   <div style={{ marginTop: 18 }}>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} a…</div>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} de {isToday ? 'hoy' : 'este día'} a…</div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {Array.from({ length: 8 }, (_, k) => addDays(today, k + 1)).map(d => {
                         const isTom = d === addDays(today, 1)
@@ -7542,7 +7567,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   </div>
                 )}
-                {planPend.length === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo de hoy ✦</div>}
+                {planPend.length === 0 && arrastradas.length === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo ✦</div>}
               </div>
             </div>
           </div>
