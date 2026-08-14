@@ -1719,7 +1719,7 @@ export default function TiempoClient() {
     showUndo(`✓ Registré «${p.name || 'Actividad'}» (${hm(p.dur)})`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, false) })
   }
   // Rutinas diarias de Épicas (hábitos) para planificar en el Planificador.
-  const planRoutines = epicasList.flatMap(e => (e.routines || []).map(r => ({ name: r.t, epicaName: e.name, color: e.color })))
+  const planRoutines = epicasList.flatMap(e => (e.routines || []).map((r, i) => ({ name: r.t, epicaName: e.name, color: e.color, epicaId: e.id, rIdx: i })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
     save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
 
@@ -1819,6 +1819,7 @@ export default function TiempoClient() {
             onSessionStart={setSessionStart}
             allOpenTasks={allTasks}
             onGeneral={startGeneral}
+            onStartRoutine={r => startRoutine(r.name, r.epicaId, r.rIdx)}
             onAddDone={planAddDone}
             onOpenMeeting={setMeetView}
             onAdd={planAdd}
@@ -3457,7 +3458,7 @@ const dtBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1
 
 /** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
  *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
-type PlanRoutine = { name: string; epicaName: string; color: string }
+type PlanRoutine = { name: string; epicaName: string; color: string; epicaId?: string; rIdx?: number }
 type PlanSession = { name: string; start: number; dur: number; plannedDur: number; area: Area; taskId?: string }
 type PlanDrag =
   | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
@@ -3466,7 +3467,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -3484,6 +3485,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onSessionStart: (startMin: number) => void
   allOpenTasks: TodayTask[] | null
   onGeneral: (name: string) => void
+  onStartRoutine: (r: PlanRoutine) => void
   onAddDone: (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => void
   onOpenMeeting: (m: Meeting) => void
 }) {
@@ -3881,6 +3883,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                       <div style={{ fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word' }} title={r.name}>{r.name}</div>
                       <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.epicaName}</div>
                     </div>
+                    <button
+                      onPointerDown={ev => ev.stopPropagation()}
+                      onClick={ev => { ev.stopPropagation(); onStartRoutine(r) }}
+                      title="Empezar ahora (al terminar se marca hecha hoy)"
+                      style={{ flexShrink: 0, border: '1px solid #e2d9cb', background: '#fff', borderRadius: 999, width: 30, height: 30, display: 'grid', placeItems: 'center', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}
+                    >▶</button>
                     <span style={{ fontSize: 16, color: '#c9c0b3', flexShrink: 0 }}>⠿</span>
                   </div>
                 )
