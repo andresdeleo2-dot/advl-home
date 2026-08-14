@@ -478,7 +478,9 @@ export function useFocusSession(hooks: FocusHooks) {
 
   // `busy` = el overlay de Modo foco está abierto (editando subtareas/extras): el contenedor
   // debe pausar sus refrescos (loadEpics) para no revertir esas ediciones en vuelo.
-  return { session, active: !!session, busy: focusOpen, begin, card }
+  // "Lo más importante hoy" (MIT) que fijaste en /tiempo — para estelarlo en Épicas (mismo margen.v1).
+  const mitIds = data.mit?.date === iso(new Date()) ? (data.mit.ids || []) : []
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

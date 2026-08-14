@@ -1340,6 +1340,15 @@ export default function TiempoClient() {
   // Empieza una actividad "general" (contador libre). NO cambia de vista: la sesión se ve como
   // popup flotante y como banda EN CURSO en el Planificador, así funciona en Hoy o en el Planificador.
   const startGeneral = (name: string) => { beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0 }) }
+  // "¿Qué ahora?": elige la mejor tarea de HOY (vencidas → prioridad → entrega) y arranca el bloque.
+  const pickNextTiempo = () => {
+    const pool = (filteredTasks || []).filter(x => x.task.status !== 'Terminada')
+    if (!pool.length) return
+    const t0 = iso(new Date()); const PR: Record<string, number> = { alta: 0, media: 1, baja: 2 }
+    const ov = (t: EpicaTask) => (t.due && /^\d{4}-\d{2}-\d{2}$/.test(t.due) && t.due < t0) ? 0 : 1
+    const pick = [...pool].sort((a, b) => ov(a.task) - ov(b.task) || ((PR[a.task.priority || 'media'] ?? 1) - (PR[b.task.priority || 'media'] ?? 1)) || (a.task.due || '9999-99').localeCompare(b.task.due || '9999-99'))[0]
+    startTask({ epicaId: pick.epicaId, task: pick.task }, durByDiff(pick.task))
+  }
   // Marca una rutina como HECHA en un día (idempotente: no la desmarca). Usado al Terminar una
   // sesión de rutina y por el botón "✓ Terminada".
   const setRoutineDone = (epicaId: string, rIdx: number, dayISO: string) => {
@@ -2083,6 +2092,9 @@ export default function TiempoClient() {
 
                   {act === 'Trabajo profundo' && <>
                     <QuickStart onStart={startGeneral} />
+                    {!data.session && (filteredTasks || []).some(x => x.task.status !== 'Terminada') && (
+                      <button onClick={pickNextTiempo} title="Elige la mejor tarea de hoy y arranca el cronómetro" style={{ alignSelf: 'flex-start', border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>⚡ ¿Qué ahora?</button>
+                    )}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                         <span style={{ fontSize: 13.5, color: '#6b645b', textTransform: 'capitalize' }}>{taskDay === today ? 'Tareas de hoy' : `Tareas · ${longDayOf(taskDay)}`}</span>

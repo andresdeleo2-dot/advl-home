@@ -512,7 +512,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       || (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
       || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
     )[0]
-    if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: WEEK_EST_MIN(pick.t.difficulty) })) showToast(`▶ A darle: «${pick.t.t}»`)
+    // El "por qué" la eligió: vencida > prioridad alta > entrega cercana > primera del orden.
+    const dl = daysUntil(pick.t.due)
+    const why = (dl != null && dl < 0) ? `venció hace ${-dl}d` : pick.t.priority === 'alta' ? 'prioridad alta' : (dl != null && dl <= 3) ? `vence ${relLong(pick.t.due).toLowerCase()}` : 'es lo siguiente en tu orden'
+    if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: WEEK_EST_MIN(pick.t.difficulty) })) showToast(`▶ «${pick.t.t}» · ${why}`)
   }
   // Presupuesto semanal por épica (horas/semana). Si la columna week_budget existe (migración
   // corrida), se guarda en Supabase y SINCRONIZA entre dispositivos; si no, cae a localStorage.
@@ -2457,7 +2460,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           {pos === 0 && <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 3 }}>Empieza aquí</div>}
-          <div className="plan-title" onClick={() => setTaskView({ eId: e.id, tid: t.id! })} title="Ver tarea" style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+          <div className="plan-title" onClick={() => setTaskView({ eId: e.id, tid: t.id! })} title="Ver tarea" style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id && focus.mitIds.includes(t.id) && <span title="Lo más importante hoy (fijado en Tiempo)" style={{ color: '#C2933A' }}>★ </span>}{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
             <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
@@ -4343,6 +4346,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {/* Presupuesto del día: suma de pesos por dificultad de lo pendiente */}
               {!board && planPend.length > 0 && (() => {
                 const load = planPend.reduce((n, x) => n + taskWeight(x.t), 0)
+                // Horas estimadas del día (por dificultad), AJUSTADAS con tu calibración si hay datos.
+                const calMin = planPend.reduce((n, x) => { const d = x.t.difficulty; if (!d) return n; const f = calibration.totalN >= 3 && calibration.factor(d) > 0 ? calibration.factor(d) : 1; return n + WEEK_EST_MIN(d) * f }, 0)
+                const asH = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${Math.round(m)}m`
                 const pctLoad = dayCapacity > 0 ? load / dayCapacity : 0
                 const c = pctLoad > 1 ? '#B0522E' : pctLoad > 0.85 ? '#A87A2C' : '#2E6E6E'
                 const bg = pctLoad > 1 ? 'rgba(176,82,46,0.10)' : pctLoad > 0.85 ? 'rgba(194,147,58,0.12)' : 'rgba(62,142,142,0.10)'
@@ -4354,6 +4360,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       <span style={{ display: 'block', width: `${Math.min(100, pctLoad * 100)}%`, height: '100%', background: c }} />
                     </span>
                     <span style={{ font: '800 11px var(--font-ui)', color: c, whiteSpace: 'nowrap' }}>{load}/{dayCapacity}</span>
+                    {calMin > 0 && <span title={`≈ tiempo estimado del día por dificultad${calibration.totalN >= 3 ? ' · ajustado con tu calibración' : ''}`} style={{ font: '800 10.5px var(--font-ui)', color: c, whiteSpace: 'nowrap', opacity: .85 }}>· ≈{asH(calMin)}</span>}
                     <span style={{ display: 'inline-flex', gap: 2 }}>
                       <button onClick={() => setDayCapacity(v => Math.max(1, v - 1))} aria-label="Bajar presupuesto" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', color: c, fontSize: 11, lineHeight: 1 }}>−</button>
                       <button onClick={() => setDayCapacity(v => Math.min(40, v + 1))} aria-label="Subir presupuesto" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', color: c, fontSize: 11, lineHeight: 1 }}>+</button>
@@ -4424,6 +4431,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
+
+          {/* Próximos recordatorios (los remindAt sólo suenan con la app abierta; aquí se VEN). */}
+          {isToday && remindReady.current && (() => {
+            const nowMs = Date.now()
+            const rem = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
+              .filter(x => x.t.remindAt && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && !isNaN(Date.parse(x.t.remindAt!)))
+              .map(x => ({ ...x, ms: Date.parse(x.t.remindAt!) }))
+              .filter(x => x.ms >= nowMs - 12 * 3600000)   // futuros + los de las últimas 12h (por si no sonaron)
+              .sort((a, b) => a.ms - b.ms).slice(0, 5)
+            if (!rem.length) return null
+            return (
+              <div style={{ marginTop: 16, borderRadius: 13, background: 'rgba(122,111,176,0.06)', border: '1px solid rgba(122,111,176,0.28)', padding: '9px 13px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: '#5E5490' }}>🔔 Próximos recordatorios</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {rem.map(({ e, t }) => { const d = new Date(t.remindAt!); const past = Date.parse(t.remindAt!) < nowMs
+                    return (
+                      <div key={planKey(e.id, t)} onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 2px', cursor: 'pointer' }}>
+                        <span style={{ flexShrink: 0, font: '800 11px var(--font-ui)', color: past ? '#B0522E' : '#5E5490', width: 88 }}>{cap(d.toLocaleString('es-MX', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).replace('.', ''))}</span>
+                        <span style={{ width: 6, height: 6, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+                        {past && <span style={{ flexShrink: 0, fontSize: 9.5, fontWeight: 800, color: '#B0522E' }}>vencido</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
 
           {isToday && (() => {
             const monday = mondayISO(today)
