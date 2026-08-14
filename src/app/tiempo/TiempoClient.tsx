@@ -745,6 +745,11 @@ export default function TiempoClient() {
         : nowH < 15 ? 'Bajón de media tarde. Buen momento para lo mecánico, no para lo difícil.'
         : nowH < 18 ? 'Segunda ventana de foco. Tu pico ya pasó, rinde alrededor del 78%.'
         : 'Rendimiento en descenso: lo que hagas ahora te cuesta más y vale menos.')
+    // MEJOR HORA por energía, PENDIENTE (de ahora en adelante hoy): para agendar ahí lo difícil.
+    let peakH = -1, peakV = -1
+    for (let h = Math.max(nowH, 7); h <= 22; h++) { const v = energyVal(h); if (v > peakV) { peakV = v; peakH = h } }
+    const energyPeakLabel = peakH >= 0 ? `${String(peakH).padStart(2, '0')}:00` : ''
+    const energyPeakSoon = peakH >= 0 && peakH <= nowH + 1   // tu pico es ahora o casi
 
     // Todos los bloques de la rutina de hoy con su cuenta regresiva (o "ya pasó") y su duración.
     const routineNext = todayBlocks.slice().sort((a, b) => a.start - b.start).map(b => {
@@ -788,7 +793,7 @@ export default function TiempoClient() {
       windowLabel: nextBlock ? hm(windowMins) + ' (hasta ' + clock(nextBlock.start) + ')' : hm(windowMins),
       bedLabel: clock(bed) + ' · despertar ' + clock(bed + sleepGoal),
       workedTodayLabel: workedToday ? hm(workedToday) : '—',
-      energy: eBars, energyNote, energyNow: nowPct, energyLearnedActive: useLearned, energyLearnAvail: learnAvail,
+      energy: eBars, energyNote, energyNow: nowPct, energyLearnedActive: useLearned, energyLearnAvail: learnAvail, energyPeakLabel, energyPeakSoon,
       hasSession: !!session, sessionOpen: !!session && !planned, sessionPaused: paused, sessionName: session ? session.name : '',
       sessionStartLabel: session ? clock(session.start) : '',
       sessionElapsedLabel: session ? hm(elapsed) : '',
@@ -1916,6 +1921,7 @@ export default function TiempoClient() {
                     {V.energy.map((_, i) => <span key={i} className={(7 + i) % 3 === 1 ? undefined : 'nrg-lbl-min'} style={{ flex: 1, textAlign: 'center' }}>{String(7 + i).padStart(2, '0')}</span>)}
                   </div>
                   <span style={{ fontSize: 13, color: '#8b8379', lineHeight: 1.5 }}>{V.energyNote} <span style={{ color: '#6f8256' }}>● marca las horas en que trabajaste hoy</span></span>
+                  {V.energyPeakLabel && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 6, borderRadius: 999, padding: '5px 12px', background: '#f5ece2', border: '1px solid #e6cfa4', fontSize: 12.5, fontWeight: 600, color: '#8a4b28' }}>⚡ {V.energyPeakSoon ? 'Estás en tu mejor ventana' : `Tu mejor hora hoy: ${V.energyPeakLabel}`} — agenda ahí lo difícil</span>}
                   <span style={{ fontSize: 12, color: '#a49b90', lineHeight: 1.45 }}>{V.energyLearnedActive
                     ? <><b style={{ fontWeight: 600 }}>Aprendida de tus horas</b>: pondera cuándo sueles trabajar de verdad (área Trabajo del historial), mezclado con una curva típica; cuanto más historial, más se ajusta a ti.</>
                     : <>Es una <b style={{ fontWeight: 600 }}>curva típica</b> del día (mañana alta, bajón post-comida, segunda ventana en la tarde), igual para todos.{V.energyLearnAvail ? ' Cambia a “Aprendida” para usar tus horas reales.' : ' Aprenderá de ti cuando acumules historial de trabajo.'}</>}</span>

@@ -159,6 +159,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [diaryEpica, setDiaryEpica] = useState<string>('todas')    // filtro de épica del diario
   const [objsOpen, setObjsOpen] = useState(false)                  // modal "Objetivos en riesgo"
   const [weekCloseOpen, setWeekCloseOpen] = useState(false)        // modal "Cerrar la semana"
+  const [triageOpen, setTriageOpen] = useState(false)              // modal "Triage" (tareas sin fecha)
   const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
   const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
   const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
@@ -605,6 +606,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         if (diaryOpen) { setDiaryOpen(false); return }
         if (objsOpen) { setObjsOpen(false); return }
         if (weekCloseOpen) { setWeekCloseOpen(false); return }
+        if (triageOpen) { setTriageOpen(false); return }
         if (dayCloseOpen) { setDayCloseOpen(false); return }
         // Estos cuatro no cerraban con Escape: en un modal a pantalla completa
         // la tecla simplemente no hacía nada.
@@ -615,7 +617,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, dayCloseOpen])
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, triageOpen, dayCloseOpen])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -825,6 +827,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }))
     return { mon, committed, closedN: closed.length }
   }, [activeEpics, today])
+  // TRIAGE: tareas activas SIN plan y SIN vencimiento (se pudren sin fecha). Más viejas primero.
+  const sinFechaTasks = useMemo(() => {
+    const out: { e: Epica; t: EpicaTask; i: number }[] = []
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
+      if (t.status === ARCHIVED || t.status === 'Terminada') return
+      if (!t.plan && !t.due) out.push({ e, t, i })
+    }))
+    return out.sort((a, b) => (a.t.createdAt || '9999').localeCompare(b.t.createdAt || '9999') || (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']))
+  }, [activeEpics])
   // Cerrar la semana: mueve lo comprometido NO terminado al lunes de la próxima semana.
   const moveWeekPendingToNext = () => {
     const next = addDays(weekSummary.mon, 7)
@@ -6635,6 +6646,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           })()}
           {objetivosAll.length > 0 && <button onClick={() => setObjsOpen(true)} title="Objetivos de todas las épicas ordenados por riesgo" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>🎯 Objetivos{objetivosAll.some(o => o.days != null && o.days < 0) ? <span style={{ color: '#B0522E' }}> ●</span> : ''}</button>}
           <button onClick={() => setWeekCloseOpen(true)} title="Cerrar la semana: resumen y mover el arrastre a la próxima" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>🗓 Cerrar semana</button>
+          {sinFechaTasks.length > 0 && <button onClick={() => setTriageOpen(true)} title="Tareas sin fecha (para no dejarlas pudrirse)" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>📥 Sin fecha {sinFechaTasks.length}</button>}
           <button onClick={() => setDiaryOpen(true)} title="Diario de trabajo: tus notas de avance y comentarios en orden" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>📖 Diario</button>
           <span style={{ height: 1, flex: 1, minWidth: 40, background: 'rgba(15,35,64,0.09)' }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -7276,6 +7288,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
+      {triageOpen && (() => {
+        return (
+          <div onClick={() => setTriageOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div role="dialog" aria-modal="true" aria-label="Tareas sin fecha" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 80px)' }}>
+              <div style={{ height: 4, background: 'linear-gradient(90deg,#8b8379,#C2933A)' }} />
+              <div style={{ padding: '18px 22px 12px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                <div>
+                  <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>📥 Sin fecha</div>
+                  <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>Ponles un día antes de que se pudran</div>
+                </div>
+                <button aria-label="Cerrar" onClick={() => setTriageOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+              </div>
+              <div style={{ overflowY: 'auto', padding: '0 22px 20px' }}>
+                {sinFechaTasks.map(({ e, t, i }) => { const dc = diasCon(t); const ps = prioStyle(t.priority)
+                  return (
+                    <div key={planKey(e.id, t)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 4px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+                      <span style={{ flexShrink: 0, width: 3, height: 28, borderRadius: 99, background: ps.accent }} />
+                      <div onClick={() => { setTriageOpen(false); setTaskView({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                        <div style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)', marginTop: 2 }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>{dc >= 1 ? ` · creada hace ${dc}d` : ''}</div>
+                      </div>
+                      <button onClick={() => planTaskToDay(e, i, today)} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)' }}>Hoy</button>
+                      <button onClick={() => planTaskToDay(e, i, addDays(today, 1))} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.6)', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)' }}>Mañana</button>
+                    </div>
+                  )
+                })}
+                {sinFechaTasks.length === 0 && <div style={{ padding: '24px 4px', textAlign: 'center', fontSize: 13, color: '#2E6E6E', fontWeight: 600 }}>Todo tiene fecha ✦</div>}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {objsOpen && (() => {
         const riskTag = (o: typeof objetivosAll[number]) => o.days != null && o.days < 0 ? { t: `venció hace ${-o.days}d`, c: '#B0522E', bg: 'rgba(176,82,46,0.1)' } : o.days != null && o.days <= 14 ? { t: `en ${o.days}d`, c: '#A87A2C', bg: 'rgba(194,147,58,0.12)' } : o.days != null ? { t: fmtDue(o.k.due!), c: 'rgba(20,35,61,0.55)', bg: 'rgba(15,35,64,0.05)' } : { t: 'sin fecha', c: 'rgba(20,35,61,0.45)', bg: 'rgba(15,35,64,0.04)' }
         return (
@@ -7450,7 +7494,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 )}
                 {planPend.length > 0 && (
-                  <button onClick={() => moveTodayPendingTo(addDays(today, 1))} style={{ ...goldBtn, width: '100%', marginTop: 18, padding: '12px' }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} a mañana →</button>
+                  <div style={{ marginTop: 18 }}>
+                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} a…</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {Array.from({ length: 8 }, (_, k) => addDays(today, k + 1)).map(d => {
+                        const isTom = d === addDays(today, 1)
+                        const lbl = isTom ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
+                        return <button key={d} onClick={() => moveTodayPendingTo(d)} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: isTom ? 'none' : '1px solid rgba(15,35,64,0.14)', background: isTom ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: isTom ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
+                      })}
+                    </div>
+                  </div>
                 )}
                 {planPend.length === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo de hoy ✦</div>}
               </div>
