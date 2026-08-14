@@ -465,12 +465,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     },
     onPatchTask: (taskId, patch) => {
       // Gates: no escribir columnas cuya migración no esté corrida (un 500 revierte TODO el write).
-      if ('comentarios' in patch && !comentariosReady.current) { showToast('Corre sql/epicas-07-comentarios.sql para usar comentarios', true); return }
-      if ('resumen' in patch && !resumenReady.current) { showToast('Corre la migración de `resumen` para editarlo aquí', true); return }
-      if ('remindAt' in patch && !remindReady.current) { showToast('Corre sql/epicas-06-remind.sql para recordatorios', true); return }
-      const ep = epicsRef.current.find(e => e.tasks.some(t => t.id === taskId)); if (!ep) return
+      // Devuelve boolean: false = NO se aplicó (gate sin migración) → el widget no limpia el input.
+      if ('comentarios' in patch && !comentariosReady.current) { showToast('Corre sql/epicas-07-comentarios.sql para usar comentarios', true); return false }
+      if ('resumen' in patch && !resumenReady.current) { showToast('Corre la migración de `resumen` para editarlo aquí', true); return false }
+      if ('remindAt' in patch && !remindReady.current) { showToast('Corre sql/epicas-06-remind.sql para recordatorios', true); return false }
+      const ep = epicsRef.current.find(e => e.tasks.some(t => t.id === taskId)); if (!ep) return false
       const tasks = clone(ep.tasks)
-      const ti = tasks.findIndex(t => t.id === taskId); if (ti < 0) return
+      const ti = tasks.findIndex(t => t.id === taskId); if (ti < 0) return false
       tasks[ti] = { ...tasks[ti], ...patch }
       // Cambiar la fecha "Hacer" (plan) debe reasignar planOrder/priority/estado como las demás rutas.
       if ('plan' in patch) {
@@ -485,6 +486,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         }
       }
       patchEpic(ep.id, { tasks })
+      return true
     },
     onToast: (msg) => showToast(msg),
   })
@@ -530,10 +532,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const byE = new Map<string, number[]>()
     planPend.forEach(x => { const a = byE.get(x.e.id) || []; a.push(x.i); byE.set(x.e.id, a) })
     let n = 0
+    let base = maxPlanOrderFor(dayISO)   // contador ÚNICO corrido entre épicas (maxPlanOrderFor lee epicsRef que no se actualiza dentro del loop → todas colisionaban en 1000)
     byE.forEach((idxs, eId) => {
       const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
-      const tasks = clone(fresh.tasks); const base = maxPlanOrderFor(dayISO)
-      idxs.forEach((i, k) => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; t.plan = dayISO; if (!t.priority) t.priority = prioFromDue(t.due); t.planOrder = base + (k + 1) * 1000; applyPlanStatus(t, dayISO); n++ })
+      const tasks = clone(fresh.tasks)
+      idxs.forEach(i => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; t.plan = dayISO; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base; applyPlanStatus(t, dayISO); n++ })
       patchEpic(eId, { tasks })
     })
     setDayCloseOpen(false)
@@ -1817,9 +1820,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const links = draftChanged('links')
       ? (taskDraft.links || []).map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.label || l.url)
       : ((orig.links as EpicaTaskLink[] | undefined) || [])
-    const t: EpicaTask = { ...orig, t: (taskDraft.t || '').trim(), status: taskDraft.status || 'Por hacer', due: taskDraft.due || '', note: sanitizeHtml(taskDraft.note), links }
-    if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
-    else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
+    const t: EpicaTask = { ...orig, t: (taskDraft.t || '').trim(), status: orig.status || 'Por hacer', due: taskDraft.due || '', note: sanitizeHtml(taskDraft.note), links }
+    // status/doneAt: sólo desde el borrador si el EDITOR los tocó; si no, conserva los frescos de
+    // `orig` (el Modo foco pudo completar la tarea mientras el editor estaba abierto → no la revivas).
+    if (draftChanged('status')) {
+      t.status = taskDraft.status || 'Por hacer'
+      if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
+      else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
+    }
     // Resumen (sólo si la columna existe): se toma del borrador; '' limpia el campo (→ null).
     if (resumenReady.current) t.resumen = (taskDraft.resumen || '').trim()
     if (!t.t) { closeTaskEdit(); return }
@@ -1852,7 +1860,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Marcar "Terminada" en el editor una tarea recurrente = REPROGRAMAR la serie (no terminarla).
     // Va después del plan para ganarle: applyComplete fija plan=siguiente ocurrencia + estado de reposo.
     let recurMsg: string | null = null
-    if (t.repeat && taskDraft.status === 'Terminada' && orig.status !== 'Terminada') {
+    if (draftChanged('status') && t.repeat && taskDraft.status === 'Terminada' && orig.status !== 'Terminada') {
       t.status = 'Por hacer'; delete t.doneAt
       recurMsg = applyComplete(t)
     }

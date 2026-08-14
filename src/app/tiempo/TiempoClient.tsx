@@ -325,9 +325,13 @@ export default function TiempoClient() {
       if (e.key !== KEY || !e.newValue || editorOpenRef.current) return
       try {
         const inc = Object.assign(defaults(), JSON.parse(e.newValue))
-        // Conserva una sesión local viva si el blob entrante no trae ninguna (no matar un cronómetro).
-        const keep = dataRef.current.session && !inc.session
-        setData(keep ? { ...inc, session: dataRef.current.session } : inc)
+        // Conserva una sesión local viva si el blob entrante no trae ninguna… SALVO que traiga un
+        // tombstone (sessionEnd) más nuevo que el inicio de la sesión local: eso significa que la
+        // MISMA sesión ya se terminó en la otra pestaña → adopta el null (no la termines dos veces).
+        const localSess = dataRef.current.session
+        const endedElsewhere = !!localSess && (Number(inc.sessionEnd) || 0) > (localSess.startedAt || 0)
+        const keep = localSess && !inc.session && !endedElsewhere
+        setData(keep ? { ...inc, session: localSess } : inc)
       } catch {}
     }
     document.addEventListener('visibilitychange', onVis)
@@ -1134,7 +1138,10 @@ export default function TiempoClient() {
     }
     if (wasMarkedDone) {
       task = task.repeat
-        ? { ...task, repeatDone: (task.repeatDone || []).filter(d => d !== row.date && d !== task.plan) }
+        // Recurrente: completeRecurring movió el plan a la próxima ocurrencia. Al deshacer, saca el
+        // día de repeatDone Y regresa el plan al día del registro (si no, una semanal/mensual
+        // DESAPARECE de hoy porque recurringDueToday depende de `plan`).
+        ? { ...task, repeatDone: (task.repeatDone || []).filter(d => d !== row.date && d !== task.plan), plan: row.date, planOrder: nextPlanOrderFor(row.date) }
         : { ...task, status: 'En curso', doneAt: undefined }
     }
     syncTask(row.epicaId, task)
@@ -1252,7 +1259,7 @@ export default function TiempoClient() {
     // Cronómetro olvidado: una sola sesión de >8h casi siempre quedó corriendo (p. ej. toda la
     // noche). Avisa antes de registrar semejante bloque; si cancelas, se descarta (no se registra).
     if (elapsed > 480 && !window.confirm(`Llevas ${hm(elapsed)} en «${s.name}». Parece que el cronómetro se quedó corriendo (¿toda la noche?). ¿Registrar TODO ese tiempo como trabajado?\n\nAceptar = registrarlo · Cancelar = descartarlo sin registrar.`)) {
-      save({ session: null }); showUndo(`Descarté «${s.name}» sin registrar`, () => save({ session: s }))
+      save({ session: null, sessionEnd: Date.now() }); showUndo(`Descarté «${s.name}» sin registrar`, () => save({ session: s }))
       return
     }
     const logId = uid()   // liga el registro de Tiempo con su entrada en la bitácora de Épicas
@@ -1262,7 +1269,7 @@ export default function TiempoClient() {
     const entryDay = startD ? iso(startD) : today
     const startMin = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
     const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
-    save({ session: null, history: dataRef.current.history.concat([entry]) })
+    save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
     showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, markDone) })
     if (s.taskId && s.epicaId) {
@@ -1443,7 +1450,7 @@ export default function TiempoClient() {
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
-  const cancel = () => save({ session: null })
+  const cancel = () => save({ session: null, sessionEnd: Date.now() })
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
   const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now) } }) }
   const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined } }) }
@@ -1455,8 +1462,10 @@ export default function TiempoClient() {
     const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
     if (d.getTime() > Date.now()) return   // no dejar un inicio en el futuro
     if (s.pausedAt != null) {
-      // Estaba EN PAUSA: no la reanudes. Banca el transcurrido corregido (ahora − nuevo inicio).
-      const banked = Math.max(0, (Date.now() - d.getTime()) / 60000)
+      // Estaba EN PAUSA: no la reanudes. Ajusta lo BANCADO por el desplazamiento del inicio (no
+      // recalcules ahora−inicio: contaría el hueco de la pausa como trabajado).
+      const oldStartMs = s.startedAt ?? d.getTime()
+      const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked } })
     } else {
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
@@ -4423,14 +4432,14 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 14, marginBottom: 6 }}>
             <span style={eb}>Bitácora de avance</span><span style={{ flex: 1 }} />
-            <input type="date" value={bitDate} onChange={e => setBitDate(e.target.value)} style={{ ...nf, padding: '6px 9px' }} />
+            <input type="date" defaultValue={bitDate} onChange={e => setBitDate(e.target.value)} style={{ ...nf, padding: '6px 9px' }} />
             <button onClick={logAdvance} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 9, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Avancé este día</button>
           </div>
           <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...nf, width: '100%', marginBottom: 6 }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {(t.progressLog || []).slice().reverse().map((e, ri) => { const i = (t.progressLog || []).length - 1 - ri; const min = (e as { min?: number }).min; return (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                <input type="date" value={e.d} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, d: ev.target.value } : x))} style={{ ...nf, padding: '6px 8px', fontSize: 12 }} />
+                <input key={`${i}:${e.d}`} type="date" defaultValue={e.d} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, d: ev.target.value } : x))} style={{ ...nf, padding: '6px 8px', fontSize: 12 }} />
                 <input type="number" min={0} max={100} value={typeof e.pct === 'number' ? e.pct : ''} placeholder="—" onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, pct: ev.target.value === '' ? undefined : Number(ev.target.value) } : x))} style={{ ...nf, width: 58, padding: '6px 8px', fontSize: 12 }} /><span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>%</span>
                 <span style={{ flex: 1, minWidth: 80, fontSize: 12.5, color: '#4c5a70' }}>{min ? `⏱ ${hm(min)} trabajado` : e.note || ''}</span>
                 <button onClick={() => setLog(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)', cursor: 'pointer' }}>✕</button>

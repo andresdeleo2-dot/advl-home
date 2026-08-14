@@ -34,9 +34,10 @@ export async function POST(req: Request) {
     const staleClash = (t: EpicaTask) => { const db = t.id ? dbStamp.get(t.id) : undefined; return !!(db && t.updatedAt && new Date(db).getTime() > new Date(t.updatedAt).getTime()) }
     update = update.filter(t => {
       const db = t.id ? dbStamp.get(t.id) : undefined
-      // No existe en BD. Si el cliente la tenía cargada (updatedAt), fue BORRADA en otra pestaña →
-      // conflicto: NO la resucites. Sin base → se permite.
-      if (!db) { if (t.updatedAt) { conflicts.push(t.id!); return false } return true }
+      // No existe en BD → fue BORRADA en otra pestaña/dispositivo. Un UPDATE nunca debe re-insertarla
+      // (el upsert lo haría). Se reporta como conflicto y no se escribe — así el autoguardado forzado
+      // del editor (que quita `updatedAt`) ya no puede "resucitar" una tarea borrada.
+      if (!db) { conflicts.push(t.id!); return false }
       if (staleClash(t)) { conflicts.push(t.id!); return false }
       return true
     })

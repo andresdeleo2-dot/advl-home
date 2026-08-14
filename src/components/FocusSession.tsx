@@ -24,6 +24,9 @@ const sessionElapsed = (s: { start: number; pausedAccum?: number; pausedAt?: num
   if (s.segAt != null) return banked + Math.max(0, (Date.now() - s.segAt) / 60000)
   return banked + Math.max(0, elapsedMin(s.start, nowMin))
 }
+// ¿La sesión local ya terminó en OTRA pestaña/dispositivo? (el tombstone entrante es más nuevo que
+// el inicio de esta sesión). Si sí, NO la conserves al adoptar: evita doble registro y resurrección.
+const localEnded = (localSess: Session, incomingEnd?: number) => !!localSess && (incomingEnd || 0) > (localSess.startedAt || 0)
 function beep() {
   try {
     const AC: typeof AudioContext | undefined = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -54,8 +57,9 @@ export type FocusHooks = {
   plannedMinFor?: (taskId: string) => number
   /** Tarea viva (subtareas/links/comentarios/fechas) para los paneles del Modo foco. */
   taskFor?: (taskId: string) => EpicaTask | null
-  /** Aplica un parche a la tarea en foco (subtareas, fechas, links, comentarios…). */
-  onPatchTask?: (taskId: string, patch: Partial<EpicaTask>) => void
+  /** Aplica un parche a la tarea en foco (subtareas, fechas, links, comentarios…). Devuelve false si
+   *  NO se aplicó (p.ej. columna gateada sin migración), para que el input no se limpie y no se pierda. */
+  onPatchTask?: (taskId: string, patch: Partial<EpicaTask>) => boolean | void
   /** Si la sesión vino de una rutina diaria, marca su día como hecho al terminar. */
   onFinishRoutine?: (epicaId: string, rIdx: number, day: string) => void
   /** Aviso ligero al descartar. */
@@ -102,7 +106,8 @@ export function useFocusSession(hooks: FocusHooks) {
         // Adopta lo del server, PERO conserva una sesión local viva (no la pises); así un blob
         // viejo de este equipo no borra history/blocks más nuevos de otro dispositivo.
         const sv = Object.assign(defaults(), j.data || {})
-        const merged: AppData = { ...sv, session: dataRef.current.session ?? sv.session }
+        const keep = dataRef.current.session && !localEnded(dataRef.current.session, sv.sessionEnd)
+        const merged: AppData = { ...sv, session: keep ? dataRef.current.session : sv.session }
         dataRef.current = merged; setData(merged)
         try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
       }
@@ -115,7 +120,7 @@ export function useFocusSession(hooks: FocusHooks) {
       if (e.key !== KEY || !e.newValue) return
       try {
         const inc = Object.assign(defaults(), JSON.parse(e.newValue)) as AppData
-        const keepLocal = dataRef.current.session && !inc.session
+        const keepLocal = dataRef.current.session && !inc.session && !localEnded(dataRef.current.session, inc.sessionEnd)
         const nd: AppData = keepLocal ? { ...inc, session: dataRef.current.session } : inc
         dataRef.current = nd; setData(nd)
       } catch {}
@@ -129,7 +134,8 @@ export function useFocusSession(hooks: FocusHooks) {
         const localTs = Number(localStorage.getItem(TS_KEY) || 0)
         if (serverTs > localTs) {
           const sv = Object.assign(defaults(), j.data || {})
-          const merged: AppData = { ...sv, session: dataRef.current.session ?? sv.session }
+          const keep = dataRef.current.session && !localEnded(dataRef.current.session, sv.sessionEnd)
+          const merged: AppData = { ...sv, session: keep ? dataRef.current.session : sv.session }
           dataRef.current = merged; setData(merged)
           try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
         }
@@ -177,6 +183,7 @@ export function useFocusSession(hooks: FocusHooks) {
 
   const begin = useCallback((a: BeginArgs): boolean => {
     if (!readyRef.current) { hooksRef.current.onToast?.('Cargando tu estado… intenta de nuevo en un segundo'); return false }
+    pomoStartElRef.current = 0; setPomoOn(false)   // Pomodoro arranca limpio para la nueva sesión (no hereda el baseline de la anterior)
     const t0 = Date.now()
     const ns: NonNullable<Session> = { name: a.name || 'Tarea', area: a.area || 'trabajo', start: Math.round(now), dur: a.dur || 0, epicaId: a.epicaId, taskId: a.taskId, origStart: Math.round(now), startedAt: t0, segAt: t0 }
     const s = dataRef.current.session
@@ -209,27 +216,29 @@ export function useFocusSession(hooks: FocusHooks) {
     const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
     if (d.getTime() > Date.now()) return
     if (s.pausedAt != null) {
-      // Estaba EN PAUSA: no la reanudes; banca el transcurrido corregido (ahora − nuevo inicio).
-      const banked = Math.max(0, (Date.now() - d.getTime()) / 60000)
+      // Estaba EN PAUSA: no la reanudes. Ajusta lo BANCADO por el desplazamiento del inicio (no
+      // recalcules ahora−inicio: eso contaría el hueco de la pausa como trabajado).
+      const oldStartMs = s.startedAt ?? d.getTime()
+      const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked } })
     } else {
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined } })
     }
   }, [save])
-  const cancel = useCallback(() => { const s = dataRef.current.session; save({ session: null }); setFocusOpen(false); if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save])
+  const cancel = useCallback(() => { const s = dataRef.current.session; save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save])
   const finish = useCallback((markDone = false) => {
     const s = dataRef.current.session; if (!s) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     if (elapsed > 480 && !window.confirm(`Llevas ${hm(elapsed)} en «${s.name}». Parece que el cronómetro se quedó corriendo. ¿Registrar TODO ese tiempo?\n\nAceptar = registrarlo · Cancelar = descartarlo sin registrar.`)) {
-      save({ session: null }); setFocusOpen(false); hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`); return
+      save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`); return
     }
     const logId = uid()
     const startD = s.startedAt != null ? new Date(s.startedAt) : null
     const entryDay = startD ? iso(startD) : iso(new Date())
     const startMin = startD ? startD.getHours() * 60 + startD.getMinutes() : Math.min(Math.round(s.origStart ?? s.start), Math.round(now))
     const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
-    save({ session: null, history: dataRef.current.history.concat([entry]) })
-    setFocusOpen(false)
+    save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
+    setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0
     logToEpica(s, elapsed, entryDay, markDone, logId)
     // Si la sesión venía de una rutina, marca su día como hecho (llena el chip de hoy).
     if (s.routineRef) hooksRef.current.onFinishRoutine?.(s.routineRef.epicaId, s.routineRef.rIdx, iso(new Date()))
@@ -263,7 +272,7 @@ export function useFocusSession(hooks: FocusHooks) {
 
   // ── Edición de la tarea en foco (subtareas/fechas/links/comentarios) vía hooks ──
   const focusTask = session?.taskId ? (hooksRef.current.taskFor?.(session.taskId) || null) : null
-  const patchFocus = (patch: Partial<EpicaTask>) => { if (session?.taskId) hooksRef.current.onPatchTask?.(session.taskId, patch) }
+  const patchFocus = (patch: Partial<EpicaTask>): boolean => session?.taskId ? (hooksRef.current.onPatchTask?.(session.taskId, patch) !== false) : false
   const toggleSub = (key: string) => {
     if (!focusTask) return
     const subs = (focusTask.subtasks || []).map(s => ((s.id || s.t) === key ? { ...s, done: !s.done, doneAt: !s.done ? new Date().toISOString() : undefined } : s))
@@ -282,13 +291,13 @@ export function useFocusSession(hooks: FocusHooks) {
     const a = pend[k].i, b = pend[j].i; [subs[a], subs[b]] = [subs[b], subs[a]]
     patchFocus({ subtasks: subs })
   }
-  const addLink = (label: string, url: string) => {
-    const u = url.trim(), l = label.trim(); if ((!u && !l) || !focusTask) return
-    patchFocus({ links: [...(focusTask.links || []), { label: l, url: u }] })
+  const addLink = (label: string, url: string): boolean => {
+    const u = url.trim(), l = label.trim(); if ((!u && !l) || !focusTask) return false
+    return patchFocus({ links: [...(focusTask.links || []), { label: l, url: u }] })
   }
-  const addComment = (text: string) => {
-    const t = text.trim(); if (!t || !focusTask) return
-    patchFocus({ comentarios: [...(focusTask.comentarios || []), { at: new Date().toISOString(), text: t }] })
+  const addComment = (text: string): boolean => {
+    const t = text.trim(); if (!t || !focusTask) return false
+    return patchFocus({ comentarios: [...(focusTask.comentarios || []), { at: new Date().toISOString(), text: t }] })
   }
 
   // ── View-model ──
@@ -358,16 +367,21 @@ export function useFocusSession(hooks: FocusHooks) {
         const phaseRemain = Math.max(0, inBreak ? 30 - pos : 25 - pos)
         const phasePct = inBreak ? ((pos - 25) / 5) * 100 : (pos / 25) * 100
         const cyc = Math.floor(pomoEl / 30) + 1
-        // Planeado vs usado (SÓLO sobre el tiempo planeado): el plan es la duración de esta sesión
-        // (session.dur) o, si no la fijaste, el estimado por dificultad de la tarea. El % es lo usado
-        // hoy sobre ese plan. Los tiempos de días previos van aparte (línea "En total").
-        const estTask = session.taskId ? (hooksRef.current.plannedMinFor?.(session.taskId) || 0) : 0
-        const planBase = planned > 0 ? planned : estTask
         const todayEl = Math.max(0, el)
-        const planPctRaw = planBase > 0 ? Math.round((todayEl / planBase) * 100) : 0
-        const planPct = Math.min(100, planPctRaw)
-        const overPlan = planBase > 0 && todayEl > planBase
         const totalTask = priorMin + todayEl
+        // Planeado vs usado, con etiquetas COHERENTES (antes la barra decía "usado hoy" pero contaba
+        // sólo la sesión, contradiciendo la línea "Hoy"):
+        //  · Si fijaste una duración de sesión (session.dur) → el plan es de ESTA SESIÓN y se compara
+        //    con lo de esta sesión (todayEl). Label "Esta sesión".
+        //  · Si no (contador libre) pero la tarea tiene estimado por dificultad → el plan es de la
+        //    TAREA y se compara con el TOTAL invertido. Label "Estimado".
+        const estTask = session.taskId ? (hooksRef.current.plannedMinFor?.(session.taskId) || 0) : 0
+        const usingSessionPlan = planned > 0
+        const planBase = usingSessionPlan ? planned : estTask
+        const usedForPlan = usingSessionPlan ? todayEl : totalTask
+        const planPctRaw = planBase > 0 ? Math.round((usedForPlan / planBase) * 100) : 0
+        const planPct = Math.min(100, planPctRaw)
+        const overPlan = planBase > 0 && usedForPlan > planBase
         // HOY: sesiones previas de hoy (bitácora con d===hoy) + esta sesión. `priorMin` incluye TODOS
         // los días; para aislar hoy, resto lo de hoy previo. Así diferenciamos "hoy" de "días previos".
         const todayPrior = session.taskId ? (hooksRef.current.todayMinFor?.(session.taskId) || 0) : 0
@@ -405,7 +419,7 @@ export function useFocusSession(hooks: FocusHooks) {
                       <div style={{ width: `${Math.max(3, planPct)}%`, height: '100%', background: overPlan ? 'linear-gradient(90deg,#C2933A,#d98a55)' : 'linear-gradient(90deg,#6f8256,#8fae74)', borderRadius: 999, transition: 'width .4s' }} />
                     </div>
                     <span style={{ fontSize: 12.5, color: overPlan ? '#d98a55' : '#8b8379' }}>
-                      Planeado <b style={{ color: '#cdc4b8' }}>{hm(planBase)}</b>{planned <= 0 && estTask > 0 ? ' (est.)' : ''} · usado hoy <b style={{ color: '#cdc4b8' }}>{hm(todayEl)}</b> {overPlan ? `· te pasaste ${hm(todayEl - planBase)}` : ''}<b style={{ color: overPlan ? '#d98a55' : '#8fae74' }}> ({planPctRaw}%)</b>
+                      {usingSessionPlan ? 'Esta sesión' : 'Estimado'} <b style={{ color: '#cdc4b8' }}>{hm(planBase)}</b>{usingSessionPlan ? '' : ' (dif.)'} · usado <b style={{ color: '#cdc4b8' }}>{hm(usedForPlan)}</b>{usingSessionPlan ? '' : ' en total'} {overPlan ? `· te pasaste ${hm(usedForPlan - planBase)}` : ''}<b style={{ color: overPlan ? '#d98a55' : '#8fae74' }}> ({planPctRaw}%)</b>
                     </span>
                   </>
                 )}
@@ -508,12 +522,12 @@ function FocusSubtasks({ subs, done, onToggle, onAdd, onMove }: { subs: EpicaSub
 }
 
 /* Fechas, enlaces y comentarios de la tarea en foco: editar sin salir del foco. */
-function FocusExtras({ due, plan, links, comentarios, onPatch, onAddLink, onAddComment }: { due: string; plan: string; links: EpicaTaskLink[]; comentarios: EpicaTaskComment[]; onPatch: (patch: Partial<EpicaTask>) => void; onAddLink: (label: string, url: string) => void; onAddComment: (text: string) => void }) {
+function FocusExtras({ due, plan, links, comentarios, onPatch, onAddLink, onAddComment }: { due: string; plan: string; links: EpicaTaskLink[]; comentarios: EpicaTaskComment[]; onPatch: (patch: Partial<EpicaTask>) => void; onAddLink: (label: string, url: string) => boolean; onAddComment: (text: string) => boolean }) {
   const [showLinkAdd, setShowLinkAdd] = useState(false)
   const [nlLabel, setNlLabel] = useState(''); const [nlUrl, setNlUrl] = useState('')
   const [comment, setComment] = useState('')
-  const addLink = () => { if (!nlUrl.trim() && !nlLabel.trim()) return; onAddLink(nlLabel, nlUrl); setNlLabel(''); setNlUrl(''); setShowLinkAdd(false) }
-  const addComment = () => { const t = comment.trim(); if (!t) return; onAddComment(t); setComment('') }
+  const addLink = () => { if (!nlUrl.trim() && !nlLabel.trim()) return; if (onAddLink(nlLabel, nlUrl)) { setNlLabel(''); setNlUrl(''); setShowLinkAdd(false) } }
+  const addComment = () => { const t = comment.trim(); if (!t) return; if (onAddComment(t)) setComment('') }   // no vaciar si el gate lo rechazó (no perder el texto)
   const field: CSSProperties = { minWidth: 0, background: 'rgba(0,0,0,0.25)', border: '1px solid #3a352e', borderRadius: 10, padding: '9px 12px', fontSize: 14, color: '#faf7f1', outline: 'none' }
   const addBtn: CSSProperties = { border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 10, padding: '9px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }
   const secLbl: CSSProperties = { fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90' }

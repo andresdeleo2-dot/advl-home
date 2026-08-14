@@ -45,6 +45,9 @@ export type AppData = {
   mit?: { date: string; ids: string[] }   // "lo más importante hoy": hasta 3 tareas foco del día
   backToTasks?: string[]   // claves `${fecha}·${taskId}` que el usuario devolvió a la lista pese a tener tiempo
   focusGoal?: number       // meta diaria de trabajo profundo en minutos (área Trabajo); 0/ausente = sin meta
+  sessionEnd?: number      // ms de la ÚLTIMA vez que se cerró una sesión (tombstone): si es más nuevo que
+                           // el startedAt de una sesión local, esa sesión ya terminó en otra pestaña/dispositivo
+                           // → no la conserves (evita doble registro y "resurrección" del cronómetro)
 }
 
 export const KEY = 'margen.v1'
