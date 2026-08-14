@@ -387,6 +387,11 @@ export function useFocusSession(hooks: FocusHooks) {
         const todayPrior = session.taskId ? (hooksRef.current.todayMinFor?.(session.taskId) || 0) : 0
         const todayTotal = todayPrior + todayEl
         const prevDays = Math.max(0, priorMin - todayPrior)
+        // TOTAL trabajado en el DÍA (todas las tareas/actividades, no sólo ésta): lo ya registrado hoy
+        // (área trabajo, incluye otras tareas) + esta sesión en curso.
+        const day0 = iso(new Date())
+        const dayWorkMin = (data.history || []).filter(h => h.date === day0 && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+        const dayTotalNow = dayWorkMin + (session.area === 'trabajo' ? todayEl : 0)
         const nowClock = clock(Math.round(now))
         const sitRemain = Math.max(0, planned - Math.max(0, el))
         const endClock = clock(Math.round(now) + sitRemain)
@@ -401,17 +406,18 @@ export function useFocusSession(hooks: FocusHooks) {
               <input type="time" value={clock(startMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
             </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: paused ? 0.5 : 1 }}>{elapsedLabel || '0m'}</span>
-            {(priorMin > 0 || todayTotal > 0 || planBase > 0) && (
+            {(priorMin > 0 || todayTotal > 0 || planBase > 0 || dayTotalNow > 0) && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9, width: 'min(460px,90vw)', marginTop: -4 }}>
-                {/* HOY primero (lo que se corre el día de la actividad); días previos y total aparte. */}
-                <span style={{ fontSize: 15, color: '#faf7f1', textAlign: 'center' }}>
-                  Hoy <b>{hm(todayTotal)}</b>{todayPrior > 0 ? <span style={{ fontSize: 12.5, color: '#8b8379' }}> ({hm(todayPrior)} antes hoy + {hm(todayEl)} ahora)</span> : ''}
-                </span>
-                {prevDays > 0 && (
-                  <span style={{ fontSize: 12.5, color: '#8b8379', textAlign: 'center' }}>
-                    En total <b style={{ color: '#cdc4b8' }}>{hm(totalTask)}</b> en la tarea · <span style={{ color: '#E7C56B' }}>{hm(prevDays)} en días previos</span>
+                {/* TOTAL DEL DÍA primero: todo lo trabajado hoy (todas las tareas) + esta sesión. */}
+                {dayTotalNow > 0 && (
+                  <span style={{ fontSize: 15, color: '#faf7f1', textAlign: 'center' }}>
+                    🗓 Hoy llevas <b>{hm(dayTotalNow)}</b> trabajadas en total{dayWorkMin > 0 && session.area === 'trabajo' ? <span style={{ fontSize: 12.5, color: '#8b8379' }}> ({hm(dayWorkMin)} antes + {hm(todayEl)} en esta sesión)</span> : ''}
                   </span>
                 )}
+                {/* Y aparte, lo de ESTA tarea (hoy y acumulado de todos los días). */}
+                <span style={{ fontSize: 12.5, color: '#8b8379', textAlign: 'center' }}>
+                  En esta tarea: <b style={{ color: '#cdc4b8' }}>{hm(todayTotal)}</b> hoy{prevDays > 0 ? <> · <b style={{ color: '#cdc4b8' }}>{hm(totalTask)}</b> acumulado (<span style={{ color: '#E7C56B' }}>{hm(prevDays)} de días previos</span>)</> : ''}
+                </span>
                 {/* Planeado vs usado (SÓLO del tiempo planeado), con % usado. */}
                 {planBase > 0 && (
                   <>
