@@ -225,7 +225,9 @@ export function useFocusSession(hooks: FocusHooks) {
       // recalcules ahora−inicio: eso contaría el hueco de la pausa como trabajado).
       const oldStartMs = s.startedAt ?? d.getTime()
       const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now() } })
+      // Corregir el inicio invalida el mapa de segmentos (los intervalos ya no cuadran con el nuevo
+      // origen): se limpian → al terminar se registra como bloque continuo, con el `dur` correcto.
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now(), segs: [] } })
     } else {
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
     }
@@ -245,7 +247,10 @@ export function useFocusSession(hooks: FocusHooks) {
     const toMin = (ms: number) => { const dt = new Date(ms); return dt.getHours() * 60 + dt.getMinutes() }
     const openStart = s.segAt ?? s.startedAt
     const allSegs: [number, number][] = [...(s.segs || []), ...(s.pausedAt == null && openStart != null ? [[openStart, Date.now()] as [number, number]] : [])]
-    const segments = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : undefined
+    const rawSegs = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : []
+    // Sólo emite segmentos si son coherentes (fin > inicio en TODOS): si alguno cruza medianoche
+    // (toMin usa hora local → fin < inicio), se omiten y se registra como bloque continuo.
+    const segments = rawSegs.length && rawSegs.every(([a, b]) => b > a) ? rawSegs : undefined
     const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0

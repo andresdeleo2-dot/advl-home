@@ -496,7 +496,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     onToast: (msg) => showToast(msg),
   })
 
-  const anyModal = !!(editing || taskEdit || taskView || routineStat || pickerOpen || focus.busy)
+  const anyModal = !!(editing || taskEdit || taskView || routineStat || pickerOpen || focus.busy || dayCloseOpen || weekCloseOpen || triageOpen || objsOpen || diaryOpen)
   useEffect(() => { modalOpenRef.current = anyModal }, [anyModal])
 
   /* "¿Qué hago ahora?": elige la MEJOR siguiente tarea del día (vencidas primero, luego prioridad,
@@ -799,7 +799,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     for (const e of activeEpics) for (const t of e.tasks || []) {
       if (!t.id) continue
       for (const l of t.progressLog || []) if (l.note && l.note.trim() && !l.note.startsWith('⏱')) out.push({ at: l.d + 'T12:00', day: l.d, kind: 'nota', text: l.note, eId: e.id, eName: e.name, color: e.color, tid: t.id, tName: t.t })
-      for (const c of t.comentarios || []) out.push({ at: c.at, day: (c.at || '').slice(0, 10), kind: 'comentario', text: c.text, eId: e.id, eName: e.name, color: e.color, tid: t.id, tName: t.t })
+      for (const c of t.comentarios || []) { const cd = new Date(c.at); const day = isNaN(cd.getTime()) ? (c.at || '').slice(0, 10) : `${cd.getFullYear()}-${String(cd.getMonth() + 1).padStart(2, '0')}-${String(cd.getDate()).padStart(2, '0')}`; out.push({ at: c.at, day, kind: 'comentario', text: c.text, eId: e.id, eName: e.name, color: e.color, tid: t.id, tName: t.t }) }
     }
     return out.sort((a, b) => b.at.localeCompare(a.at))
   }, [activeEpics])

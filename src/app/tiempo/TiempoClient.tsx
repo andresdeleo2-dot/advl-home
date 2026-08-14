@@ -302,15 +302,21 @@ export default function TiempoClient() {
     // el teléfono no se pierde cuando la laptop (con estado viejo en memoria) guarde encima.
     // No adopta con un editor abierto ni con una sesión en curso (para no pisar trabajo en vuelo).
     const adopt = () => {
-      if (!canRefresh() || dataRef.current.session) return
+      if (!canRefresh()) return   // no adopta con un editor abierto (edición por índice)
       fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
-        // Revalida TAMBIÉN el editor tras el fetch: si se abrió un registro/tarea mientras el fetch
-        // estaba en vuelo, adoptar reemplazaría data.history y el autoguardado por índice pisaría otra fila.
-        if (!j?.ok || !canRefresh() || dataRef.current.session) return
+        if (!j?.ok || !canRefresh()) return
         const serverTs = Number(j.ts) || 0
         const curTs = Number(localStorage.getItem(TS_KEY) || 0)
         if (serverTs > curTs && j.data && Object.keys(j.data).length) {
-          const merged = Object.assign(defaults(), j.data)
+          const sv = Object.assign(defaults(), j.data)
+          // Sesión: gana la de `mod` más nuevo; si la local ya terminó en OTRO dispositivo (tombstone
+          // sessionEnd > su inicio), se limpia — así el cronómetro no queda "vivo" ni se registra doble.
+          const localSess = dataRef.current.session
+          const endedElsewhere = !!localSess && (Number(sv.sessionEnd) || 0) > (localSess.startedAt || 0)
+          const sess = (localSess && sv.session)
+            ? ((localSess.mod || 0) >= (sv.session.mod || 0) ? localSess : sv.session)
+            : (localSess && !sv.session) ? (endedElsewhere ? null : localSess) : sv.session
+          const merged = { ...sv, session: sess }
           setData(merged)
           try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
         }
@@ -1157,7 +1163,10 @@ export default function TiempoClient() {
   // Registro de hoy (localStorage): editar entradas (auto-guardado, NO cierra el editor).
   const saveHist = (idx: number, patch: Partial<AppData['history'][number]>) => {
     const row = dataRef.current.history[idx]
-    save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, ...patch } : h) })
+    // Si cambian el inicio o la duración, los `segments` (bloques por intervalo) dejan de cuadrar →
+    // se limpian y el registro vuelve a un bloque continuo con la nueva hora/duración.
+    const p = (patch.start != null || patch.dur != null) ? { ...patch, segments: undefined } : patch
+    save({ history: dataRef.current.history.map((h, i) => i === idx ? { ...h, ...p } : h) })
     if (row && typeof patch.dur === 'number' && patch.dur !== row.dur) adjustEpicLog(row, patch.dur)
   }
   // Toast "deshacer": guarda una acción de restauración por ~6s.
@@ -1279,7 +1288,8 @@ export default function TiempoClient() {
     const toMin = (ms: number) => { const dt = new Date(ms); return dt.getHours() * 60 + dt.getMinutes() }
     const openStart = s.segAt ?? s.startedAt
     const allSegs: [number, number][] = [...(s.segs || []), ...(s.pausedAt == null && openStart != null ? [[openStart, Date.now()] as [number, number]] : [])]
-    const segments = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : undefined
+    const rawSegs = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : []
+    const segments = rawSegs.length && rawSegs.every(([a, b]) => b > a) ? rawSegs : undefined   // omite si alguno cruza medianoche
     const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
     save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
@@ -1487,7 +1497,8 @@ export default function TiempoClient() {
       // recalcules ahora−inicio: contaría el hueco de la pausa como trabajado).
       const oldStartMs = s.startedAt ?? d.getTime()
       const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now() } })
+      // Corregir el inicio invalida los segmentos (ya no cuadran con el nuevo origen) → se limpian.
+      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now(), segs: [] } })
     } else {
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
     }
@@ -3670,7 +3681,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const activeR = drag?.kind === 'wresize' && drag.idx === w._idx
               // Sesión con PAUSAS: se dibuja un bloque por intervalo trabajado (con el hueco de la
               // pausa libre) en vez de un bloque continuo que ocupaba también el tiempo en pausa.
-              const segs = (w.segments && w.segments.length > 1 && drag?.kind !== 'wresize') ? w.segments : null
+              const segs = (w.segments && w.segments.length > 1 && !(drag?.kind === 'wresize' && drag.idx === w._idx)) ? w.segments : null
               if (segs) {
                 return (
                   <Fragment key={'w' + w._idx}>
