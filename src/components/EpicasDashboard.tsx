@@ -132,11 +132,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null)  // ancla del popover (⋯ o prioridad) abierto
   const [doneOpen, setDoneOpen] = useState(true)
   const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'>('plan')  // orden del enfoque
-  const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance'>('todas')          // filtro del enfoque
+  const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance' | 'estancada' | 'multidia' | 'arrastre'>('todas')          // filtro del enfoque
   const [dayEpica, setDayEpica] = useState<string>('todas')                                                // filtro por épica en el enfoque de día
   const [tasksExpanded, setTasksExpanded] = useState(false)   // ver todas las tareas activas de la épica destacada
   const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
-  const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'>('todas')
+  const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'>('todas')
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
@@ -379,7 +379,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const d = q.get('d'); if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setViewDate(d)
       const e = q.get('e'); if (e) setFeaturedId(e)
       const tsk = q.get('t'); if (tsk && e) setTimeout(() => openTaskEditRef.current?.(e, tsk), 0)
-      const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance'].includes(f)) setPlanFilter(f as typeof planFilter)
+      const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance', 'estancada', 'multidia', 'arrastre'].includes(f)) setPlanFilter(f as typeof planFilter)
       const ep = q.get('ep'); if (ep) setWeekEpica(ep)
       const df = q.get('df'); if (df && ['todas', 'facil', 'media', 'dificil'].includes(df)) setWeekDif(df as typeof weekDif)
     }
@@ -1008,6 +1008,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (daysSince >= 8) return `${daysSince} días sin movimiento`
     return null
   }
+  // Predicados de estado reutilizables por los filtros (Día, backlog y épicas).
+  const isStuck = (t: EpicaTask) => stuckReason(t) != null                                   // 🐌 estancada
+  const isMultiDay = (t: EpicaTask) => diasTrabajados(t) >= 2                                 // ⧗ trabajada en varios días
+  const isCarried = (t: EpicaTask) => !!t.plan && t.plan < today && t.status !== 'Terminada' && t.status !== ARCHIVED  // ⏳ de días anteriores
   // Días que llevas con una tarea (desde que la creaste; si no hay fecha de creación, desde que la planeaste).
   const diasCon = (t: EpicaTask): number => {
     const desde = t.createdAt || t.plan
@@ -2174,6 +2178,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicFilter === 'sinplan') return !t.plan
     if (epicFilter === 'vencidas') { const dl = daysUntil(t.due); return dl != null && dl < 0 }
     if (epicFilter === 'alta') return t.priority === 'alta'
+    if (epicFilter === 'estancada') return isStuck(t)
+    if (epicFilter === 'multidia') return isMultiDay(t)
+    if (epicFilter === 'arrastre') return isCarried(t)
     return true
   }
   const objOfTask = (tid?: string) => featured.kpis.find(m => (m.taskIds || []).includes(tid || ''))
@@ -2641,6 +2648,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : planFilter === 'estancada' ? isStuck(t)
+      : planFilter === 'multidia' ? isMultiDay(t)
+      : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
     type WeekRow = { e: Epica; t: EpicaTask; i: number }
     const cmp = (a: WeekRow, b: WeekRow) => {
@@ -2668,7 +2678,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <option value="epica">Épica</option>
           </select>
         )}
-        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
           const on = planFilter === k
           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
         })}
@@ -2975,6 +2985,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : planFilter === 'estancada' ? isStuck(t)
+      : planFilter === 'multidia' ? isMultiDay(t)
+      : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
     const matchF = (e: Epica, t: EpicaTask) => (effWeekEpica === 'todas' || e.id === effWeekEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
@@ -3125,6 +3138,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : planFilter === 'estancada' ? isStuck(t)
+      : planFilter === 'multidia' ? isMultiDay(t)
+      : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
     const matchF = (e: Epica, t: EpicaTask) => (effEpica === 'todas' || e.id === effEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
@@ -3192,6 +3208,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
       : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
       : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+      : planFilter === 'estancada' ? isStuck(t)
+      : planFilter === 'multidia' ? isMultiDay(t)
+      : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
     type Row = { e: Epica; t: EpicaTask; i: number }
     const cmp = (a: Row, b: Row) => {
@@ -3230,7 +3249,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <option value="epica">Épica</option>
           </select>
         )}
-        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
           const on = planFilter === k
           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
         })}
@@ -3559,7 +3578,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Fila de filtros compartida (épica/dificultad/completadas) ─── */
   const renderBoardFilters = (epicsForFilter: Epica[], effEpica: string) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 12px', flexWrap: 'wrap' }}>
-      {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+      {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
         const on = planFilter === k
         return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
       })}
@@ -3578,7 +3597,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   )
   const passPlanFilter = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
     : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
-    : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan) : true) && passWork(t, today)
+    : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === t.plan)
+    : planFilter === 'estancada' ? isStuck(t)
+    : planFilter === 'multidia' ? isMultiDay(t)
+    : planFilter === 'arrastre' ? isCarried(t) : true) && passWork(t, today)
 
   /** Vista Calendario: retícula mensual con tarjetas por su día planeado; arrastra
    *  para reprogramar, clic para abrir. Marca las completadas (tachadas). */
@@ -4584,7 +4606,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <>
               <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '18px 0 8px' }} />
               {(() => {
-                const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta' : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })() : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === viewDate) : true
+                const passF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta' : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })() : planFilter === 'avance' ? (t.progressLog || []).some(x => x.d === viewDate) : planFilter === 'estancada' ? isStuck(t) : planFilter === 'multidia' ? isMultiDay(t) : planFilter === 'arrastre' ? isCarried(t) : true
                 // Épicas presentes en el plan de hoy (para los chips de filtro por épica)
                 const dayEpics = Array.from(new Map(planItems.map(x => [x.e.id, x.e])).values())
                 const effDayEpica = dayEpics.some(e => e.id === dayEpica) ? dayEpica : 'todas'
@@ -4622,7 +4644,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <option value="epica">Épica</option>
                           </select>
                         )}
-                        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance']] as [typeof planFilter, string][]).map(([k, label]) => {
+                        {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
                           const on = planFilter === k
                           return <button key={k} onClick={() => setPlanFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                         })}
@@ -6583,7 +6605,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <option value="progreso">Avance</option>
                     <option value="nombre">Nombre</option>
                   </select>
-                  {([['todas', 'Todas'], ['planeadas', 'Planeadas'], ['sinplan', 'Sin plan'], ['vencidas', 'Vencidas'], ['alta', 'Alta']] as [typeof epicFilter, string][]).map(([k, label]) => {
+                  {([['todas', 'Todas'], ['planeadas', 'Planeadas'], ['sinplan', 'Sin plan'], ['vencidas', 'Vencidas'], ['alta', 'Alta'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof epicFilter, string][]).map(([k, label]) => {
                     const on = epicFilter === k
                     return <button key={k} onClick={() => setEpicFilter(k)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 600, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' }}>{label}</button>
                   })}
@@ -7545,11 +7567,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{label}</span>
           </div>
         )
-        const row = (x: { e: Epica; t: EpicaTask }, extra?: string) => (
-          <div key={planKey(x.e.id, x.t)} onClick={() => { setDayCloseOpen(false); setTaskView({ eId: x.e.id, tid: x.t.id! }) }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 4px', cursor: 'pointer', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+        const row = (x: { e: Epica; t: EpicaTask; i: number }, extra?: string) => (
+          <div key={planKey(x.e.id, x.t)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 4px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
-            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t.t}</span>
+            <span onClick={() => { setDayCloseOpen(false); setTaskView({ eId: x.e.id, tid: x.t.id! }) }} title="Abrir actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
             {extra && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>{extra}</span>}
+            {/* Calendario por-tarea: mueve SOLO esta actividad a otro día, sin abrirla */}
+            <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 14 }}>
+              📅
+              <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día de la actividad"
+                onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) planTaskToDay(x.e, x.i, d, { toast: true }) }}
+                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+            </label>
           </div>
         )
         return (

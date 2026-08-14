@@ -448,11 +448,11 @@ export type Prefs = {
   compact: boolean; showRowKpi: boolean
   estadoFilter: 'activas' | 'archivadas' | 'todas'; catFilter: string
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
-  planFilter: 'todas' | 'alta' | 'vencidas' | 'avance'
+  planFilter: 'todas' | 'alta' | 'vencidas' | 'avance' | 'estancada' | 'multidia' | 'arrastre'
   planMode: 'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen' | 'agenda' | 'detalle'
   weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; boardView: 'tablero' | 'tabla'; epicView: 'lista' | 'tabla'; dayCapacity: number
   epicSort: 'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
-  epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta'
+  epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
   backlogView: 'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'
   backlogDone: boolean; backlogFEpica: string; backlogFStatus: string; backlogFPrio: string
