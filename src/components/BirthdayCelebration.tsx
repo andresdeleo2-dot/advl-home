@@ -14,15 +14,15 @@ const PERSONAS_URL = 'https://mi-vida-neon.vercel.app/vida?vista=personas'
 
 type P = { id: string; nombre: string; apodo: string | null; cumple: string; excepcional?: boolean; foto?: string | null; celular?: string | null }
 
-const hoyISO = () => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 export default function BirthdayCelebration() {
   const [personas, setPersonas] = useState<P[]>([])
-  const [cerrado, setCerrado] = useState(true) // arranca cerrado hasta saber
+  const [mounted, setMounted] = useState(false)
+  const [cerrado, setCerrado] = useState(false)
   const force = typeof window !== 'undefined' ? fiestaForzada() : null
+
+  // Solo cliente (evita desajustes de hidratación con el confeti aleatorio) y,
+  // como no guarda nada, en CADA recarga la fiesta vuelve completa.
+  useEffect(() => setMounted(true), [])
 
   useEffect(() => {
     let alive = true
@@ -36,19 +36,12 @@ export default function BirthdayCelebration() {
     [personas, force]
   )
 
-  // Cierre por día: si ya cerró la fiesta hoy, no reaparece hasta mañana / el
-  // próximo cumpleaños. La vista previa (?fiesta) ignora el cierre.
-  const clave = `advl-fiesta:${hoyISO()}`
-  useEffect(() => {
-    if (force === 'andres') { setCerrado(false); return }
-    if (force === 'off') { setCerrado(true); return }
-    setCerrado(localStorage.getItem(clave) === '1')
-  }, [force, clave])
-
-  if (cerrado) return null
+  // El cierre (✕) es solo temporal: NO se guarda, así que al recargar la fiesta
+  // reaparece completa. Dura todo el día del cumpleaños pase lo que pase.
+  if (!mounted || cerrado) return null
   if (!andresHoy && excepcionalesHoy.length === 0) return null
 
-  const cerrar = () => { setCerrado(true); if (!force) localStorage.setItem(clave, '1') }
+  const cerrar = () => setCerrado(true)
   const edadAndres = edadQueCumple(MI_CUMPLE)
 
   return (
