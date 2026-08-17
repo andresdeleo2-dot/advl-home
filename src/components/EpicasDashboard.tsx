@@ -11,6 +11,7 @@ import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
+import BirthdayCelebration from './BirthdayCelebration'
 import FavoritosStrip from './FavoritosStrip'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 import {
@@ -2137,6 +2138,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return (
       <div style={{ minHeight: '100%' }}>
         <TopBar sourceCount={0} onNew={openNew} />
+        <BirthdayCelebration />
         <div style={{ maxWidth: 1360, margin: '0 auto', padding: '60px 18px', textAlign: 'center', color: 'rgba(20,35,61,0.5)' }}>
           <p style={{ fontSize: 15, marginBottom: 18 }}>Aún no hay épicas. Crea tu primer gran frente.</p>
           <button onClick={openNew} style={goldBtn}>+ Nueva épica</button>
@@ -6256,6 +6258,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     <div style={{ minHeight: '100%' }}>
       {focus.card}
       <TopBar sourceCount={sourceCount} onNew={openNew} />
+      <BirthdayCelebration />
 
       <div className="ep-shell" style={{ maxWidth: 1360, margin: '0 auto', padding: '22px 18px 60px' }}>
         {/* Aviso de carga fallida: antes el error se tragaba y se veían datos rancios del SSR */}

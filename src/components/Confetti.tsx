@@ -7,18 +7,18 @@ import { PALETA_FIESTA } from '@/lib/cumple'
    Cada pieza cae (confFall) mientras gira y se mece (confSpin) con valores al
    azar, así ninguna va igual que otra. Respeta prefers-reduced-motion (menos
    piezas y sin giro brusco). CSS puro: cero dependencias. */
-export default function Confetti({ count = 44, zIndex = 55 }: { count?: number; zIndex?: number }) {
+export default function Confetti({ count = 60, zIndex = 9990 }: { count?: number; zIndex?: number }) {
   const piezas = useMemo(() => {
     const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-    const n = reduce ? Math.min(16, count) : count
+    const n = reduce ? Math.min(20, count) : count
     return Array.from({ length: n }, (_, i) => ({
       i,
       color: PALETA_FIESTA[i % PALETA_FIESTA.length],
       left: Math.random() * 100,
-      size: 6 + Math.random() * 8,
-      dur: 3.6 + Math.random() * 3.4,
+      size: 8 + Math.random() * 9,
+      dur: 3.4 + Math.random() * 3.2,
       delay: -Math.random() * 6,
-      sway: 10 + Math.random() * 34,
+      sway: 10 + Math.random() * 36,
       circle: Math.random() < 0.32,
     }))
   }, [count])

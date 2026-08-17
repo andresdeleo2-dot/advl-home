@@ -46,7 +46,7 @@ export default function BirthdayCelebration() {
 
   return (
     <>
-      <Confetti count={andresHoy ? 56 : 40} />
+      <Confetti count={andresHoy ? 90 : 50} />
       <div className="fiesta-in" style={{ margin: '14px 14px 0', position: 'relative', zIndex: 30 }}>
         <div style={{ maxWidth: 1500, margin: '0 auto' }}>
           <div style={{
