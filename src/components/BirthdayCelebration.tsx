@@ -30,7 +30,11 @@ export default function BirthdayCelebration() {
     return () => { alive = false }
   }, [])
 
-  const andresHoy = force === 'andres' || (force !== 'off' && esHoyCumple(MI_CUMPLE))
+  // Andrés cumple hoy si lo dice su FICHA (misma fuente que el resto de la app)
+  // o la constante de respaldo. Antes solo miraba la constante fija, así que si
+  // se cambiaba la fecha de la ficha, el HERO no se disparaba aunque el resto sí.
+  const andresHoy = force === 'andres'
+    || (force !== 'off' && (esHoyCumple(MI_CUMPLE) || personas.some(p => esAndres(p.nombre) && esHoyCumple(p.cumple))))
   const excepcionalesHoy = useMemo(
     () => (force === 'off' ? [] : personas.filter(p => !esAndres(p.nombre) && p.excepcional && esHoyCumple(p.cumple))),
     [personas, force]
