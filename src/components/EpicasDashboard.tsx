@@ -1874,13 +1874,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return f ? { ...clone(f.t), links: f.t.links || [] } : null
   }
   const openTaskEdit = (epicId: string, tid: string | null, seed?: Partial<EpicaTask>) => {
-    const found = tid ? findTask(epicId, tid) : null
+    // Resuelve contra el estado y, si falla (render aún no propaga un patch reciente), contra el ref.
+    const found = tid ? (findTask(epicId, tid) || findTaskRef(epicId, tid)) : null
     if (found && tid) {
       const base = { ...clone(found.t), links: found.t.links || [] }
       editOpenSnapshotRef.current = clone(base)   // referencia de "qué había al abrir"
       const cached = draftCacheRef.current[`${epicId}:${tid}`]
-      // Hay un borrador sin guardar y distinto de la tarea (SÓLO en campos del editor) → restaurarlo.
-      if (cached && editorSlice(cached.draft) !== editorSlice(base)) {
+      // Restaura un borrador sin guardar SÓLO si es válido (con título) y difiere de la tarea en
+      // campos del editor. Un borrador vacío/corrupto se ignora (antes abría el editor en blanco).
+      if (cached && (cached.draft?.t || '').trim() && editorSlice(cached.draft) !== editorSlice(base)) {
         setTaskDraft(cached.draft)
         setTaskEditTarget(cached.target || epicId)
         setTaskEdit({ epicId, tid })
@@ -5704,12 +5706,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const dt = dueTone(t.due, t.status === 'Terminada')
         const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 9 }
         const openEditFromView = () => { opts.onClose(); openTaskEdit(view.eId, t.id!) }
+        // Cambiar de épica sin abrir "Editar": mueve la tarea y reapunta el detalle a su nueva épica
+        // (si no, findTask con la épica vieja daría null y el modal quedaría vacío).
+        const changeEpica = (newEId: string) => {
+          if (!newEId || newEId === ep.id) return
+          moveTaskToEpica(ep, i, newEId)
+          if (opts.docked) setMdSel({ eId: newEId, tid: t.id! }); else setTaskView({ eId: newEId, tid: t.id! })
+        }
     const card = (
             <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={e => e.stopPropagation()} className="ep-modal" style={opts.docked ? { width: '100%', maxWidth: 'none', height: '100%', background: '#fff', borderRadius: 14, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden', display: 'flex', flexDirection: 'column' } : { width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
               <div style={{ height: 4, background: ep.color, flexShrink: 0 }} />
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '18px 26px 14px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(20,35,61,0.55)', marginBottom: 7 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color, flexShrink: 0 }} />
+                      {activeEpics.length > 1
+                        ? <select value={ep.id} onChange={e => changeEpica(e.target.value)} title="Mover esta actividad a otra épica" aria-label="Épica" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 22px 3px 7px', fontSize: 12, fontWeight: 700, color: ep.color, background: '#fff', outline: 'none', maxWidth: 240 }}>{activeEpics.map(x => <option key={x.id} value={x.id} style={{ color: '#16365F' }}>{x.name}</option>)}</select>
+                        : <span>{ep.name}</span>}
+                    </div>
                     <input key={`title:${t.id}`} defaultValue={t.t} aria-label="Título de la tarea"
                       onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); (ev.currentTarget as HTMLInputElement).blur() } }}
                       onFocus={ev => { ev.currentTarget.style.background = '#fff'; ev.currentTarget.style.borderColor = 'rgba(15,35,64,0.18)' }}
