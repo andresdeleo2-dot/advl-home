@@ -980,9 +980,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const c = key.lastIndexOf(':')
     return findTaskRef(key.slice(0, c), key.slice(c + 1))
   }
+  // ── Sesiones por día (dayPlans): helpers de LECTURA. Definidos ANTES de planItems porque los usa. ──
+  const dayPlansOf = (t: EpicaTask): EpicaDayPlan[] => Array.isArray(t.dayPlans) ? t.dayPlans : []
+  // Días en que la tarea está agendada = plan (día "primario") ∪ días de dayPlans. Para que la MISMA
+  // tarea aparezca en CADA uno de esos días en las vistas Día/Ajuste/Semana.
+  const taskDays = (t: EpicaTask): string[] => { const s = new Set<string>(dayPlansOf(t).map(d => d.day).filter(Boolean)); if (t.plan) s.add(t.plan); return [...s] }
+  const dayPlanFor = (t: EpicaTask, day: string): EpicaDayPlan | undefined => dayPlansOf(t).find(d => d.day === day)
+  // Dificultad / estimado / "hecho" EFECTIVOS ese día (los del dayPlan si existen; si no, los generales).
+  const difForDay = (t: EpicaTask, day: string): 'facil' | 'media' | 'dificil' | undefined => dayPlanFor(t, day)?.difficulty || t.difficulty
+  const estMinForDay = (t: EpicaTask, day: string): number => { const dp = dayPlanFor(t, day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; return estMinOf({ estMin: t.estMin, difficulty: difForDay(t, day) }) }
+  const doneOnDay = (t: EpicaTask, day: string): boolean => !!dayPlanFor(t, day)?.done || (t.progressLog || []).some(x => x.d === day)
   const planItems = useMemo(() => {
     const arr: { e: Epica; t: EpicaTask; i: number }[] = []
-    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan === viewDate && t.status !== ARCHIVED) arr.push({ e, t, i }) }))
+    // La tarea aparece en el día si su plan es ese día O si tiene un "Día de trabajo" (dayPlan) ese día.
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && taskDays(t).includes(viewDate)) arr.push({ e, t, i }) }))
     return arr.sort((a, b) =>
       ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)) ||
       ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9)))
@@ -1609,16 +1620,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     else tasks[ti].estMin = 0   // 0/propiedad presente = “sin estimado propio”, se limpia en la fila (est_min = null? -> guardamos 0 = usa dificultad)
     patchEpic(e.id, { tasks })
   }
-  // ── Sesiones por día (dayPlans): la misma tarea en varios días, con horas/dificultad/hecho por día ──
-  const dayPlansOf = (t: EpicaTask): EpicaDayPlan[] => Array.isArray(t.dayPlans) ? t.dayPlans : []
-  // Días en que la tarea está agendada = plan (día "primario") ∪ días de dayPlans. Para que la MISMA
-  // tarea aparezca en CADA uno de esos días en las vistas Día/Ajuste/Semana.
-  const taskDays = (t: EpicaTask): string[] => { const s = new Set<string>(dayPlansOf(t).map(d => d.day).filter(Boolean)); if (t.plan) s.add(t.plan); return [...s] }
-  const dayPlanFor = (t: EpicaTask, day: string): EpicaDayPlan | undefined => dayPlansOf(t).find(d => d.day === day)
-  // Dificultad / estimado / "hecho" EFECTIVOS ese día (los del dayPlan si existen; si no, los generales).
-  const difForDay = (t: EpicaTask, day: string): 'facil' | 'media' | 'dificil' | undefined => dayPlanFor(t, day)?.difficulty || t.difficulty
-  const estMinForDay = (t: EpicaTask, day: string): number => { const dp = dayPlanFor(t, day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; return estMinOf({ estMin: t.estMin, difficulty: difForDay(t, day) }) }
-  const doneOnDay = (t: EpicaTask, day: string): boolean => !!dayPlanFor(t, day)?.done || (t.progressLog || []).some(x => x.d === day)
+  // ── Sesiones por día (dayPlans): setters. Los helpers de LECTURA (dayPlansOf/taskDays/…) se
+  //    definen más arriba, antes de planItems, porque planItems los usa. ──
   const mutateDayPlans = (e: Epica, ti: number, fn: (arr: EpicaDayPlan[]) => EpicaDayPlan[]) => {
     if (!dayPlansReady.current) { showToast('Corre sql/epicas-10-day-plans.sql para agendar por día', true); return }
     const tasks = clone(e.tasks)
@@ -2544,10 +2547,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           style={{ flexShrink: 0, height: 20, width: 20, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: selected ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: selected ? '#10233F' : '#fff', color: '#fff' }}>
           {selected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
         </button>
-        <button onClick={ev => { if (ev.detail > 1) return; completeFromPlan(e, i) }} aria-label="Marcar terminada" title="Marcar terminada" className="plan-check"
-          style={{ flexShrink: 0, height: 30, width: 30, borderRadius: 99, border: '1.5px solid rgba(15,35,64,0.25)', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'transparent', transition: 'border-color .15s, color .15s' }}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>
-        </button>
+        {(() => { const dp = dayPlanFor(t, viewDate); const dayDone = doneOnDay(t, viewDate)
+          return (
+            <button onClick={ev => { if (ev.detail > 1) return; if (dp) toggleDayPlanDone(e, i, viewDate); else completeFromPlan(e, i) }} aria-label={dp ? 'Marcar trabajado este día' : 'Marcar terminada'} title={dp ? (dp.done ? 'Trabajado este día · clic para desmarcar' : 'Marcar: trabajé este día') : 'Marcar terminada'} className="plan-check"
+              style={{ flexShrink: 0, height: 30, width: 30, borderRadius: 99, border: `1.5px solid ${dp && dayDone ? '#C2933A' : 'rgba(15,35,64,0.25)'}`, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: dp && dayDone ? '#C2933A' : 'transparent', transition: 'border-color .15s, color .15s' }}>
+              {dp && dayDone ? <span style={{ fontSize: 15, lineHeight: 1 }}>◐</span> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+            </button>
+          )
+        })()}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
           <span style={{ width: ps.accentW, height: 30, borderRadius: 99, background: ps.accent, flexShrink: 0 }} />
           <span className="serif plan-num" style={{ fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{String(pos + 1).padStart(2, '0')}</span>
@@ -2564,8 +2571,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
             )})()}
             {/* Estimado por dificultad vs real invertido (bitácora). Sólo cuando hay algo que comparar. */}
-            {(() => { const est = estMinOf(t), real = investedMinOf(t); if (!est && !real) return null; const over = est > 0 && real > est; const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`; return (
-              <span title={`Estimado por dificultad ${est ? hmm(est) : '—'} · llevas ${hmm(real)} invertidos${over ? ` (${hmm(real - est)} de más)` : ''}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: over ? '#B0522E' : 'rgba(20,35,61,0.5)', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(15,35,64,0.05)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(15,35,64,0.1)'}`, borderRadius: 99, padding: '1px 7px' }}>⏳ {est ? hmm(est) : '—'}{real > 0 ? ` / ${hmm(real)}` : ''}</span>
+            {(() => { const est = estMinForDay(t, viewDate), real = investedMinOf(t); if (!est && !real) return null; const over = est > 0 && real > est; const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`; const perDay = !!dayPlanFor(t, viewDate)?.estMin; return (
+              <span title={`Estimado ${perDay ? 'de este día' : 'por dificultad'} ${est ? hmm(est) : '—'} · llevas ${hmm(real)} invertidos${over ? ` (${hmm(real - est)} de más)` : ''}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: over ? '#B0522E' : 'rgba(20,35,61,0.5)', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(15,35,64,0.05)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(15,35,64,0.1)'}`, borderRadius: 99, padding: '1px 7px' }}>⏳ {est ? hmm(est) : '—'}{real > 0 ? ` / ${hmm(real)}` : ''}</span>
             )})()}
             {/* Tarea estancada: reprogramada muchas veces o días sin avanzar. */}
             {(() => { const r = stuckReason(t); if (!r) return null; return (
@@ -4473,7 +4480,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && (() => {
                 const load = planPend.reduce((n, x) => n + taskWeight(x.t), 0)
                 // Horas estimadas del día (por dificultad), AJUSTADAS con tu calibración si hay datos.
-                const calMin = planPend.reduce((n, x) => { const base = estMinOf(x.t); if (!base) return n; const d = x.t.difficulty; const custom = typeof x.t.estMin === 'number' && x.t.estMin > 0; const f = (!custom && d && calibration.totalN >= 3 && calibration.factor(d) > 0) ? calibration.factor(d) : 1; return n + base * f }, 0)
+                const calMin = planPend.reduce((n, x) => { const base = estMinForDay(x.t, viewDate); if (!base) return n; const d = difForDay(x.t, viewDate); const dp = dayPlanFor(x.t, viewDate); const custom = (typeof x.t.estMin === 'number' && x.t.estMin > 0) || (dp && typeof dp.estMin === 'number' && dp.estMin > 0); const f = (!custom && d && calibration.totalN >= 3 && calibration.factor(d) > 0) ? calibration.factor(d) : 1; return n + base * f }, 0)
                 const asH = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${Math.round(m)}m`
                 const pctLoad = dayCapacity > 0 ? load / dayCapacity : 0
                 const c = pctLoad > 1 ? '#B0522E' : pctLoad > 0.85 ? '#A87A2C' : '#2E6E6E'
