@@ -242,6 +242,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
   const comentariosReady = useRef(false) // true si la columna comentarios existe
   const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
+  const estMinReady = useRef(false)      // true si la columna est_min existe (estimado propio de horas por tarea)
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
@@ -269,6 +270,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       remindReady.current = !!j.remindReady
       comentariosReady.current = !!j.comentariosReady
       resumenReady.current = !!j.resumenReady
+      estMinReady.current = !!j.estMinReady
       weekBudgetReady.current = !!j.weekBudgetReady
       {
         const raw = j.data as Epica[]
@@ -462,7 +464,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       return 0
     },
     plannedMinFor: (taskId) => {
-      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return WEEK_EST_MIN(t.difficulty) }
+      for (const e of epicsRef.current) { const t = e.tasks.find(x => x.id === taskId); if (t) return estMinOf(t) }
       return 0
     },
     taskFor: (taskId) => {
@@ -516,7 +518,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // El "por qué" la eligió: vencida > prioridad alta > entrega cercana > primera del orden.
     const dl = daysUntil(pick.t.due)
     const why = (dl != null && dl < 0) ? `venció hace ${-dl}d` : pick.t.priority === 'alta' ? 'prioridad alta' : (dl != null && dl <= 3) ? `vence ${relLong(pick.t.due).toLowerCase()}` : 'es lo siguiente en tu orden'
-    if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: WEEK_EST_MIN(pick.t.difficulty) })) showToast(`▶ «${pick.t.t}» · ${why}`)
+    if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: estMinOf(pick.t) })) showToast(`▶ «${pick.t.t}» · ${why}`)
   }
   // Presupuesto semanal por épica (horas/semana). Si la columna week_budget existe (migración
   // corrida), se guarda en Supabase y SINCRONIZA entre dispositivos; si no, cae a localStorage.
@@ -1596,6 +1598,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks); tasks[ti].t = t
     patchEpic(e.id, { tasks })
   }
+  // Estimado propio (minutos) editable inline. null = usar el default por dificultad.
+  const setTaskEstMin = (e: Epica, ti: number, min: number | null) => {
+    if (!estMinReady.current) { showToast('Corre sql/epicas-09-est-min.sql para guardar tu estimado', true); return }
+    const tasks = clone(e.tasks)
+    if (min != null && min > 0) tasks[ti].estMin = Math.round(min)
+    else tasks[ti].estMin = 0   // 0/propiedad presente = “sin estimado propio”, se limpia en la fila (est_min = null? -> guardamos 0 = usa dificultad)
+    patchEpic(e.id, { tasks })
+  }
   // Repetición editable inline en el detalle (mismos presets que el editor). null = no se repite.
   const setTaskRepeat = (e: Epica, ti: number, repeat: EpicaRepeat | null) => {
     const tasks = clone(e.tasks)
@@ -2498,7 +2508,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
             )})()}
             {/* Estimado por dificultad vs real invertido (bitácora). Sólo cuando hay algo que comparar. */}
-            {(() => { const est = WEEK_EST_MIN(t.difficulty), real = investedMinOf(t); if (!est && !real) return null; const over = est > 0 && real > est; const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`; return (
+            {(() => { const est = estMinOf(t), real = investedMinOf(t); if (!est && !real) return null; const over = est > 0 && real > est; const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`; return (
               <span title={`Estimado por dificultad ${est ? hmm(est) : '—'} · llevas ${hmm(real)} invertidos${over ? ` (${hmm(real - est)} de más)` : ''}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: over ? '#B0522E' : 'rgba(20,35,61,0.5)', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(15,35,64,0.05)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(15,35,64,0.1)'}`, borderRadius: 99, padding: '1px 7px' }}>⏳ {est ? hmm(est) : '—'}{real > 0 ? ` / ${hmm(real)}` : ''}</span>
             )})()}
             {/* Tarea estancada: reprogramada muchas veces o días sin avanzar. */}
@@ -2553,7 +2563,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {/* Arrancar el cronómetro de foco directo desde la fila (misma sesión que /tiempo) */}
           {focus.session?.taskId === t.id
             ? <span title="Sesión en curso con esta tarea" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: '800 10px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.12)', border: '1px solid rgba(62,142,142,0.35)', borderRadius: 99, padding: '4px 9px', whiteSpace: 'nowrap' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: '#2E6E6E', boxShadow: '0 0 0 3px rgba(62,142,142,0.2)' }} />en curso</span>
-            : <button onClick={ev => { ev.stopPropagation(); focus.begin({ name: t.t, epicaId: e.id, taskId: t.id!, dur: WEEK_EST_MIN(t.difficulty) }) }} aria-label="Empezar con cronómetro" title="Empezar ahora con cronómetro (el tiempo se registra en esta tarea)"
+            : <button onClick={ev => { ev.stopPropagation(); focus.begin({ name: t.t, epicaId: e.id, taskId: t.id!, dur: estMinOf(t) }) }} aria-label="Empezar con cronómetro" title="Empezar ahora con cronómetro (el tiempo se registra en esta tarea)"
                 style={{ height: 30, width: 30, border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', borderRadius: 8, cursor: 'pointer', color: '#A87A2C', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, lineHeight: 1 }}>▶</button>}
           {/* Cambiar la fecha "Hacer" con calendario, SIN abrir la tarea */}
           <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setCalMonth((t.plan || viewDate).slice(0, 7)); setMovePick(movePick && movePick.tid === t.id ? null : { eId: e.id, tid: t.id! }); setRowMenu(null); setPrioMenu(null) }} aria-label="Cambiar fecha" title="Cambiar el día (calendario)" style={{ height: 30, width: 30, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, lineHeight: 1 }}>📅</button>
@@ -2712,7 +2722,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const pend = all.filter(x => x.t.status !== 'Terminada')
         const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }
         pend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
-        const totMin = pend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+        const totMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
         const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
         const pill = (c: string, bg: string, label: string, n: number) => n > 0
           ? <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 99, padding: '3px 10px', font: '700 11.5px var(--font-ui)', color: c, background: bg }}><span style={{ width: 7, height: 7, borderRadius: 99, background: c }} />{label} {n}</span>
@@ -2818,7 +2828,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const pend = full.filter(x => x.t.status !== 'Terminada').length
           const done = full.length - pend
           const allDone = full.length > 0 && pend === 0
-          const dayMin = full.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+          const dayMin = full.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinOf(x.t), 0)
           const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
           const overloaded = dayMin > 480   // más de ~8h planeadas en un día
           return (
@@ -2931,7 +2941,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
           <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
           {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
-          {t.difficulty && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title="Estimado por dificultad">~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>}
+          {estMinOf(t) > 0 && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={typeof t.estMin === 'number' && t.estMin > 0 ? 'Tu estimado' : 'Estimado por dificultad'}>~{Math.round(estMinOf(t) / 60 * 10) / 10}h</span>}
           <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
         </div>
         {weekMoveKey === k && (
@@ -2951,7 +2961,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const over = weekOverDay === d && !!weekDrag
     const pendN = sorted.filter(x => x.t.status !== 'Terminada').length
     const doneN = sorted.length - pendN
-    const dayMin = sorted.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+    const dayMin = sorted.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinOf(x.t), 0)
     const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
     const overloaded = dayMin > 480
     return (
@@ -3007,7 +3017,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat()
     const pend = all.filter(x => x.t.status !== 'Terminada')
-    const totMin = pend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+    const totMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
     const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }; pend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
     const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
 
@@ -3022,7 +3032,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
             <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
             {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
-            {t.difficulty && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title="Estimado por dificultad">~{Math.round(WEEK_EST_MIN(t.difficulty) / 60 * 10) / 10}h</span>}
+            {estMinOf(t) > 0 && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={typeof t.estMin === 'number' && t.estMin > 0 ? 'Tu estimado' : 'Estimado por dificultad'}>~{Math.round(estMinOf(t) / 60 * 10) / 10}h</span>}
             <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
           </div>
           {weekMoveKey === k && (
@@ -3079,7 +3089,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const over = weekOverDay === d && !!weekDrag
           const pendN = items.filter(x => x.t.status !== 'Terminada').length
           const doneN = items.length - pendN
-          const dayMin = items.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+          const dayMin = items.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinOf(x.t), 0)
           const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
           const overloaded = dayMin > 480
           return (
@@ -3106,7 +3116,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   const totPend = byDayTotal.get(d)!.filter(x => x.t.status !== 'Terminada')
                   if (totPend.length === 0) return null
                   const withDif = totPend.filter(x => x.t.difficulty)
-                  const tMin = withDif.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)   // sólo las que tienen dificultad
+                  const tMin = withDif.reduce((s, x) => s + estMinOf(x.t), 0)   // sólo las que tienen dificultad
                   const tHrs = tMin >= 60 ? `${Math.round(tMin / 60 * 10) / 10}h` : `${tMin}m`
                   const tOver = tMin > 480
                   const nSin = totPend.length - withDif.length
@@ -3187,7 +3197,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         days.forEach(d => byDay.set(d, []))
         activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED && matchF(e, t)) byDay.get(t.plan)!.push({ e, t, i }) }))
         const all = [...byDay.values()].flat(); const pend = all.filter(x => x.t.status !== 'Terminada')
-        const wMin = pend.reduce((s, x) => s + WEEK_EST_MIN(x.t.difficulty), 0)
+        const wMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
         // Semanas con tareas: abiertas por defecto. Semanas VACÍAS: colapsadas por defecto
         // (para no mostrar 7 carriles vacíos). El clic invierte el default en ambos casos.
         const collapsed = all.length > 0 ? sprintCollapsed.has(wm) : !sprintCollapsed.has(wm)
@@ -4400,7 +4410,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && (() => {
                 const load = planPend.reduce((n, x) => n + taskWeight(x.t), 0)
                 // Horas estimadas del día (por dificultad), AJUSTADAS con tu calibración si hay datos.
-                const calMin = planPend.reduce((n, x) => { const d = x.t.difficulty; if (!d) return n; const f = calibration.totalN >= 3 && calibration.factor(d) > 0 ? calibration.factor(d) : 1; return n + WEEK_EST_MIN(d) * f }, 0)
+                const calMin = planPend.reduce((n, x) => { const base = estMinOf(x.t); if (!base) return n; const d = x.t.difficulty; const custom = typeof x.t.estMin === 'number' && x.t.estMin > 0; const f = (!custom && d && calibration.totalN >= 3 && calibration.factor(d) > 0) ? calibration.factor(d) : 1; return n + base * f }, 0)
                 const asH = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${Math.round(m)}m`
                 const pctLoad = dayCapacity > 0 ? load / dayCapacity : 0
                 const c = pctLoad > 1 ? '#B0522E' : pctLoad > 0.85 ? '#A87A2C' : '#2E6E6E'
@@ -5854,6 +5864,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   </div>
                 </div>
 
+                {/* Estimado propio de tiempo (horas): cuánto crees que te tomará. Alimenta la carga
+                    del día ("~Xh") para planear. Si lo dejas vacío, se usa el default por dificultad. */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Estimado <span style={{ color: 'rgba(20,35,61,0.4)', fontWeight: 600, letterSpacing: 0, textTransform: 'none' }}>· cuánto crees que te tomará</span></div>
+                  {estMinReady.current ? (() => {
+                    const custom = typeof t.estMin === 'number' && t.estMin > 0
+                    const defMin = WEEK_EST_MIN(t.difficulty)
+                    const toH = (m: number) => Math.round(m / 60 * 100) / 100
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: `1px solid ${custom ? 'rgba(194,147,58,0.5)' : 'rgba(15,35,64,0.14)'}`, borderRadius: 9, padding: '6px 9px', background: custom ? 'rgba(194,147,58,0.08)' : '#fff' }}>
+                          <input key={`est:${t.id}:${t.estMin ?? ''}`} type="number" min={0} step={0.25} defaultValue={custom ? toH(t.estMin!) : ''} placeholder={defMin ? String(toH(defMin)) : '—'}
+                            onKeyDown={ev => { if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur() }}
+                            onBlur={e => { const v = e.currentTarget.value.trim(); const h = v === '' ? null : Number(v); setTaskEstMin(ep, i, (h != null && h > 0) ? Math.round(h * 60) : null) }}
+                            aria-label="Estimado en horas" style={{ width: 52, border: 'none', background: 'transparent', fontSize: 14, fontWeight: 700, color: custom ? '#A87A2C' : '#14233D', outline: 'none', textAlign: 'right' }} />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>h</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 5 }}>
+                          {([['30m', 30], ['1h', 60], ['2h', 120], ['4h', 240]] as [string, number][]).map(([lbl, m]) => (
+                            <button key={lbl} onClick={() => setTaskEstMin(ep, i, m)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', fontSize: 11.5, fontWeight: 700, border: `1px solid ${custom && t.estMin === m ? 'rgba(194,147,58,0.5)' : 'rgba(15,35,64,0.14)'}`, background: custom && t.estMin === m ? 'rgba(194,147,58,0.10)' : '#fff', color: custom && t.estMin === m ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>{lbl}</button>
+                          ))}
+                        </div>
+                        {custom
+                          ? <button onClick={() => setTaskEstMin(ep, i, null)} title="Volver al estimado por dificultad" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>usar dificultad</button>
+                          : <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)' }}>{defMin ? `usando ~${toH(defMin)}h por dificultad` : 'pon dificultad o un número'}</span>}
+                      </div>
+                    )
+                  })() : (
+                    <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>Corre <code>sql/epicas-09-est-min.sql</code> en Supabase para poner tu estimado propio.</div>
+                  )}
+                </div>
+
                 {/* Avance (editable) — commit al soltar (no re-renderiza en cada escalón) */}
                 <ProgressSlider value={t.progress ?? 0} color={ep.color} labelStyle={eb}
                   onCommit={v => setTaskProgress(ep, i, v)} onHundred={() => setTaskProgress(ep, i, 100)} />
@@ -6104,7 +6146,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <span style={{ flex: 1 }} />
                   {/* Comenzar ahora: arranca el cronómetro ligado a esta tarea AQUÍ (widget de foco).
                       Es la misma sesión que /tiempo (estado compartido); el tiempo se registra en la tarea. */}
-                  <button onClick={() => { if (focus.begin({ name: t.t, epicaId: ep.id, taskId: t.id!, dur: WEEK_EST_MIN(t.difficulty) })) opts.onClose() }}
+                  <button onClick={() => { if (focus.begin({ name: t.t, epicaId: ep.id, taskId: t.id!, dur: estMinOf(t) })) opts.onClose() }}
                     title="Empezar ahora con cronómetro (la misma sesión que en Tiempo; el tiempo se registra en esta tarea)"
                     style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 800, border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.12)', color: '#8a5a12' }}>▶ Comenzar</button>
                   {/* Marcar terminada (o reabrir) — acción principal, siempre a la vista */}
@@ -7809,6 +7851,9 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
 // Estimación de tiempo SÓLO a partir de la dificultad (fácil 45m · media 2h · difícil 4h).
 // Sin dificultad = 0: no hay base para estimar, así que esas tareas no inventan horas.
 const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 45 : d === 'media' ? 120 : d === 'dificil' ? 240 : 0
+// Estimado EFECTIVO de una tarea en minutos: tu estimado propio (estMin) si lo pusiste; si no,
+// el default por dificultad. Es lo que alimenta la carga estimada del día ("~Xh") para planear.
+const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : WEEK_EST_MIN(t.difficulty)
 
 const goldBtn: CSSProperties = {
   border: 'none', cursor: 'pointer', borderRadius: 12, fontWeight: 800, color: '#1B1305',

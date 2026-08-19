@@ -71,6 +71,7 @@ export type EpicaTask = {
   plan?: string                        // 'YYYY-MM-DD' del día para el que se planeó (vista "Plan de hoy")
   priority?: 'alta' | 'media' | 'baja' // prioridad dentro del plan
   difficulty?: 'facil' | 'media' | 'dificil' // dificultad estimada de la tarea
+  estMin?: number                      // estimado PROPIO en minutos (cuánto crees que te tomará); si falta, se usa el default por dificultad
   planOrder?: number                   // orden dentro del plan (se reasigna 1000,2000,3000… al reordenar)
   orden?: number                       // orden manual dentro de su épica (cuál va primero)
   updatedAt?: string                   // última modificación (server); base para detectar choques entre pestañas
