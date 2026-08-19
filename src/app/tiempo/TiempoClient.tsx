@@ -70,6 +70,9 @@ function recurringDueToday(t: EpicaTask, today: string): boolean {
 type Meeting = { id: string; name: string; start: number; dur: number; date: string; location?: string; description?: string; htmlLink?: string; hangoutLink?: string }
 
 const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
+// Duración inicial al arrastrar una tarea al calendario: TU estimado propio (estMin) si lo pusiste;
+// si no, el default por dificultad; si tampoco, 15 min. Así "1h de estimado" cae como bloque de 1h.
+const estDurOf = (t?: EpicaTask) => (t && typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : (t?.difficulty ? durByDiff(t) : 15)
 const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
 // Al marcar terminada, la fecha de término es la fecha en que se IBA A HACER (plan) si existe;
 // si no, el día que se pasa (hoy/día visto). Así "terminó" queda en la fecha que decía "hacer".
@@ -252,11 +255,12 @@ export default function TiempoClient() {
   // (evita el 500 de recordar/comentar sin migración) — sin parpadeo mientras carga si sí existe.
   const [remindReady, setRemindReady] = useState(true)
   const [comentariosReady, setComentariosReady] = useState(true)
+  const estMinReadyRef = useRef(true)   // true si la columna est_min existe (para escribir tu estimado desde aquí)
   const refreshTasks = useCallback(() => {
     setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
-      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady)
+      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady); estMinReadyRef.current = !!j.estMinReady
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[] = []
       for (const e of j.data as Epica[]) {
@@ -1273,6 +1277,18 @@ export default function TiempoClient() {
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
     setSelTaskId(id => id === taskId ? null : id)
   }
+  // Redimensionaste en el calendario un bloque ligado a una tarea → guarda ESA duración como tu
+  // estimado propio de la tarea (sincronía de dos vías). Sin la columna est_min, no escribe (evita 500).
+  const setTaskEstMinFromPlan = (epicaId: string, taskId: string, min: number) => {
+    if (!estMinReadyRef.current) return
+    const tt = tasksRef.current.find(x => x.task.id === taskId)
+    if (!tt) return
+    const m = Math.max(0, Math.round(min))
+    if ((tt.task.estMin || 0) === m) return
+    const upd: EpicaTask = { ...tt.task, estMin: m }
+    syncTask(epicaId, upd)
+    setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
+  }
   // Quitar una terminada de Épicas del día ("me equivoqué, no se trabajó"): la reabre
   // (recurrente = saca el día de repeatDone; normal = En curso, sin doneAt).
   const unmarkEpicDone = (tt: TodayTask) => {
@@ -1693,7 +1709,7 @@ export default function TiempoClient() {
   // save() poda los agendados de días pasados, así que agendar en el pasado se descartaría solo:
   // lo cortamos antes con un aviso claro en vez de que el arrastre "no haga nada".
   const planPastGuard = () => { if (planDay < iso(new Date())) { showUndo('No puedes agendar en un día que ya pasó', () => {}); return true } return false }
-  const planAdd = (t: TodayTask, start: number, dur = 15) => {
+  const planAdd = (t: TodayTask, start: number, dur = estDurOf(t.task)) => {
     if (planPastGuard()) return
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: planDay, epicaId: t.epicaId, taskId: t.task.id }] })
   }
@@ -1823,6 +1839,7 @@ export default function TiempoClient() {
             onAddDone={planAddDone}
             onOpenMeeting={setMeetView}
             onAdd={planAdd}
+            onSetEstMin={setTaskEstMinFromPlan}
             onAddFree={planAddFree}
             onPatch={planPatch}
             onRemove={removeScheduled}
@@ -3467,11 +3484,12 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
   onAdd: (t: TodayTask, start: number, dur?: number) => void
+  onSetEstMin: (epicaId: string, taskId: string, min: number) => void
   onAddFree: (name: string, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
@@ -3551,7 +3569,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
         else if (d.kind === 'wresize') onEditWorked(d.idx, { dur: d.curDur })
         else if (d.kind === 'session') { if (d.curMin !== d.start0) onSessionStart(d.curMin); else if (session?.taskId) onOpenTask(session.taskId) }
-        else onPatch(d.id, { dur: d.curDur })
+        else { onPatch(d.id, { dur: d.curDur }); const blk = scheduled.find(s => s.id === d.id); if (blk?.taskId && blk.epicaId) onSetEstMin(blk.epicaId, blk.taskId, d.curDur) }
       }
       setDrag(null)
     }
@@ -3864,7 +3882,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               ) })}
             </div>
           )}
-          {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: 15, moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
+          {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurOf(t.task), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
             <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? 'Sin tareas por agendar en esa épica.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
           )}
           {routines.length > 0 && (
