@@ -1003,6 +1003,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planTotal = planItems.length
   const planPct = planTotal ? Math.round((planDone.length / planTotal) * 100) : 0
   const planAllDone = planTotal > 0 && planDone.length === planTotal
+  // Actividad de HOY en CUALQUIER tarea: lo que TRABAJASTE (avance con fecha de hoy), CERRASTE hoy, o
+  // marcaste hecho hoy en un "Día de trabajo" — aunque la tarea esté planeada para OTRO día. Así el
+  // enfoque de hoy muestra "lo que hiciste hoy" aunque no tuvieras nada planeado para hoy.
+  const activityToday = useMemo(() => {
+    if (viewDate !== today) return [] as { e: Epica; t: EpicaTask; i: number; min: number; closed: boolean; dayDone: boolean }[]
+    const out: { e: Epica; t: EpicaTask; i: number; min: number; closed: boolean; dayDone: boolean }[] = []
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
+      if (t.status === ARCHIVED) return
+      const logs = (t.progressLog || []).filter(x => x.d === today)
+      const min = logs.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+      const closed = t.status === 'Terminada' && t.doneAt === today
+      const dayDone = !!dayPlanFor(t, today)?.done
+      if (logs.length > 0 || closed || dayDone) out.push({ e, t, i, min, closed, dayDone })
+    }))
+    return out.sort((a, b) => (b.closed ? 1 : 0) - (a.closed ? 1 : 0) || b.min - a.min)
+  }, [activeEpics, viewDate, today])
   // planOrder máximo de CUALQUIER día (el modal y "Mover a…" planean a fechas ≠ viewDate)
   const maxPlanOrderFor = (dateISO: string) => {
     let m = 0
@@ -4676,6 +4692,43 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             </div>
           )}
+
+          {/* Lo que TRABAJASTE / CERRASTE hoy aunque estuviera planeado para otro día (o nada planeado hoy). */}
+          {isToday && (() => {
+            const extra = activityToday.filter(x => !planItems.some(p => p.t.id === x.t.id))
+            if (extra.length === 0) return null
+            const totMin = extra.reduce((s, x) => s + x.min, 0)
+            const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
+            return (
+              <div style={{ marginTop: 16, borderRadius: 13, background: 'rgba(62,142,142,0.05)', border: '1px solid rgba(62,142,142,0.25)', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 13px', background: 'rgba(62,142,142,0.08)' }}>
+                  <span style={{ fontSize: 14 }}>🔆</span>
+                  <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#2E6E6E' }}>Trabajaste hoy</span>
+                  <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(46,110,110,0.7)' }}>{extra.length}</span>
+                  {totMin > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>· ⏱ {hmm(totMin)}</span>}
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)' }}>planeadas para otros días</span>
+                </div>
+                <div style={{ padding: '2px 6px 4px' }}>
+                  {extra.map(({ e, t, min, closed, dayDone }) => (
+                    <div key={planKey(e.id, t)} onClick={() => setTaskView({ eId: e.id, tid: t.id! })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 9, cursor: 'pointer' }}
+                      onMouseEnter={ev => (ev.currentTarget.style.background = 'rgba(62,142,142,0.05)')} onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                      <span style={{ flexShrink: 0, width: 16, textAlign: 'center', fontSize: 12, color: closed ? '#2E6E6E' : '#A87A2C' }}>{closed ? '✓' : dayDone ? '◐' : '⏱'}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: closed ? 'line-through' : 'none' }}>{t.t}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                          <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>{e.name}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: closed ? '#2E6E6E' : '#A87A2C' }}>· {closed ? 'cerrada hoy' : dayDone ? 'trabajada hoy' : `hoy ${hmm(min)}`}</span>
+                          {t.plan && t.plan !== today && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>· plan {fmtDue(t.plan)}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
 
           {empty ? (
             <div style={{ padding: '28px 12px 12px', textAlign: 'center' }}>
