@@ -1627,6 +1627,33 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     mutateDayPlans(e, ti, arr => arr.map(d => d.day === day ? { ...d, ...patch } : d))
   const toggleDayPlanDone = (e: Epica, ti: number, day: string) =>
     mutateDayPlans(e, ti, arr => arr.map(d => d.day === day ? { ...d, done: !d.done } : d))
+  // Control reusable de estimado de tiempo: dropdown de presets + "Personalizado…" (tiempo libre).
+  // `ckey` identifica el control (para el modo personalizado); `onSet(min|null)` guarda el valor.
+  const renderEstControl = (ckey: string, min: number | undefined, defMin: number, onSet: (m: number | null) => void, compact = false) => {
+    const has = typeof min === 'number' && min > 0
+    const cur = has ? min : 0
+    const isPreset = has && EST_PRESETS.some(([m]) => m === cur)
+    const isCustom = estCustomId === ckey || (has && !isPreset)
+    const selVal = isCustom ? 'custom' : (has ? String(cur) : '')
+    const selStyle: CSSProperties = { cursor: 'pointer', border: `1px solid ${has ? 'rgba(194,147,58,0.5)' : 'rgba(15,35,64,0.16)'}`, borderRadius: compact ? 7 : 9, padding: compact ? '4px 6px' : '8px 10px', fontSize: compact ? 11.5 : 13, fontWeight: 700, color: has ? '#A87A2C' : 'rgba(20,35,61,0.62)', background: has ? 'rgba(194,147,58,0.08)' : '#fff', outline: 'none', minWidth: compact ? 92 : 152 }
+    return (
+      <>
+        <select value={selVal} aria-label="Estimado de tiempo" onChange={ev => { const v = ev.target.value; if (v === 'custom') setEstCustomId(ckey); else if (v === '') { setEstCustomId(null); onSet(null) } else { setEstCustomId(null); onSet(Number(v)) } }} style={selStyle}>
+          <option value="">{defMin ? (compact ? `≈ ${fmtEst(defMin)}` : `Por dificultad · ~${fmtEst(defMin)}`) : (compact ? 'Tiempo…' : 'Por dificultad')}</option>
+          <optgroup label="Elige un tiempo">{EST_PRESETS.map(([m, lbl]) => <option key={m} value={String(m)}>{lbl}</option>)}</optgroup>
+          <option value="custom">Personalizado…</option>
+        </select>
+        {isCustom && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(194,147,58,0.5)', borderRadius: compact ? 7 : 9, padding: compact ? '3px 7px' : '6px 9px', background: 'rgba(194,147,58,0.06)' }}>
+            <input key={`estc:${ckey}:${cur}`} type="text" autoFocus defaultValue={has ? fmtCustom(cur) : ''} placeholder="1h30 · 45m · 2h"
+              onKeyDown={ev => { if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur() }}
+              onBlur={ev => { const v = ev.currentTarget.value.trim(); if (v === '') { onSet(null); setEstCustomId(null); return } const mm = parseEst(v); if (mm && mm > 0) { onSet(mm); setEstCustomId(null) } }}
+              aria-label="Tiempo personalizado" style={{ width: compact ? 78 : 92, border: 'none', background: 'transparent', fontSize: compact ? 12 : 13, fontWeight: 700, color: '#A87A2C', outline: 'none' }} />
+          </div>
+        )}
+      </>
+    )
+  }
   // Repetición editable inline en el detalle (mismos presets que el editor). null = no se repite.
   const setTaskRepeat = (e: Epica, ti: number, repeat: EpicaRepeat | null) => {
     const tasks = clone(e.tasks)
@@ -5897,28 +5924,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const has = typeof t.estMin === 'number' && t.estMin > 0
                     const cur = has ? t.estMin! : 0
                     const defMin = WEEK_EST_MIN(t.difficulty)
-                    const isPreset = has && EST_PRESETS.some(([m]) => m === cur)
-                    const isCustom = estCustomId === t.id || (has && !isPreset)
-                    const selVal = isCustom ? 'custom' : (has ? String(cur) : '')
                     return (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <select value={selVal} aria-label="Estimado de tiempo"
-                          onChange={ev => { const v = ev.target.value; if (v === 'custom') setEstCustomId(t.id!); else if (v === '') { setEstCustomId(null); setTaskEstMin(ep, i, null) } else { setEstCustomId(null); setTaskEstMin(ep, i, Number(v)) } }}
-                          style={{ cursor: 'pointer', border: `1px solid ${has ? 'rgba(194,147,58,0.5)' : 'rgba(15,35,64,0.16)'}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 700, color: has ? '#A87A2C' : 'rgba(20,35,61,0.62)', background: has ? 'rgba(194,147,58,0.08)' : '#fff', outline: 'none', minWidth: 152 }}>
-                          <option value="">{defMin ? `Por dificultad · ~${fmtEst(defMin)}` : 'Por dificultad'}</option>
-                          <optgroup label="Elige un tiempo">
-                            {EST_PRESETS.map(([m, lbl]) => <option key={m} value={String(m)}>{lbl}</option>)}
-                          </optgroup>
-                          <option value="custom">Personalizado…</option>
-                        </select>
-                        {isCustom && (
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(194,147,58,0.5)', borderRadius: 9, padding: '6px 9px', background: 'rgba(194,147,58,0.06)' }}>
-                            <input key={`estc:${t.id}:${cur}`} type="text" autoFocus defaultValue={has ? String(cur) : ''} placeholder="1h30 · 90 · 45m"
-                              onKeyDown={ev => { if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur() }}
-                              onBlur={ev => { const v = ev.currentTarget.value.trim(); if (v === '') { setTaskEstMin(ep, i, null); setEstCustomId(null); return } const min = parseEst(v); if (min && min > 0) { setTaskEstMin(ep, i, min); setEstCustomId(null) } }}
-                              aria-label="Tiempo personalizado" style={{ width: 92, border: 'none', background: 'transparent', fontSize: 13, fontWeight: 700, color: '#A87A2C', outline: 'none' }} />
-                          </div>
-                        )}
+                        {renderEstControl(t.id!, t.estMin, defMin, m => setTaskEstMin(ep, i, m))}
                         {has && <span style={{ fontSize: 12.5, fontWeight: 700, color: '#2E6E6E' }}>= {fmtEst(cur)}</span>}
                         {has
                           ? <button onClick={() => { setEstCustomId(null); setTaskEstMin(ep, i, null) }} title="Volver al estimado por dificultad" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>usar dificultad</button>
@@ -6032,7 +6040,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={eb}>Días de trabajo <span style={{ color: 'rgba(20,35,61,0.4)', fontWeight: 600, letterSpacing: 0, textTransform: 'none' }}>· agéndala en varios días</span></div>
                   {dayPlansReady.current ? (() => {
                     const dps = dayPlansOf(t)
-                    const genLbl = estMinOf(t) > 0 ? `≈${fmtEst(estMinOf(t))}` : '⏱ tiempo'
                     const worked = (d: EpicaDayPlan) => !!d.done || (t.progressLog || []).some(x => x.d === d.day)
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -6043,8 +6050,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <div key={dp.day} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 9, background: w ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', border: `1px solid ${w ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.08)'}` }}>
                               <button onClick={() => toggleDayPlanDone(ep, i, dp.day)} title={dp.done ? 'Marcar como no trabajado ese día' : 'Marcar: trabajé este día'} style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', border: dp.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: dp.done ? '#C2933A' : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{dp.done ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : w ? <span style={{ color: '#C2933A', fontSize: 10, lineHeight: 1 }}>◐</span> : null}</button>
                               <input type="date" value={dp.day} onChange={ev => { const nd = ev.target.value; if (nd && nd !== dp.day) setDayPlanField(ep, i, dp.day, { day: nd }) }} aria-label="Día" style={{ flexShrink: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: '#16365F', background: '#fff', outline: 'none' }} />
-                              <input key={`dpH:${dp.day}:${dp.estMin ?? ''}`} type="text" defaultValue={dp.estMin ? String(dp.estMin) : ''} placeholder={genLbl} title="Tiempo ese día · 1h30 · 90 · 45m" onKeyDown={ev => { if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur() }} onBlur={ev => { const v = ev.currentTarget.value.trim(); setDayPlanField(ep, i, dp.day, { estMin: v === '' ? undefined : (parseEst(v) || undefined) }) }} aria-label="Tiempo ese día" style={{ width: 66, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 12, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none' }} />
-                              {dp.estMin ? <span style={{ fontSize: 10.5, fontWeight: 700, color: '#A87A2C' }}>{fmtEst(dp.estMin)}</span> : null}
+                              {renderEstControl(`${t.id}:${dp.day}`, dp.estMin, estMinOf(t), m => setDayPlanField(ep, i, dp.day, { estMin: m == null ? undefined : m }), true)}
                               <select value={dp.difficulty || ''} onChange={ev => setDayPlanField(ep, i, dp.day, { difficulty: (ev.target.value || undefined) as EpicaDayPlan['difficulty'] })} title="Dificultad ese día" aria-label="Dificultad ese día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 5px', fontSize: 11, fontWeight: 700, color: dp.difficulty ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }}>
                                 <option value="">Dif ·</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
                               </select>
@@ -7928,13 +7934,18 @@ const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeo
 const EST_PRESETS: [number, string][] = [[15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h'], [90, '1 h 30'], [120, '2 h'], [150, '2 h 30'], [180, '3 h'], [240, '4 h'], [360, '6 h'], [480, '8 h']]
 // Minutos → etiqueta legible: 90 → "1 h 30", 45 → "45 min", 120 → "2 h".
 const fmtEst = (m: number): string => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h} h ${r}` : h ? `${h} h` : `${r} min` }
-// Texto flexible → minutos. Acepta "90", "1h30", "1:30", "1.5h", "2h", "45m". null si no parsea.
+// Minutos → forma compacta editable para el input personalizado: 90 → "1h30", 45 → "45m", 120 → "2h".
+const fmtCustom = (m: number): string => { m = Math.round(m); if (m % 60 === 0) return `${m / 60}h`; if (m < 60) return `${m}m`; return `${Math.floor(m / 60)}h${m % 60}` }
+// Texto flexible → minutos. "1h30"/"1:30"→90, "2h"/"1.5h"→horas, "45m"/"45min"→minutos.
+// Un número SUELTO chico se toma como HORAS (1→1h, 2→2h) y uno grande como minutos (90→90m, 45→45m).
 const parseEst = (s: string): number | null => {
   s = (s || '').trim().toLowerCase().replace(',', '.'); if (!s) return null
   let m = s.match(/^(\d+)\s*[:h]\s*(\d+)\s*m?$/); if (m) return (+m[1]) * 60 + (+m[2])       // 1:30 · 1h30
   m = s.match(/^(\d+(?:\.\d+)?)\s*h$/); if (m) return Math.round(+m[1] * 60)                  // 2h · 1.5h
   m = s.match(/^(\d+)\s*m(?:in)?$/); if (m) return +m[1]                                       // 45m · 45min
-  const n = Number(s); return (!isNaN(n) && n > 0) ? Math.round(n) : null                     // 90 = minutos
+  const n = Number(s); if (isNaN(n) || n <= 0) return null
+  if (!Number.isInteger(n)) return Math.round(n * 60)                                          // 1.5 = 1h30
+  return n <= 12 ? n * 60 : Math.round(n)                                                       // 1→1h · 8→8h · 45→45m · 90→90m
 }
 
 const goldBtn: CSSProperties = {
