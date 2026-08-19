@@ -4513,8 +4513,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
             // con el filtro de épica (chips), dificultad, "ocultar completadas" y un rango
             // de fecha (esta semana / 2 sem / mes) por su día "Hacer".
-            const enfEpics = activeEpics.filter(e => (e.tasks || []).some(t => t.status !== ARCHIVED))
-            const effEnf = enfEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
             const rStart = mondayISO(today)
             const [ry, rm] = today.split('-').map(Number)
             const monthEnd = `${today.slice(0, 7)}-${String(new Date(ry, rm, 0).getDate()).padStart(2, '0')}`
@@ -4522,8 +4520,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const rStartUse = mdRange === 'mes' ? today.slice(0, 7) + '-01' : rStart
             const inRange = (t: EpicaTask) => mdRange === 'todas' ? true : (!!t.plan && t.plan >= rStartUse && t.plan <= rEnd)
             const weekDays = Array.from({ length: 7 }, (_, k) => addDays(rStart, k))   // L-D de esta semana
+            // Filtro por estado del día (Alta/Vencidas/Con avance/Estancadas/…) aplicado en ESTA vista.
+            const passPF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
+              : planFilter === 'vencidas' ? (() => { const dl = daysUntil(t.due); return dl != null && dl < 0 })()
+              : planFilter === 'avance' ? (t.progressLog || []).some(x => mdDay ? x.d === mdDay : true)
+              : planFilter === 'estancada' ? isStuck(t)
+              : planFilter === 'multidia' ? isMultiDay(t)
+              : planFilter === 'arrastre' ? isCarried(t)
+              : true
+            // Una tarea "cuenta" para el día/rango + filtros elegidos (para los chips de épica y las filas).
+            const matchDR = (t: EpicaTask) => t.status !== ARCHIVED && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && !(boardHideDone && t.status === 'Terminada') && (mdDay ? t.plan === mdDay : inRange(t)) && passWork(t, mdDay || today) && passPF(t)
+            // Épicas con tareas EN ese día/rango+filtros: si filtras a un día, sólo salen las de ese día.
+            const enfEpics = activeEpics.filter(e => (e.tasks || []).some(matchDR))
+            const effEnf = enfEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
             const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
-              .filter(x => x.t.status !== ARCHIVED && (effEnf === 'todas' || x.e.id === effEnf) && (weekDif === 'todas' || (x.t.difficulty || '') === weekDif) && !(boardHideDone && x.t.status === 'Terminada') && (mdDay ? x.t.plan === mdDay : inRange(x.t)) && passWork(x.t, mdDay || today))
+              .filter(x => (effEnf === 'todas' || x.e.id === effEnf) && matchDR(x.t))
             const rangeChips = (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 8px' }}>
