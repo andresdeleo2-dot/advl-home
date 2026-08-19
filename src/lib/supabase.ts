@@ -63,6 +63,14 @@ export type EpicaSubtask = {
 /** Recurrencia de una tarea: "cada N días / semanas / meses".
  *  La tarea NO se duplica: al completarla se reprograma sola a la siguiente fecha. */
 export type EpicaRepeat = { every: number; unit: 'dia' | 'semana' | 'mes' }
+/** "Sesión por día": la MISMA tarea agendada en varios días, cada uno con SUS horas, SU dificultad
+ *  y su propio "hecho ese día" (sin cerrar toda la tarea). Ausente/vacío = tarea de un solo día (`plan`). */
+export type EpicaDayPlan = {
+  day: string                                   // 'YYYY-MM-DD'
+  estMin?: number                               // horas estimadas ESE día (minutos); si falta, usa el estimado general
+  difficulty?: 'facil' | 'media' | 'dificil'    // dificultad ESE día; si falta, usa la general
+  done?: boolean                                // marcaste "trabajé/terminé este día" (no cierra la tarea completa)
+}
 export type EpicaTask = {
   id?: string                          // identidad estable (los índices se recorren al borrar/mover)
   t: string; status: string; due: string; note: string
@@ -72,6 +80,7 @@ export type EpicaTask = {
   priority?: 'alta' | 'media' | 'baja' // prioridad dentro del plan
   difficulty?: 'facil' | 'media' | 'dificil' // dificultad estimada de la tarea
   estMin?: number                      // estimado PROPIO en minutos (cuánto crees que te tomará); si falta, se usa el default por dificultad
+  dayPlans?: EpicaDayPlan[]            // sesiones por día: la misma tarea en varios días, con horas/dificultad/hecho por día
   planOrder?: number                   // orden dentro del plan (se reasigna 1000,2000,3000… al reordenar)
   orden?: number                       // orden manual dentro de su épica (cuál va primero)
   updatedAt?: string                   // última modificación (server); base para detectar choques entre pestañas

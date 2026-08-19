@@ -14,6 +14,7 @@ export type TareaRow = {
   nota: string | null
   resumen?: string | null
   est_min?: number | null
+  day_plans?: unknown[] | null
   avance: number | null
   plan: string | null
   plan_order: number | null
@@ -49,6 +50,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   }
   if (r.resumen) t.resumen = r.resumen
   if (typeof r.est_min === 'number') t.estMin = r.est_min
+  if (r.day_plans?.length) t.dayPlans = r.day_plans as EpicaTask['dayPlans']
   if (r.prioridad) t.priority = r.prioridad as EpicaTask['priority']
   if (r.dificultad) t.difficulty = r.dificultad as EpicaTask['difficulty']
   if (typeof r.avance === 'number') t.progress = r.avance
@@ -94,6 +96,9 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     // est_min: viaja sólo si la tarea tiene la propiedad (permite LIMPIAR con null); el cliente
     // sólo la fija cuando la columna existe (gate estMinReady) → seguro sin migrar.
     ...('estMin' in t ? { est_min: (typeof t.estMin === 'number' ? t.estMin : null) } : {}),
+    // day_plans: viaja sólo si la tarea tiene la propiedad; el cliente sólo la fija cuando la
+    // columna existe (gate dayPlansReady) → seguro sin migrar.
+    ...('dayPlans' in t ? { day_plans: (t.dayPlans || []) } : {}),
     id: t.id,
     epica_id: epicaId,
     titulo: t.t || '',

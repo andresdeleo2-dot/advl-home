@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
 import Link from 'next/link'
-import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat } from '@/lib/supabase'
+import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
 import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
@@ -243,6 +243,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const comentariosReady = useRef(false) // true si la columna comentarios existe
   const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
   const estMinReady = useRef(false)      // true si la columna est_min existe (estimado propio de horas por tarea)
+  const dayPlansReady = useRef(false)    // true si la columna day_plans existe (sesiones por día)
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
@@ -271,6 +272,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       comentariosReady.current = !!j.comentariosReady
       resumenReady.current = !!j.resumenReady
       estMinReady.current = !!j.estMinReady
+      dayPlansReady.current = !!j.dayPlansReady
       weekBudgetReady.current = !!j.weekBudgetReady
       {
         const raw = j.data as Epica[]
@@ -1606,6 +1608,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     else tasks[ti].estMin = 0   // 0/propiedad presente = “sin estimado propio”, se limpia en la fila (est_min = null? -> guardamos 0 = usa dificultad)
     patchEpic(e.id, { tasks })
   }
+  // ── Sesiones por día (dayPlans): la misma tarea en varios días, con horas/dificultad/hecho por día ──
+  const dayPlansOf = (t: EpicaTask): EpicaDayPlan[] => Array.isArray(t.dayPlans) ? t.dayPlans : []
+  const mutateDayPlans = (e: Epica, ti: number, fn: (arr: EpicaDayPlan[]) => EpicaDayPlan[]) => {
+    if (!dayPlansReady.current) { showToast('Corre sql/epicas-10-day-plans.sql para agendar por día', true); return }
+    const tasks = clone(e.tasks)
+    const cur = Array.isArray(tasks[ti].dayPlans) ? tasks[ti].dayPlans! : []
+    tasks[ti].dayPlans = fn(cur).sort((a, b) => a.day.localeCompare(b.day))
+    patchEpic(e.id, { tasks })
+  }
+  const addDayPlan = (e: Epica, ti: number, day: string) => {
+    if (!day) return
+    mutateDayPlans(e, ti, arr => arr.some(d => d.day === day) ? arr : [...arr, { day }])
+  }
+  const removeDayPlan = (e: Epica, ti: number, day: string) => mutateDayPlans(e, ti, arr => arr.filter(d => d.day !== day))
+  const setDayPlanField = (e: Epica, ti: number, day: string, patch: Partial<EpicaDayPlan>) =>
+    mutateDayPlans(e, ti, arr => arr.map(d => d.day === day ? { ...d, ...patch } : d))
+  const toggleDayPlanDone = (e: Epica, ti: number, day: string) =>
+    mutateDayPlans(e, ti, arr => arr.map(d => d.day === day ? { ...d, done: !d.done } : d))
   // Repetición editable inline en el detalle (mismos presets que el editor). null = no se repite.
   const setTaskRepeat = (e: Epica, ti: number, repeat: EpicaRepeat | null) => {
     const tasks = clone(e.tasks)
@@ -5994,6 +6014,45 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {t.repeat && ((t.repeat.every ?? 1) > 1 || t.repeatUntil) && (
                     <div style={{ marginTop: 6, fontSize: 11, color: '#7A6FB0', fontWeight: 600 }}>↻ {repeatLabel(t.repeat)}{t.repeatUntil ? ` · hasta ${fmtDue(t.repeatUntil)}` : ''} <span style={{ color: 'rgba(20,35,61,0.4)' }}>· frecuencia avanzada en “Editar”</span></div>
                   )}
+                </div>
+
+                {/* Días de trabajo (sesiones por día): la misma tarea agendada en varios días, cada uno
+                    con SUS horas, SU dificultad y su propio "hecho ese día" (sin cerrar la tarea). */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Días de trabajo <span style={{ color: 'rgba(20,35,61,0.4)', fontWeight: 600, letterSpacing: 0, textTransform: 'none' }}>· agéndala en varios días</span></div>
+                  {dayPlansReady.current ? (() => {
+                    const dps = dayPlansOf(t)
+                    const toH = (m?: number) => (typeof m === 'number' && m > 0) ? String(Math.round(m / 60 * 100) / 100) : ''
+                    const genH = WEEK_EST_MIN(t.difficulty) ? String(Math.round(estMinOf(t) / 60 * 100) / 100) : ''
+                    const worked = (d: EpicaDayPlan) => !!d.done || (t.progressLog || []).some(x => x.d === d.day)
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {dps.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Un solo día por ahora. Agrega fechas abajo para trabajarla en varios días, cada uno con sus horas y dificultad.</div>}
+                        {dps.map(dp => {
+                          const w = worked(dp)
+                          return (
+                            <div key={dp.day} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 9, background: w ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', border: `1px solid ${w ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.08)'}` }}>
+                              <button onClick={() => toggleDayPlanDone(ep, i, dp.day)} title={dp.done ? 'Marcar como no trabajado ese día' : 'Marcar: trabajé este día'} style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', border: dp.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: dp.done ? '#C2933A' : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{dp.done ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : w ? <span style={{ color: '#C2933A', fontSize: 10, lineHeight: 1 }}>◐</span> : null}</button>
+                              <input type="date" value={dp.day} onChange={ev => { const nd = ev.target.value; if (nd && nd !== dp.day) setDayPlanField(ep, i, dp.day, { day: nd }) }} aria-label="Día" style={{ flexShrink: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: '#16365F', background: '#fff', outline: 'none' }} />
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                <input key={`dpH:${dp.day}:${dp.estMin ?? ''}`} type="number" min={0} step={0.25} defaultValue={toH(dp.estMin)} placeholder={genH || '—'} onKeyDown={ev => { if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur() }} onBlur={ev => { const v = ev.currentTarget.value.trim(); const h = v === '' ? undefined : Number(v); setDayPlanField(ep, i, dp.day, { estMin: (h != null && h > 0) ? Math.round(h * 60) : undefined }) }} aria-label="Horas ese día" style={{ width: 42, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 4px', fontSize: 12, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none', textAlign: 'right' }} />
+                                <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>h</span>
+                              </span>
+                              <select value={dp.difficulty || ''} onChange={ev => setDayPlanField(ep, i, dp.day, { difficulty: (ev.target.value || undefined) as EpicaDayPlan['difficulty'] })} title="Dificultad ese día" aria-label="Dificultad ese día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 5px', fontSize: 11, fontWeight: 700, color: dp.difficulty ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }}>
+                                <option value="">Dif ·</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+                              </select>
+                              <span style={{ flex: 1 }} />
+                              <button onClick={() => removeDayPlan(ep, i, dp.day)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.45)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                            </div>
+                          )
+                        })}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 2 }}>
+                          <input type="date" value="" onChange={ev => { if (ev.target.value) addDayPlan(ep, i, ev.target.value) }} aria-label="Agregar día de trabajo" style={{ cursor: 'pointer', border: '1px dashed rgba(15,35,64,0.22)', borderRadius: 7, padding: '5px 7px', fontSize: 11.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }} />
+                          <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)' }}>+ agregar un día para trabajarla</span>
+                        </div>
+                      </div>
+                    )
+                  })() : <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>Corre <code>sql/epicas-10-day-plans.sql</code> en Supabase para agendarla en varios días.</div>}
                 </div>
 
                 {/* Subtareas — editables aquí mismo, sin abrir "Editar" */}
