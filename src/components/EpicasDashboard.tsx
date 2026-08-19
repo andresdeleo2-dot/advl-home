@@ -3090,7 +3090,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                  {items.length > 0 && <span style={{ font: '700 9.5px var(--font-ui)', color: doneN === items.length ? '#2E6E6E' : '#A87A2C' }}>{doneN}/{items.length}</span>}
+                  {/* Contador del día: SIEMPRE el total real del día (todas las épicas, incluidas las
+                      hechas), aunque haya filtro. Al filtrar se añade cuántas coinciden con el filtro. */}
+                  {(() => {
+                    const tot = byDayTotal.get(d) || []
+                    const totLen = tot.length || items.length
+                    if (totLen === 0) return null
+                    const totDone = tot.length ? tot.filter(x => x.t.status === 'Terminada').length : doneN
+                    return <span title={filtering ? `${totDone} hechas de ${totLen} actividades ese día (total, todas las épicas). ${items.length} coinciden con el filtro.` : `${totDone} hechas de ${totLen}`} style={{ font: '700 9.5px var(--font-ui)', color: totDone === totLen ? '#2E6E6E' : '#A87A2C' }}>{totDone}/{totLen}{filtering && items.length !== totLen && <span style={{ color: 'rgba(20,35,61,0.4)' }}> · {items.length} filtr.</span>}</span>
+                  })()}
                   {dayMin > 0 && <span title={`≈ ${dayHrs} estimado por dificultad${overloaded ? ' · demasiado, reparte' : ''}`} style={{ borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', color: overloaded ? '#B0522E' : 'rgba(20,35,61,0.5)', background: overloaded ? 'rgba(176,82,46,0.12)' : 'rgba(15,35,64,0.05)' }}>~{dayHrs}</span>}
                 </div>
                 {/* Carga TOTAL del día (TODAS las épicas, sin filtro) — visible al filtrar. */}
@@ -4373,7 +4381,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" className="ep-modes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
-                {([['dia', 'Día'], ['detalle', 'Detalle'], ['semana', 'Semana'], ['ajuste', 'Ajuste'], ['3sem', '3 sem'], ['agenda', 'Agenda'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
+                {([['dia', 'Día'], ['detalle', 'Detalle'], ['ajuste', 'Ajuste'], ['semana', 'Semana'], ['3sem', '3 sem'], ['agenda', 'Agenda'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
                   const on = planMode === m
                   return <button key={m} aria-pressed={on} onClick={() => setPlanMode(m)} style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 11px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)', transition: 'background .15s', whiteSpace: 'nowrap' }}>{label}</button>
                 })}
