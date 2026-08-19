@@ -4696,18 +4696,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {/* Lo que TRABAJASTE / CERRASTE hoy aunque estuviera planeado para otro día (o nada planeado hoy). */}
           {isToday && (() => {
             const extra = activityToday.filter(x => !planItems.some(p => p.t.id === x.t.id))
-            if (extra.length === 0) return null
-            const totMin = extra.reduce((s, x) => s + x.min, 0)
             const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
+            const dayTotal = focus.workedTodayMin || 0              // TOTAL de trabajo hoy (Tiempo): tareas + general + rutinas
+            const taskMin = activityToday.reduce((s, x) => s + x.min, 0)   // sólo el tiempo en tareas de épica
+            const otherMin = Math.max(0, dayTotal - taskMin)        // general + rutinas (no son tareas)
+            if (extra.length === 0 && dayTotal === 0) return null
             return (
               <div style={{ marginTop: 16, borderRadius: 13, background: 'rgba(62,142,142,0.05)', border: '1px solid rgba(62,142,142,0.25)', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 13px', background: 'rgba(62,142,142,0.08)' }}>
                   <span style={{ fontSize: 14 }}>🔆</span>
                   <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#2E6E6E' }}>Trabajaste hoy</span>
-                  <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(46,110,110,0.7)' }}>{extra.length}</span>
-                  {totMin > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>· ⏱ {hmm(totMin)}</span>}
+                  {dayTotal > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: '#2E6E6E' }}>⏱ {hmm(dayTotal)}</span>}
                   <span style={{ flex: 1 }} />
-                  <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)' }}>planeadas para otros días</span>
+                  <a href="/tiempo" style={{ fontSize: 10, fontWeight: 700, color: 'rgba(46,110,110,0.75)', textDecoration: 'none' }}>ver en Tiempo →</a>
                 </div>
                 <div style={{ padding: '2px 6px 4px' }}>
                   {extra.map(({ e, t, min, closed, dayDone }) => (
@@ -4719,13 +4720,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
                           <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                           <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>{e.name}</span>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: closed ? '#2E6E6E' : '#A87A2C' }}>· {closed ? 'cerrada hoy' : dayDone ? 'trabajada hoy' : `hoy ${hmm(min)}`}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: closed ? '#2E6E6E' : '#A87A2C' }}>· {closed ? `cerrada hoy${min > 0 ? ` · ${hmm(min)}` : ''}` : dayDone ? `trabajada hoy${min > 0 ? ` · ${hmm(min)}` : ''}` : `hoy ${hmm(min)}`}</span>
                           {t.plan && t.plan !== today && <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>· plan {fmtDue(t.plan)}</span>}
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
+                {/* Reconciliación con Tiempo: cuánto fue en tareas vs. en general/rutinas (que no son tareas). */}
+                {otherMin > 0 && (
+                  <div style={{ padding: '2px 13px 9px', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>
+                    ⏱ <b style={{ color: '#2E6E6E' }}>{hmm(taskMin)}</b> en tareas · <b style={{ color: '#A87A2C' }}>{hmm(otherMin)}</b> en actividades generales y rutinas <span style={{ color: 'rgba(20,35,61,0.4)' }}>(de Tiempo)</span>
+                  </div>
+                )}
               </div>
             )
           })()}

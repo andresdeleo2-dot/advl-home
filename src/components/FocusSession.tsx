@@ -501,7 +501,11 @@ export function useFocusSession(hooks: FocusHooks) {
   // debe pausar sus refrescos (loadEpics) para no revertir esas ediciones en vuelo.
   // "Lo más importante hoy" (MIT) que fijaste en /tiempo — para estelarlo en Épicas (mismo margen.v1).
   const mitIds = data.mit?.date === iso(new Date()) ? (data.mit.ids || []) : []
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card }
+  // Total de TRABAJO registrado hoy (mismo cálculo que /tiempo: área 'trabajo' del historial de hoy).
+  // Incluye actividades generales y rutinas, no solo tareas de épica → para reconciliar en Épicas.
+  const day0 = iso(new Date())
+  const workedTodayMin = (data.history || []).filter(h => h.date === day0 && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
