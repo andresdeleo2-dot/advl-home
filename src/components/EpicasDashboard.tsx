@@ -2716,10 +2716,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
     activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => {
-      if (!t.plan || !byDay.has(t.plan) || t.status === ARCHIVED) return
+      if (t.status === ARCHIVED) return
       if (effWeekEpica !== 'todas' && e.id !== effWeekEpica) return
       if (weekDif !== 'todas' && (t.difficulty || '') !== weekDif) return
-      byDay.get(t.plan)!.push({ e, t, i })
+      taskDays(t).forEach(d => { if (byDay.has(d)) byDay.get(d)!.push({ e, t, i }) })   // la misma tarea en cada Día de trabajo
     }))
     // Filtro y orden compartidos con la vista de día (planFilter / planSort)
     const passF = (t: EpicaTask) => (planFilter === 'alta' ? t.priority === 'alta'
@@ -2891,7 +2891,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const pend = full.filter(x => x.t.status !== 'Terminada').length
           const done = full.length - pend
           const allDone = full.length > 0 && pend === 0
-          const dayMin = full.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinOf(x.t), 0)
+          const dayMin = full.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinForDay(x.t, d), 0)
           const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
           const overloaded = dayMin > 480   // más de ~8h planeadas en un día
           return (
@@ -2942,19 +2942,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const tdone = t.status === 'Terminada'
                     const ps = prioStyle(t.priority)
                     const dt = dueTone(t.due, tdone)
+                    const dpFor = dayPlanFor(t, d)                 // sesión de ESTE día (multi-día)
+                    const dayW = !tdone && doneOnDay(t, d)          // trabajado/hecho este día (◐)
                     return (
-                      <div key={k}
+                      <div key={`${k}:${d}`}
                         onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove}
                         onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
                         title={`${t.t} — arrastra a otro día para reprogramar`}
-                        style={{ position: 'relative', background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${tdone ? '#2E6E6E' : ps.accent}`, borderRadius: 9, padding: '8px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: weekDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
+                        style={{ position: 'relative', background: dayW ? 'rgba(194,147,58,0.08)' : '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${tdone ? '#2E6E6E' : dayW ? '#C2933A' : ps.accent}`, borderRadius: 9, padding: '8px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: weekDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
-                          <button onClick={ev => { ev.stopPropagation(); if (!tdone) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()}
-                            aria-label={tdone ? 'Marcar sin terminar' : 'Marcar terminada'} title={tdone ? 'Marcar sin terminar' : 'Marcar terminada'}
-                            style={{ flexShrink: 0, marginTop: 1, height: 18, width: 18, borderRadius: 99, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: tdone ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: tdone ? '#2E6E6E' : '#fff', color: '#fff' }}>
-                            {tdone && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}
+                          <button onClick={ev => { ev.stopPropagation(); if (dpFor) toggleDayPlanDone(e, i, d); else if (!tdone) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()}
+                            aria-label={dpFor ? 'Marcar trabajado este día' : (tdone ? 'Marcar sin terminar' : 'Marcar terminada')} title={dpFor ? (dpFor.done ? 'Trabajado este día · clic para desmarcar' : 'Marcar: trabajé este día') : (tdone ? 'Marcar sin terminar' : 'Marcar terminada')}
+                            style={{ flexShrink: 0, marginTop: 1, height: 18, width: 18, borderRadius: 99, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', border: tdone ? 'none' : dayW ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.25)', background: tdone ? '#2E6E6E' : '#fff', color: tdone ? '#fff' : '#C2933A' }}>
+                            {tdone ? <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : dayW ? <span style={{ fontSize: 10, lineHeight: 1 }}>◐</span> : null}
                           </button>
-                          <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, color: tdone ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: tdone ? 'line-through' : 'none' }}>{t.t}</div>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, color: tdone ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: tdone ? 'line-through' : 'none' }}>{t.t}{taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ marginLeft: 4, font: '700 8.5px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}</div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 6, paddingLeft: 25 }}>
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
@@ -2967,6 +2969,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <DifDots d={t.difficulty} size={9} />{t.difficulty && <span style={{ font: '700 9.5px var(--font-ui)' }}>{difStyle(t.difficulty).label}</span>}
                           </button>
                           {typeof t.progress === 'number' && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span>}
+                          {estMinForDay(t, d) > 0 && <span title={dayPlanFor(t, d)?.estMin ? 'Tu estimado ese día' : 'Estimado'} style={{ font: '700 9px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }}>~{Math.round(estMinForDay(t, d) / 60 * 10) / 10}h</span>}
                           <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día de la semana" aria-label="Mover a otro día" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.4)', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}>📅</button>
                         </div>
                         {weekMoveKey === k && (
