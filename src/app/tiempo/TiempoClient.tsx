@@ -73,6 +73,12 @@ const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficu
 // Duración inicial al arrastrar una tarea al calendario: TU estimado propio (estMin) si lo pusiste;
 // si no, el default por dificultad; si tampoco, 15 min. Así "1h de estimado" cae como bloque de 1h.
 const estDurOf = (t?: EpicaTask) => (t && typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : (t?.difficulty ? durByDiff(t) : 15)
+// ── Sesiones por día (dayPlans) desde Tiempo ──
+const dayPlansOfT = (t?: EpicaTask) => (t && Array.isArray(t.dayPlans)) ? t.dayPlans : []
+// ¿La tarea está agendada ese día? (su plan es ese día O tiene un "Día de trabajo" ese día).
+const taskOnDay = (t: EpicaTask, day: string) => t.plan === day || dayPlansOfT(t).some(d => d.day === day)
+// Duración al arrastrar en un día concreto: el estimado de ESE día (dayPlan) si existe; si no, el general.
+const estDurForDay = (t: EpicaTask | undefined, day: string) => { const dp = dayPlansOfT(t).find(d => d.day === day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; if (dp?.difficulty && !(t && typeof t.estMin === 'number' && t.estMin > 0)) return durByDiff({ difficulty: dp.difficulty } as EpicaTask); return estDurOf(t) }
 const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
 // Al marcar terminada, la fecha de término es la fecha en que se IBA A HACER (plan) si existe;
 // si no, el día que se pasa (hoy/día visto). Así "terminó" queda en la fecha que decía "hacer".
@@ -366,7 +372,7 @@ export default function TiempoClient() {
       if (t.task.status === 'Terminada' || t.task.status === 'Archivada') return false
       const backed = taskDay === t0 && back.has(`${t0}·${t.task.id}`)
       // Aparece si está planeada ese día, o es recurrente hoy, O la devolviste con "↩ A tareas".
-      if (!(t.task.plan === taskDay || recurringDueToday(t.task, taskDay) || backed)) return false
+      if (!(taskOnDay(t.task, taskDay) || recurringDueToday(t.task, taskDay) || backed)) return false
       // Se oculta si ya tiene tiempo hoy y NO la devolviste.
       if (taskDay === t0 && worked.has(t.task.id) && !backed) return false
       return true
@@ -382,7 +388,7 @@ export default function TiempoClient() {
     const workedDay = new Set((data.history || []).filter(h => h.date === planDay && h.taskId).map(h => h.taskId))
     return allTasks
       .filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada')
-      .filter(t => t.task.plan === planDay || recurringDueToday(t.task, planDay))
+      .filter(t => taskOnDay(t.task, planDay) || recurringDueToday(t.task, planDay))
       .filter(t => !workedDay.has(t.task.id))
       .map(t => ({ ...t, recurring: recurringDueToday(t.task, planDay) }))
   }, [allTasks, planDay, data.history])
@@ -899,7 +905,7 @@ export default function TiempoClient() {
         } else segs.push({ w: ((e - s) / span) * 100, bg: '#eee6da', faded: false, label: 'libre · ' + clock(s) + '–' + clock(e) })
       }
       const free = Math.max(0, (winEnd - winStart) - doneMin - protMin)
-      const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (t.task.plan === date || recurringDueToday(t.task, date))).length
+      const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, date) || recurringDueToday(t.task, date))).length
       return { date, letter: dowLetterOf(date), num: Number(date.slice(8)), isToday: date === todayISO, segs, freeLabel: hm(free), doneLabel: hm(doneMin), doneMin, nTasks }
     })
     return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
@@ -1017,8 +1023,8 @@ export default function TiempoClient() {
   // Horas PLANEADAS a trabajar ese día = estimación (por dificultad) de las tareas planeadas para el día.
   // Sirve para el "planeado vs real" (real = dayWorkedMin).
   const plannedDay = useMemo(() => {
-    const list = (allTasks || []).filter(t => t.task.status !== 'Archivada' && (t.task.plan === taskDay || recurringDueToday(t.task, taskDay)))
-    return { min: list.reduce((s, t) => s + durByDiff(t.task), 0), count: list.length }
+    const list = (allTasks || []).filter(t => t.task.status !== 'Archivada' && (taskOnDay(t.task, taskDay) || recurringDueToday(t.task, taskDay)))
+    return { min: list.reduce((s, t) => s + estDurForDay(t.task, taskDay), 0), count: list.length }
   }, [allTasks, taskDay])
   const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
 
@@ -1709,7 +1715,7 @@ export default function TiempoClient() {
   // save() poda los agendados de días pasados, así que agendar en el pasado se descartaría solo:
   // lo cortamos antes con un aviso claro en vez de que el arrastre "no haga nada".
   const planPastGuard = () => { if (planDay < iso(new Date())) { showUndo('No puedes agendar en un día que ya pasó', () => {}); return true } return false }
-  const planAdd = (t: TodayTask, start: number, dur = estDurOf(t.task)) => {
+  const planAdd = (t: TodayTask, start: number, dur = estDurForDay(t.task, planDay)) => {
     if (planPastGuard()) return
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: planDay, epicaId: t.epicaId, taskId: t.task.id }] })
   }
@@ -3882,7 +3888,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               ) })}
             </div>
           )}
-          {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurOf(t.task), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
+          {pending.length ? pending.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurForDay(t.task, day), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
             <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? 'Sin tareas por agendar en esa épica.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
           )}
           {routines.length > 0 && (
