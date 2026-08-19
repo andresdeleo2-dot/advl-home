@@ -1611,6 +1611,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   // ── Sesiones por día (dayPlans): la misma tarea en varios días, con horas/dificultad/hecho por día ──
   const dayPlansOf = (t: EpicaTask): EpicaDayPlan[] => Array.isArray(t.dayPlans) ? t.dayPlans : []
+  // Días en que la tarea está agendada = plan (día "primario") ∪ días de dayPlans. Para que la MISMA
+  // tarea aparezca en CADA uno de esos días en las vistas Día/Ajuste/Semana.
+  const taskDays = (t: EpicaTask): string[] => { const s = new Set<string>(dayPlansOf(t).map(d => d.day).filter(Boolean)); if (t.plan) s.add(t.plan); return [...s] }
+  const dayPlanFor = (t: EpicaTask, day: string): EpicaDayPlan | undefined => dayPlansOf(t).find(d => d.day === day)
+  // Dificultad / estimado / "hecho" EFECTIVOS ese día (los del dayPlan si existen; si no, los generales).
+  const difForDay = (t: EpicaTask, day: string): 'facil' | 'media' | 'dificil' | undefined => dayPlanFor(t, day)?.difficulty || t.difficulty
+  const estMinForDay = (t: EpicaTask, day: string): number => { const dp = dayPlanFor(t, day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; return estMinOf({ estMin: t.estMin, difficulty: difForDay(t, day) }) }
+  const doneOnDay = (t: EpicaTask, day: string): boolean => !!dayPlanFor(t, day)?.done || (t.progressLog || []).some(x => x.d === day)
   const mutateDayPlans = (e: Epica, ti: number, fn: (arr: EpicaDayPlan[]) => EpicaDayPlan[]) => {
     if (!dayPlansReady.current) { showToast('Corre sql/epicas-10-day-plans.sql para agendar por día', true); return }
     const tasks = clone(e.tasks)
@@ -3054,15 +3062,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const matchF = (e: Epica, t: EpicaTask) => (effWeekEpica === 'todas' || e.id === effWeekEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
-    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED && matchF(e, t)) byDay.get(t.plan)!.push({ e, t, i }) }))
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && matchF(e, t)) taskDays(t).forEach(d => { if (byDay.has(d)) byDay.get(d)!.push({ e, t, i }) }) }))
     // Carga TOTAL del día (todas las épicas, SIN filtro): para estimar la carga real
     // aunque estés filtrando por una épica y muevas actividades.
     const byDayTotal = new Map<string, { e: Epica; t: EpicaTask }[]>()
     days.forEach(d => byDayTotal.set(d, []))
-    activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.plan && byDayTotal.has(t.plan) && t.status !== ARCHIVED) byDayTotal.get(t.plan)!.push({ e, t }) }))
+    activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.status !== ARCHIVED) taskDays(t).forEach(d => { if (byDayTotal.has(d)) byDayTotal.get(d)!.push({ e, t }) }) }))
     const filtering = effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas' || workFilter !== ''
     const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
-    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
+    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat()
     const pend = all.filter(x => x.t.status !== 'Terminada')
     const totMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
@@ -3074,17 +3082,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       // ¿Se trabajó ESTE día? (hay avance en la bitácora con la fecha del carril). Se pinta en dorado
       // aunque no esté terminada, para que se note que ese día sí le metiste mano.
       const workedMinDay = fromDay ? (t.progressLog || []).filter(p => p.d === fromDay).reduce((s, p) => s + (typeof (p as { min?: number }).min === 'number' ? (p as { min?: number }).min! : 0), 0) : 0
-      const workedDay = !done && !!fromDay && (t.progressLog || []).some(p => p.d === fromDay)
+      const workedDay = !done && !!fromDay && doneOnDay(t, fromDay)
+      const nDays = taskDays(t).length
+      const dpFor = fromDay ? dayPlanFor(t, fromDay) : undefined   // sesión de ESTE día (si la tarea es multi-día)
       return (
-        <div key={k} style={{ position: 'relative' }}>
+        <div key={fromDay ? `${k}:${fromDay}` : k} style={{ position: 'relative' }}>
           <div onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
             title={`${t.t} — clic para abrir · arrástrala a otro día${workedDay ? `\n◐ trabajada este día${workedMinDay > 0 ? ` · ${Math.round(workedMinDay)}m` : ''}` : ''}`}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: done ? '#fff' : workedDay ? 'rgba(194,147,58,0.10)' : '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : workedDay ? '#C2933A' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
-            <button onClick={ev => { ev.stopPropagation(); if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={done ? 'Marcar sin terminar' : 'Marcar terminada'} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : workedDay ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: done ? '#fff' : '#C2933A' }}>{done ? <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg> : workedDay ? <span style={{ fontSize: 9, lineHeight: 1 }}>◐</span> : null}</button>
+            <button onClick={ev => { ev.stopPropagation(); if (dpFor && fromDay) toggleDayPlanDone(e, i, fromDay); else if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={dpFor ? (dpFor.done ? 'Marcar: no trabajado ese día' : 'Marcar: trabajé este día') : (done ? 'Marcar sin terminar' : 'Marcar terminada')} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : workedDay ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: done ? '#fff' : '#C2933A' }}>{done ? <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg> : workedDay ? <span style={{ fontSize: 9, lineHeight: 1 }}>◐</span> : null}</button>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
             <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
-            {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
-            {estMinOf(t) > 0 && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={typeof t.estMin === 'number' && t.estMin > 0 ? 'Tu estimado' : 'Estimado por dificultad'}>~{Math.round(estMinOf(t) / 60 * 10) / 10}h</span>}
+            {(() => { const dfd = difForDay(t, fromDay || t.plan || ''); return dfd ? <span title={`Dificultad ${difStyle(dfd).label}${dayPlanFor(t, fromDay || '')?.difficulty ? ' (ese día)' : ''}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={dfd} size={8} /></span> : null })()}
+            {(() => { const em = estMinForDay(t, fromDay || t.plan || ''); return em > 0 ? <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={dayPlanFor(t, fromDay || '')?.estMin ? 'Tu estimado ese día' : (typeof t.estMin === 'number' && t.estMin > 0 ? 'Tu estimado' : 'Estimado por dificultad')}>~{Math.round(em / 60 * 10) / 10}h</span> : null })()}
+            {nDays > 1 && <span title={`Agendada en ${nDays} días`} style={{ flexShrink: 0, font: '700 8.5px var(--font-ui)', color: '#7A6FB0' }}>🗓{nDays}</span>}
             <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
           </div>
           {weekMoveKey === k && (
@@ -3141,7 +3152,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const over = weekOverDay === d && !!weekDrag
           const pendN = items.filter(x => x.t.status !== 'Terminada').length
           const doneN = items.length - pendN
-          const dayMin = items.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinOf(x.t), 0)
+          const dayMin = items.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinForDay(x.t, d), 0)
           const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
           const overloaded = dayMin > 480
           return (
@@ -3167,12 +3178,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {filtering && (() => {
                   const totPend = byDayTotal.get(d)!.filter(x => x.t.status !== 'Terminada')
                   if (totPend.length === 0) return null
-                  const withDif = totPend.filter(x => x.t.difficulty)
-                  const tMin = withDif.reduce((s, x) => s + estMinOf(x.t), 0)   // sólo las que tienen dificultad
+                  const withDif = totPend.filter(x => difForDay(x.t, d))
+                  const tMin = withDif.reduce((s, x) => s + estMinForDay(x.t, d), 0)   // sólo las que tienen dificultad (ese día)
                   const tHrs = tMin >= 60 ? `${Math.round(tMin / 60 * 10) / 10}h` : `${tMin}m`
                   const tOver = tMin > 480
                   const nSin = totPend.length - withDif.length
-                  const tdc = { facil: 0, media: 0, dificil: 0 }; withDif.forEach(x => { const dd = x.t.difficulty; if (dd === 'facil') tdc.facil++; else if (dd === 'dificil') tdc.dificil++; else tdc.media++ })
+                  const tdc = { facil: 0, media: 0, dificil: 0 }; withDif.forEach(x => { const dd = difForDay(x.t, d); if (dd === 'facil') tdc.facil++; else if (dd === 'dificil') tdc.dificil++; else tdc.media++ })
                   return (
                     <div title={`Carga TOTAL del día (todas las épicas): ${totPend.length} actividades pendientes.\n~${tHrs} estimado sólo de las que tienen dificultad (fácil 45m · media 2h · difícil 4h).${nSin ? `\n${nSin} sin dificultad (no se estiman).` : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginTop: 2, paddingTop: 3, borderTop: '1px dashed rgba(15,35,64,0.1)' }}>
                       <span style={{ font: '700 8px/1 var(--font-ui)', letterSpacing: '.05em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.4)' }}>Todo el día</span>
