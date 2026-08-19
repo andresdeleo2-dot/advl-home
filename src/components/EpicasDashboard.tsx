@@ -4707,6 +4707,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <span style={{ fontSize: 14 }}>🔆</span>
                   <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#2E6E6E' }}>Trabajaste hoy</span>
                   {dayTotal > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: '#2E6E6E' }}>⏱ {hmm(dayTotal)}</span>}
+                  {(focus.runningTodayMin || 0) > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: '#6f8256' }}>▶ +{hmm(focus.runningTodayMin)} en curso</span>}
                   <span style={{ flex: 1 }} />
                   <a href="/tiempo" style={{ fontSize: 10, fontWeight: 700, color: 'rgba(46,110,110,0.75)', textDecoration: 'none' }}>ver en Tiempo →</a>
                 </div>

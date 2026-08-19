@@ -501,11 +501,13 @@ export function useFocusSession(hooks: FocusHooks) {
   // debe pausar sus refrescos (loadEpics) para no revertir esas ediciones en vuelo.
   // "Lo más importante hoy" (MIT) que fijaste en /tiempo — para estelarlo en Épicas (mismo margen.v1).
   const mitIds = data.mit?.date === iso(new Date()) ? (data.mit.ids || []) : []
-  // Total de TRABAJO registrado hoy (mismo cálculo que /tiempo: área 'trabajo' del historial de hoy).
-  // Incluye actividades generales y rutinas, no solo tareas de épica → para reconciliar en Épicas.
+  // Total de TRABAJO registrado hoy (mismo cálculo que /tiempo: área 'trabajo' del historial de hoy)
+  // MÁS la sesión EN CURSO (si corre hoy y es trabajo). Incluye general y rutinas → reconcilia en Épicas.
   const day0 = iso(new Date())
-  const workedTodayMin = (data.history || []).filter(h => h.date === day0 && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin }
+  const startedToday = session?.startedAt ? iso(new Date(session.startedAt)) === day0 : true
+  const runningTodayMin = (session && session.area === 'trabajo' && startedToday) ? Math.max(0, Math.round(elapsed)) : 0
+  const workedTodayMin = (data.history || []).filter(h => h.date === day0 && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0) + runningTodayMin
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

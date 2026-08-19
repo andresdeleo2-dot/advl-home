@@ -3660,21 +3660,24 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
 
       {/* Resumen arriba: trabajadas (real) · planeadas total · planeadas hasta ahora */}
       {(() => {
-        const realMin = worked.reduce((a, w) => a + w.dur, 0)
+        // Sesión EN CURSO (si corre hoy y es trabajo): su transcurrido cuenta en "trabajadas hoy".
+        const runningMin = (isToday && session && session.area === 'trabajo') ? Math.max(0, Math.round(session.dur || 0)) : 0
+        const realMin = worked.reduce((a, w) => a + w.dur, 0) + runningMin
         const planTotalMin = scheduled.reduce((a, s) => a + s.dur, 0)
         const nowM = Math.round(now)
         // "a esta hora" = lo agendado cuyo horario ya llegó (start ≤ ahora), a duración completa.
         const planByNow = scheduled.filter(s => s.start <= nowM).reduce((a, s) => a + s.dur, 0)
         const behind = planByNow - realMin
-        const stat = (v: string, l: string, c: string) => (
+        const stat = (v: string, l: string, c: string, sub?: string) => (
           <div style={{ background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 14, padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 118 }}>
             <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, color: c }}>{v}</span>
             <span style={{ fontSize: 11.5, color: '#a49b90' }}>{l}</span>
+            {sub && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#6f8256', marginTop: 1 }}>{sub}</span>}
           </div>
         )
         return (
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-            {stat(hm(realMin), `trabajadas${isToday ? ' hoy' : ''}`, '#6f8256')}
+            {stat(hm(realMin), `trabajadas${isToday ? ' hoy' : ''}`, '#6f8256', runningMin > 0 ? `▶ +${hm(runningMin)} en curso` : undefined)}
             {stat(hm(planTotalMin), 'planeadas · total', '#c2933a')}
             {isToday && stat(hm(planByNow), 'planeadas a esta hora', '#8a4b28')}
             {isToday && planByNow > 0 && (
