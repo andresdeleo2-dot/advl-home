@@ -222,7 +222,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [sinDiaOpen, setSinDiaOpen] = useState(false)                 // bandeja "Sin día" (backlog) en la vista Ajuste
   const [sprintCollapsed, setSprintCollapsed] = useState<Set<string>>(new Set()) // semanas colapsadas en Ajuste multi-semana
   const [weekOverDay, setWeekOverDay] = useState<string | null>(null)
-  const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
+  const weekDragRef = useRef<{ key: string; x: number; y: number; moved: boolean; fromDay?: string } | null>(null)
   const [sprintDrag, setSprintDrag] = useState<string | null>(null) // tarjeta arrastrada en la vista multi-semana
   const [sprintOverCol, setSprintOverCol] = useState<string | null>(null) // lunes de la semana bajo el drag
   const [sprintOverDay, setSprintOverDay] = useState<string | null>(null) // día concreto bajo el drag (mover a ese día)
@@ -1399,8 +1399,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /* ─── Vista semana: arrastrar tarjetas entre días ─────────────
      Mismo patrón que el tablero, pero la columna destino es un día
      y soltar reprograma la tarea (planTaskToDay), no cambia su estado. */
-  const onWeekDown = (ev: React.PointerEvent, key: string) => {
-    weekDragRef.current = { key, x: ev.clientX, y: ev.clientY, moved: false }
+  const onWeekDown = (ev: React.PointerEvent, key: string, fromDay?: string) => {
+    weekDragRef.current = { key, x: ev.clientX, y: ev.clientY, moved: false, fromDay }
     try { (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId) } catch { /* noop */ }
   }
   const onWeekMove = (ev: React.PointerEvent) => {
@@ -1419,7 +1419,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setWeekDrag(null); setWeekOverDay(null)
     if (!d) return
     if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }   // fue un clic
-    if (day && day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
+    if (!day) return
+    const fromDay = d.fromDay
+    // Si arrastraste desde un "Día de trabajo" (no el plan principal), mueve ESE día; si no, el plan.
+    const dp = fromDay ? dayPlanFor(x.t, fromDay) : undefined
+    if (dp && fromDay && fromDay !== x.t.plan) { if (day !== fromDay) moveDayPlanDay(x.e, x.i, fromDay, day); return }
+    if (day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
   }
   const onWeekCancel = () => { weekDragRef.current = null; setWeekDrag(null); setWeekOverDay(null) }
 
@@ -1657,6 +1662,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     mutateDayPlans(e, ti, arr => arr.map(d => d.day === day ? { ...d, ...patch } : d))
   const toggleDayPlanDone = (e: Epica, ti: number, day: string) =>
     mutateDayPlans(e, ti, arr => arr.map(d => d.day === day ? { ...d, done: !d.done } : d))
+  // Mueve un "Día de trabajo" de una fecha a otra (arrastrar el chip de ese día). Si el destino ya
+  // existe, funde (quita el origen). Conserva horas/dificultad/hecho del día.
+  const moveDayPlanDay = (e: Epica, ti: number, fromDay: string, toDay: string) => {
+    mutateDayPlans(e, ti, arr => arr.some(x => x.day === toDay) ? arr.filter(x => x.day !== fromDay) : arr.map(x => x.day === fromDay ? { ...x, day: toDay } : x))
+    showToast(`Moví ese día a ${relLong(toDay).toLowerCase()}`)
+  }
   // Control reusable de estimado de tiempo: dropdown de presets + "Personalizado…" (tiempo libre).
   // `ckey` identifica el control (para el modo personalizado); `onSet(min|null)` guarda el valor.
   const renderEstControl = (ckey: string, min: number | undefined, defMin: number, onSet: (m: number | null) => void, compact = false) => {
@@ -2965,7 +2976,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const dayW = !tdone && doneOnDay(t, d)          // trabajado/hecho este día (◐)
                     return (
                       <div key={`${k}:${d}`}
-                        onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove}
+                        onPointerDown={ev => onWeekDown(ev, k, d)} onPointerMove={onWeekMove}
                         onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
                         title={`${t.t} — arrastra a otro día para reprogramar`}
                         style={{ position: 'relative', background: dayW ? 'rgba(194,147,58,0.08)' : '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${tdone ? '#2E6E6E' : dayW ? '#C2933A' : ps.accent}`, borderRadius: 9, padding: '8px 9px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 16px 26px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: weekDrag && !dragging ? 0.5 : 1, transform: dragging ? 'rotate(-1.5deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
@@ -3019,7 +3030,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const { e, t, i } = x; const k = planKey(e.id, t); const done = t.status === 'Terminada'; const dragging = weekDrag === k
     return (
       <div key={k} style={{ position: 'relative' }}>
-        <div onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
+        <div onPointerDown={ev => onWeekDown(ev, k, fromDay || undefined)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
           title={`${t.t} — clic para abrir · arrástrala a otro día`}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
           <button onClick={ev => { ev.stopPropagation(); if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={done ? 'Marcar sin terminar' : 'Marcar terminada'} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{done && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg>}</button>
@@ -3116,7 +3127,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const dpFor = fromDay ? dayPlanFor(t, fromDay) : undefined   // sesión de ESTE día (si la tarea es multi-día)
       return (
         <div key={fromDay ? `${k}:${fromDay}` : k} style={{ position: 'relative' }}>
-          <div onPointerDown={ev => onWeekDown(ev, k)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
+          <div onPointerDown={ev => onWeekDown(ev, k, fromDay || undefined)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
             title={`${t.t} — clic para abrir · arrástrala a otro día${workedDay ? `\n◐ trabajada este día${workedMinDay > 0 ? ` · ${Math.round(workedMinDay)}m` : ''}` : ''}`}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: done ? '#fff' : workedDay ? 'rgba(194,147,58,0.10)' : '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : workedDay ? '#C2933A' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
             <button onClick={ev => { ev.stopPropagation(); if (dpFor && fromDay) toggleDayPlanDone(e, i, fromDay); else if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={dpFor ? (dpFor.done ? 'Marcar: no trabajado ese día' : 'Marcar: trabajé este día') : (done ? 'Marcar sin terminar' : 'Marcar terminada')} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : workedDay ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: done ? '#fff' : '#C2933A' }}>{done ? <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg> : workedDay ? <span style={{ fontSize: 9, lineHeight: 1 }}>◐</span> : null}</button>
