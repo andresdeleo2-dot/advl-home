@@ -1064,10 +1064,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planCounts = useMemo(() => {
     const m = new Map<string, { total: number; done: number }>()
     activeEpics.forEach(e => (e.tasks || []).forEach(t => {
-      if (!t.plan || t.status === ARCHIVED) return
-      const c = m.get(t.plan) || { total: 0, done: 0 }
-      c.total++; if (t.status === 'Terminada') c.done++
-      m.set(t.plan, c)
+      if (t.status === ARCHIVED) return
+      // Cuenta en CADA día en que la tarea está agendada (plan + Días de trabajo), como las vistas.
+      taskDays(t).forEach(d => {
+        const c = m.get(d) || { total: 0, done: 0 }
+        c.total++; if (t.status === 'Terminada' || !!dayPlanFor(t, d)?.done) c.done++
+        m.set(d, c)
+      })
     }))
     return m
   }, [activeEpics])
@@ -4555,7 +4558,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const monthEnd = `${today.slice(0, 7)}-${String(new Date(ry, rm, 0).getDate()).padStart(2, '0')}`
             const rEnd = mdRange === 'semana' ? addDays(rStart, 6) : mdRange === '2sem' ? addDays(rStart, 13) : mdRange === 'mes' ? monthEnd : ''
             const rStartUse = mdRange === 'mes' ? today.slice(0, 7) + '-01' : rStart
-            const inRange = (t: EpicaTask) => mdRange === 'todas' ? true : (!!t.plan && t.plan >= rStartUse && t.plan <= rEnd)
+            const inRange = (t: EpicaTask) => mdRange === 'todas' ? true : taskDays(t).some(d => d >= rStartUse && d <= rEnd)
             const weekDays = Array.from({ length: 7 }, (_, k) => addDays(rStart, k))   // L-D de esta semana
             // Filtro por estado del día (Alta/Vencidas/Con avance/Estancadas/…) aplicado en ESTA vista.
             const passPF = (t: EpicaTask) => planFilter === 'alta' ? t.priority === 'alta'
@@ -4566,7 +4569,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               : planFilter === 'arrastre' ? isCarried(t)
               : true
             // Una tarea "cuenta" para el día/rango + filtros elegidos (para los chips de épica y las filas).
-            const matchDR = (t: EpicaTask) => t.status !== ARCHIVED && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && !(boardHideDone && t.status === 'Terminada') && (mdDay ? t.plan === mdDay : inRange(t)) && passWork(t, mdDay || today) && passPF(t)
+            const matchDR = (t: EpicaTask) => t.status !== ARCHIVED && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && !(boardHideDone && t.status === 'Terminada') && (mdDay ? taskDays(t).includes(mdDay) : inRange(t)) && passWork(t, mdDay || today) && passPF(t)
             // Épicas con tareas EN ese día/rango+filtros: si filtras a un día, sólo salen las de ese día.
             const enfEpics = activeEpics.filter(e => (e.tasks || []).some(matchDR))
             const effEnf = enfEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
