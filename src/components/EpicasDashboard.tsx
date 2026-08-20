@@ -1668,6 +1668,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     mutateDayPlans(e, ti, arr => arr.some(x => x.day === toDay) ? arr.filter(x => x.day !== fromDay) : arr.map(x => x.day === fromDay ? { ...x, day: toDay } : x))
     showToast(`Moví ese día a ${relLong(toDay).toLowerCase()}`)
   }
+  // Reparte el estimado TOTAL de la tarea en N días consecutivos (desde su plan o desde hoy), cada
+  // uno con su porción de horas y la dificultad general. Sobrescribe los Días de trabajo actuales.
+  const splitIntoNDays = (e: Epica, ti: number, n: number) => {
+    if (!dayPlansReady.current) { showToast('Corre sql/epicas-10-day-plans.sql para repartir por días', true); return }
+    const tasks = clone(e.tasks)
+    const t = tasks[ti]; if (!t) return
+    const total = estMinOf(t) || 120
+    const per = Math.max(15, Math.round(total / n / 15) * 15)   // porción por día, redondeada a 15 min
+    const start = t.plan || todayISO()
+    t.dayPlans = Array.from({ length: n }, (_, k) => ({ day: addDays(start, k), estMin: per, difficulty: t.difficulty }))
+    patchEpic(e.id, { tasks })
+    showToast(`Repartida en ${n} días · ~${fmtEst(per)}/día`)
+  }
   // Control reusable de estimado de tiempo: dropdown de presets + "Personalizado…" (tiempo libre).
   // `ckey` identifica el control (para el modo personalizado); `onSet(min|null)` guarda el valor.
   const renderEstControl = (ckey: string, min: number | undefined, defMin: number, onSet: (m: number | null) => void, compact = false) => {
@@ -3028,16 +3041,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // (para el popover 📅). `fromDay` != null si viene de un día (habilita "Sin día").
   const ajusteChip = (x: { e: Epica; t: EpicaTask; i: number }, weekDays: string[], fromDay: string | null) => {
     const { e, t, i } = x; const k = planKey(e.id, t); const done = t.status === 'Terminada'; const dragging = weekDrag === k
+    const workedDay = !done && !!fromDay && doneOnDay(t, fromDay)
+    const dpFor = fromDay ? dayPlanFor(t, fromDay) : undefined
+    const nDays = taskDays(t).length
+    const dfd = difForDay(t, fromDay || t.plan || '')
+    const em = estMinForDay(t, fromDay || t.plan || '')
     return (
-      <div key={k} style={{ position: 'relative' }}>
+      <div key={fromDay ? `${k}:${fromDay}` : k} style={{ position: 'relative' }}>
         <div onPointerDown={ev => onWeekDown(ev, k, fromDay || undefined)} onPointerMove={onWeekMove} onPointerUp={() => onWeekUp(x)} onPointerCancel={onWeekCancel}
           title={`${t.t} — clic para abrir · arrástrala a otro día`}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
-          <button onClick={ev => { ev.stopPropagation(); if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={done ? 'Marcar sin terminar' : 'Marcar terminada'} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{done && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg>}</button>
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: done ? '#fff' : workedDay ? 'rgba(194,147,58,0.10)' : '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : workedDay ? '#C2933A' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
+          <button onClick={ev => { ev.stopPropagation(); if (dpFor && fromDay) toggleDayPlanDone(e, i, fromDay); else if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={dpFor ? (dpFor.done ? 'Marcar: no trabajado ese día' : 'Marcar: trabajé este día') : (done ? 'Marcar sin terminar' : 'Marcar terminada')} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : workedDay ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: done ? '#fff' : '#C2933A' }}>{done ? <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg> : workedDay ? <span style={{ fontSize: 9, lineHeight: 1 }}>◐</span> : null}</button>
           <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
           <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
-          {t.difficulty && <span title={`Dificultad ${difStyle(t.difficulty).label}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={t.difficulty} size={8} /></span>}
-          {estMinOf(t) > 0 && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={typeof t.estMin === 'number' && t.estMin > 0 ? 'Tu estimado' : 'Estimado por dificultad'}>~{Math.round(estMinOf(t) / 60 * 10) / 10}h</span>}
+          {dfd && <span title={`Dificultad ${difStyle(dfd).label}${dpFor?.difficulty ? ' (ese día)' : ''}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={dfd} size={8} /></span>}
+          {em > 0 && <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={dpFor?.estMin ? 'Tu estimado ese día' : 'Estimado'}>~{Math.round(em / 60 * 10) / 10}h</span>}
+          {nDays > 1 && <span title={`Agendada en ${nDays} días`} style={{ flexShrink: 0, font: '700 8.5px var(--font-ui)', color: '#7A6FB0' }}>🗓{nDays}</span>}
           <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
         </div>
         {weekMoveKey === k && (
@@ -3057,7 +3076,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const over = weekOverDay === d && !!weekDrag
     const pendN = sorted.filter(x => x.t.status !== 'Terminada').length
     const doneN = sorted.length - pendN
-    const dayMin = sorted.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinOf(x.t), 0)
+    const dayMin = sorted.filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinForDay(x.t, d), 0)
     const dayHrs = dayMin >= 60 ? `${Math.round(dayMin / 60 * 10) / 10}h` : `${dayMin}m`
     const overloaded = dayMin > 480
     return (
@@ -3268,7 +3287,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
     const matchF = (e: Epica, t: EpicaTask) => (effEpica === 'todas' || e.id === effEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
-    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => !x.t.plan && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
+    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const firstWeekDays = Array.from({ length: 7 }, (_, k) => addDays(weekMondays[0], k))
     const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
     const thisMon = mondayISO(today)
@@ -3298,7 +3317,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const days = Array.from({ length: 7 }, (_, k) => addDays(wm, k))
         const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
         days.forEach(d => byDay.set(d, []))
-        activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && byDay.has(t.plan) && t.status !== ARCHIVED && matchF(e, t)) byDay.get(t.plan)!.push({ e, t, i }) }))
+        activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && matchF(e, t)) taskDays(t).forEach(d => { if (byDay.has(d)) byDay.get(d)!.push({ e, t, i }) }) }))
         const all = [...byDay.values()].flat(); const pend = all.filter(x => x.t.status !== 'Terminada')
         const wMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
         // Semanas con tareas: abiertas por defecto. Semanas VACÍAS: colapsadas por defecto
@@ -6150,7 +6169,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const worked = (d: EpicaDayPlan) => !!d.done || (t.progressLog || []).some(x => x.d === d.day)
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {dps.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Un solo día por ahora. Agrega fechas abajo para trabajarla en varios días, cada uno con sus horas y dificultad.</div>}
+                        {/* Repartir el estimado total en N días consecutivos de un toque */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>Repartir {estMinOf(t) > 0 ? `${fmtEst(estMinOf(t))} ` : ''}en:</span>
+                          {[2, 3, 4, 5].map(n => (
+                            <button key={n} onClick={() => splitIntoNDays(ep, i, n)} title={`Partir en ${n} días consecutivos, cada uno con su porción de horas`} style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, border: '1px solid rgba(122,111,176,0.35)', background: 'rgba(122,111,176,0.08)', color: '#5F5596' }}>{n} días</button>
+                          ))}
+                          {dps.length > 0 && <button onClick={() => mutateDayPlans(ep, i, () => [])} title="Quitar todos los días de trabajo" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 11, fontWeight: 700 }}>limpiar</button>}
+                        </div>
+                        {dps.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Un solo día por ahora. Reparte arriba o agrega fechas abajo para trabajarla en varios días, cada uno con sus horas y dificultad.</div>}
                         {dps.map(dp => {
                           const w = worked(dp)
                           return (
