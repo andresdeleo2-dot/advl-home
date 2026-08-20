@@ -1681,6 +1681,33 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(e.id, { tasks })
     showToast(`Repartida en ${n} días · ~${fmtEst(per)}/día`)
   }
+  // Auto-balancear la semana: mueve tareas de días SOBRECARGADOS (> capacidad) a los más ligeros,
+  // usando el estimado por día. Solo mueve tareas de un solo día (no las multi-día ya repartidas).
+  const balanceWeek = (monday: string) => {
+    const days = Array.from({ length: 7 }, (_, k) => addDays(monday, k))
+    const CAP = Math.max(60, (dayCapacity || 8) * 60)
+    const items = epicsRef.current.flatMap(e => (e.tasks || []).map((t, i) => ({ e, i, t }))
+      .filter(x => x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && dayPlansOf(x.t).length === 0 && !!x.t.plan && days.includes(x.t.plan!))
+      .map(x => ({ eId: e.id, e: x.e, i: x.i, orig: x.t.plan!, day: x.t.plan!, min: estMinForDay(x.t, x.t.plan!) })))
+    const load: Record<string, number> = {}; days.forEach(d => (load[d] = 0)); items.forEach(x => (load[x.day] += x.min))
+    let guard = 0
+    while (guard++ < 300) {
+      const heavy = days.reduce((a, b) => (load[b] > load[a] ? b : a), days[0])
+      if (load[heavy] <= CAP) break
+      const light = days.reduce((a, b) => (load[b] < load[a] ? b : a), days[0])
+      if (light === heavy) break
+      const cand = items.filter(x => x.day === heavy).sort((a, b) => a.min - b.min)[0]
+      if (!cand || load[light] + cand.min >= load[heavy]) break   // sin candidato o no mejora
+      load[heavy] -= cand.min; load[light] += cand.min; cand.day = light
+    }
+    const moves = items.filter(x => x.day !== x.orig)
+    if (moves.length === 0) { showToast('La semana ya está balanceada 👌', false); return }
+    const byTarget = new Map<string, { e: Epica; i: number }[]>()
+    moves.forEach(m => { const a = byTarget.get(m.day) || []; a.push({ e: m.e, i: m.i }); byTarget.set(m.day, a) })
+    let n = 0
+    byTarget.forEach((list, day) => { n += moveTasksTo(list, day) })
+    showToast(`Balanceé la semana · moví ${n} ${n === 1 ? 'tarea' : 'tareas'}`)
+  }
   // Control reusable de estimado de tiempo: dropdown de presets + "Personalizado…" (tiempo libre).
   // `ckey` identifica el control (para el modo personalizado); `onSet(min|null)` guarda el valor.
   const renderEstControl = (ckey: string, min: number | undefined, defMin: number, onSet: (m: number | null) => void, compact = false) => {
@@ -3188,6 +3215,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {dc.dificil > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: '#B0522E', background: 'rgba(176,82,46,0.12)' }}>Difícil {dc.dificil}</span>}
             {dc.sin > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)', background: 'rgba(15,35,64,0.05)' }}>sin dif {dc.sin}</span>}
           </div>
+          <button onClick={() => balanceWeek(monday)} title={`Mueve tareas de días con más de ${dayCapacity || 8}h a los días más ligeros de la semana`} style={{ marginLeft: 'auto', cursor: 'pointer', borderRadius: 9, padding: '6px 12px', font: '700 12px var(--font-ui)', border: '1px solid rgba(122,111,176,0.4)', background: 'rgba(122,111,176,0.08)', color: '#5F5596', whiteSpace: 'nowrap' }}>⚖ Balancear</button>
         </div>
       )}
 
