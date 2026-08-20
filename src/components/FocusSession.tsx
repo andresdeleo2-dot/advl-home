@@ -507,7 +507,12 @@ export function useFocusSession(hooks: FocusHooks) {
   const startedToday = session?.startedAt ? iso(new Date(session.startedAt)) === day0 : true
   const runningTodayMin = (session && session.area === 'trabajo' && startedToday) ? Math.max(0, Math.round(elapsed)) : 0
   const workedTodayMin = (data.history || []).filter(h => h.date === day0 && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0) + runningTodayMin
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin }
+  // Bloques de trabajo de hoy SIN tarea de épica (General + rutinas), agrupados por nombre — para
+  // que Épicas los pueda listar por nombre (no solo el total).
+  const otherMap = new Map<string, number>()
+  ;(data.history || []).filter(h => h.date === day0 && h.area === 'trabajo' && !h.taskId).forEach(h => otherMap.set(h.name, (otherMap.get(h.name) || 0) + h.dur))
+  const todayOther = [...otherMap.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

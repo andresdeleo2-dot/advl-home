@@ -4791,8 +4791,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
                 {/* Reconciliación con Tiempo: cuánto fue en tareas vs. en general/rutinas (que no son tareas). */}
                 {otherMin > 0 && (
-                  <div style={{ padding: '2px 13px 9px', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>
-                    ⏱ <b style={{ color: '#2E6E6E' }}>{hmm(taskMin)}</b> en tareas · <b style={{ color: '#A87A2C' }}>{hmm(otherMin)}</b> en actividades generales y rutinas <span style={{ color: 'rgba(20,35,61,0.4)' }}>(de Tiempo)</span>
+                  <div style={{ padding: '2px 13px 10px' }}>
+                    <div style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)', marginBottom: (focus.todayOther?.length || 0) > 0 ? 5 : 0 }}>
+                      ⏱ <b style={{ color: '#2E6E6E' }}>{hmm(taskMin)}</b> en tareas · <b style={{ color: '#A87A2C' }}>{hmm(otherMin)}</b> en general y rutinas <span style={{ color: 'rgba(20,35,61,0.4)' }}>(de Tiempo)</span>
+                    </div>
+                    {(focus.todayOther || []).length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {focus.todayOther.map(o => (
+                          <span key={o.name} title={`${o.name} · ${hmm(o.min)} hoy`} style={{ font: '700 10px var(--font-ui)', color: '#A87A2C', background: 'rgba(168,122,44,0.10)', border: '1px solid rgba(168,122,44,0.25)', borderRadius: 99, padding: '2px 8px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.name} · {hmm(o.min)}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -7896,7 +7905,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>Cierre del día</div>
                     <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cap(new Date(refDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
                     {!refIsToday && <div style={{ marginTop: 6, fontSize: 11.5, color: '#B0522E', fontWeight: 700 }}>Este día quedó sin cerrar</div>}
-                    {totalMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(totalMin)} de trabajo registrado {refIsToday ? 'hoy' : 'ese día'}</div>}
+                    {refIsToday
+                      ? (focus.workedTodayMin > 0 && (() => { const otherM = Math.max(0, focus.workedTodayMin - totalMin); return (
+                          <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(focus.workedTodayMin)} trabajadas hoy{otherM > 0 ? <span style={{ fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}> · {hmm(totalMin)} en tareas, {hmm(otherM)} general/rutinas</span> : null}</div>
+                        ) })())
+                      : (totalMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(totalMin)} de trabajo registrado ese día</div>)}
                   </div>
                   <button aria-label="Cerrar" onClick={() => setDayCloseOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
