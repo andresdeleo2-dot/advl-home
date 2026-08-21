@@ -5981,11 +5981,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         ? <select value={ep.id} onChange={e => changeEpica(e.target.value)} title="Mover esta actividad a otra épica" aria-label="Épica" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 22px 3px 7px', fontSize: 12, fontWeight: 700, color: ep.color, background: '#fff', outline: 'none', maxWidth: 240 }}>{activeEpics.map(x => <option key={x.id} value={x.id} style={{ color: '#16365F' }}>{x.name}</option>)}</select>
                         : <span>{ep.name}</span>}
                     </div>
-                    <input key={`title:${t.id}`} defaultValue={t.t} aria-label="Título de la tarea"
-                      onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); (ev.currentTarget as HTMLInputElement).blur() } }}
+                    {/* Título editable que ENVUELVE a varias líneas (textarea auto-alto): usa todo el
+                        ancho disponible en vez de recortar títulos largos. */}
+                    <textarea key={`title:${t.id}`} defaultValue={t.t} rows={1} aria-label="Título de la tarea"
+                      ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }}
+                      onInput={ev => { const el = ev.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' }}
+                      onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); ev.currentTarget.blur() } }}
                       onFocus={ev => { ev.currentTarget.style.background = '#fff'; ev.currentTarget.style.borderColor = 'rgba(15,35,64,0.18)' }}
-                      onBlur={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; const v = ev.currentTarget.value.trim(); if (v && v !== t.t) setTaskTitle(ep, i, v); else ev.currentTarget.value = t.t }}
-                      className="serif" style={{ display: 'block', width: '100%', boxSizing: 'border-box', border: '1px solid transparent', borderRadius: 8, padding: '3px 7px', margin: '-3px -7px', fontWeight: 600, fontSize: 27, lineHeight: 1.1, color: '#10233F', background: 'transparent', outline: 'none', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }} />
+                      onBlur={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; const v = ev.currentTarget.value.trim().replace(/\s*\n\s*/g, ' '); if (v && v !== t.t) setTaskTitle(ep, i, v); else ev.currentTarget.value = t.t }}
+                      className="serif" style={{ display: 'block', width: '100%', boxSizing: 'border-box', resize: 'none', overflow: 'hidden', border: '1px solid transparent', borderRadius: 8, padding: '3px 7px', margin: '-3px -7px', fontWeight: 600, fontSize: 27, lineHeight: 1.15, color: '#10233F', background: 'transparent', outline: 'none', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }} />
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
                       {t.createdAt && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>Creada · {cap(new Date(t.createdAt + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }))}</span>}
                       {t.status !== 'Terminada' && diasCon(t) >= 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>🕐 llevas {diasCon(t)} {diasCon(t) === 1 ? 'día' : 'días'} en esto</span>}
