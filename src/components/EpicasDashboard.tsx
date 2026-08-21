@@ -6231,7 +6231,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={eb}>Días de trabajo <span style={{ color: 'rgba(20,35,61,0.4)', fontWeight: 600, letterSpacing: 0, textTransform: 'none' }}>· agéndala en varios días</span></div>
                   {dayPlansReady.current ? (() => {
                     const dps = dayPlansOf(t)
-                    const worked = (d: EpicaDayPlan) => !!d.done || (t.progressLog || []).some(x => x.d === d.day)
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {/* Repartir el estimado total en N días consecutivos de un toque */}
@@ -6244,15 +6243,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                         {dps.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Un solo día por ahora. Reparte arriba o agrega fechas abajo para trabajarla en varios días, cada uno con sus horas y dificultad.</div>}
                         {dps.map(dp => {
-                          const w = worked(dp)
+                          // Resuelve el día: cuánto trabajaste (bitácora) vs. lo estimado ese día.
+                          const workedMin = (t.progressLog || []).filter(x => x.d === dp.day).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+                          const est = (typeof dp.estMin === 'number' && dp.estMin > 0) ? dp.estMin : estMinOf(t)
+                          const isPast = dp.day < today
+                          const done = !!dp.done
+                          const met = done || (est > 0 && workedMin >= est) || (workedMin > 0 && est === 0)
+                          const partial = !met && workedMin > 0
+                          const state = met ? 'met' : partial ? 'partial' : (isPast ? 'missed' : 'plan')
+                          const bg = state === 'met' ? 'rgba(46,110,110,0.08)' : state === 'partial' ? 'rgba(194,147,58,0.10)' : state === 'missed' ? 'rgba(176,82,46,0.06)' : 'rgba(15,35,64,0.03)'
+                          const bd = state === 'met' ? 'rgba(46,110,110,0.35)' : state === 'partial' ? 'rgba(194,147,58,0.4)' : state === 'missed' ? 'rgba(176,82,46,0.28)' : 'rgba(15,35,64,0.08)'
                           return (
-                            <div key={dp.day} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 9, background: w ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', border: `1px solid ${w ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.08)'}` }}>
-                              <button onClick={() => toggleDayPlanDone(ep, i, dp.day)} title={dp.done ? 'Marcar como no trabajado ese día' : 'Marcar: trabajé este día'} style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', border: dp.done ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: dp.done ? '#C2933A' : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{dp.done ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : w ? <span style={{ color: '#C2933A', fontSize: 10, lineHeight: 1 }}>◐</span> : null}</button>
+                            <div key={dp.day} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 9, background: bg, border: `1px solid ${bd}` }}>
+                              <button onClick={() => toggleDayPlanDone(ep, i, dp.day)} title={done ? 'Marcar como no trabajado ese día' : 'Marcar: sí trabajé este día'} style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', border: met ? 'none' : partial ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.25)', background: met ? '#2E6E6E' : '#fff', color: met ? '#fff' : '#C2933A', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{met ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : partial ? <span style={{ fontSize: 10, lineHeight: 1 }}>◐</span> : null}</button>
                               <input type="date" value={dp.day} onChange={ev => { const nd = ev.target.value; if (nd && nd !== dp.day) setDayPlanField(ep, i, dp.day, { day: nd }) }} aria-label="Día" style={{ flexShrink: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: '#16365F', background: '#fff', outline: 'none' }} />
-                              {renderEstControl(`${t.id}:${dp.day}`, dp.estMin, estMinOf(t), m => setDayPlanField(ep, i, dp.day, { estMin: m == null ? undefined : m }), true)}
-                              <select value={dp.difficulty || ''} onChange={ev => setDayPlanField(ep, i, dp.day, { difficulty: (ev.target.value || undefined) as EpicaDayPlan['difficulty'] })} title="Dificultad ese día" aria-label="Dificultad ese día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 5px', fontSize: 11, fontWeight: 700, color: dp.difficulty ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }}>
-                                <option value="">Dif ·</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
-                              </select>
+                              {isPast ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <span style={{ font: '700 11.5px var(--font-ui)', color: state === 'met' ? '#2E6E6E' : state === 'partial' ? '#A87A2C' : '#B0522E' }}>{state === 'met' ? '✅ Cumplió' : state === 'partial' ? '◐ Parcial' : '○ No se trabajó'}</span>
+                                  {workedMin > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{fmtEst(workedMin)}{est > 0 ? ` de ~${fmtEst(est)}` : ''}</span>}
+                                  {workedMin === 0 && est > 0 && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>eran ~{fmtEst(est)}</span>}
+                                </span>
+                              ) : (
+                                <>
+                                  {renderEstControl(`${t.id}:${dp.day}`, dp.estMin, estMinOf(t), m => setDayPlanField(ep, i, dp.day, { estMin: m == null ? undefined : m }), true)}
+                                  <select value={dp.difficulty || ''} onChange={ev => setDayPlanField(ep, i, dp.day, { difficulty: (ev.target.value || undefined) as EpicaDayPlan['difficulty'] })} title="Dificultad ese día" aria-label="Dificultad ese día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 5px', fontSize: 11, fontWeight: 700, color: dp.difficulty ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }}>
+                                    <option value="">Dif ·</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+                                  </select>
+                                </>
+                              )}
                               <span style={{ flex: 1 }} />
                               <button onClick={() => removeDayPlan(ep, i, dp.day)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.45)', fontSize: 13, lineHeight: 1 }}>✕</button>
                             </div>
