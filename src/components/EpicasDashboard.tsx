@@ -151,6 +151,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogView, setBacklogView] = useState<'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'>('tabla')
   const [backlogWeek, setBacklogWeek] = useState<string>('')        // lunes ancla de la vista Semana del backlog ('' = esta semana)
   const [mdSel, setMdSel] = useState<{ eId: string; tid: string } | null>(null)  // tarea seleccionada en la vista maestro/detalle
+  const [mdMultiSel, setMdMultiSel] = useState<Set<string>>(new Set())            // selección MÚLTIPLE en la lista de Detalle (independiente del lote del backlog)
   const [mdRange, setMdRange] = useState<'todas' | 'semana' | '2sem' | 'mes'>('todas')  // rango de fecha en Detalle/Agenda del Enfoque
   const [mdDay, setMdDay] = useState<string>('')                    // filtro por día concreto (L-D) en Detalle/Agenda del Enfoque
   const [workFilter, setWorkFilter] = useState<'' | 'plan' | 'openworked' | 'unworked'>('')  // filtro por estado de trabajo del día (Día/Detalle): planeadas · trabajadas sin terminar · sin trabajar
@@ -577,15 +578,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const n = moveTasksTo(arrastradas.map(x => ({ e: x.e, i: x.i })), dayISO)
     setDayCloseOpen(false)
     if (n) showToast(`Moví ${n} ${n === 1 ? 'arrastrada' : 'arrastradas'} a ${relLong(dayISO).toLowerCase()}`)
-  }
-  // Mueve las tareas SELECCIONADAS (backlogSel) a un día/fecha. dayISO='' = quitar de todo día.
-  const moveSelectedTo = (dayISO: string) => {
-    const list = [...backlogSel].map(k => keyToTask(k)).filter(Boolean).map(x => ({ e: x!.e, i: x!.i }))
-    if (list.length === 0) return
-    if (!dayISO) { list.forEach(({ e, i }) => setTaskPlan(e, i, '')); setBacklogSel(new Set()); showToast(`Quité ${list.length} del calendario`); return }
-    const n = moveTasksTo(list, dayISO)
-    setBacklogSel(new Set())
-    if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(dayISO).toLowerCase()}`)
   }
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -1430,9 +1422,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }   // fue un clic
     if (!day) return
     const fromDay = d.fromDay
-    // Si arrastraste desde un "Día de trabajo" (no el plan principal), mueve ESE día; si no, el plan.
+    // Si arrastraste desde un "Día de trabajo" (aunque coincida con el plan), mueve ESE día
+    // (moveDayPlanDay también reubica el plan si coincide). Si no, mueve el plan principal.
     const dp = fromDay ? dayPlanFor(x.t, fromDay) : undefined
-    if (dp && fromDay && fromDay !== x.t.plan) { if (day !== fromDay) moveDayPlanDay(x.e, x.i, fromDay, day); return }
+    if (dp && fromDay) { if (day !== fromDay) moveDayPlanDay(x.e, x.i, fromDay, day); return }
     if (day !== x.t.plan) planTaskToDay(x.e, x.i, day, { toast: true })
   }
   const onWeekCancel = () => { weekDragRef.current = null; setWeekDrag(null); setWeekOverDay(null) }
@@ -1674,7 +1667,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Mueve un "Día de trabajo" de una fecha a otra (arrastrar el chip de ese día). Si el destino ya
   // existe, funde (quita el origen). Conserva horas/dificultad/hecho del día.
   const moveDayPlanDay = (e: Epica, ti: number, fromDay: string, toDay: string) => {
-    mutateDayPlans(e, ti, arr => arr.some(x => x.day === toDay) ? arr.filter(x => x.day !== fromDay) : arr.map(x => x.day === fromDay ? { ...x, day: toDay } : x))
+    if (!dayPlansReady.current) { showToast('Corre sql/epicas-10-day-plans.sql para agendar por día', true); return }
+    const tasks = clone(e.tasks); const t = tasks[ti]; if (!t) return
+    if (Array.isArray(t.dayPlans)) {
+      t.dayPlans = (t.dayPlans.some(x => x.day === toDay) ? t.dayPlans.filter(x => x.day !== fromDay) : t.dayPlans.map(x => x.day === fromDay ? { ...x, day: toDay } : x)).sort((a, b) => a.day.localeCompare(b.day))
+    }
+    // Si ese día era también el plan principal, mueve el plan con él (no lo dejes huérfano en fromDay).
+    if (t.plan === fromDay) { t.plan = toDay; if (!t.priority) t.priority = prioFromDue(t.due); t.planOrder = maxPlanOrderFor(toDay) + 1000; applyPlanStatus(t, toDay) }
+    patchEpic(e.id, { tasks })
     showToast(`Moví ese día a ${relLong(toDay).toLowerCase()}`)
   }
   // Reparte el estimado TOTAL de la tarea en N días consecutivos (desde su plan o desde hoy), cada
@@ -2890,7 +2890,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
-      {boardView === 'tabla' ? renderDayTable([...byDay.values()].flat().filter(x => passF(x.t) && !(boardHideDone && x.t.status === 'Terminada'))) : (() => {
+      {boardView === 'tabla' ? renderDayTable((() => { const m = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); [...byDay.values()].flat().filter(x => passF(x.t) && !(boardHideDone && x.t.status === 'Terminada')).forEach(x => { if (x.t.id && !m.has(x.t.id)) m.set(x.t.id, x) }); return [...m.values()] })()) : (() => {
       // Rutinas ("las diarias") + tablero en UN solo contenedor, para que las celdas
       // de rutina cuadren columna a columna con los días de abajo. El riel izquierdo
       // nombra las rutinas; cada columna trae sus celdas de ese día arriba.
@@ -3364,7 +3364,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         days.forEach(d => byDay.set(d, []))
         activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && matchF(e, t)) taskDays(t).forEach(d => { if (byDay.has(d)) byDay.get(d)!.push({ e, t, i }) }) }))
         const all = [...byDay.values()].flat(); const pend = all.filter(x => x.t.status !== 'Terminada')
-        const wMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
+        const uniqW = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); all.forEach(x => { if (x.t.id) uniqW.set(x.t.id, x) })
+        const uniqWN = uniqW.size || all.length
+        const uniqWPend = [...uniqW.values()].filter(x => x.t.status !== 'Terminada').length
+        const wMin = days.reduce((sum, d) => sum + (byDay.get(d) || []).filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinForDay(x.t, d), 0), 0)
         // Semanas con tareas: abiertas por defecto. Semanas VACÍAS: colapsadas por defecto
         // (para no mostrar 7 carriles vacíos). El clic invierte el default en ambos casos.
         const collapsed = all.length > 0 ? sprintCollapsed.has(wm) : !sprintCollapsed.has(wm)
@@ -3374,7 +3377,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <button onClick={() => setSprintCollapsed(s => { const n = new Set(s); if (n.has(wm)) n.delete(wm); else n.add(wm); return n })} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', cursor: 'pointer', border: 'none', background: isThisWeek ? 'rgba(194,147,58,0.08)' : '#FBFAF6', padding: '11px 14px' }}>
               <span className="serif" style={{ fontSize: 16, fontWeight: 600, color: '#10233F' }}>{weekRangeLabel(wm)}</span>
               {isThisWeek && <span style={{ font: '700 9px var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: '#A87A2C', border: '1px solid rgba(194,147,58,0.4)', borderRadius: 99, padding: '1px 7px' }}>Esta semana</span>}
-              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>{all.length} act · {pend.length} pend · <b style={{ color: '#A87A2C' }}>~{hmw(wMin)}</b></span>
+              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>{uniqWN} act · {uniqWPend} pend · <b style={{ color: '#A87A2C' }}>~{hmw(wMin)}</b></span>
               <span style={{ marginLeft: 'auto', fontSize: 12, color: 'rgba(20,35,61,0.45)', transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform .15s' }}>▾</span>
             </button>
             {!collapsed && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 10 }}>{days.map(d => ajusteLane(d, byDay.get(d)!, days))}</div>}
@@ -6448,12 +6451,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // completo editable al centro (SIN popup) reusando renderTaskDetail acoplado.
   const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
     const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
-    // Selección múltiple (reusa backlogSel) para mover varias a un día de una.
+    // Selección múltiple (estado PROPIO mdMultiSel) para mover varias a un día de una. Se acota a
+    // las filas VISIBLES: nunca mueve algo fuera del filtro actual.
     const keys = rows.map(x => planKey(x.e.id, x.t))
-    const selCount = keys.filter(k => backlogSel.has(k)).length
+    const selRows = rows.filter(x => mdMultiSel.has(planKey(x.e.id, x.t)))
+    const selCount = selRows.length
     const allSel = keys.length > 0 && selCount === keys.length
-    const toggleOne = (k: string) => setBacklogSel(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })
-    const toggleAll = () => setBacklogSel(prev => { const n = new Set(prev); if (allSel) keys.forEach(k => n.delete(k)); else keys.forEach(k => n.add(k)); return n })
+    const toggleOne = (k: string) => setMdMultiSel(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })
+    const toggleAll = () => setMdMultiSel(prev => { const n = new Set(prev); if (allSel) keys.forEach(k => n.delete(k)); else keys.forEach(k => n.add(k)); return n })
+    const doMove = (dayISO: string) => {
+      if (selRows.length === 0) return
+      if (!dayISO) { selRows.forEach(x => setTaskPlan(x.e, x.i, '')); setMdMultiSel(new Set()); showToast(`Quité ${selRows.length} del calendario`); return }
+      const n = moveTasksTo(selRows.map(x => ({ e: x.e, i: x.i })), dayISO)
+      setMdMultiSel(new Set())
+      if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(dayISO).toLowerCase()}`)
+    }
     return (
       <div className="ep-md" style={{ display: 'flex', width: '100%', gap: 14, alignItems: 'stretch', minHeight: 420 }}>
         <div className="ep-md-list" style={{ flex: '0 0 320px', maxWidth: 360, maxHeight: 'calc(100dvh - 88px)', position: 'sticky', top: 12, alignSelf: 'flex-start', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, paddingRight: 4 }}>
@@ -6467,15 +6479,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ font: '800 12px var(--font-ui)' }}>{selCount} seleccionada{selCount === 1 ? '' : 's'}</span>
                 <span style={{ flex: 1 }} />
-                <button onClick={() => setBacklogSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.7)', fontSize: 11.5, fontWeight: 700 }}>Limpiar</button>
+                <button onClick={() => setMdMultiSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.7)', fontSize: 11.5, fontWeight: 700 }}>Limpiar</button>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 700 }}>Mover a:</span>
                 {([['Hoy', today], ['Mañana', addDays(today, 1)]] as [string, string][]).map(([lbl, d]) => (
-                  <button key={lbl} onClick={() => moveSelectedTo(d)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: 'none', background: 'rgba(255,255,255,0.16)', color: '#fff' }}>{lbl}</button>
+                  <button key={lbl} onClick={() => doMove(d)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: 'none', background: 'rgba(255,255,255,0.16)', color: '#fff' }}>{lbl}</button>
                 ))}
-                <input type="date" onChange={e => { if (e.target.value) moveSelectedTo(e.target.value) }} title="Otra fecha" aria-label="Mover a otra fecha" style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 7px', fontSize: 11.5, fontWeight: 700, border: 'none', background: '#fff', color: '#10233F', outline: 'none' }} />
-                <button onClick={() => moveSelectedTo('')} title="Quitar del calendario" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: '1px solid rgba(255,255,255,0.3)', background: 'transparent', color: 'rgba(255,255,255,0.85)' }}>Sin fecha</button>
+                <input type="date" onChange={e => { if (e.target.value) doMove(e.target.value) }} title="Otra fecha" aria-label="Mover a otra fecha" style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 7px', fontSize: 11.5, fontWeight: 700, border: 'none', background: '#fff', color: '#10233F', outline: 'none' }} />
+                <button onClick={() => doMove('')} title="Quitar del calendario" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: '1px solid rgba(255,255,255,0.3)', background: 'transparent', color: 'rgba(255,255,255,0.85)' }}>Sin fecha</button>
               </div>
             </div>
           )}
@@ -6483,7 +6495,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           {rows.map(({ e, t }) => {
             const k = planKey(e.id, t)
             const on = !!valid && valid.eId === e.id && valid.tid === t.id
-            const sel = backlogSel.has(k)
+            const sel = mdMultiSel.has(k)
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
             return (
               <div key={k} style={{ flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, overflow: 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>

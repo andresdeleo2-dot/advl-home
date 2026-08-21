@@ -77,6 +77,8 @@ const estDurOf = (t?: EpicaTask) => (t && typeof t.estMin === 'number' && t.estM
 const dayPlansOfT = (t?: EpicaTask) => (t && Array.isArray(t.dayPlans)) ? t.dayPlans : []
 // ¿La tarea está agendada ese día? (su plan es ese día O tiene un "Día de trabajo" ese día).
 const taskOnDay = (t: EpicaTask, day: string) => t.plan === day || dayPlansOfT(t).some(d => d.day === day)
+// ¿Marcaste ese "Día de trabajo" como hecho (◐)? Entonces no sale "por agendar" ese día.
+const dayPlanDoneT = (t: EpicaTask, day: string) => !!dayPlansOfT(t).find(d => d.day === day)?.done
 // Duración al arrastrar en un día concreto: el estimado de ESE día (dayPlan) si existe; si no, el general.
 const estDurForDay = (t: EpicaTask | undefined, day: string) => { const dp = dayPlansOfT(t).find(d => d.day === day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; if (dp?.difficulty && !(t && typeof t.estMin === 'number' && t.estMin > 0)) return durByDiff({ difficulty: dp.difficulty } as EpicaTask); return estDurOf(t) }
 const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
@@ -372,7 +374,7 @@ export default function TiempoClient() {
       if (t.task.status === 'Terminada' || t.task.status === 'Archivada') return false
       const backed = taskDay === t0 && back.has(`${t0}·${t.task.id}`)
       // Aparece si está planeada ese día, o es recurrente hoy, O la devolviste con "↩ A tareas".
-      if (!(taskOnDay(t.task, taskDay) || recurringDueToday(t.task, taskDay) || backed)) return false
+      if (!(backed || ((taskOnDay(t.task, taskDay) || recurringDueToday(t.task, taskDay)) && !dayPlanDoneT(t.task, taskDay)))) return false
       // Se oculta si ya tiene tiempo hoy y NO la devolviste.
       if (taskDay === t0 && worked.has(t.task.id) && !backed) return false
       return true
@@ -388,7 +390,7 @@ export default function TiempoClient() {
     const workedDay = new Set((data.history || []).filter(h => h.date === planDay && h.taskId).map(h => h.taskId))
     return allTasks
       .filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada')
-      .filter(t => taskOnDay(t.task, planDay) || recurringDueToday(t.task, planDay))
+      .filter(t => (taskOnDay(t.task, planDay) || recurringDueToday(t.task, planDay)) && !dayPlanDoneT(t.task, planDay))
       .filter(t => !workedDay.has(t.task.id))
       .map(t => ({ ...t, recurring: recurringDueToday(t.task, planDay) }))
   }, [allTasks, planDay, data.history])
@@ -905,7 +907,7 @@ export default function TiempoClient() {
         } else segs.push({ w: ((e - s) / span) * 100, bg: '#eee6da', faded: false, label: 'libre · ' + clock(s) + '–' + clock(e) })
       }
       const free = Math.max(0, (winEnd - winStart) - doneMin - protMin)
-      const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, date) || recurringDueToday(t.task, date))).length
+      const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, date) || recurringDueToday(t.task, date)) && !dayPlanDoneT(t.task, date)).length
       return { date, letter: dowLetterOf(date), num: Number(date.slice(8)), isToday: date === todayISO, segs, freeLabel: hm(free), doneLabel: hm(doneMin), doneMin, nTasks }
     })
     return { winStartLabel: clock(winStart), winEndLabel: clock(winEnd), days }
@@ -1285,13 +1287,22 @@ export default function TiempoClient() {
   }
   // Redimensionaste en el calendario un bloque ligado a una tarea → guarda ESA duración como tu
   // estimado propio de la tarea (sincronía de dos vías). Sin la columna est_min, no escribe (evita 500).
-  const setTaskEstMinFromPlan = (epicaId: string, taskId: string, min: number) => {
+  const setTaskEstMinFromPlan = (epicaId: string, taskId: string, min: number, day?: string) => {
     if (!estMinReadyRef.current) return
     const tt = tasksRef.current.find(x => x.task.id === taskId)
     if (!tt) return
     const m = Math.max(0, Math.round(min))
-    if ((tt.task.estMin || 0) === m) return
-    const upd: EpicaTask = { ...tt.task, estMin: m }
+    const dps = Array.isArray(tt.task.dayPlans) ? tt.task.dayPlans : []
+    const dp = day ? dps.find(d => d.day === day) : undefined
+    let upd: EpicaTask
+    if (dp) {
+      // Multi-día: guarda la duración como el estimado de ESE día (no pises el general).
+      if ((dp.estMin || 0) === m) return
+      upd = { ...tt.task, dayPlans: dps.map(d => d.day === day ? { ...d, estMin: m } : d) }
+    } else {
+      if ((tt.task.estMin || 0) === m) return
+      upd = { ...tt.task, estMin: m }
+    }
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
@@ -1837,7 +1848,7 @@ export default function TiempoClient() {
             blocks={data.blocks.filter(b => blockActiveOn(b, new Date(planDay + 'T12:00:00').getDay()))}
             meetings={meetings.filter(m => m.date === planDay)}
             now={now}
-            session={data.session && planDay === today ? { name: data.session.name, start: sessStartMin, dur: sessElapsed, plannedDur: data.session.dur || 0, area: data.session.area, taskId: data.session.taskId } : null}
+            session={data.session && planDay === today ? { name: data.session.name, start: sessStartMin, dur: sessElapsed, plannedDur: data.session.dur || 0, area: data.session.area, taskId: data.session.taskId, startedToday: data.session.startedAt ? iso(new Date(data.session.startedAt)) === today : true } : null}
             onSessionStart={setSessionStart}
             allOpenTasks={allTasks}
             onGeneral={startGeneral}
@@ -3482,7 +3493,7 @@ const dtBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1
 /** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
  *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
 type PlanRoutine = { name: string; epicaName: string; color: string; epicaId?: string; rIdx?: number }
-type PlanSession = { name: string; start: number; dur: number; plannedDur: number; area: Area; taskId?: string }
+type PlanSession = { name: string; start: number; dur: number; plannedDur: number; area: Area; taskId?: string; startedToday?: boolean }
 type PlanDrag =
   | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
   | { kind: 'newfree'; name: string; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
@@ -3495,7 +3506,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
   onAdd: (t: TodayTask, start: number, dur?: number) => void
-  onSetEstMin: (epicaId: string, taskId: string, min: number) => void
+  onSetEstMin: (epicaId: string, taskId: string, min: number, day?: string) => void
   onAddFree: (name: string, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
@@ -3575,7 +3586,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
         else if (d.kind === 'wresize') onEditWorked(d.idx, { dur: d.curDur })
         else if (d.kind === 'session') { if (d.curMin !== d.start0) onSessionStart(d.curMin); else if (session?.taskId) onOpenTask(session.taskId) }
-        else { onPatch(d.id, { dur: d.curDur }); const blk = scheduled.find(s => s.id === d.id); if (blk?.taskId && blk.epicaId) onSetEstMin(blk.epicaId, blk.taskId, d.curDur) }
+        else { onPatch(d.id, { dur: d.curDur }); const blk = scheduled.find(s => s.id === d.id); if (blk?.taskId && blk.epicaId) onSetEstMin(blk.epicaId, blk.taskId, d.curDur, blk.date || day) }
       }
       setDrag(null)
     }
@@ -3661,7 +3672,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
       {/* Resumen arriba: trabajadas (real) · planeadas total · planeadas hasta ahora */}
       {(() => {
         // Sesión EN CURSO (si corre hoy y es trabajo): su transcurrido cuenta en "trabajadas hoy".
-        const runningMin = (isToday && session && session.area === 'trabajo') ? Math.max(0, Math.round(session.dur || 0)) : 0
+        const runningMin = (isToday && session && session.area === 'trabajo' && session.startedToday !== false) ? Math.max(0, Math.round(session.dur || 0)) : 0
         const realMin = worked.reduce((a, w) => a + w.dur, 0) + runningMin
         const planTotalMin = scheduled.reduce((a, s) => a + s.dur, 0)
         const nowM = Math.round(now)
