@@ -2862,9 +2862,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const all = [...byDay.values()].flat().filter(x => passF(x.t))
         if (all.length === 0) return null
         const pend = all.filter(x => x.t.status !== 'Terminada')
+        const uniqAll = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); all.forEach(x => { if (x.t.id) uniqAll.set(x.t.id, x) })
+        const uniqAllN = uniqAll.size || all.length
+        const uniqPend = [...uniqAll.values()].filter(x => x.t.status !== 'Terminada')
         const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }
-        pend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
-        const totMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
+        uniqPend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
+        const totMin = days.reduce((sum, d) => sum + (byDay.get(d) || []).filter(x => x.t.status !== 'Terminada' && passF(x.t)).reduce((s, x) => s + estMinForDay(x.t, d), 0), 0)
         const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
         const pill = (c: string, bg: string, label: string, n: number) => n > 0
           ? <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 99, padding: '3px 10px', font: '700 11.5px var(--font-ui)', color: c, background: bg }}><span style={{ width: 7, height: 7, borderRadius: 99, background: c }} />{label} {n}</span>
@@ -2872,8 +2875,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '0 0 12px', padding: '11px 14px', borderRadius: 14, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{all.length} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{all.length === 1 ? 'actividad' : 'actividades'}</span></span>
-              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginTop: 2 }}>{pend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> de trabajo estimado</span>
+              <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{uniqAllN} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{uniqAllN === 1 ? 'actividad' : 'actividades'}</span></span>
+              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginTop: 2 }}>{uniqPend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> de trabajo estimado</span>
             </div>
             <span style={{ width: 1, height: 30, background: 'rgba(15,35,64,0.1)' }} />
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -3168,8 +3171,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat()
     const pend = all.filter(x => x.t.status !== 'Terminada')
-    const totMin = pend.reduce((s, x) => s + estMinOf(x.t), 0)
-    const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }; pend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
+    // Únicas: una tarea multi-día cuenta UNA vez para "N actividades" y la dificultad (aunque salga en varios días).
+    const uniqAll = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); all.forEach(x => { if (x.t.id) uniqAll.set(x.t.id, x) })
+    const uniqAllN = uniqAll.size || all.length
+    const uniqPend = [...uniqAll.values()].filter(x => x.t.status !== 'Terminada')
+    // Horas: suma el estimado POR DÍA de cada aparición (multi-día NO se cuenta de más).
+    const totMin = days.reduce((sum, d) => sum + (byDay.get(d) || []).filter(x => x.t.status !== 'Terminada').reduce((s, x) => s + estMinForDay(x.t, d), 0), 0)
+    const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }; uniqPend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
     const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
 
     const chip = (x: { e: Epica; t: EpicaTask; i: number }, fromDay: string | null) => {
@@ -3215,8 +3223,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
       {all.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '0 0 12px', padding: '11px 14px', borderRadius: 14, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)' }}>
-          <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{all.length} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{all.length === 1 ? 'actividad' : 'actividades'}</span></span>
-          <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }} title="El estimado sólo cuenta las tareas con dificultad (fácil 45m · media 2h · difícil 4h). Las sin dificultad no se estiman.">{pend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> estimado por dificultad</span>
+          <span className="serif" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, color: '#10233F' }}>{uniqAllN} <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{uniqAllN === 1 ? 'actividad' : 'actividades'}</span></span>
+          <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }} title="Horas = suma del estimado de cada día (una tarea en varios días suma sus porciones, no de más).">{uniqPend.length} pendientes · <b style={{ color: '#A87A2C' }}>~{hmw(totMin)}</b> estimado</span>
           <span style={{ width: 1, height: 26, background: 'rgba(15,35,64,0.1)' }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {dc.facil > 0 && <span style={{ borderRadius: 99, padding: '3px 9px', font: '700 11px var(--font-ui)', color: '#5f8a52', background: 'rgba(95,138,82,0.12)' }}>Fácil {dc.facil}</span>}
