@@ -985,7 +985,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const dayPlansOf = (t: EpicaTask): EpicaDayPlan[] => Array.isArray(t.dayPlans) ? t.dayPlans : []
   // Días en que la tarea está agendada = plan (día "primario") ∪ días de dayPlans. Para que la MISMA
   // tarea aparezca en CADA uno de esos días en las vistas Día/Ajuste/Semana.
-  const taskDays = (t: EpicaTask): string[] => { const s = new Set<string>(dayPlansOf(t).map(d => d.day).filter(Boolean)); if (t.plan) s.add(t.plan); return [...s] }
+  const taskDays = (t: EpicaTask): string[] => {
+    const s = new Set<string>()
+    // Un "Día de trabajo" sigue "anclando" la tarea en las vistas si es HOY/FUTURO, o si es PASADO pero
+    // ya se trabajó/marcó (◐, queda como registro). Un día pasado NO trabajado se resuelve como "no
+    // cumplió" y ya NO retiene la tarea en esa semana/día (solo se ve en el detalle).
+    dayPlansOf(t).forEach(d => { if (d.day && (d.day >= today || d.done || (t.progressLog || []).some(x => x.d === d.day))) s.add(d.day) })
+    if (t.plan) s.add(t.plan)
+    return [...s]
+  }
   const dayPlanFor = (t: EpicaTask, day: string): EpicaDayPlan | undefined => dayPlansOf(t).find(d => d.day === day)
   // Dificultad / estimado / "hecho" EFECTIVOS ese día (los del dayPlan si existen; si no, los generales).
   const difForDay = (t: EpicaTask, day: string): 'facil' | 'media' | 'dificil' | undefined => dayPlanFor(t, day)?.difficulty || t.difficulty
