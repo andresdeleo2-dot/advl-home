@@ -154,6 +154,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [mdMultiSel, setMdMultiSel] = useState<Set<string>>(new Set())            // selección MÚLTIPLE en la lista de Detalle (independiente del lote del backlog)
   const [mdRange, setMdRange] = useState<'todas' | 'semana' | '2sem' | 'mes'>('todas')  // rango de fecha en Detalle/Agenda del Enfoque
   const [mdDay, setMdDay] = useState<string>('')                    // filtro por día concreto (L-D) en Detalle/Agenda del Enfoque
+  const [detShowRoutines, setDetShowRoutines] = useState(false)     // mostrar la tira de rutinas diarias en Detalle
   const [workFilter, setWorkFilter] = useState<'' | 'plan' | 'openworked' | 'unworked'>('')  // filtro por estado de trabajo del día (Día/Detalle): planeadas · trabajadas sin terminar · sin trabajar
   const [dayCloseOpen, setDayCloseOpen] = useState(false)          // modal "Cerrar el día" (retro rápida del día)
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
@@ -4679,10 +4680,40 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     return <button key={d} onClick={() => setMdDay(on ? '' : d)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', fontSize: 11, fontWeight: 700, border: on ? '1.5px solid #C2933A' : isTd ? '1px solid rgba(194,147,58,0.45)' : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.14)' : '#fff', color: on ? '#A87A2C' : isTd ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>{lbl}</button>
                   })}
                   {mdDay && <button onClick={() => setMdDay('')} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Todos</button>}
+                  <span style={{ flex: 1 }} />
+                  {detalle && <button onClick={() => setDetShowRoutines(v => !v)} title="Mostrar/ocultar las rutinas diarias" style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: detShowRoutines ? '1px solid #7A6FB0' : '1px solid rgba(15,35,64,0.12)', background: detShowRoutines ? 'rgba(122,111,176,0.12)' : '#fff', color: detShowRoutines ? '#5F5596' : 'rgba(20,35,61,0.6)' }}>🔁 Rutinas diarias</button>}
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
+            const routinesStrip = detalle && detShowRoutines ? (() => {
+              const rDay = mdDay || today
+              const rMon = mondayISO(rDay)
+              const rDi = (new Date(rDay + 'T00:00:00').getDay() + 6) % 7
+              const routines = activeEpics.flatMap(e => (e.routines || []).map((r, ri) => ({ e, r, ri })))
+              if (routines.length === 0) return <div style={{ marginBottom: 12, fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>No tienes rutinas diarias. Agrégalas en una épica.</div>
+              const doneN = routines.filter(({ r }) => getRoutineWeek(r, rMon)[rDi]).length
+              return (
+                <div style={{ marginBottom: 12, borderRadius: 13, background: 'rgba(122,111,176,0.05)', border: '1px solid rgba(122,111,176,0.25)', padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: '#5F5596' }}>🔁 Rutinas diarias · {mdDay ? cap(new Date(rDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric' }).replace('.', '')) : 'hoy'}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(95,85,150,0.7)' }}>{doneN}/{routines.length}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {routines.map(({ e, r, ri }) => {
+                      const on = getRoutineWeek(r, rMon)[rDi]
+                      return (
+                        <div key={e.id + ':' + ri} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 99, background: on ? 'rgba(122,111,176,0.14)' : '#fff', border: `1px solid ${on ? 'rgba(122,111,176,0.4)' : 'rgba(15,35,64,0.12)'}` }}>
+                          <button onClick={() => toggleRoutineWeekDay(e, ri, rMon, rDi)} title={on ? 'Marcar sin hacer' : 'Marcar hecha'} style={{ flexShrink: 0, height: 16, width: 16, borderRadius: 5, cursor: 'pointer', border: on ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: on ? e.color : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</button>
+                          <button onClick={() => setRoutineStat({ eId: e.id, ri })} title="Ver estadísticas" style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 600, color: on ? '#5F5596' : '#16365F' }}>{r.t}</button>
+                          <span style={{ width: 6, height: 6, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })() : null
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{routinesStrip}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
