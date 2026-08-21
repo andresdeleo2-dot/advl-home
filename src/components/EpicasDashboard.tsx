@@ -5317,18 +5317,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const keyOf = (x: { e: Epica; t: EpicaTask }) => planKey(x.e.id, x.t)
     const allKeys = sorted.map(keyOf)
     const allSel = allKeys.length > 0 && allKeys.every(k => backlogSel.has(k))
-    const someSel = backlogSel.size > 0
+    // SÓLO las seleccionadas que están VISIBLES (dentro del filtro actual): las acciones en lote nunca
+    // tocan algo fuera de lo que ves. Evita borrar/mover tareas ocultas por un filtro.
+    const visibleSel = new Set(allKeys.filter(k => backlogSel.has(k)))
+    const someSel = visibleSel.size > 0
     const toggleAll = () => setBacklogSel(() => allSel ? new Set() : new Set(allKeys))
     const toggleOne = (k: string) => setBacklogSel(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })
 
-    // Edición masiva: agrupa la selección por épica y aplica en un patch por épica
+    // Edición masiva: agrupa la selección VISIBLE por épica y aplica en un patch por épica
     const bulkGroup = () => {
       const m = new Map<string, number[]>()
-      backlogSel.forEach(key => { const f = keyToTask(key); if (!f) return; if (!m.has(f.e.id)) m.set(f.e.id, []); m.get(f.e.id)!.push(f.i) })
+      visibleSel.forEach(key => { const f = keyToTask(key); if (!f) return; if (!m.has(f.e.id)) m.set(f.e.id, []); m.get(f.e.id)!.push(f.i) })
       return m
     }
     const bulkField = (mutate: (t: EpicaTask) => void, msg: string) => {
-      const count = backlogSel.size
+      const count = visibleSel.size
       const g = bulkGroup(); const snaps = snapshot([...g.keys()])
       g.forEach((idxs, eId) => {
         const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
@@ -5342,7 +5345,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const bulkPrio = (v: Prio) => bulkField(t => { t.priority = v }, `· prioridad ${v}`)
     const bulkDue = (v: string) => bulkField(t => { t.due = v }, '· entrega')
     const bulkPlan = (v: string) => {
-      const count = backlogSel.size
+      const count = visibleSel.size
       let base = v ? maxPlanOrderFor(v) : 0
       const g = bulkGroup(); const snaps = snapshot([...g.keys()])
       g.forEach((idxs, eId) => {
@@ -5354,7 +5357,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       undoToast(`${count} · ${v ? 'planeadas' : 'sin planear'}`, snaps); setBacklogSel(new Set())
     }
     const bulkDelete = () => {
-      const count = backlogSel.size
+      const count = visibleSel.size
+      if (count === 0) return
       if (!window.confirm(`¿Eliminar ${count} ${count === 1 ? 'tarea' : 'tareas'}?`)) return
       const g = bulkGroup(); const snaps = snapshot([...g.keys()])
       g.forEach((idxs, eId) => {
@@ -5530,7 +5534,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
             {someSel && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 12px 10px', padding: '9px 12px', borderRadius: 12, background: '#16365F', color: '#fff' }}>
-                <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{backlogSel.size} seleccionada{backlogSel.size === 1 ? '' : 's'}</span>
+                <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{visibleSel.size} seleccionada{visibleSel.size === 1 ? '' : 's'}</span>
                 <span style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.18)' }} />
                 <select value="" onChange={e => e.target.value && bulkStatus(e.target.value)} style={bulkSelStyle}>
                   <option value="" disabled>Estado…</option>
