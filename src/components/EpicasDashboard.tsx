@@ -578,6 +578,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setDayCloseOpen(false)
     if (n) showToast(`Moví ${n} ${n === 1 ? 'arrastrada' : 'arrastradas'} a ${relLong(dayISO).toLowerCase()}`)
   }
+  // Mueve las tareas SELECCIONADAS (backlogSel) a un día/fecha. dayISO='' = quitar de todo día.
+  const moveSelectedTo = (dayISO: string) => {
+    const list = [...backlogSel].map(k => keyToTask(k)).filter(Boolean).map(x => ({ e: x!.e, i: x!.i }))
+    if (list.length === 0) return
+    if (!dayISO) { list.forEach(({ e, i }) => setTaskPlan(e, i, '')); setBacklogSel(new Set()); showToast(`Quité ${list.length} del calendario`); return }
+    const n = moveTasksTo(list, dayISO)
+    setBacklogSel(new Set())
+    if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(dayISO).toLowerCase()}`)
+  }
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!anyModal) {
@@ -6431,24 +6440,58 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // completo editable al centro (SIN popup) reusando renderTaskDetail acoplado.
   const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
     const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
+    // Selección múltiple (reusa backlogSel) para mover varias a un día de una.
+    const keys = rows.map(x => planKey(x.e.id, x.t))
+    const selCount = keys.filter(k => backlogSel.has(k)).length
+    const allSel = keys.length > 0 && selCount === keys.length
+    const toggleOne = (k: string) => setBacklogSel(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n })
+    const toggleAll = () => setBacklogSel(prev => { const n = new Set(prev); if (allSel) keys.forEach(k => n.delete(k)); else keys.forEach(k => n.add(k)); return n })
     return (
       <div className="ep-md" style={{ display: 'flex', width: '100%', gap: 14, alignItems: 'stretch', minHeight: 420 }}>
         <div className="ep-md-list" style={{ flex: '0 0 320px', maxWidth: 360, maxHeight: 'calc(100dvh - 88px)', position: 'sticky', top: 12, alignSelf: 'flex-start', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, paddingRight: 4 }}>
-          <div style={{ position: 'sticky', top: 0, zIndex: 1, background: 'linear-gradient(#F6F1E7, #F6F1E7 70%, rgba(246,241,231,0))', padding: '1px 2px 6px', font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>{rows.length} tarea{rows.length === 1 ? '' : 's'}</div>
+          <div style={{ position: 'sticky', top: 0, zIndex: 1, background: 'linear-gradient(#F6F1E7, #F6F1E7 70%, rgba(246,241,231,0))', padding: '1px 2px 6px', display: 'flex', alignItems: 'center', gap: 7 }}>
+            {rows.length > 0 && <button onClick={toggleAll} title={allSel ? 'Quitar selección' : 'Seleccionar todas'} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, display: 'flex' }}><span style={{ height: 16, width: 16, borderRadius: 4, border: allSel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: allSel ? '#10233F' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{allSel && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span></button>}
+            <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>{selCount > 0 ? `${selCount} de ${rows.length}` : `${rows.length} tarea${rows.length === 1 ? '' : 's'}`}</span>
+          </div>
+          {/* Barra flotante de acción: mover las seleccionadas a un día/fecha */}
+          {selCount > 0 && (
+            <div style={{ position: 'sticky', top: 24, zIndex: 3, background: '#10233F', color: '#fff', borderRadius: 11, padding: '9px 11px', marginBottom: 4, display: 'flex', flexDirection: 'column', gap: 8, boxShadow: '0 12px 26px -14px rgba(15,35,64,0.75)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ font: '800 12px var(--font-ui)' }}>{selCount} seleccionada{selCount === 1 ? '' : 's'}</span>
+                <span style={{ flex: 1 }} />
+                <button onClick={() => setBacklogSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.7)', fontSize: 11.5, fontWeight: 700 }}>Limpiar</button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', fontWeight: 700 }}>Mover a:</span>
+                {([['Hoy', today], ['Mañana', addDays(today, 1)]] as [string, string][]).map(([lbl, d]) => (
+                  <button key={lbl} onClick={() => moveSelectedTo(d)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: 'none', background: 'rgba(255,255,255,0.16)', color: '#fff' }}>{lbl}</button>
+                ))}
+                <input type="date" onChange={e => { if (e.target.value) moveSelectedTo(e.target.value) }} title="Otra fecha" aria-label="Mover a otra fecha" style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 7px', fontSize: 11.5, fontWeight: 700, border: 'none', background: '#fff', color: '#10233F', outline: 'none' }} />
+                <button onClick={() => moveSelectedTo('')} title="Quitar del calendario" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: '1px solid rgba(255,255,255,0.3)', background: 'transparent', color: 'rgba(255,255,255,0.85)' }}>Sin fecha</button>
+              </div>
+            </div>
+          )}
           {rows.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '14px 6px' }}>Nada coincide con los filtros.</div>}
           {rows.map(({ e, t }) => {
+            const k = planKey(e.id, t)
             const on = !!valid && valid.eId === e.id && valid.tid === t.id
+            const sel = backlogSel.has(k)
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
             return (
-              <button key={planKey(e.id, t)} onClick={() => setMdSel({ eId: e.id, tid: t.id! })}
-                style={{ flexShrink: 0, textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '8px 11px', border: on ? '1.5px solid #10233F' : '1px solid rgba(15,35,64,0.10)', background: on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
-                  <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
-                  {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
-                </div>
-              </button>
+              <div key={k} style={{ flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, overflow: 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
+                <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 32, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ height: 18, width: 18, borderRadius: 5, border: sel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: sel ? '#C2933A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{sel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
+                </button>
+                <button onClick={() => setMdSel({ eId: e.id, tid: t.id! })} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '8px 11px 8px 2px' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                    <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
+                    {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
+                    {taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ font: '700 9px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}
+                  </div>
+                </button>
+              </div>
             )
           })}
         </div>
