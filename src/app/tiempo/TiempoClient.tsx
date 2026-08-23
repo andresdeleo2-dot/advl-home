@@ -1752,7 +1752,7 @@ export default function TiempoClient() {
     showUndo(`✓ Registré «${p.name || 'Actividad'}» (${hm(p.dur)})`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, false) })
   }
   // Rutinas diarias de Épicas (hábitos) para planificar en el Planificador.
-  const planRoutines = epicasList.flatMap(e => (e.routines || []).map((r, i) => ({ name: r.t, epicaName: e.name, color: e.color, epicaId: e.id, rIdx: i })))
+  const planRoutines = epicasList.flatMap(e => (e.routines || []).map((r, i) => ({ name: r.t, epicaName: e.name, color: e.color, epicaId: e.id, rIdx: i, estMin: r.estMin })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
     save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
 
@@ -3492,7 +3492,7 @@ const dtBtn: CSSProperties = { border: '1px solid #e2d9cb', background: '#faf7f1
 
 /** Plan de hoy: calendario de UN día. Se arrastran las tareas (columna derecha) a la rejilla
  *  de horas; ya colocadas se pueden mover y redimensionar (con popup en vivo de inicio–fin/duración). */
-type PlanRoutine = { name: string; epicaName: string; color: string; epicaId?: string; rIdx?: number }
+type PlanRoutine = { name: string; epicaName: string; color: string; epicaId?: string; rIdx?: number; estMin?: number }
 type PlanSession = { name: string; start: number; dur: number; plannedDur: number; area: Area; taskId?: string; startedToday?: boolean }
 type PlanDrag =
   | { kind: 'new'; task: TodayTask; dur: number; moved: boolean; curMin: number | null; x: number; y: number }
@@ -3704,7 +3704,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         {/* Rejilla de horas */}
         <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
           <div ref={gridRef}
-            onPointerDown={e => { setActBar(null); if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { onAddFree(selFree, yToMin(e.clientY)); setSelFree(null) } }}
+            onPointerDown={e => { setActBar(null); if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { const rm = routines.find(x => x.name === selFree)?.estMin; onAddFree(selFree, yToMin(e.clientY), (rm && rm > 0) ? rm : undefined); setSelFree(null) } }}
             onDoubleClick={e => { if (!selTask && !selFree) setDoneAt(yToMin(e.clientY)) }}
             title="Doble clic en una hora para registrar algo que ya hiciste"
             style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: (selTask || selFree) ? 'copy' : 'default' }}>
@@ -3914,7 +3914,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               {routines.map((r, i) => {
                 const sel = selFree === r.name
                 return (
-                  <div key={'r' + i} onPointerDown={e => setDrag({ kind: 'newfree', name: r.name, dur: 15, moved: false, curMin: null, x: e.clientX, y: e.clientY })}
+                  <div key={'r' + i} onPointerDown={e => setDrag({ kind: 'newfree', name: r.name, dur: (r.estMin && r.estMin > 0) ? r.estMin : 15, moved: false, curMin: null, x: e.clientX, y: e.clientY })}
                     style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, cursor: 'grab', touchAction: 'none', background: sel ? '#f5ece2' : '#faf7f1', border: `1px solid ${sel ? '#b4653a' : '#e7dfd2'}` }}>
                     <span style={{ fontSize: 13, flexShrink: 0 }}>🔁</span>
                     <div style={{ flex: 1, minWidth: 0 }}>

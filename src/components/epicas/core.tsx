@@ -162,7 +162,7 @@ export function normalize(e: Epica): Epica {
       const days = (r.days && r.days.length === 7) ? r.days : [false, false, false, false, false, false, false]
       // Migra el progreso legado (days) a la semana actual si aún no hay historial por semana
       const weeks = (r.weeks && typeof r.weeks === 'object') ? r.weeks : (days.some(Boolean) ? { [mondayISO(todayISO())]: days } : {})
-      return { t: r.t, days, weeks }
+      return { t: r.t, days, weeks, ...(typeof r.estMin === 'number' ? { estMin: r.estMin } : {}) }
     }),
     tasks: (e.tasks || []).map(t => {
       const nt = t.id ? { ...t } : { ...t, id: uid() }
