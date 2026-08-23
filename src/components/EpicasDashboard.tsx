@@ -1897,6 +1897,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (routineWeek === mondayISO(todayISO())) r.days = wk   // mantiene `days` sincronizado con la semana actual
     patchEpic(e.id, { routines })
   }
+  // Estimado de minutos/día de una rutina (se guarda en el jsonb de rutinas, sin migración).
+  const setRoutineEstMin = (e: Epica, ri: number, min: number | null) => {
+    const routines = clone(e.routines)
+    if (!routines[ri]) return
+    if (min != null && min > 0) routines[ri].estMin = Math.round(min); else delete routines[ri].estMin
+    patchEpic(e.id, { routines })
+  }
   // marca/desmarca una rutina en una semana y día concretos (vista semana del enfoque)
   const toggleRoutineWeekDay = (e: Epica, ri: number, monday: string, di: number) => {
     const routines = clone(e.routines)
@@ -6542,10 +6549,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {routines.map(({ e, r, ri }) => {
                   const on = getRoutineWeek(r, rMon)[rDi]
                   return (
-                    <div key={'r' + e.id + ':' + ri} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, borderRadius: 10, padding: '7px 9px', border: `1px solid ${on ? 'rgba(122,111,176,0.4)' : 'rgba(15,35,64,0.10)'}`, background: on ? 'rgba(122,111,176,0.10)' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${e.color}` }}>
+                    <div key={'r' + e.id + ':' + ri} style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderRadius: 10, padding: '7px 9px', border: `1px solid ${on ? 'rgba(122,111,176,0.4)' : 'rgba(15,35,64,0.10)'}`, background: on ? 'rgba(122,111,176,0.10)' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${e.color}` }}>
                       <button onClick={() => toggleRoutineWeekDay(e, ri, rMon, rDi)} title={on ? 'Marcar sin hacer' : 'Marcar hecha'} style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', border: on ? 'none' : '1.5px solid rgba(15,35,64,0.25)', background: on ? e.color : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{on && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</button>
-                      <button onClick={() => setRoutineStat({ eId: e.id, ri })} title="Ver racha y estadísticas" style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 12.5, fontWeight: 600, color: on ? '#5F5596' : '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t}</button>
+                      <button onClick={() => setRoutineStat({ eId: e.id, ri })} title="Ver racha y estadísticas" style={{ flex: '1 1 auto', minWidth: 0, textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 12.5, fontWeight: 600, color: on ? '#5F5596' : '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t}</button>
                       <span title="Rutina diaria" style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, color: 'rgba(20,35,61,0.35)' }}>🔁</span>
+                      {/* Tiempo dedicado (de tu registro en Tiempo, por nombre) + estimado editable por rutina */}
+                      <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', paddingLeft: 26 }}>
+                        {(() => { const ded = focus.minByNameOn(r.t, rDay); const est = r.estMin || 0; return (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: ded > 0 ? '#2E6E6E' : 'rgba(20,35,61,0.45)' }}>⏱ {ded > 0 ? fmtEst(ded) : '0m'}{est > 0 ? ` de ~${fmtEst(est)}` : ''} <span style={{ fontWeight: 600, color: 'rgba(20,35,61,0.4)' }}>{mdDay ? 'ese día' : 'hoy'}</span></span>
+                        ) })()}
+                        {renderEstControl(`routine:${e.id}:${ri}`, r.estMin, 0, m => setRoutineEstMin(e, ri, m), true)}
+                      </div>
                     </div>
                   )
                 })}
@@ -8127,6 +8141,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {tile('Este año', String(s.year), 'veces')}
                   {tile('Mejor semana', `${s.best}/7`)}
                   {tile('Total', String(s.total), `${s.activeWeeks} sem`)}
+                </div>
+                {/* Tiempo: estimado por día (editable) + total dedicado (de tu registro en Tiempo, por nombre) */}
+                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '11px 13px', borderRadius: 12, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Estimado por día</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{renderEstControl(`routineStat:${ep.id}:${routineStat.ri}`, r.estMin, 0, m => setRoutineEstMin(ep, routineStat.ri, m))}</div>
+                  </div>
+                  <span style={{ width: 1, height: 38, background: 'rgba(15,35,64,0.1)' }} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Tiempo dedicado</span>
+                    <span className="serif" style={{ fontSize: 24, fontWeight: 600, lineHeight: 1, color: '#2E6E6E' }}>{fmtEst(focus.totalMinByName(r.t))}</span>
+                    <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>hoy {fmtEst(focus.minByNameOn(r.t, today))}</span>
+                  </div>
                 </div>
                 {s.recent.length > 0 && (
                   <div style={{ marginTop: 18 }}>

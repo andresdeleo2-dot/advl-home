@@ -46,6 +46,7 @@ export type EpicaRoutine = {
   t: string
   days: boolean[]                        // legado / semana actual (compat)
   weeks?: Record<string, boolean[]>      // progreso por semana: lunesISO -> 7 booleanos (L…D)
+  estMin?: number                        // estimado de minutos que le dedicas al día (opcional; se guarda en el jsonb de rutinas, sin migración)
 }
 export type EpicaTaskLink = { label: string; url: string }
 export type EpicaSubtask = {

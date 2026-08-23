@@ -512,7 +512,16 @@ export function useFocusSession(hooks: FocusHooks) {
   const otherMap = new Map<string, number>()
   ;(data.history || []).filter(h => h.date === day0 && h.area === 'trabajo' && !h.taskId).forEach(h => otherMap.set(h.name, (otherMap.get(h.name) || 0) + h.dur))
   const todayOther = [...otherMap.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther }
+  // Minutos registrados con un NOMBRE concreto en un día (para el tiempo dedicado a una rutina, que en
+  // /tiempo se registra por nombre). Incluye la sesión en curso si coincide nombre y día.
+  const minByNameOn = (name: string, day: string): number => {
+    let m = (data.history || []).filter(h => h.date === day && h.name === name).reduce((s, h) => s + h.dur, 0)
+    if (session && session.name === name && startedToday && day === day0) m += Math.max(0, Math.round(elapsed))
+    return m
+  }
+  // Total de minutos registrados con ese nombre (todo el historial) — para el "registro" de una rutina.
+  const totalMinByName = (name: string): number => (data.history || []).filter(h => h.name === name).reduce((s, h) => s + h.dur, 0)
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, minByNameOn, totalMinByName }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
