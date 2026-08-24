@@ -1756,6 +1756,14 @@ export default function TiempoClient() {
   const planRoutines = epicasList.flatMap(e => (e.routines || []).map((r, i) => ({ name: r.t, epicaName: e.name, color: e.color, epicaId: e.id, rIdx: i, estMin: r.estMin })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
     save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
+  // Duplica un bloque agendado (misma tarea/actividad, otra hora el mismo día) para trabajarla 2+ veces.
+  // Lo coloca justo después del original; luego lo puedes arrastrar a la hora que quieras.
+  const planClone = (id: string) => {
+    const list = data.scheduled || []
+    const blk = list.find(s => s.id === id); if (!blk) return
+    const newStart = Math.min(1425, blk.start + Math.max(15, blk.dur))
+    save({ scheduled: [...list, { ...blk, id: uid(), start: newStart, started: false }] })
+  }
   // Mover un bloque a `newStart` y, en modo CADENA, recorrer todo lo que empezaba en o después de su
   // hora original por el mismo delta (empieza antes/después → arrastra las siguientes). Mismo día.
   const planMoveRipple = (id: string, newStart: number, chain: boolean) => {
@@ -1873,6 +1881,7 @@ export default function TiempoClient() {
             onAdd={planAdd}
             onSetEstMin={setTaskEstMinFromPlan}
             onRippleMove={planMoveRipple}
+            onClone={planClone}
             chainDrag={chainDrag}
             onToggleChain={() => setChainDrag(v => !v)}
             onAddFree={planAddFree}
@@ -3519,13 +3528,14 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, chainDrag, onToggleChain, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
   onAdd: (t: TodayTask, start: number, dur?: number) => void
   onSetEstMin: (epicaId: string, taskId: string, min: number, day?: string) => void
   onRippleMove: (id: string, newStart: number, chain: boolean) => void
+  onClone: (id: string) => void
   chainDrag: boolean
   onToggleChain: () => void
   onAddFree: (name: string, start: number, dur?: number) => void
@@ -3861,6 +3871,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title={s.started ? 'Volver a comenzar' : 'Comenzar ahora'} style={planBtn}>▶</button>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la tarea" style={planBtn}>👁</button>}
+                      <button onPointerDown={e => e.stopPropagation()} onClick={() => onClone(s.id)} title="Duplicar: ponla otra vez hoy a otra hora" style={planBtn}>⧉</button>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>
                     </div>}
                   </div>
@@ -3888,6 +3899,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     <button onClick={() => onStart(s)} title={s.started ? 'Volver a comenzar' : 'Comenzar ahora'} style={actBtn}>▶</button>
                     <button onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora" style={actBtn}>✎</button>
                     {t && <button onClick={() => onEdit(t)} title="Ver la tarea" style={actBtn}>👁</button>}
+                    <button onClick={() => { onClone(s.id); setActBar(null) }} title="Duplicar: ponla otra vez hoy a otra hora" style={actBtn}>⧉</button>
                     <button onClick={() => { onRemove(s.id); setActBar(null) }} title="Quitar del plan" style={actBtn}>×</button>
                   </>)}
                   {w && (<>
