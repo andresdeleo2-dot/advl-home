@@ -2393,6 +2393,60 @@ export default function TiempoClient() {
               <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.55 }}>En <b>sólido</b> ves lo que realmente hiciste cada día (tu registro); en <b>tenue</b>, la rutina que tienes planeada según “Mi rutina”. Reuniones y agendado sólo aparecen en hoy.</span>
             </div>
 
+            {/* CARGA PLANEADA de la semana: tareas planeadas + juntas del calendario + lo agendado, por
+                día — para ver qué día está más libre y decidir dónde meter algo nuevo (una junta, etc.). */}
+            {(() => {
+              const rows = WEEK.days.map(d => {
+                const day = d.date
+                const sched = (data.scheduled || []).filter(s => (s.date || iso(new Date())) === day).reduce((a, s) => a + s.dur, 0)
+                const mtgs = meetings.filter(m => m.date === day)
+                const meet = mtgs.reduce((a, m) => a + m.dur, 0)
+                const taskMin = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, day) || recurringDueToday(t.task, day)) && !dayPlanDoneT(t.task, day)).reduce((a, t) => a + estDurForDay(t.task, day), 0)
+                const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, day) || recurringDueToday(t.task, day)) && !dayPlanDoneT(t.task, day)).length
+                const planned = sched + meet + taskMin
+                return { ...d, meetN: mtgs.length, planned, nPlan: nTasks }
+              })
+              const future = rows.filter(r => r.date >= iso(new Date()))
+              const minPlan = future.length ? Math.min(...future.map(r => r.planned)) : 0
+              const scale = Math.max(480, ...rows.map(r => r.planned))
+              return (
+                <div className="t-card" style={card(22)}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>Carga planeada · elige el mejor día</span>
+                    <span style={{ fontSize: 13.5, color: '#8b8379', lineHeight: 1.5, maxWidth: 620 }}>Suma de tus <b>tareas planeadas</b> (por su estimado) + <b>juntas</b> del calendario + lo <b>agendado</b>. El día más ligero (de hoy en adelante) se marca para agendar algo nuevo, como una junta.</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {rows.map(d => {
+                      const pct = scale > 0 ? Math.round(d.planned / scale * 100) : 0
+                      const over = d.planned > 480
+                      const lightest = d.date >= iso(new Date()) && d.planned === minPlan && d.planned < 480
+                      const barC = over ? '#b0522e' : d.planned >= 360 ? '#c2933a' : '#6f8256'
+                      return (
+                        <div key={d.date} onClick={() => { setTaskDay(d.date); setView('plan') }} title="Abrir este día en el Planificador" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 12px', borderRadius: 14, cursor: 'pointer', background: lightest ? 'rgba(111,130,86,0.08)' : d.isToday ? '#f5ece2' : '#f7f2e8', border: `1px solid ${lightest ? 'rgba(111,130,86,0.4)' : d.isToday ? '#e6cfa4' : '#ece3d5'}` }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 38, flexShrink: 0 }}>
+                            <span style={{ fontSize: 11, color: '#a49b90', textTransform: 'uppercase' }}>{d.letter}</span>
+                            <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1, color: d.isToday ? '#8a4b28' : '#1c1a17' }}>{d.num}</span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ height: 12, borderRadius: 6, background: '#efe7d9', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: barC, transition: 'width .2s' }} /></div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap', fontSize: 11.5, color: '#8b8379' }}>
+                              {d.nPlan > 0 && <span>{d.nPlan} {d.nPlan === 1 ? 'tarea' : 'tareas'}</span>}
+                              {d.meetN > 0 && <span style={{ color: '#2E5A9E', fontWeight: 700 }}>· 🗓 {d.meetN} {d.meetN === 1 ? 'junta' : 'juntas'}</span>}
+                              {lightest && <span style={{ color: '#4f6238', fontWeight: 800 }}>· ✦ el más libre</span>}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', width: 92, flexShrink: 0 }}>
+                            <span style={{ fontSize: 15, fontWeight: 700, color: over ? '#b0522e' : '#1c1a17', fontVariantNumeric: 'tabular-nums' }}>{d.planned > 0 ? hm(d.planned) : '—'}</span>
+                            <span style={{ fontSize: 11, color: over ? '#b0522e' : '#a49b90' }}>{over ? 'lleno' : 'planeadas'}</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* Insights de la semana — patrones a partir de tu historial real */}
             <div className="t-card" style={card(22)}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
