@@ -107,6 +107,7 @@ export default function TiempoClient() {
   const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
   const [planDay, setPlanDay] = useState(iso(new Date()))              // día que se planifica en el Planificador
   const [chainDrag, setChainDrag] = useState(true)                     // al mover un bloque, recorrer los siguientes (arrastre en cadena)
+  const [planSel, setPlanSel] = useState<Set<string>>(new Set())       // bloques elegidos: al mover en cadena SOLO estos se recorren (vacío = todos los siguientes)
   const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
@@ -1772,9 +1773,13 @@ export default function TiempoClient() {
     const delta = newStart - moved.start
     if (delta === 0) return
     const oldStart = moved.start
+    const useSel = planSel.size > 0   // si hay bloques elegidos, SOLO esos se recorren; si no, todos los siguientes
     save({ scheduled: list.map(s => {
       if (s.id === id) return { ...s, start: newStart }
-      if (chain && (s.date || planDay) === (moved.date || planDay) && s.start >= oldStart) return { ...s, start: Math.max(0, s.start + delta) }
+      if (!chain) return s
+      const sameDay = (s.date || planDay) === (moved.date || planDay)
+      const follows = useSel ? planSel.has(s.id) : s.start >= oldStart
+      if (follows && sameDay) return { ...s, start: Math.max(0, s.start + delta) }
       return s
     }) })
   }
@@ -1884,6 +1889,9 @@ export default function TiempoClient() {
             onClone={planClone}
             chainDrag={chainDrag}
             onToggleChain={() => setChainDrag(v => !v)}
+            selBlocks={planSel}
+            onToggleSel={(bid: string) => setPlanSel(prev => { const n = new Set(prev); if (n.has(bid)) n.delete(bid); else n.add(bid); return n })}
+            onClearSel={() => setPlanSel(new Set())}
             onAddFree={planAddFree}
             onPatch={planPatch}
             onRemove={removeScheduled}
@@ -3528,7 +3536,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -3538,6 +3546,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onClone: (id: string) => void
   chainDrag: boolean
   onToggleChain: () => void
+  selBlocks: Set<string>
+  onToggleSel: (id: string) => void
+  onClearSel: () => void
   onAddFree: (name: string, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
@@ -3692,6 +3703,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#fff', border: '1px solid #b4653a' }} />plan (derecha)</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'repeating-linear-gradient(45deg,#f2ece0,#f2ece0 4px,#efe8db 4px,#efe8db 8px)', border: '1px solid #e7dfd2' }} />rutina · 🗓 juntas</span>
           <button onClick={onToggleChain} title="Al mover un bloque, recorre también los siguientes por el mismo tiempo (empujar en cadena)" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', border: `1px solid ${chainDrag ? '#b4653a' : '#e2d9cb'}`, background: chainDrag ? 'rgba(180,101,58,0.08)' : '#faf7f1', color: chainDrag ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '4px 11px', fontSize: 11.5, fontWeight: 700 }}>⛓ Mover en cadena{chainDrag ? '' : ': off'}</button>
+          {chainDrag && selBlocks.size > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: '#8a4b28' }}>solo {selBlocks.size} elegido{selBlocks.size === 1 ? '' : 's'} se moverá{selBlocks.size === 1 ? '' : 'n'} <button onClick={onClearSel} title="Quitar selección (vuelve a mover todos los siguientes)" style={{ border: 'none', background: 'transparent', color: '#8a4b28', cursor: 'pointer', fontSize: 11, fontWeight: 700, textDecoration: 'underline', padding: 0 }}>limpiar</button></span>}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }} title="Estirar o encoger el calendario (alto de las horas)">
             <span style={{ fontSize: 11.5 }}>alto del calendario</span>
             <button onClick={() => setZoom(pxm - 0.4)} disabled={pxm <= 0.8} aria-label="Encoger" style={{ ...weekNav, width: 28, height: 28, fontSize: 16, opacity: pxm <= 0.8 ? 0.4 : 1 }}>−</button>
@@ -3857,14 +3869,16 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const t = (tasks || []).find(x => x.task.id === s.taskId)
               const col = colorFor(s); const tall = dur * PXM >= 46
               const active = drag && 'id' in drag && drag.id === s.id
+              const sel = selBlocks.has(s.id)
               return (
                 <div key={s.id}
                   onPointerEnter={() => { if (!tall) showActBar({ kind: 'sched', ref: s.id, top: topOf(start), lane: 'right' }) }}
                   onPointerDown={e => { setHover(null); e.stopPropagation(); setDrag({ kind: 'move', id: s.id, dur: s.dur, grab: yToMin(e.clientY) - s.start, curMin: s.start, x: e.clientX, y: e.clientY }) }}
                   onPointerMove={e => { if (!drag) setHover({ x: e.clientX, y: e.clientY, txt: `${s.name} · ${clock(s.start)}–${clock(s.start + s.dur)} · ${hm(s.dur)}` }) }}
                   onPointerLeave={() => { setHover(null); hideActBarSoon() }}
-                  style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: s.started ? '#f7f4ee' : '#fff', border: `1px solid ${col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', opacity: s.started ? 0.72 : 1, boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  style={{ position: 'absolute', left: '50%', right: 6, top: topOf(start), height: hOf(dur), background: sel ? 'rgba(180,101,58,.07)' : s.started ? '#f7f4ee' : '#fff', border: `1px solid ${sel ? '#b4653a' : col}`, borderLeft: `4px solid ${col}`, borderRadius: 10, padding: tall ? '7px 10px' : '3px 10px', overflow: 'hidden', cursor: 'grab', touchAction: 'none', opacity: s.started ? 0.72 : 1, boxShadow: active ? '0 6px 18px rgba(28,26,23,.16)' : sel ? '0 0 0 2px rgba(180,101,58,.35)' : '0 1px 3px rgba(28,26,23,.06)', zIndex: active ? 20 : 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onToggleSel(s.id) }} title={sel ? 'Quitar de la selección (mover en cadena)' : 'Elegir: al mover en cadena, mover SOLO los elegidos'} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 4, cursor: 'pointer', border: sel ? 'none' : '1.5px solid #ccc2b2', background: sel ? '#b4653a' : '#fff', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>{sel && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</button>
                     <span style={{ fontSize: 11.5, color: '#a49b90', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{s.started ? '✓ ' : ''}{clock(start)}–{clock(start + dur)} · {hm(dur)}</span>
                     <span style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}{s.started ? ' · plan' : ''}</span>
                     {tall && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
