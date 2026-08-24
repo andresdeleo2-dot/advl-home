@@ -106,6 +106,7 @@ export default function TiempoClient() {
   const [allTasks, setAllTasks] = useState<TodayTask[] | null>(null)   // null = cargando; TODAS las tareas abiertas
   const [taskDay, setTaskDay] = useState(iso(new Date()))              // día que se está viendo/planeando
   const [planDay, setPlanDay] = useState(iso(new Date()))              // día que se planifica en el Planificador
+  const [chainDrag, setChainDrag] = useState(true)                     // al mover un bloque, recorrer los siguientes (arrastre en cadena)
   const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
@@ -1755,6 +1756,20 @@ export default function TiempoClient() {
   const planRoutines = epicasList.flatMap(e => (e.routines || []).map((r, i) => ({ name: r.t, epicaName: e.name, color: e.color, epicaId: e.id, rIdx: i, estMin: r.estMin })))
   const planPatch = (id: string, patch: Partial<ScheduledBlock>) =>
     save({ scheduled: (data.scheduled || []).map(s => s.id === id ? { ...s, ...patch } : s) })
+  // Mover un bloque a `newStart` y, en modo CADENA, recorrer todo lo que empezaba en o después de su
+  // hora original por el mismo delta (empieza antes/después → arrastra las siguientes). Mismo día.
+  const planMoveRipple = (id: string, newStart: number, chain: boolean) => {
+    const list = data.scheduled || []
+    const moved = list.find(s => s.id === id); if (!moved) return
+    const delta = newStart - moved.start
+    if (delta === 0) return
+    const oldStart = moved.start
+    save({ scheduled: list.map(s => {
+      if (s.id === id) return { ...s, start: newStart }
+      if (chain && (s.date || planDay) === (moved.date || planDay) && s.start >= oldStart) return { ...s, start: Math.max(0, s.start + delta) }
+      return s
+    }) })
+  }
 
   // Agendado cuya hora ya llegó y aún no preguntamos (y no hay sesión corriendo): dispara
   // el aviso "¿iniciar ahora?". La ventana termina en start+dur para no avisar de algo ya vencido.
@@ -1857,6 +1872,9 @@ export default function TiempoClient() {
             onOpenMeeting={setMeetView}
             onAdd={planAdd}
             onSetEstMin={setTaskEstMinFromPlan}
+            onRippleMove={planMoveRipple}
+            chainDrag={chainDrag}
+            onToggleChain={() => setChainDrag(v => !v)}
             onAddFree={planAddFree}
             onPatch={planPatch}
             onRemove={removeScheduled}
@@ -3501,12 +3519,15 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, chainDrag, onToggleChain, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
   onAdd: (t: TodayTask, start: number, dur?: number) => void
   onSetEstMin: (epicaId: string, taskId: string, min: number, day?: string) => void
+  onRippleMove: (id: string, newStart: number, chain: boolean) => void
+  chainDrag: boolean
+  onToggleChain: () => void
   onAddFree: (name: string, start: number, dur?: number) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
@@ -3583,7 +3604,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
       if (d) {
         if (d.kind === 'new') { if (d.moved && d.curMin != null) onAdd(d.task, d.curMin, d.dur); else { setSelFree(null); setSelTask(p => p === d.task.task.id ? null : (d.task.task.id || null)) } }
         else if (d.kind === 'newfree') { if (d.moved && d.curMin != null) onAddFree(d.name, d.curMin, d.dur); else { setSelTask(null); setSelFree(p => p === d.name ? null : d.name) } }
-        else if (d.kind === 'move') onPatch(d.id, { start: d.curMin })
+        else if (d.kind === 'move') onRippleMove(d.id, d.curMin, chainDrag)
         else if (d.kind === 'wresize') onEditWorked(d.idx, { dur: d.curDur })
         else if (d.kind === 'session') { if (d.curMin !== d.start0) onSessionStart(d.curMin); else if (session?.taskId) onOpenTask(session.taskId) }
         else { onPatch(d.id, { dur: d.curDur }); const blk = scheduled.find(s => s.id === d.id); if (blk?.taskId && blk.epicaId) onSetEstMin(blk.epicaId, blk.taskId, d.curDur, blk.date || day) }
@@ -3660,6 +3681,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#e9f0e6', border: '1px solid #b6cbab' }} />hecho (izquierda)</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: '#fff', border: '1px solid #b4653a' }} />plan (derecha)</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'repeating-linear-gradient(45deg,#f2ece0,#f2ece0 4px,#efe8db 4px,#efe8db 8px)', border: '1px solid #e7dfd2' }} />rutina · 🗓 juntas</span>
+          <button onClick={onToggleChain} title="Al mover un bloque, recorre también los siguientes por el mismo tiempo (empujar en cadena)" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', border: `1px solid ${chainDrag ? '#b4653a' : '#e2d9cb'}`, background: chainDrag ? 'rgba(180,101,58,0.08)' : '#faf7f1', color: chainDrag ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '4px 11px', fontSize: 11.5, fontWeight: 700 }}>⛓ Mover en cadena{chainDrag ? '' : ': off'}</button>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }} title="Estirar o encoger el calendario (alto de las horas)">
             <span style={{ fontSize: 11.5 }}>alto del calendario</span>
             <button onClick={() => setZoom(pxm - 0.4)} disabled={pxm <= 0.8} aria-label="Encoger" style={{ ...weekNav, width: 28, height: 28, fontSize: 16, opacity: pxm <= 0.8 ? 0.4 : 1 }}>−</button>
