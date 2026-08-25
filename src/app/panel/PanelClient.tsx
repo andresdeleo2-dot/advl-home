@@ -19,6 +19,8 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const MES3 = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 const longDay = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); const dt = new Date(y, m - 1, d); const dn = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']; const mn = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']; return `${dn[dt.getDay()]}, ${d} de ${mn[m - 1]}` }
 const rel = (d: number) => (d === 0 ? '¡hoy! 🎉' : d === 1 ? 'mañana' : `en ${d}d`)
+const VIDA = 'https://mi-vida-neon.vercel.app/vida'
+const PERSONAS = `${VIDA}?vista=personas`
 
 type Tt = { e: Epica; t: EpicaTask }
 type SlotState = 'normal' | 'collapsed'
@@ -47,12 +49,15 @@ function Slot({ id, title, icon, accent = '#2E5A9E', dark, bare, children, layou
   )
 }
 
-// Título de sección con regla, para dividir el panel por temas.
-function SectionTitle({ icon, children }: { icon?: string; children: ReactNode }) {
+// Título de sección con regla + link opcional a "su parte".
+function SectionTitle({ icon, children, href, cta, external }: { icon?: string; children: ReactNode; href?: string; cta?: string; external?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '26px 2px 14px' }}>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, font: '800 12px var(--font-ui, system-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: '#10233F' }}>{icon && <span style={{ fontSize: 15 }}>{icon}</span>}{children}</span>
       <span style={{ flex: 1, height: 1, background: 'rgba(15,35,64,0.12)' }} />
+      {href && (external
+        ? <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none', whiteSpace: 'nowrap' }}>{cta || 'ver todo'} →</a>
+        : <Link href={href} style={{ fontSize: 11, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none', whiteSpace: 'nowrap' }}>{cta || 'ver todo'} →</Link>)}
     </div>
   )
 }
@@ -148,13 +153,12 @@ export default function PanelClient() {
       let next = new Date(hoy.getFullYear(), mo - 1, d, 12)
       if (next.getTime() < hoy.getTime() - 43200000) next = new Date(hoy.getFullYear() + 1, mo - 1, d, 12)
       const days = Math.round((next.getTime() - hoy.getTime()) / 86400000)
-      return { titulo: mm.titulo, personas: mm.personas || [], days, dia: d, mes: mo - 1, anos: next.getFullYear() - y }
+      return { id: mm.id, titulo: mm.titulo, personas: mm.personas || [], days, dia: d, mes: mo - 1, anos: next.getFullYear() - y }
     }).filter((x): x is NonNullable<typeof x> => !!x).sort((a, b) => a.days - b.days).slice(0, 7)
   }, [momentos])
 
   const routinesDone = routines.filter(r => r.done).length
   const greet = now ? (now.getHours() < 12 ? 'Buenos días' : now.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches') : ''
-  const persLink = 'https://mi-vida-neon.vercel.app/vida?vista=personas'
   const seeAll = (href: string) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(231,197,107,0.9)', textDecoration: 'none' }}>ver todos →</a>
 
   return (
@@ -193,14 +197,14 @@ export default function PanelClient() {
           ))}
         </div>
 
-        {/* INFORMATIVO (arriba, no es sección): clima + frase */}
-        <div style={{ columnWidth: 340, columnGap: 16 }}>
-          <MItem><Slot id="clima" title="Clima" icon="🌤️" bare layout={layout} setSlot={setSlot}><WeatherWidget /></Slot></MItem>
-          <MItem><Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot></MItem>
+        {/* Justo después de los KPIs: clima + frase, lado a lado (informativo, sin título de sección) */}
+        <div className="panel-info" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginBottom: 4 }}>
+          <Slot id="clima" title="Clima" icon="🌤️" bare layout={layout} setSlot={setSlot}><WeatherWidget /></Slot>
+          <Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot>
         </div>
 
         {/* SECCIÓN · EL DÍA (rutinas, actividades, calendario) */}
-        <SectionTitle icon="📅">El día</SectionTitle>
+        <SectionTitle icon="📅" href="/epicas" cta="ver en Épicas">El día</SectionTitle>
         <div style={{ columnWidth: 320, columnGap: 16 }}>
           <MItem>
             <Slot id="hoy" title="Actividades de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
@@ -250,17 +254,17 @@ export default function PanelClient() {
         </div>
 
         {/* SECCIÓN · PERSONAS Y FECHAS (navy) */}
-        <SectionTitle icon="👥">Personas y fechas</SectionTitle>
+        <SectionTitle icon="👥" href={PERSONAS} external cta="ver en Mi Vida">Personas y fechas</SectionTitle>
         <div style={{ columnWidth: 340, columnGap: 16 }}>
           {cumples.length > 0 && (
             <MItem>
-              <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(persLink)}>
+              <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
                 {cumples.map((c, k) => (
-                  <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
+                  <a key={k} href={PERSONAS} target="_blank" rel="noopener noreferrer" title="Abrir en Mi Vida" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                     <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
                     <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
-                  </div>
+                  </a>
                 ))}
               </Slot>
             </MItem>
@@ -268,22 +272,23 @@ export default function PanelClient() {
 
           {fechas.length > 0 && (
             <MItem>
-              <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(persLink)}>
+              <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
                 {fechas.map((f, k) => (
-                  <div key={k} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '9px 0', borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
+                  <a key={k} href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" title="Abrir este momento en Mi Vida" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '9px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                     <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: f.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0, paddingTop: 1 }}>{f.dia} {MES3[f.mes]}</span>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13.5, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}{f.anos > 0 ? <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {f.anos} años</span> : ''}</div>
                       {f.personas.length > 0 && <div style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>con {f.personas.join(', ')}</div>}
                     </span>
                     <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0, paddingTop: 1 }}>{rel(f.days)}</span>
-                  </div>
+                  </a>
                 ))}
               </Slot>
             </MItem>
           )}
         </div>
       </main>
+      <style>{`@media (max-width: 640px){ .panel-info{ grid-template-columns: 1fr !important; } }`}</style>
     </div>
   )
 }
