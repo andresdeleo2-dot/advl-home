@@ -8,6 +8,8 @@ import FavoritosStrip from '@/components/FavoritosStrip'
 import CalendarWidget from '@/components/CalendarWidget'
 import QuoteWidget from '@/components/QuoteWidget'
 import BirthdayCelebration from '@/components/BirthdayCelebration'
+import PersonaExpediente from '@/components/PersonaExpediente'
+import type { Persona, Vida } from '@/lib/persona-card'
 import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO, mondayISO } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
@@ -90,6 +92,13 @@ export default function PanelClient() {
   const [enfAll, setEnfAll] = useState(false)               // ver TODAS las actividades del día
   const [fotoIdx, setFotoIdx] = useState(0)                 // carrusel de fotos en el popup de momento
   useEffect(() => { setFotoIdx(0) }, [peek])
+  const [personaDetail, setPersonaDetail] = useState<{ persona: Persona; recuerdos: Vida[] } | null>(null)  // ficha completa de mi-vida (en el sitio)
+  const [personaLoading, setPersonaLoading] = useState<string | null>(null)
+  const openPersona = async (id: string) => {
+    setPersonaLoading(id)
+    try { const j = await fetch(`/api/persona/${id}`).then(r => r.json()); if (j?.ok) setPersonaDetail({ persona: j.persona, recuerdos: j.recuerdos || [] }) } catch { /* noop */ }
+    setPersonaLoading(null)
+  }
 
   const today = todayISO()
 
@@ -341,10 +350,10 @@ export default function PanelClient() {
           {cumples.length > 0 && (
             <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
               {cumples.map((c, k) => (
-                <div key={k} onClick={() => setPeek({ kind: 'cumple', c })} title={`Ver a ${c.nombre}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <div key={k} onClick={() => openPersona(c.id)} title={`Ver la ficha de ${c.nombre}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', opacity: personaLoading === c.id ? 0.55 : 1, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{personaLoading === c.id ? '…' : rel(c.days)}</span>
                 </div>
               ))}
             </Slot>
@@ -494,6 +503,20 @@ export default function PanelClient() {
           <div style={{ marginTop: 16 }}><a href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Ver completo en Mi Vida →</a></div>
         </>)
       })()}
+
+      {/* FICHA COMPLETA de la persona (réplica de Mi Vida), EN EL SITIO */}
+      {personaLoading && !personaDetail && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ color: '#F3EFE6', font: '700 13px var(--font-ui, system-ui)' }}>Cargando ficha…</div>
+        </div>
+      )}
+      {personaDetail && (
+        <div onClick={() => setPersonaDetail(null)} style={{ position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(10,22,42,0.6)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '20px 14px', overflow: 'auto' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 960 }}>
+            <PersonaExpediente persona={personaDetail.persona} recuerdos={personaDetail.recuerdos} onClose={() => setPersonaDetail(null)} />
+          </div>
+        </div>
+      )}
 
       <style>{`@media (max-width: 720px){ .panel-info, .panel-2col{ grid-template-columns: 1fr !important; } .enfoque-split{ grid-template-columns: 1fr !important; } .enfoque-div{ display: none !important; } }`}</style>
     </div>
