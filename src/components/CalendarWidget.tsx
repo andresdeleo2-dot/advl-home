@@ -122,7 +122,7 @@ export default function CalendarWidget() {
       </div>
 
       {view === 'agenda' ? (
-        <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 320 }}>
+        <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 400 }}>
           {!events && <p className="px-4 py-6 text-center text-sm text-[rgba(20,35,61,0.4)]">Cargando…</p>}
           {events && grouped.length === 0 && <p className="px-4 py-6 text-center text-sm text-[rgba(20,35,61,0.4)]">Sin eventos próximos</p>}
           {grouped.map(([key, evs]) => {
@@ -146,6 +146,7 @@ export default function CalendarWidget() {
                           <span className="tabular-nums">{fmtRange(ev)}</span>
                           {ev.location && <span className="clamp-1 max-w-[150px]">📍 {ev.location}</span>}
                         </div>
+                        {ev.description && ev.description.trim() && <p className="clamp-1 mt-0.5 text-[11px] text-[rgba(20,35,61,0.5)]">{ev.description.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()}</p>}
                       </div>
                       {ev.hangoutLink && (
                         <a href={ev.hangoutLink} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}

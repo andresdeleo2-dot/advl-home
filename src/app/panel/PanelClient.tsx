@@ -65,7 +65,7 @@ export default function PanelClient() {
   const [now, setNow] = useState<Date | null>(null)
   const [workedMin, setWorkedMin] = useState(0)
   const [runningName, setRunningName] = useState<string | null>(null)
-  const [personas, setPersonas] = useState<{ nombre: string; apodo: string | null; cumple: string; excepcional?: boolean }[]>([])
+  const [personas, setPersonas] = useState<{ id: string; nombre: string; apodo: string | null; cumple: string; excepcional?: boolean }[]>([])
   const [momentos, setMomentos] = useState<{ id: number; titulo: string; fecha: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
   const [weather, setWeather] = useState<{ temp: number; feels: number; humidity: number; label: string; icon: string; hourly: { h: number; temp: number; icon: string; pop: number | null }[]; cities: { name: string; temp: number; icon: string }[] } | null>(null)
@@ -108,7 +108,9 @@ export default function PanelClient() {
       if (t.status === 'Terminada' || t.status === 'Archivada') continue
       if (t.plan === today || (Array.isArray(t.dayPlans) && t.dayPlans.some(d => d.day === today))) out.push({ e, t })
     }
-    return out.sort((a, b) => (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
+    // Orden por IMPORTANCIA: prioridad (alta→media→baja), luego vencimiento, luego orden manual.
+    const prioRank = (p?: string) => (p === 'alta' ? 0 : p === 'baja' ? 2 : 1)
+    return out.sort((a, b) => prioRank(a.t.priority) - prioRank(b.t.priority) || (a.t.due || '9999').localeCompare(b.t.due || '9999') || (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
   }, [list, today])
 
   const routines = useMemo(() => {
@@ -136,7 +138,7 @@ export default function PanelClient() {
       let next = new Date(hoy.getFullYear(), m - 1, d, 12)
       if (next.getTime() < hoy.getTime() - 43200000) next = new Date(hoy.getFullYear() + 1, m - 1, d, 12)
       const days = Math.round((next.getTime() - hoy.getTime()) / 86400000)
-      return { nombre: p.apodo?.trim() || p.nombre, days, dia: d, mes: m - 1, anos: next.getFullYear() - y, exc: !!p.excepcional }
+      return { id: p.id, nombre: p.apodo?.trim() || p.nombre, days, dia: d, mes: m - 1, anos: next.getFullYear() - y, exc: !!p.excepcional }
     }).filter((x): x is NonNullable<typeof x> => !!x).sort((a, b) => a.days - b.days).slice(0, 7)
   }, [personas])
 
@@ -249,8 +251,9 @@ export default function PanelClient() {
                   <div style={{ padding: '8px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></div>
                 ) : (<>
                   {todayTasks.slice(0, 9).map(({ e, t }, k, arr) => (
-                    <Link key={t.id || k} href="/epicas" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
+                    <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} title={`Abrir “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
                       <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                      {t.priority === 'alta' && <span title="Prioridad alta" style={{ font: '800 8.5px var(--font-ui)', letterSpacing: '.05em', color: '#B0522E', background: 'rgba(176,82,46,0.1)', border: '1px solid rgba(176,82,46,0.25)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>ALTA</span>}
                       <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
                       <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{e.name}</span>
                     </Link>
@@ -278,7 +281,7 @@ export default function PanelClient() {
             {dueSoon.length > 0 && (
               <Slot id="vence" title="Por vencer" icon="⏳" accent="#B0522E" layout={layout} setSlot={setSlot}>
                 {dueSoon.map(({ e, t, days }, k) => (
-                  <Link key={t.id || k} href="/epicas" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
+                  <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} title={`Abrir “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
                     <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                     <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: days === 0 ? '#B0522E' : days <= 3 ? '#A87A2C' : 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{days === 0 ? 'hoy' : days === 1 ? 'mañana' : `en ${days} d`}</span>
@@ -303,7 +306,7 @@ export default function PanelClient() {
           {cumples.length > 0 && (
             <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
               {cumples.map((c, k) => (
-                <a key={k} href={PERSONAS} target="_blank" rel="noopener noreferrer" title="Abrir en Mi Vida" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <a key={k} href={`${PERSONAS}&persona=${c.id}`} target="_blank" rel="noopener noreferrer" title={`Abrir a ${c.nombre} en Mi Vida`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
