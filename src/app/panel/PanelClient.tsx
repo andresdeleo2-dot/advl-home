@@ -69,12 +69,9 @@ export default function PanelClient() {
   const [momentos, setMomentos] = useState<{ id: number; titulo: string; fecha: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
   const [weather, setWeather] = useState<{ temp: number; feels: number; humidity: number; label: string; icon: string; hourly: { h: number; temp: number; icon: string; pop: number | null }[]; cities: { name: string; temp: number; icon: string }[] } | null>(null)
-  const [peek, setPeek] = useState<
-    | { kind: 'task'; e: Epica; t: EpicaTask }
-    | { kind: 'cumple'; c: { id: string; nombre: string; dia: number; mes: number; anos: number; exc: boolean; days: number } }
-    | { kind: 'fecha'; f: { id: number; titulo: string; personas: string[]; dia: number; mes: number; anos: number; days: number } }
-    | null
-  >(null)
+  const [peek, setPeek] = useState<{ kind: 'task'; e: Epica; t: EpicaTask } | null>(null)
+  const [enfEpic, setEnfEpic] = useState<string>('todas')   // filtro por épica en Actividades
+  const [enfAll, setEnfAll] = useState(false)               // ver TODAS las actividades del día
 
   const today = todayISO()
 
@@ -118,6 +115,10 @@ export default function PanelClient() {
     const prioRank = (p?: string) => (p === 'alta' ? 0 : p === 'baja' ? 2 : 1)
     return out.sort((a, b) => prioRank(a.t.priority) - prioRank(b.t.priority) || (a.t.due || '9999').localeCompare(b.t.due || '9999') || (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
   }, [list, today])
+
+  // Épicas presentes en las tareas de hoy (para el filtro) + tareas filtradas.
+  const enfEpics = useMemo(() => { const seen = new Map<string, Epica>(); todayTasks.forEach(({ e }) => { if (!seen.has(e.id)) seen.set(e.id, e) }); return [...seen.values()] }, [todayTasks])
+  const filteredTasks = useMemo(() => enfEpic === 'todas' ? todayTasks : todayTasks.filter(x => x.e.id === enfEpic), [todayTasks, enfEpic])
 
   const routines = useMemo(() => {
     const mon = mondayISO(today), di = dayIdxMon(today)
@@ -252,11 +253,19 @@ export default function PanelClient() {
           <Slot id="enfoque" title="Enfoque de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
             <div className="enfoque-split" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) 1px minmax(0,1fr)', gap: 20, alignItems: 'stretch' }}>
               <div>
-                <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E5A9E', marginBottom: 8 }}>Actividades · {todayTasks.length}</div>
-                {epics === null ? <div style={{ height: 80, opacity: 0 }} /> : todayTasks.length === 0 ? (
-                  <div style={{ padding: '8px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                  <span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E5A9E' }}>Actividades · {filteredTasks.length}</span>
+                  {enfEpics.length > 1 && (
+                    <select value={enfEpic} onChange={ev => { setEnfEpic(ev.target.value); setEnfAll(false) }} style={{ font: '600 11px var(--font-ui)', color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 6px', cursor: 'pointer', maxWidth: 150 }}>
+                      <option value="todas">Todas las épicas</option>
+                      {enfEpics.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                  )}
+                </div>
+                {epics === null ? <div style={{ height: 80, opacity: 0 }} /> : filteredTasks.length === 0 ? (
+                  <div style={{ padding: '8px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>{todayTasks.length === 0 ? <>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></> : 'Nada en esta épica hoy.'}</div>
                 ) : (<>
-                  {todayTasks.slice(0, 9).map(({ e, t }, k, arr) => (
+                  {(enfAll ? filteredTasks : filteredTasks.slice(0, 9)).map(({ e, t }, k, arr) => (
                     <div key={t.id || k} onClick={() => setPeek({ kind: 'task', e, t })} title={`Ver “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
                       <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                       {t.priority === 'alta' && <span title="Prioridad alta" style={{ font: '800 8.5px var(--font-ui)', letterSpacing: '.05em', color: '#B0522E', background: 'rgba(176,82,46,0.1)', border: '1px solid rgba(176,82,46,0.25)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>ALTA</span>}
@@ -264,7 +273,7 @@ export default function PanelClient() {
                       <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{e.name}</span>
                     </div>
                   ))}
-                  {todayTasks.length > 9 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', paddingTop: 8 }}>+{todayTasks.length - 9} más</div>}
+                  {filteredTasks.length > 9 && <button onClick={() => setEnfAll(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11.5px var(--font-ui)', color: '#2E5A9E', padding: '8px 0 0' }}>{enfAll ? 'ver menos ▴' : `ver todas (${filteredTasks.length}) ▾`}</button>}
                 </>)}
               </div>
               <div className="enfoque-div" style={{ background: 'rgba(15,35,64,0.08)' }} />
@@ -312,25 +321,25 @@ export default function PanelClient() {
           {cumples.length > 0 && (
             <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
               {cumples.map((c, k) => (
-                <div key={k} onClick={() => setPeek({ kind: 'cumple', c })} title={`Ver a ${c.nombre}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <a key={k} href={`${PERSONAS}&persona=${c.id}`} target="_blank" rel="noopener noreferrer" title={`Ver a ${c.nombre} en Mi Vida`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', textDecoration: 'none', borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
-                </div>
+                </a>
               ))}
             </Slot>
           )}
           {fechas.length > 0 && (
             <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
               {fechas.map((f, k) => (
-                <div key={k} onClick={() => setPeek({ kind: 'fecha', f })} title="Ver este momento" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <a key={k} href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" title="Abrir este momento en Mi Vida" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', textDecoration: 'none', borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: f.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0, paddingTop: 1 }}>{f.dia} {MES3[f.mes]}</span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}{f.anos > 0 ? <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {f.anos} años</span> : ''}</div>
                     {f.personas.length > 0 && <div style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>con {f.personas.join(', ')}</div>}
                   </span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0, paddingTop: 1 }}>{rel(f.days)}</span>
-                </div>
+                </a>
               ))}
             </Slot>
           )}
@@ -386,30 +395,7 @@ export default function PanelClient() {
           </>)
         }
 
-        if (peek.kind === 'cumple') {
-          const { c } = peek
-          return shell('#E7C56B', true, <>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-              <div><div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>🎂 Cumpleaños</div><div className="serif" style={{ fontSize: 22, color: '#F3EFE6' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}</div></div>
-              {closeBtn(true)}
-            </div>
-            <div style={{ marginTop: 12, fontSize: 13.5, color: 'rgba(243,239,230,0.85)' }}>{c.dia} de {['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][c.mes]} · cumple <b style={{ color: '#F3EFE6' }}>{c.anos}</b></div>
-            <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{c.days === 0 ? '¡Es hoy! 🎉' : `Faltan ${c.days} días`}{c.exc ? ' · Persona excepcional' : ''}</div>
-            <div style={{ marginTop: 16 }}><a href={`${PERSONAS}&persona=${c.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Ver a {c.nombre} en Mi Vida →</a></div>
-          </>)
-        }
-
-        const { f } = peek
-        return shell('#C2933A', true, <>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-            <div style={{ minWidth: 0 }}><div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>✦ Fecha a recordar</div><div className="serif" style={{ fontSize: 21, color: '#F3EFE6', lineHeight: 1.2 }}>{f.titulo}</div></div>
-            {closeBtn(true)}
-          </div>
-          <div style={{ marginTop: 12, fontSize: 13.5, color: 'rgba(243,239,230,0.85)' }}>{f.dia} de {['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][f.mes]}{f.anos > 0 ? ` · ${f.anos} años` : ''}</div>
-          {f.personas.length > 0 && <div style={{ marginTop: 4, fontSize: 12.5, color: 'rgba(243,239,230,0.55)' }}>con {f.personas.join(', ')}</div>}
-          <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{f.days === 0 ? '¡Es hoy! 🎉' : `Faltan ${f.days} días`}</div>
-          <div style={{ marginTop: 16 }}><a href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Abrir en Mi Vida →</a></div>
-        </>)
+        return null
       })()}
 
       <style>{`@media (max-width: 720px){ .panel-info, .panel-2col{ grid-template-columns: 1fr !important; } .enfoque-split{ grid-template-columns: 1fr !important; } .enfoque-div{ display: none !important; } }`}</style>
