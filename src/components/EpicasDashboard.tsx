@@ -162,6 +162,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dcClose, setDcClose] = useState(false)                    // en el cierre: mostrando el selector "mover pendientes a…"
   const [dcSel, setDcSel] = useState<Set<string>>(new Set())       // selección múltiple de tareas en el cierre (para mover varias)
   const [dcEpic, setDcEpic] = useState<string>('todas')            // filtro por épica dentro del cierre del día
+  const [dcCompare, setDcCompare] = useState(false)                // popup "planeado vs trabajado" (detalle por tarea)
   const [dayScores, setDayScores] = useState<Record<string, number>>({})  // calificación 1-10 del día (localStorage 'epicas.dayScores.v1')
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
@@ -549,7 +550,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
-  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas') } }, [dayCloseOpen])
+  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
   const setEpicBudget = (id: string, hours: number) => {
     const h = hours > 0 ? Math.round(hours) : 0
@@ -8108,6 +8109,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const breakdown = breakdownAll.filter(b => dcEpic === 'todas' || b.eId === dcEpic)
         const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
         const doneSubs = doneSubsAll.filter(s => epOK(s.eId))
+        // PLANEADO vs TRABAJADO: por cada tarea del día su estimado vs el tiempo real registrado ese día.
+        const cmpRows = planItems.filter(x => epOK(x.e.id)).map(x => ({ e: x.e, t: x.t, est: estMinForDay(x.t, refDay), real: minToday(x.t), done: x.t.status === 'Terminada' })).sort((a, b) => b.real - a.real)
+        const plannedMin = cmpRows.reduce((s, r) => s + r.est, 0)
+        const realTaskMin = cmpRows.reduce((s, r) => s + r.real, 0)
+        const otherMinDay = others.reduce((s, o) => s + o.min, 0)
+        const planPct = plannedMin > 0 ? Math.min(150, Math.round(realTaskMin / plannedMin * 100)) : 0
         const secLbl = (txt: string, extra?: ReactNode) => (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
             <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{txt}</span>
@@ -8239,6 +8246,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {fDone.length === 0 && fOpen.length === 0 && fUntouched.length === 0 && fRoutines.length === 0 && generalRowsF.length === 0 && <div style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
                   </div>
                   <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {plannedMin > 0 && (
+                      <div>
+                        {secLbl('🎯 Planeado vs trabajado', <button onClick={() => setDcCompare(true)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>ver detalle ▸</button>)}
+                        <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 14px', background: '#FBFAF6' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                            <div><div className="serif" style={{ fontSize: 22, color: '#2E6E6E', lineHeight: 1 }}>{hmm(realTaskMin)}</div><div style={{ fontSize: 10, color: 'rgba(20,35,61,0.5)' }}>trabajado</div></div>
+                            <div style={{ fontSize: 18, color: 'rgba(15,35,64,0.25)' }}>/</div>
+                            <div style={{ textAlign: 'right' }}><div className="serif" style={{ fontSize: 22, color: '#A87A2C', lineHeight: 1 }}>{hmm(plannedMin)}</div><div style={{ fontSize: 10, color: 'rgba(20,35,61,0.5)' }}>planeado</div></div>
+                          </div>
+                          <div style={{ height: 8, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><div style={{ width: `${Math.min(100, planPct)}%`, height: '100%', background: planPct >= 100 ? '#2E6E6E' : planPct >= 60 ? '#C2933A' : '#B0522E' }} /></div>
+                          <div style={{ marginTop: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)', fontWeight: 600 }}>{planPct}% de lo planeado{realTaskMin >= plannedMin ? ' · ✓ cumpliste' : ` · faltan ${hmm(Math.max(0, plannedMin - realTaskMin))}`}{otherMinDay > 0 ? ` · +${hmm(otherMinDay)} general/rutinas` : ''}</div>
+                        </div>
+                      </div>
+                    )}
                     <div>
                       {secLbl('⏱ Tu día en tiempo', bdTotal > 0 ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{hmm(bdTotal)}</span> : undefined)}
                       {breakdown.length > 0 ? (
@@ -8381,6 +8402,49 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <input type="date" defaultValue={t.plan || refDay} aria-label="Cambiar día" onChange={ev => { const d = ev.target.value; if (d && d !== t.plan) { planTaskToDay(e, i, d, { toast: true }); setDcPeek(null) } }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
                       </label>
                     </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+          {/* POPUP: planeado vs trabajado, detalle por tarea del día. */}
+          {dcCompare && (() => {
+            const over = cmpRows.filter(r => r.est > 0 && r.real > r.est * 1.1).length
+            return (
+              <div onClick={() => setDcCompare(false)} style={{ position: 'fixed', inset: 0, zIndex: 82, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '30px 20px', overflow: 'auto' }}>
+                <div role="dialog" aria-modal="true" aria-label="Planeado vs trabajado" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 560, background: '#fff', borderRadius: 16, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+                  <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
+                  <div style={{ padding: '18px 20px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+                      <div>
+                        <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 4 }}>Planeado vs trabajado</div>
+                        <div className="serif" style={{ fontSize: 21, color: '#10233F', lineHeight: 1 }}>{cap(new Date(refDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
+                        <div style={{ marginTop: 6, fontSize: 12.5, color: 'rgba(20,35,61,0.6)' }}>Trabajaste <b style={{ color: '#2E6E6E' }}>{hmm(realTaskMin)}</b> de <b style={{ color: '#A87A2C' }}>{hmm(plannedMin)}</b> planeadas · <b>{planPct}%</b>{over > 0 ? ` · ${over} se pasaron` : ''}</div>
+                      </div>
+                      <button aria-label="Cerrar" onClick={() => setDcCompare(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {cmpRows.map((r, k) => {
+                        const pct = r.est > 0 ? Math.min(140, Math.round(r.real / r.est * 100)) : (r.real > 0 ? 100 : 0)
+                        const tone = r.real === 0 ? 'rgba(20,35,61,0.35)' : (r.est > 0 && r.real > r.est * 1.1) ? '#B0522E' : r.done ? '#2E6E6E' : '#C2933A'
+                        const status = r.real === 0 ? '○ no trabajada' : (r.est > 0 && r.real > r.est * 1.1) ? '⚠ se pasó' : r.done ? '✓ hecha' : '◐ en curso'
+                        return (
+                          <div key={k} onClick={() => { setDcCompare(false); setDcPeek({ eId: r.e.id, tid: r.t.id! }) }} title="Ver la actividad" style={{ cursor: 'pointer' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                              <span style={{ width: 7, height: 7, borderRadius: 99, background: r.e.color, flexShrink: 0 }} />
+                              <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t.t}</span>
+                              <span style={{ fontSize: 10.5, fontWeight: 700, color: tone, flexShrink: 0 }}>{hmm(r.real)} / {hmm(r.est)}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div style={{ flex: 1, height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: tone }} /></div>
+                              <span style={{ fontSize: 10, color: tone, fontWeight: 700, width: 78, textAlign: 'right', flexShrink: 0 }}>{status}</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      {cmpRows.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', textAlign: 'center', padding: '8px 0' }}>No hay tareas planeadas este día.</div>}
+                    </div>
+                    {otherMinDay > 0 && <div style={{ marginTop: 12, fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>Además: <b style={{ color: '#2E6E6E' }}>{hmm(otherMinDay)}</b> en general/rutinas (fuera del plan de tareas).</div>}
                   </div>
                 </div>
               </div>
