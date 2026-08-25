@@ -24,7 +24,6 @@ type Tt = { e: Epica; t: EpicaTask }
 type SlotState = 'normal' | 'collapsed'
 
 const baseCard: CSSProperties = { borderRadius: 16, overflow: 'hidden', boxShadow: '0 20px 44px -34px rgba(15,35,64,0.5)' }
-const col: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }
 
 // Tarjeta con COLOR propio + minimizar/expandir (–/+). `bare` = el widget ya trae su tarjeta.
 function Slot({ id, title, icon, accent = '#2E5A9E', dark, bare, children, layout, setSlot, right }: { id: string; title: string; icon?: string; accent?: string; dark?: boolean; bare?: boolean; children: ReactNode; layout: Record<string, SlotState>; setSlot: (id: string, s: SlotState) => void; right?: ReactNode }) {
@@ -46,6 +45,20 @@ function Slot({ id, title, icon, accent = '#2E5A9E', dark, bare, children, layou
       {!collapsed && <div style={{ padding: '2px 15px 15px' }}>{children}</div>}
     </section>
   )
+}
+
+// Título de sección con regla, para dividir el panel por temas.
+function SectionTitle({ icon, children }: { icon?: string; children: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '26px 2px 14px' }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, font: '800 12px var(--font-ui, system-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: '#10233F' }}>{icon && <span style={{ fontSize: 15 }}>{icon}</span>}{children}</span>
+      <span style={{ flex: 1, height: 1, background: 'rgba(15,35,64,0.12)' }} />
+    </div>
+  )
+}
+// Ítem dentro de una rejilla masonry (CSS columns): no se parte y empaca sin huecos.
+function MItem({ children }: { children: ReactNode }) {
+  return <div style={{ breakInside: 'avoid', WebkitColumnBreakInside: 'avoid', marginBottom: 16 } as CSSProperties}>{children}</div>
 }
 
 export default function PanelClient() {
@@ -180,11 +193,16 @@ export default function PanelClient() {
           ))}
         </div>
 
-        {/* COLUMNAS TEMÁTICAS (empacan sin huecos): trabajo · personas · entorno */}
-        <div className="panel-cols" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, alignItems: 'start' }}>
+        {/* INFORMATIVO (arriba, no es sección): clima + frase */}
+        <div style={{ columnWidth: 340, columnGap: 16 }}>
+          <MItem><Slot id="clima" title="Clima" icon="🌤️" bare layout={layout} setSlot={setSlot}><WeatherWidget /></Slot></MItem>
+          <MItem><Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot></MItem>
+        </div>
 
-          {/* ── Columna 1 · TU TRABAJO HOY ── */}
-          <div style={col}>
+        {/* SECCIÓN · EL DÍA (rutinas, actividades, calendario) */}
+        <SectionTitle icon="📅">El día</SectionTitle>
+        <div style={{ columnWidth: 320, columnGap: 16 }}>
+          <MItem>
             <Slot id="hoy" title="Actividades de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
               {epics === null ? <div style={{ height: 90, opacity: 0 }} /> : todayTasks.length === 0 ? (
                 <div style={{ padding: '10px 0', textAlign: 'center', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></div>
@@ -199,8 +217,10 @@ export default function PanelClient() {
                 {todayTasks.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', paddingTop: 8 }}>+{todayTasks.length - 8} más en Épicas</div>}
               </>)}
             </Slot>
+          </MItem>
 
-            {routines.length > 0 && (
+          {routines.length > 0 && (
+            <MItem>
               <Slot id="rutinas" title="Rutinas de hoy" icon="🔁" accent="#2E6E6E" layout={layout} setSlot={setSlot} right={<span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{routinesDone}/{routines.length}</span>}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {routines.map((r, k) => (
@@ -209,9 +229,13 @@ export default function PanelClient() {
                 </div>
                 <Link href="/epicas" style={{ display: 'inline-block', marginTop: 12, fontSize: 11.5, fontWeight: 700, color: '#2E6E6E', textDecoration: 'none' }}>marcar en Épicas →</Link>
               </Slot>
-            )}
+            </MItem>
+          )}
 
-            {dueSoon.length > 0 && (
+          <MItem><Slot id="calendario" title="Calendario" icon="🗓️" bare layout={layout} setSlot={setSlot}><CalendarWidget /></Slot></MItem>
+
+          {dueSoon.length > 0 && (
+            <MItem>
               <Slot id="vence" title="Por vencer" icon="⏳" accent="#B0522E" layout={layout} setSlot={setSlot}>
                 {dueSoon.map(({ e, t, days }, k) => (
                   <Link key={t.id || k} href="/epicas" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
@@ -221,12 +245,15 @@ export default function PanelClient() {
                   </Link>
                 ))}
               </Slot>
-            )}
-          </div>
+            </MItem>
+          )}
+        </div>
 
-          {/* ── Columna 2 · PERSONAS Y FECHAS (navy) ── */}
-          <div style={col}>
-            {cumples.length > 0 && (
+        {/* SECCIÓN · PERSONAS Y FECHAS (navy) */}
+        <SectionTitle icon="👥">Personas y fechas</SectionTitle>
+        <div style={{ columnWidth: 340, columnGap: 16 }}>
+          {cumples.length > 0 && (
+            <MItem>
               <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(persLink)}>
                 {cumples.map((c, k) => (
                   <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
@@ -236,9 +263,11 @@ export default function PanelClient() {
                   </div>
                 ))}
               </Slot>
-            )}
+            </MItem>
+          )}
 
-            {fechas.length > 0 && (
+          {fechas.length > 0 && (
+            <MItem>
               <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(persLink)}>
                 {fechas.map((f, k) => (
                   <div key={k} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '9px 0', borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
@@ -251,19 +280,10 @@ export default function PanelClient() {
                   </div>
                 ))}
               </Slot>
-            )}
-          </div>
-
-          {/* ── Columna 3 · TU ENTORNO ── */}
-          <div style={col}>
-            <Slot id="clima" title="Clima" icon="🌤️" bare layout={layout} setSlot={setSlot}><WeatherWidget /></Slot>
-            <Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot>
-            <Slot id="calendario" title="Calendario" icon="🗓️" bare layout={layout} setSlot={setSlot}><CalendarWidget /></Slot>
-          </div>
+            </MItem>
+          )}
         </div>
       </main>
-
-      <style>{`@media (max-width: 640px){ .panel-cols{ grid-template-columns: 1fr !important; } }`}</style>
     </div>
   )
 }
