@@ -163,6 +163,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dcSel, setDcSel] = useState<Set<string>>(new Set())       // selección múltiple de tareas en el cierre (para mover varias)
   const [dcEpic, setDcEpic] = useState<string>('todas')            // filtro por épica dentro del cierre del día
   const [dcCompare, setDcCompare] = useState(false)                // popup "planeado vs trabajado" (detalle por tarea)
+  const [dcSubsAll, setDcSubsAll] = useState(false)                // ver TODAS las subtareas terminadas del día
   const [dayScores, setDayScores] = useState<Record<string, number>>({})  // calificación 1-10 del día (localStorage 'epicas.dayScores.v1')
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
@@ -550,7 +551,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
-  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false) } }, [dayCloseOpen])
+  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false); setDcSubsAll(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
   const setEpicBudget = (id: string, hours: number) => {
     const h = hours > 0 ? Math.round(hours) : 0
@@ -8066,11 +8067,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       {dayCloseOpen && (() => {
         const refDay = viewDate                 // el día que se está cerrando (hoy o uno pasado)
         const refIsToday = refDay === today
-        const workedToday = (t: EpicaTask) => (t.progressLog || []).some(x => x.d === refDay)
-        const minToday = (t: EpicaTask) => (t.progressLog || []).filter(x => x.d === refDay).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
-        const open = planPend.filter(x => workedToday(x.t))
-        const untouched = planPend.filter(x => !workedToday(x.t))
-        const totalMin = planItems.reduce((s, x) => s + minToday(x.t), 0)
+        // TAREAS TRABAJADAS ese día — desde el HISTORIAL (misma fuente que /tiempo), no desde progressLog,
+        // para que Épicas y /tiempo muestren lo MISMO y una tarea con tiempo hoy NO desaparezca al moverla.
+        const worked = focus.workedTasksOnDay(refDay)
+        const workedMinById = new Map(worked.map(w => [w.taskId, w.min]))
+        const workedDoneById = new Map(worked.map(w => [w.taskId, w.done]))
+        const workedSet = new Set(worked.map(w => w.taskId))
+        const minToday = (t: EpicaTask) => (t.id && workedMinById.get(t.id)) || 0
+        const cmpTaskById = new Map<string, { e: Epica; t: EpicaTask; i: number }>()
+        epics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.id) cmpTaskById.set(t.id, { e, t, i }) }))
+        // Filas de tareas trabajadas hoy (resueltas a su épica): terminadas vs avanzaste (sin cerrar).
+        const workedRows = worked.map(w => cmpTaskById.get(w.taskId)).filter(Boolean) as { e: Epica; t: EpicaTask; i: number }[]
+        const open = workedRows.filter(x => !(x.t.status === 'Terminada' || workedDoneById.get(x.t.id!)))
+        const planDoneDay = workedRows.filter(x => x.t.status === 'Terminada' || workedDoneById.get(x.t.id!))
+        // Sin tocar = planeadas hoy que NO tienen tiempo registrado hoy.
+        const untouched = planPend.filter(x => !workedSet.has(x.t.id!))
+        const totalMin = worked.reduce((s, w) => s + w.min, 0)
         const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
         const stat = (emoji: string, n: number, label: string, c: string) => (
           <div className="glass" style={{ borderRadius: 13, padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -8089,7 +8101,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const generalRows = others.filter(o => !routineNames.has((o.name || '').trim().toLowerCase()))
         // % del tiempo por actividad (introspección): tareas (minToday) + general/rutinas (others).
         const breakdownAll = [
-          ...planItems.filter(x => minToday(x.t) > 0).map(x => ({ name: x.t.t, min: minToday(x.t), color: x.e.color, eId: x.e.id })),
+          ...workedRows.filter(x => minToday(x.t) > 0).map(x => ({ name: x.t.t, min: minToday(x.t), color: x.e.color, eId: x.e.id })),
           ...others.map(o => ({ name: o.name, min: o.min, color: '#94A3B8', eId: '' })),
         ].sort((a, b) => b.min - a.min)
         // Subtareas que marcaste hechas ESE día (para el resumen de logros del día).
@@ -8098,13 +8110,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const doneSubsAll: { task: string; sub: string; color: string; eId: string; tid: string }[] = []
         for (const e of epics) for (const t of e.tasks) for (const s of (t.subtasks || [])) if (s.done && localDay(s.doneAt) === refDay) doneSubsAll.push({ task: t.t, sub: s.t, color: e.color, eId: e.id, tid: t.id! })
         // FILTRO POR ÉPICA dentro del cierre: chips de las épicas presentes ese día.
-        const dayEpicIds = new Set<string>(); planItems.forEach(x => dayEpicIds.add(x.e.id)); routineRows.forEach(r => dayEpicIds.add(r.e.id))
+        const dayEpicIds = new Set<string>(); planItems.forEach(x => dayEpicIds.add(x.e.id)); workedRows.forEach(x => dayEpicIds.add(x.e.id)); routineRows.forEach(r => dayEpicIds.add(r.e.id))
         const dayEpics = epics.filter(e => dayEpicIds.has(e.id))
         const epOK = (eId: string) => dcEpic === 'todas' || eId === dcEpic
         const fRoutines = shownRoutines.filter(r => epOK(r.e.id))
         const fOpen = open.filter(x => epOK(x.e.id))
         const fUntouched = untouched.filter(x => epOK(x.e.id))
-        const fDone = planDone.filter(x => epOK(x.e.id))
+        const fDone = planDoneDay.filter(x => epOK(x.e.id))
         const generalRowsF = dcEpic === 'todas' ? generalRows : []
         const breakdown = breakdownAll.filter(b => dcEpic === 'todas' || b.eId === dcEpic)
         const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
@@ -8114,12 +8126,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // tareas que agendaste o trabajaste ese día (no las 21 del backlog).
         const schedDay = focus.schedOnDay(refDay)
         const schedByTask = (tid: string) => schedDay.filter(s => s.taskId === tid).reduce((a, b) => a + b.min, 0)
-        const taskById = new Map<string, { e: Epica; t: EpicaTask; i: number }>()
-        epics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.id) taskById.set(t.id, { e, t, i }) }))
         const cmpIds = new Set<string>()
         schedDay.forEach(s => { if (s.taskId) cmpIds.add(s.taskId) })
-        epics.forEach(e => (e.tasks || []).forEach(t => { if (t.id && minToday(t) > 0) cmpIds.add(t.id) }))
-        const cmpRows = ([...cmpIds].map(tid => { const ref = taskById.get(tid); return ref ? { e: ref.e, t: ref.t, i: ref.i, est: schedByTask(tid), real: minToday(ref.t), done: ref.t.status === 'Terminada' } : null }).filter(Boolean) as { e: Epica; t: EpicaTask; i: number; est: number; real: number; done: boolean }[]).filter(r => epOK(r.e.id)).sort((a, b) => (b.est + b.real) - (a.est + a.real))
+        worked.forEach(w => cmpIds.add(w.taskId))
+        const cmpRows = ([...cmpIds].map(tid => { const ref = cmpTaskById.get(tid); return ref ? { e: ref.e, t: ref.t, i: ref.i, est: schedByTask(tid), real: minToday(ref.t), done: ref.t.status === 'Terminada' || !!workedDoneById.get(tid) } : null }).filter(Boolean) as { e: Epica; t: EpicaTask; i: number; est: number; real: number; done: boolean }[]).filter(r => epOK(r.e.id)).sort((a, b) => (b.est + b.real) - (a.est + a.real))
         const otherMinDay = others.reduce((s, o) => s + o.min, 0)
         const genSchedPlan = schedDay.filter(s => !s.taskId).reduce((a, b) => a + b.min, 0)
         const showGenCmp = dcEpic === 'todas' && (genSchedPlan > 0 || otherMinDay > 0)
@@ -8319,10 +8329,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                     {doneSubs.length > 0 && (
                       <div>
-                        {secLbl('✓ Subtareas que terminaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{doneSubs.length}</span>)}
+                        {secLbl('✓ Subtareas que terminaste', <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{doneSubs.length}</span>{doneSubs.length > 4 && <button onClick={() => setDcSubsAll(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>{dcSubsAll ? 'ver menos ▴' : 'ver todas ▾'}</button>}</div>)}
                         <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', overflow: 'hidden' }}>
-                          {doneSubs.map((s, k) => (
-                            <div key={k} onClick={() => setDcPeek({ eId: s.eId, tid: s.tid })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < doneSubs.length - 1 ? '1px solid rgba(15,35,64,0.05)' : 'none' }}>
+                          {(dcSubsAll ? doneSubs : doneSubs.slice(0, 4)).map((s, k, arr) => (
+                            <div key={k} onClick={() => setDcPeek({ eId: s.eId, tid: s.tid })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.05)' : 'none' }}>
                               <span style={{ color: '#2E6E6E', fontSize: 12, flexShrink: 0 }}>✓</span>
                               <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.sub}<span style={{ color: 'rgba(20,35,61,0.4)' }}> · {s.task}</span></span>
                               <span style={{ width: 7, height: 7, borderRadius: 99, background: s.color, flexShrink: 0 }} />

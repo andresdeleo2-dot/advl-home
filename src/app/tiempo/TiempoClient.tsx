@@ -107,6 +107,7 @@ export default function TiempoClient() {
   const [dayScoresT, setDayScoresT] = useState<Record<string, number>>({})  // calificación 1-10 del día (localStorage 'epicas.dayScores.v1')
   const [routinePopT, setRoutinePopT] = useState<{ epicaId: string; rIdx: number } | null>(null)  // popup de rutina (paridad con Épicas)
   const [dcCompareT, setDcCompareT] = useState(false)                  // popup "planeado vs trabajado" (detalle por tarea)
+  const [dcSubsAllT, setDcSubsAllT] = useState(false)                  // ver TODAS las subtareas terminadas del día
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1055,7 +1056,7 @@ export default function TiempoClient() {
     return next
   })
   const openTaskById = (tid?: string) => { if (!tid) return; const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
-  useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false); setDcSelT(new Set()); setDcEpicT('todas'); setDcCompareT(false) } }, [dayCloseT])
+  useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false); setDcSelT(new Set()); setDcEpicT('todas'); setDcCompareT(false); setDcSubsAllT(false) } }, [dayCloseT])
 
   // Subtareas COMPLETADAS el día visto (con su hora) — para verlas en el registro del día.
   const daySubtasksDone = useMemo(() => {
@@ -2804,10 +2805,10 @@ export default function TiempoClient() {
                     </div>
                     {doneSubsF.length > 0 && (
                       <div>
-                        {secLbl('✓ Subtareas que terminaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{doneSubsF.length}</span>)}
+                        {secLbl('✓ Subtareas que terminaste', <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{doneSubsF.length}</span>{doneSubsF.length > 4 && <button onClick={() => setDcSubsAllT(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>{dcSubsAllT ? 'ver menos ▴' : 'ver todas ▾'}</button>}</div>)}
                         <div style={{ borderRadius: 12, border: '1px solid #ece4d6', overflow: 'hidden', background: '#fff' }}>
-                          {doneSubsF.map((s, k) => (
-                            <div key={k} onClick={() => setEditTask({ epicaId: s.tt.epicaId, epicaName: s.tt.epicaName, color: s.tt.color, task: { ...s.tt.task } })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < doneSubsF.length - 1 ? '1px solid #f0e9dc' : 'none' }}>
+                          {(dcSubsAllT ? doneSubsF : doneSubsF.slice(0, 4)).map((s, k, arr) => (
+                            <div key={k} onClick={() => setEditTask({ epicaId: s.tt.epicaId, epicaName: s.tt.epicaName, color: s.tt.color, task: { ...s.tt.task } })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < arr.length - 1 ? '1px solid #f0e9dc' : 'none' }}>
                               <span style={{ color: '#3E6E6E', fontSize: 12, flexShrink: 0 }}>✓</span>
                               <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.sub}<span style={{ color: '#a49b90' }}> · {s.task}</span></span>
                               <span style={{ width: 7, height: 7, borderRadius: 99, background: s.color, flexShrink: 0 }} />

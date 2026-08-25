@@ -531,7 +531,15 @@ export function useFocusSession(hooks: FocusHooks) {
   // Bloques AGENDADOS (Planificador de /tiempo) de un día — para el "planeado vs trabajado" en Épicas.
   const schedOnDay = (dy: string): { taskId?: string; name: string; min: number }[] =>
     (data.scheduled || []).filter(s => (s.date || dy) === dy && s.area === 'trabajo').map(s => ({ taskId: s.taskId, name: s.name, min: s.dur }))
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay }
+  // TAREAS con tiempo registrado en un día (por taskId) — MISMA fuente que /tiempo (el historial), para
+  // que Épicas y /tiempo muestren lo mismo y las tareas trabajadas ese día NO desaparezcan al moverlas.
+  const workedTasksOnDay = (dy: string): { taskId: string; name: string; min: number; done: boolean }[] => {
+    const m = new Map<string, { name: string; min: number; done: boolean }>()
+    ;(data.history || []).filter(h => h.date === dy && h.area === 'trabajo' && h.taskId).forEach(h => { const c = m.get(h.taskId!) || { name: h.name, min: 0, done: false }; c.min += h.dur; c.done = c.done || h.done === true; m.set(h.taskId!, c) })
+    if (session && session.area === 'trabajo' && session.taskId && startedToday && dy === day0) { const c = m.get(session.taskId) || { name: session.name, min: 0, done: false }; c.min += Math.max(0, Math.round(elapsed)); m.set(session.taskId, c) }
+    return [...m.entries()].map(([taskId, v]) => ({ taskId, ...v })).sort((a, b) => b.min - a.min)
+  }
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
