@@ -103,6 +103,9 @@ export default function TiempoClient() {
   const [dcShowAllT, setDcShowAllT] = useState(false)                  // "ver todas" las tareas sin tocar en el cierre
   const [dcCloseT, setDcCloseT] = useState(false)                      // en el cierre: mostrando el selector "mover pendientes a…"
   const [dcSelT, setDcSelT] = useState<Set<string>>(new Set())         // selección múltiple de tareas en el cierre (para mover varias)
+  const [dcEpicT, setDcEpicT] = useState<string>('todas')              // filtro por épica dentro del cierre del día
+  const [dayScoresT, setDayScoresT] = useState<Record<string, number>>({})  // calificación 1-10 del día (localStorage 'epicas.dayScores.v1')
+  const [routinePopT, setRoutinePopT] = useState<{ epicaId: string; rIdx: number } | null>(null)  // popup de rutina (paridad con Épicas)
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1043,8 +1046,15 @@ export default function TiempoClient() {
     try { localStorage.setItem('epicas.dayNotes.v1', JSON.stringify(next)) } catch {}
     return next
   })
+  // Calificación 1-10 del día (mismo almacén que Épicas).
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayScores.v1'); if (raw) setDayScoresT(JSON.parse(raw)) } catch {} }, [])
+  const setDayScoreT = (day: string, score: number | null) => setDayScoresT(prev => {
+    const next = { ...prev }; if (score != null && score > 0) next[day] = score; else delete next[day]
+    try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch {}
+    return next
+  })
   const openTaskById = (tid?: string) => { if (!tid) return; const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
-  useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false); setDcSelT(new Set()) } }, [dayCloseT])
+  useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false); setDcSelT(new Set()); setDcEpicT('todas') } }, [dayCloseT])
 
   // Subtareas COMPLETADAS el día visto (con su hora) — para verlas en el registro del día.
   const daySubtasksDone = useMemo(() => {
@@ -2613,12 +2623,26 @@ export default function TiempoClient() {
         // Mueve TODAS las pendientes (en curso + sin tocar) del día a otro día, y cierra.
         const pendingAll = [...openTasks.map(w => w.tt).filter(Boolean) as TodayTask[], ...planned]
         const moveAllPending = (day: string) => { const seen = new Set<string>(); pendingAll.forEach(t => { if (t.task.id && !seen.has(t.task.id)) { seen.add(t.task.id); moveTaskToDay(t, day) } }); setDcCloseT(false); setDayCloseT(false) }
-        // % del tiempo por actividad (todo el trabajo del día, por nombre, color de la tarea si aplica).
-        const bmap = new Map<string, { min: number; color: string }>()
-        data.history.filter(h => h.date === dcDay && h.area === 'trabajo').forEach(h => { const cur = bmap.get(h.name) || { min: 0, color: h.taskId ? (tof(h.taskId)?.color || '#8a4b28') : '#94A3B8' }; cur.min += h.dur; bmap.set(h.name, cur) })
-        const breakdown = [...bmap.entries()].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.min - a.min)
-        const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
+        // % del tiempo por actividad (todo el trabajo del día, por nombre, color/épica de la tarea si aplica).
+        const bmap = new Map<string, { min: number; color: string; eId: string }>()
+        data.history.filter(h => h.date === dcDay && h.area === 'trabajo').forEach(h => { const cur = bmap.get(h.name) || { min: 0, color: h.taskId ? (tof(h.taskId)?.color || '#8a4b28') : '#94A3B8', eId: h.taskId ? (tof(h.taskId)?.epicaId || '') : '' }; cur.min += h.dur; bmap.set(h.name, cur) })
+        const breakdownAll = [...bmap.entries()].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.min - a.min)
         const openByName = (name: string) => { const tt = (allTasks || []).find(x => (x.task.t || '').trim().toLowerCase() === name.trim().toLowerCase()); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
+        // FILTRO POR ÉPICA dentro del cierre: chips de las épicas presentes ese día.
+        const dayEpicIds = new Set<string>(); ;[...doneTasks, ...openTasks].forEach(w => w.tt && dayEpicIds.add(w.tt.epicaId)); planned.forEach(t => dayEpicIds.add(t.epicaId)); routines.forEach(r => dayEpicIds.add(r.epicaId))
+        const dayEpics = epicasList.filter(e => dayEpicIds.has(e.id))
+        const epOK = (eId?: string) => dcEpicT === 'todas' || eId === dcEpicT
+        const fRoutines = shownRoutines.filter(r => epOK(r.epicaId))
+        const fDoneTasks = doneTasks.filter(w => epOK(w.tt?.epicaId))
+        const fOpenTasks = openTasks.filter(w => epOK(w.tt?.epicaId))
+        const fPlanned = planned.filter(t => epOK(t.epicaId))
+        const generalRowsF = dcEpicT === 'todas' ? generalRows : []
+        const doneSubsF = doneSubs.filter(s => epOK(s.tt.epicaId))
+        const breakdown = breakdownAll.filter(b => dcEpicT === 'todas' || b.eId === dcEpicT)
+        const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
+        // Planeado vs real del día: horas estimadas de lo planeado ese día vs. lo realmente trabajado.
+        const planMin = plannedDay.min, realMin = dayWorkedMin
+        const planPct = planMin > 0 ? Math.min(150, Math.round(realMin / planMin * 100)) : 0
         const lbl: CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 6 }
         const secLbl = (txt: string, extra?: ReactNode) => (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}><span style={lbl}>{txt}</span>{extra}</div>)
         const stat = (n: number, label: string, c: string) => (
@@ -2665,8 +2689,8 @@ export default function TiempoClient() {
           )
         }
         return (
-          <div onClick={() => setDayCloseT(false)} style={{ position: 'fixed', inset: 0, zIndex: 88, background: 'rgba(28,26,23,.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 960, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
+          <div onClick={() => setDayCloseT(false)} style={{ position: 'fixed', inset: 0, zIndex: 88, background: 'rgba(28,26,23,.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '20px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 1180, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#8a4b28,#c2933a)' }} />
               <div style={{ padding: '20px 24px 24px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
@@ -2678,37 +2702,46 @@ export default function TiempoClient() {
                   <button aria-label="Cerrar" onClick={() => setDayCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(28,26,23,.06)', borderRadius: 9, height: 32, width: 32, color: '#8b8379', fontSize: 16 }}>✕</button>
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  {stat(doneTasks.length, 'terminadas', '#3E6E6E')}
-                  {stat(openTasks.length, 'sin terminar', '#8a4b28')}
-                  {stat(planned.length, 'sin tocar', '#a49b90')}
+                  {stat(fDoneTasks.length, 'terminadas', '#3E6E6E')}
+                  {stat(fOpenTasks.length, 'sin terminar', '#8a4b28')}
+                  {stat(fPlanned.length, 'sin tocar', '#a49b90')}
                 </div>
+                {/* FILTRO POR ÉPICA: ver solo lo de una épica ese día. */}
+                {dayEpics.length > 1 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                    <button onClick={() => setDcEpicT('todas')} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', font: '700 11.5px var(--tiempo-ui, system-ui, sans-serif)', border: dcEpicT === 'todas' ? 'none' : '1px solid #e2d9cb', background: dcEpicT === 'todas' ? '#1c1a17' : '#fff', color: dcEpicT === 'todas' ? '#faf7f1' : '#6b645b' }}>Todas</button>
+                    {dayEpics.map(e => (
+                      <button key={e.id} onClick={() => setDcEpicT(e.id)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', font: '700 11.5px var(--tiempo-ui, system-ui, sans-serif)', border: dcEpicT === e.id ? 'none' : '1px solid #e2d9cb', background: dcEpicT === e.id ? e.color : '#fff', color: dcEpicT === e.id ? '#fff' : '#6b645b', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: dcEpicT === e.id ? '#fff' : e.color }} />{e.name}</button>
+                    ))}
+                  </div>
+                )}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginTop: 18, alignItems: 'flex-start' }}>
                   <div style={{ flex: '1 1 360px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    {shownRoutines.length > 0 && (
+                    {fRoutines.length > 0 && (
                       <div>
-                        {secLbl('Rutinas del día', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{shownRoutines.filter(r => r.doneDay).length}/{shownRoutines.length} hechas</span>)}
-                        {listBox(shownRoutines.map(r => cbTask('r' + r.epicaId + r.rIdx, r.name, r.min, r.doneDay, () => toggleRoutineDay(r.epicaId, r.rIdx, weekRoutines.monday, di), () => openByName(r.name), r.color)))}
+                        {secLbl('Rutinas del día', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{fRoutines.filter(r => r.doneDay).length}/{fRoutines.length} hechas</span>)}
+                        {listBox(fRoutines.map(r => cbTask('r' + r.epicaId + r.rIdx, r.name, r.min, r.doneDay, () => toggleRoutineDay(r.epicaId, r.rIdx, weekRoutines.monday, di), () => setRoutinePopT({ epicaId: r.epicaId, rIdx: r.rIdx }), r.color)))}
                         <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Marca o desmarca lo que hiciste hoy.</div>
                       </div>
                     )}
-                    {generalRows.length > 0 && (
+                    {generalRowsF.length > 0 && (
                       <div>
-                        {secLbl('General', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A' }}>⏱ {hmm(generalRows.reduce((s, o) => s + o.min, 0))}</span>)}
-                        {listBox(generalRows.map((o, k) => row('g' + k, o.name, o.min, (allTasks || []).some(x => (x.task.t || '').trim().toLowerCase() === o.name.trim().toLowerCase()) ? () => openByName(o.name) : null, '#94A3B8')))}
+                        {secLbl('General', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A' }}>⏱ {hmm(generalRowsF.reduce((s, o) => s + o.min, 0))}</span>)}
+                        {listBox(generalRowsF.map((o, k) => row('g' + k, o.name, o.min, (allTasks || []).some(x => (x.task.t || '').trim().toLowerCase() === o.name.trim().toLowerCase()) ? () => openByName(o.name) : null, '#94A3B8')))}
                         <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Clic para describir con subtareas/nota (tarea “General”).</div>
                       </div>
                     )}
-                    {doneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(doneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
-                    {openTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(openTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
-                    {planned.length > 0 && (
+                    {fDoneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(fDoneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
+                    {fOpenTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(fOpenTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
+                    {fPlanned.length > 0 && (
                       <div>
                         {secLbl(isTodayView ? '○ No las tocaste hoy' : '○ Sin tocar', (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <button onClick={() => setDcSelT(s => s.size >= planned.length ? new Set() : new Set(planned.map(t => t.task.id!)))} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90' }}>{dcSelT.size >= planned.length && planned.length ? 'ninguna' : 'todas'}</button>
-                            {planned.length > 8 && <button onClick={() => setDcShowAllT(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>{dcShowAllT ? 'ver menos ▴' : `ver todas (${planned.length}) ▾`}</button>}
+                            <button onClick={() => setDcSelT(s => s.size >= fPlanned.length ? new Set() : new Set(fPlanned.map(t => t.task.id!)))} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90' }}>{dcSelT.size >= fPlanned.length && fPlanned.length ? 'ninguna' : 'todas'}</button>
+                            {fPlanned.length > 8 && <button onClick={() => setDcShowAllT(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>{dcShowAllT ? 'ver menos ▴' : `ver todas (${fPlanned.length}) ▾`}</button>}
                           </div>
                         ))}
-                        {dcSelT.size > 0 && (() => { const t0 = iso(new Date()); const WD = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom']; const sel = planned.filter(t => dcSelT.has(t.task.id!)); return (
+                        {dcSelT.size > 0 && (() => { const t0 = iso(new Date()); const WD = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom']; const sel = fPlanned.filter(t => dcSelT.has(t.task.id!)); return (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 10px', marginBottom: 8, borderRadius: 10, background: 'rgba(138,75,40,0.08)', border: '1px solid rgba(138,75,40,0.22)' }}>
                             <span style={{ fontSize: 11.5, fontWeight: 800, color: '#8a4b28' }}>{sel.length} seleccionadas</span>
                             <span style={{ fontSize: 10.5, color: '#a49b90' }}>mover a</span>
@@ -2720,12 +2753,26 @@ export default function TiempoClient() {
                             <button onClick={() => setDcSelT(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90' }}>Limpiar</button>
                           </div>
                         ) })()}
-                        {listBox((dcShowAllT ? planned : planned.slice(0, 8)).map(selRowT))}
+                        {listBox((dcShowAllT ? fPlanned : fPlanned.slice(0, 8)).map(selRowT))}
                       </div>
                     )}
-                    {workedTasks.length === 0 && generalRows.length === 0 && planned.length === 0 && shownRoutines.length === 0 && <div style={{ fontSize: 13, color: '#a49b90', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
+                    {fDoneTasks.length === 0 && fOpenTasks.length === 0 && fPlanned.length === 0 && fRoutines.length === 0 && generalRowsF.length === 0 && <div style={{ fontSize: 13, color: '#a49b90', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
                   </div>
                   <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {planMin > 0 && (
+                      <div>
+                        {secLbl('🎯 Planeado vs real')}
+                        <div style={{ borderRadius: 12, border: '1px solid #ece4d6', padding: '12px 14px', background: '#fff' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                            <div><div style={{ fontFamily: SERIF, fontSize: 22, color: '#3E6E6E', lineHeight: 1 }}>{hmm(realMin)}</div><div style={{ fontSize: 10, color: '#a49b90' }}>real</div></div>
+                            <div style={{ fontSize: 18, color: '#c9bfae' }}>/</div>
+                            <div style={{ textAlign: 'right' }}><div style={{ fontFamily: SERIF, fontSize: 22, color: '#8a4b28', lineHeight: 1 }}>{hmm(planMin)}</div><div style={{ fontSize: 10, color: '#a49b90' }}>planeado</div></div>
+                          </div>
+                          <div style={{ height: 8, borderRadius: 99, background: '#f0e9dc', overflow: 'hidden' }}><div style={{ width: `${Math.min(100, planPct)}%`, height: '100%', background: planPct >= 100 ? '#3E6E6E' : planPct >= 60 ? '#c2933a' : '#b0522e' }} /></div>
+                          <div style={{ marginTop: 5, fontSize: 11, color: '#8b8379', fontWeight: 600 }}>{planPct}% de lo planeado{realMin >= planMin ? ' · ✓ cumpliste' : ` · faltan ${hmm(Math.max(0, planMin - realMin))}`}</div>
+                        </div>
+                      </div>
+                    )}
                     <div>
                       {secLbl('⏱ Tu día en tiempo', bdTotal > 0 ? <span style={{ fontSize: 10.5, fontWeight: 700, color: '#8b8379' }}>{hmm(bdTotal)}</span> : undefined)}
                       {breakdown.length > 0 ? (
@@ -2742,12 +2789,12 @@ export default function TiempoClient() {
                         </div>
                       ) : <div style={{ fontSize: 12, color: '#a49b90', padding: '8px 2px' }}>Aún no hay tiempo registrado este día.</div>}
                     </div>
-                    {doneSubs.length > 0 && (
+                    {doneSubsF.length > 0 && (
                       <div>
-                        {secLbl('✓ Subtareas que terminaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{doneSubs.length}</span>)}
+                        {secLbl('✓ Subtareas que terminaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{doneSubsF.length}</span>)}
                         <div style={{ borderRadius: 12, border: '1px solid #ece4d6', overflow: 'hidden', background: '#fff' }}>
-                          {doneSubs.map((s, k) => (
-                            <div key={k} onClick={() => setEditTask({ epicaId: s.tt.epicaId, epicaName: s.tt.epicaName, color: s.tt.color, task: { ...s.tt.task } })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < doneSubs.length - 1 ? '1px solid #f0e9dc' : 'none' }}>
+                          {doneSubsF.map((s, k) => (
+                            <div key={k} onClick={() => setEditTask({ epicaId: s.tt.epicaId, epicaName: s.tt.epicaName, color: s.tt.color, task: { ...s.tt.task } })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < doneSubsF.length - 1 ? '1px solid #f0e9dc' : 'none' }}>
                               <span style={{ color: '#3E6E6E', fontSize: 12, flexShrink: 0 }}>✓</span>
                               <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.sub}<span style={{ color: '#a49b90' }}> · {s.task}</span></span>
                               <span style={{ width: 7, height: 7, borderRadius: 99, background: s.color, flexShrink: 0 }} />
@@ -2756,6 +2803,19 @@ export default function TiempoClient() {
                         </div>
                       </div>
                     )}
+                    {(() => { const sc = dayScoresT[dcDay] ?? null; const scColor = sc == null ? '#c9bfae' : sc < 4 ? '#b0522e' : sc < 7 ? '#c2933a' : '#3E6E6E'; return (
+                      <div>
+                        {secLbl('⭐ Qué tan productivo fue', sc != null ? <button onClick={() => setDayScoreT(dcDay, null)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90' }}>quitar</button> : undefined)}
+                        <div style={{ borderRadius: 12, border: '1px solid #ece4d6', padding: '12px 14px', background: '#fff' }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+                            <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: .9, color: scColor }}>{sc == null ? '—' : sc.toFixed(1)}</span>
+                            <span style={{ fontSize: 13, color: '#a49b90', fontWeight: 600 }}>/ 10</span>
+                          </div>
+                          <input type="range" min={1} max={10} step={0.1} value={sc ?? 5} onChange={e => setDayScoreT(dcDay, Number(e.target.value))} style={{ width: '100%', accentColor: scColor, cursor: 'pointer' }} />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, color: '#a49b90', marginTop: 2 }}><span>1</span><span>5</span><span>10</span></div>
+                        </div>
+                      </div>
+                    ) })()}
                     <div>
                       {secLbl('✍️ Comentario del día')}
                       <textarea value={dayNotesT[dcDay] || ''} onChange={e => setDayNoteT(dcDay, e.target.value)} placeholder="¿Cómo te fue? Lo importante, qué quedó pendiente, cómo te sentiste…"
@@ -2786,6 +2846,63 @@ export default function TiempoClient() {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+      {/* POPUP DE RUTINA (paridad con Épicas): al picar una rutina en el cierre muestra su info + tracker. */}
+      {routinePopT && (() => {
+        const ep = epicasList.find(e => e.id === routinePopT.epicaId)
+        const r = ep?.routines[routinePopT.rIdx]
+        if (!ep || !r) return null
+        const today0 = iso(new Date())
+        const doneOn = (d: string) => { const mon = mondayOfISO(d); const wk = r.weeks?.[mon]; return !!(wk && wk[dayIdxMon(d)]) }
+        let streak = 0; for (let k = doneOn(today0) ? 0 : 1; k < 400; k++) { if (doneOn(addDaysISO(today0, -k))) streak++; else break }
+        const weekDone = weekRoutines.dates.filter((_, i) => r.weeks?.[weekRoutines.monday]?.[i]).length
+        let monthDone = 0; for (let k = 0; k < 30; k++) if (doneOn(addDaysISO(today0, -k))) monthDone++
+        let total = 0; for (const mon in (r.weeks || {})) total += (r.weeks![mon] || []).filter(Boolean).length
+        const timeTotal = data.history.filter(h => h.name === r.t).reduce((s, h) => s + h.dur, 0)
+        const timeToday = data.history.filter(h => h.date === today0 && h.name === r.t).reduce((s, h) => s + h.dur, 0)
+        const WD = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
+        const tile = (label: string, value: string, sub?: string) => (
+          <div style={{ flex: 1, background: '#fff', border: '1px solid #ece4d6', borderRadius: 12, padding: '10px 12px' }}>
+            <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#a49b90' }}>{label}</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 5 }}><span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: .9, color: '#1c1a17' }}>{value}</span>{sub && <span style={{ fontSize: 10.5, color: '#a49b90' }}>{sub}</span>}</div>
+          </div>
+        )
+        return (
+          <div onClick={() => setRoutinePopT(null)} style={{ position: 'fixed', inset: 0, zIndex: 92, background: 'rgba(28,26,23,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 16px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+            <div role="dialog" aria-modal="true" aria-label="Rutina" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 440, background: '#faf7f1', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: ep.color }} />
+              <div style={{ padding: '18px 20px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.16em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 4 }}>Rutina diaria</div>
+                    <div style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1, color: '#1c1a17' }}>{r.t}</div>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, color: '#8b8379' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: ep.color }} />{ep.name}</div>
+                    {streak > 0 && <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, marginLeft: 8, borderRadius: 99, padding: '3px 10px', background: 'rgba(194,147,58,0.14)', border: '1px solid rgba(194,147,58,0.35)', font: '800 12px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>🔥 {streak} {streak === 1 ? 'día' : 'días'}</div>}
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setRoutinePopT(null)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(28,26,23,.06)', borderRadius: 9, height: 32, width: 32, color: '#8b8379', fontSize: 16 }}>✕</button>
+                </div>
+                <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 6 }}>Esta semana</div>
+                <div style={{ display: 'flex', gap: 5, marginBottom: 14 }}>
+                  {weekRoutines.dates.map((d, i) => { const on = !!r.weeks?.[weekRoutines.monday]?.[i]; const isTd = d === today0; return (
+                    <button key={i} onClick={() => toggleRoutineDay(ep.id, routinePopT.rIdx, weekRoutines.monday, i)} title={`${d}${on ? ' · hecha' : ''}`} style={{ flex: 1, height: 42, borderRadius: 9, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, border: isTd ? '1.5px solid #c2933a' : '1px solid transparent', background: on ? ep.color : '#f2ece0', color: on ? '#fff' : '#a49b90' }}>
+                      <span style={{ fontSize: 10, fontWeight: 700 }}>{WD[i]}</span><span style={{ fontSize: 11, fontWeight: 700 }}>{Number(d.slice(8))}</span>
+                    </button>
+                  )})}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                  {tile('Esta semana', `${weekDone}/7`)}
+                  {tile('Últimos 30d', String(monthDone), 'veces')}
+                  {tile('Total', String(total), 'veces')}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 12, background: '#fff', border: '1px solid #ece4d6' }}>
+                  <div><div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#a49b90' }}>Tiempo dedicado</div><div style={{ fontFamily: SERIF, fontSize: 20, color: '#3E6E6E', marginTop: 3 }}>{timeTotal >= 60 ? `${Math.round(timeTotal / 60 * 10) / 10}h` : `${timeTotal}m`}</div></div>
+                  <span style={{ width: 1, height: 34, background: '#ece4d6' }} />
+                  <div style={{ fontSize: 11, color: '#8b8379' }}>hoy {timeToday >= 60 ? `${Math.round(timeToday / 60 * 10) / 10}h` : `${timeToday}m`}</div>
                 </div>
               </div>
             </div>
