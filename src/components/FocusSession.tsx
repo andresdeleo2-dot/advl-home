@@ -528,7 +528,10 @@ export function useFocusSession(hooks: FocusHooks) {
   }
   // Total de minutos registrados con ese nombre (todo el historial) — para el "registro" de una rutina.
   const totalMinByName = (name: string): number => (data.history || []).filter(h => h.name === name).reduce((s, h) => s + h.dur, 0)
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, otherOnDay, minByNameOn, totalMinByName }
+  // Bloques AGENDADOS (Planificador de /tiempo) de un día — para el "planeado vs trabajado" en Épicas.
+  const schedOnDay = (dy: string): { taskId?: string; name: string; min: number }[] =>
+    (data.scheduled || []).filter(s => (s.date || dy) === dy && s.area === 'trabajo').map(s => ({ taskId: s.taskId, name: s.name, min: s.dur }))
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
