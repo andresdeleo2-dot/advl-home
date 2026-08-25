@@ -281,7 +281,7 @@ export default function PanelClient() {
             {dueSoon.length > 0 && (
               <Slot id="vence" title="Por vencer" icon="⏳" accent="#B0522E" layout={layout} setSlot={setSlot}>
                 {dueSoon.map(({ e, t, days }, k) => (
-                  <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} title={`Abrir “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
+                  <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} title={`Abrir “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
                     <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                     <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: days === 0 ? '#B0522E' : days <= 3 ? '#A87A2C' : 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{days === 0 ? 'hoy' : days === 1 ? 'mañana' : `en ${days} d`}</span>
@@ -291,7 +291,7 @@ export default function PanelClient() {
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               {[{ href: '/tiempo', t: 'Tiempo', d: 'Planifica y cierra el día', c: '#8a4b28' }, { href: '/epicas', t: 'Épicas', d: 'Tus frentes y tareas', c: '#2E5A9E' }].map(q => (
-                <Link key={q.href} href={q.href} style={{ ...baseCard, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', padding: '14px 16px', textDecoration: 'none', color: 'inherit', display: 'block' }}>
+                <Link key={q.href} href={q.href} style={{ ...baseCard, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', padding: '14px 16px', textDecoration: 'none', color: 'inherit', display: 'block', transition: 'transform .14s ease, box-shadow .14s ease' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 16px 32px -22px rgba(15,35,64,0.6)' }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = baseCard.boxShadow as string }}>
                   <div style={{ fontFamily: SERIF, fontSize: 17, color: q.c }}>{q.t} →</div>
                   <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 3 }}>{q.d}</div>
                 </Link>

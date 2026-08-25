@@ -16,10 +16,10 @@ const ICONS: Record<string, ReactNode> = {
 
 export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' }) {
   const items = [
-    { id: 'accesos', label: 'Accesos', href: '/' },
     { id: 'panel', label: 'Panel', href: '/panel' },
-    { id: 'epicas', label: 'Épicas', href: '/epicas' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
+    { id: 'epicas', label: 'Épicas', href: '/epicas' },
+    { id: 'accesos', label: 'Accesos', href: '/' },
   ] as const
   return (
     <nav className="section-nav" aria-label="Secciones" style={{ display: 'inline-flex', gap: 2, background: 'rgba(10,20,38,0.28)', border: '1px solid rgba(255,255,255,0.14)', padding: 3, borderRadius: 999, boxShadow: 'inset 0 1px 2px rgba(0,0,0,.18)' }}>
