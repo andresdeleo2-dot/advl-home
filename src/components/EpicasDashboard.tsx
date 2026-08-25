@@ -159,6 +159,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dayCloseOpen, setDayCloseOpen] = useState(false)          // modal "Cerrar el día" (retro rápida del día)
   const [dcPeek, setDcPeek] = useState<{ eId: string; tid: string } | null>(null)  // popup ligero de tarea DENTRO del cierre del día
   const [dcShowAll, setDcShowAll] = useState(false)                // "ver todas" las tareas sin tocar en el cierre
+  const [dcClose, setDcClose] = useState(false)                    // en el cierre: mostrando el selector "mover pendientes a…"
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
@@ -538,6 +539,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.dayNotes.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
+  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
   const setEpicBudget = (id: string, hours: number) => {
     const h = hours > 0 ? Math.round(hours) : 0
@@ -8080,6 +8082,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           ...others.map(o => ({ name: o.name, min: o.min, color: '#94A3B8' })),
         ].sort((a, b) => b.min - a.min)
         const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
+        // Subtareas que marcaste hechas ESE día (para el resumen de logros del día).
+        const doneSubs: { task: string; sub: string; color: string; eId: string; tid: string }[] = []
+        for (const e of epics) for (const t of e.tasks) for (const s of (t.subtasks || [])) if (s.done && (s.doneAt || '').slice(0, 10) === refDay) doneSubs.push({ task: t.t, sub: s.t, color: e.color, eId: e.id, tid: t.id! })
         const secLbl = (txt: string, extra?: ReactNode) => (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
             <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{txt}</span>
@@ -8114,7 +8119,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         return (
           <>
           <div onClick={() => setDayCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 960, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
               <div style={{ padding: '18px 22px 22px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
@@ -8186,6 +8191,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                       ) : <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)', padding: '8px 2px' }}>Aún no hay tiempo registrado este día. Regístralo en /tiempo para ver el desglose.</div>}
                     </div>
+                    {doneSubs.length > 0 && (
+                      <div>
+                        {secLbl('✓ Subtareas que terminaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{doneSubs.length}</span>)}
+                        <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', overflow: 'hidden' }}>
+                          {doneSubs.map((s, k) => (
+                            <div key={k} onClick={() => setDcPeek({ eId: s.eId, tid: s.tid })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < doneSubs.length - 1 ? '1px solid rgba(15,35,64,0.05)' : 'none' }}>
+                              <span style={{ color: '#2E6E6E', fontSize: 12, flexShrink: 0 }}>✓</span>
+                              <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.sub}<span style={{ color: 'rgba(20,35,61,0.4)' }}> · {s.task}</span></span>
+                              <span style={{ width: 7, height: 7, borderRadius: 99, background: s.color, flexShrink: 0 }} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       {secLbl('✍️ Comentario del día')}
                       <textarea value={dayNotes[refDay] || ''} onChange={e => setDayNote(refDay, e.target.value)} placeholder="¿Cómo te fue hoy? Lo importante, qué quedó pendiente, cómo te sentiste…"
@@ -8206,19 +8225,30 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   </div>
                 )}
-                {planPend.length > 0 && (
-                  <div style={{ marginTop: 18 }}>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 8 }}>Mover {planPend.length} {planPend.length === 1 ? 'pendiente' : 'pendientes'} de {refIsToday ? 'hoy' : 'este día'} a…</div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {Array.from({ length: 8 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
-                        const first = d === addDays(today, refIsToday ? 1 : 0)
-                        const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
-                        return <button key={d} onClick={() => moveTodayPendingTo(d)} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
-                      })}
+                {/* FOOTER: botón para cerrar el día. Si hay pendientes, pregunta a qué día moverlas TODAS. */}
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                  {!dcClose ? (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.6)', fontWeight: 600 }}>{planPend.length > 0 ? `${planPend.length} ${planPend.length === 1 ? 'pendiente' : 'pendientes'} sin cerrar` : 'Cerraste todo ✦'}</span>
+                      <button onClick={() => { if (planPend.length > 0) setDcClose(true); else setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>✓ Cerrar el día</button>
                     </div>
-                  </div>
-                )}
-                {planPend.length === 0 && arrastradas.length === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo ✦</div>}
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#10233F', marginBottom: 8 }}>¿Mover las {planPend.length} pendientes a otro día?</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {Array.from({ length: 8 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
+                          const first = d === addDays(today, refIsToday ? 1 : 0)
+                          const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
+                          return <button key={d} onClick={() => { moveTodayPendingTo(d); setDcClose(false) }} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
+                        })}
+                      </div>
+                      <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+                        <button onClick={() => { setDcClose(false); setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--font-ui)', color: '#2E6E6E', padding: 0 }}>No mover · solo cerrar</button>
+                        <button onClick={() => setDcClose(false)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 12.5px var(--font-ui)', color: 'rgba(20,35,61,0.5)', padding: 0 }}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

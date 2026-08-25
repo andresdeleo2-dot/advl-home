@@ -101,6 +101,7 @@ export default function TiempoClient() {
   const [hoyPanel, setHoyPanel] = useState<'both' | 'resumen' | 'tareas'>('both')   // vista Hoy: ambos paneles, o uno maximizado
   const [dayCloseT, setDayCloseT] = useState(false)                    // modal "Cerrar el día" (retro del día, igual que en Épicas)
   const [dcShowAllT, setDcShowAllT] = useState(false)                  // "ver todas" las tareas sin tocar en el cierre
+  const [dcCloseT, setDcCloseT] = useState(false)                      // en el cierre: mostrando el selector "mover pendientes a…"
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1042,6 +1043,7 @@ export default function TiempoClient() {
     return next
   })
   const openTaskById = (tid?: string) => { if (!tid) return; const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
+  useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false) } }, [dayCloseT])
 
   // Subtareas COMPLETADAS el día visto (con su hora) — para verlas en el registro del día.
   const daySubtasksDone = useMemo(() => {
@@ -2581,6 +2583,8 @@ export default function TiempoClient() {
         const tof = (tid?: string) => (allTasks || []).find(x => x.task.id === tid) || null
         // Marca/desmarca una tarea como Terminada (respeta recurrencia al completar).
         const markTask = (tt: TodayTask | null, done: boolean) => { if (!tt) return; const task = done ? completeTaskFields(tt.task) : { ...tt.task, status: 'En curso', doneAt: undefined }; autoSaveTask(tt.epicaId, task) }
+        // Mueve UNA tarea a otro día (mismo modelo que Épicas: plan + planOrder).
+        const moveTaskToDay = (tt: TodayTask | null, day: string) => { if (!tt || !day) return; autoSaveTask(tt.epicaId, { ...tt.task, plan: day, planOrder: nextPlanOrderFor(day) }) }
         // Tareas de épica trabajadas ese día (por taskId), con su tiempo; estado real desde allTasks.
         const wmap = new Map<string, number>()
         data.history.filter(h => h.date === dcDay && h.taskId).forEach(h => wmap.set(h.taskId!, (wmap.get(h.taskId!) || 0) + h.dur))
@@ -2600,6 +2604,12 @@ export default function TiempoClient() {
         const othersMin = generalRows.reduce((s, o) => s + o.min, 0) + routines.reduce((s, r) => s + r.min, 0)
         // Planeadas ese día que NO se tocaron.
         const planned = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, dcDay) || recurringDueToday(t.task, dcDay)) && !dayPlanDoneT(t.task, dcDay) && !workedSet.has(t.task.id!))
+        // Subtareas que marcaste hechas ESE día (resumen de logros del día).
+        const doneSubs: { task: string; sub: string; color: string; tt: TodayTask }[] = []
+        for (const t of (allTasks || [])) for (const s of (t.task.subtasks || [])) if (s.done && (s.doneAt || '').slice(0, 10) === dcDay) doneSubs.push({ task: t.task.t, sub: s.t, color: t.color, tt: t })
+        // Mueve TODAS las pendientes (en curso + sin tocar) del día a otro día, y cierra.
+        const pendingAll = [...openTasks.map(w => w.tt).filter(Boolean) as TodayTask[], ...planned]
+        const moveAllPending = (day: string) => { const seen = new Set<string>(); pendingAll.forEach(t => { if (t.task.id && !seen.has(t.task.id)) { seen.add(t.task.id); moveTaskToDay(t, day) } }); setDcCloseT(false); setDayCloseT(false) }
         // % del tiempo por actividad (todo el trabajo del día, por nombre, color de la tarea si aplica).
         const bmap = new Map<string, { min: number; color: string }>()
         data.history.filter(h => h.date === dcDay && h.area === 'trabajo').forEach(h => { const cur = bmap.get(h.name) || { min: 0, color: h.taskId ? (tof(h.taskId)?.color || '#8a4b28') : '#94A3B8' }; cur.min += h.dur; bmap.set(h.name, cur) })
@@ -2622,19 +2632,24 @@ export default function TiempoClient() {
             {onClick && <span style={{ fontSize: 15, color: '#c9bfae', flexShrink: 0 }}>›</span>}
           </div>
         )
-        // Fila con checkbox (marcar/desmarcar hecha) + nombre (→ abre detalle) + tiempo.
-        const cbTask = (key: string, name: string, min: number, checked: boolean, onToggle: () => void, onOpen: () => void, dot: string) => (
+        // Fila con checkbox (marcar/desmarcar hecha) + nombre (→ abre detalle) + tiempo + 📅 mover.
+        const cbTask = (key: string, name: string, min: number, checked: boolean, onToggle: () => void, onOpen: () => void, dot: string, mv?: { plan?: string; onMove: (day: string) => void }) => (
           <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderBottom: '1px solid #f0e9dc' }}>
             <input type="checkbox" checked={checked} onChange={onToggle} title={checked ? 'Desmarcar' : 'Marcar hecha'} style={{ width: 16, height: 16, accentColor: dot, cursor: 'pointer', flexShrink: 0 }} />
             <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flexShrink: 0 }} />
             <span onClick={onOpen} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: checked ? '#a49b90' : '#1c1a17', textDecoration: checked ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{name}</span>
             {min > 0 && <span style={{ fontSize: 10.5, fontWeight: 800, color: '#3E6E6E', flexShrink: 0 }}>⏱ {hmm(min)}</span>}
+            {mv && (
+              <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid #e2d9cb', background: '#fff', fontSize: 13 }}>📅
+                <input type="date" defaultValue={mv.plan || dcDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== mv.plan) mv.onMove(d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+              </label>
+            )}
           </div>
         )
         const listBox = (children: ReactNode) => <div style={{ border: '1px solid #ece4d6', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>{children}</div>
         return (
           <div onClick={() => setDayCloseT(false)} style={{ position: 'fixed', inset: 0, zIndex: 88, background: 'rgba(28,26,23,.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 920, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 960, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#8a4b28,#c2933a)' }} />
               <div style={{ padding: '20px 24px 24px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
@@ -2666,12 +2681,12 @@ export default function TiempoClient() {
                         <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Trabajo fuera de una tarea. Crea/abre la tarea “General” en Épicas para describirlo.</div>
                       </div>
                     )}
-                    {doneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(doneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a')))}</div>)}
-                    {openTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(openTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a')))}</div>)}
+                    {doneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(doneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
+                    {openTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(openTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
                     {planned.length > 0 && (
                       <div>
                         {secLbl(isTodayView ? '○ No las tocaste hoy' : '○ Sin tocar', planned.length > 8 ? <button onClick={() => setDcShowAllT(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>{dcShowAllT ? 'ver menos ▴' : `ver todas (${planned.length}) ▾`}</button> : undefined)}
-                        {listBox((dcShowAllT ? planned : planned.slice(0, 8)).map(t => cbTask(t.task.id!, t.task.t, 0, false, () => markTask(t, true), () => openTaskById(t.task.id), t.color)))}
+                        {listBox((dcShowAllT ? planned : planned.slice(0, 8)).map(t => cbTask(t.task.id!, t.task.t, 0, false, () => markTask(t, true), () => openTaskById(t.task.id), t.color, { plan: t.task.plan, onMove: d => moveTaskToDay(t, d) })))}
                       </div>
                     )}
                     {workedTasks.length === 0 && generalRows.length === 0 && planned.length === 0 && shownRoutines.length === 0 && <div style={{ fontSize: 13, color: '#a49b90', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
@@ -2693,12 +2708,50 @@ export default function TiempoClient() {
                         </div>
                       ) : <div style={{ fontSize: 12, color: '#a49b90', padding: '8px 2px' }}>Aún no hay tiempo registrado este día.</div>}
                     </div>
+                    {doneSubs.length > 0 && (
+                      <div>
+                        {secLbl('✓ Subtareas que terminaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{doneSubs.length}</span>)}
+                        <div style={{ borderRadius: 12, border: '1px solid #ece4d6', overflow: 'hidden', background: '#fff' }}>
+                          {doneSubs.map((s, k) => (
+                            <div key={k} onClick={() => setEditTask({ epicaId: s.tt.epicaId, epicaName: s.tt.epicaName, color: s.tt.color, task: { ...s.tt.task } })} title="Ver la actividad" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: k < doneSubs.length - 1 ? '1px solid #f0e9dc' : 'none' }}>
+                              <span style={{ color: '#3E6E6E', fontSize: 12, flexShrink: 0 }}>✓</span>
+                              <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.sub}<span style={{ color: '#a49b90' }}> · {s.task}</span></span>
+                              <span style={{ width: 7, height: 7, borderRadius: 99, background: s.color, flexShrink: 0 }} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       {secLbl('✍️ Comentario del día')}
                       <textarea value={dayNotesT[dcDay] || ''} onChange={e => setDayNoteT(dcDay, e.target.value)} placeholder="¿Cómo te fue? Lo importante, qué quedó pendiente, cómo te sentiste…"
                         style={{ width: '100%', minHeight: 120, resize: 'vertical', boxSizing: 'border-box', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--tiempo-ui, system-ui, sans-serif)', color: '#1c1a17', background: '#fff', outline: 'none' }} />
                     </div>
                   </div>
+                </div>
+                {/* FOOTER: botón para cerrar el día. Si hay pendientes, pregunta a qué día moverlas TODAS. */}
+                <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #ece4d6' }}>
+                  {!dcCloseT ? (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12.5, color: '#8b8379', fontWeight: 600 }}>{pendingAll.length > 0 ? `${pendingAll.length} ${pendingAll.length === 1 ? 'pendiente' : 'pendientes'} sin cerrar` : 'Cerraste todo ✦'}</span>
+                      <button onClick={() => { if (pendingAll.length > 0) setDcCloseT(true); else setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--tiempo-ui, system-ui, sans-serif)', background: 'linear-gradient(135deg,#8a4b28,#6f3c20)', color: '#faf7f1', boxShadow: '0 8px 20px -8px rgba(138,75,40,.6)' }}>✓ Cerrar el día</button>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#1c1a17', marginBottom: 8 }}>¿Mover las {pendingAll.length} pendientes a otro día?</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {(() => { const t0 = iso(new Date()); const WD = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom']; return Array.from({ length: 8 }, (_, k) => addDaysISO(t0, k + (isTodayView ? 1 : 0))).map(d => {
+                          const first = d === addDaysISO(t0, isTodayView ? 1 : 0)
+                          const lbl = d === t0 ? 'Hoy' : d === addDaysISO(t0, 1) ? 'Mañana' : `${WD[dayIdxMon(d)]} ${Number(d.slice(8))}`
+                          return <button key={d} onClick={() => moveAllPending(d)} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--tiempo-ui, system-ui, sans-serif)', border: first ? 'none' : '1px solid #e2d9cb', background: first ? 'linear-gradient(135deg,#E7C56B,#c2933a)' : '#fff', color: first ? '#1B1305' : '#6b645b' }}>{lbl}</button>
+                        }) })()}
+                      </div>
+                      <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+                        <button onClick={() => { setDcCloseT(false); setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28', padding: 0 }}>No mover · solo cerrar</button>
+                        <button onClick={() => setDcCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90', padding: 0 }}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
