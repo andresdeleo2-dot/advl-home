@@ -99,6 +99,8 @@ export default function TiempoClient() {
   const [now, setNow] = useState(0)
   const [view, setView] = useState<'plan' | 'hoy' | 'semana' | 'rutina' | 'historial'>('plan')   // abre en Planificador por defecto
   const [hoyPanel, setHoyPanel] = useState<'both' | 'resumen' | 'tareas'>('both')   // vista Hoy: ambos paneles, o uno maximizado
+  const [dayCloseT, setDayCloseT] = useState(false)                    // modal "Cerrar el día" (retro del día, igual que en Épicas)
+  const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
   const [data, setData] = useState<AppData>(() => defaults())
@@ -1031,6 +1033,14 @@ export default function TiempoClient() {
     return { min: list.reduce((s, t) => s + estDurForDay(t.task, taskDay), 0), count: list.length }
   }, [allTasks, taskDay])
   const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
+  // Comentario libre por día (mismo almacén que Épicas, para que se vea en ambos lados).
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayNotes.v1'); if (raw) setDayNotesT(JSON.parse(raw)) } catch {} }, [])
+  const setDayNoteT = (day: string, text: string) => setDayNotesT(prev => {
+    const next = { ...prev }; if (text.trim()) next[day] = text; else delete next[day]
+    try { localStorage.setItem('epicas.dayNotes.v1', JSON.stringify(next)) } catch {}
+    return next
+  })
+  const openTaskById = (tid?: string) => { if (!tid) return; const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
 
   // Subtareas COMPLETADAS el día visto (con su hora) — para verlas en el registro del día.
   const daySubtasksDone = useMemo(() => {
@@ -1915,6 +1925,7 @@ export default function TiempoClient() {
            ) : (<section className="hoy-panel" style={{ flex: 1 }}>
              <div className="hoy-panel-head">
                <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', flex: 1 }}>Resumen del día</span>
+               <button onClick={() => setDayCloseT(true)} title="Cerrar el día: retro, general/rutinas y comentario" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, fontWeight: 600, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>Cerrar el día ✓</button>
                {hoyPanel === 'resumen'
                  ? <button onClick={() => setHoyPanel('both')} title="Ver ambos paneles" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }}>⤢ ver ambos</button>
                  : <>
@@ -2561,6 +2572,87 @@ export default function TiempoClient() {
         )}
       </div>
 
+      {/* ── CERRAR EL DÍA (igual que en Épicas): retro del día con general/rutinas + comentario ── */}
+      {dayCloseT && (() => {
+        const dcDay = taskDay
+        const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
+        // Tareas de épica trabajadas ese día (por taskId), con su tiempo y si quedaron hechas.
+        const wmap = new Map<string, { name: string; min: number; done: boolean }>()
+        data.history.filter(h => h.date === dcDay && h.taskId).forEach(h => { const c = wmap.get(h.taskId!) || { name: h.name, min: 0, done: false }; c.min += h.dur; c.done = c.done || h.done === true; wmap.set(h.taskId!, c) })
+        const workedTasks = [...wmap.entries()].map(([taskId, v]) => ({ taskId, ...v })).sort((a, b) => b.min - a.min)
+        const workedSet = new Set(workedTasks.map(w => w.taskId))
+        const doneTasks = workedTasks.filter(w => w.done)
+        const openTasks = workedTasks.filter(w => !w.done)
+        // General + rutinas (bloques de trabajo sin taskId), por nombre.
+        const omap = new Map<string, number>()
+        data.history.filter(h => h.date === dcDay && h.area === 'trabajo' && !h.taskId).forEach(h => omap.set(h.name, (omap.get(h.name) || 0) + h.dur))
+        const others = [...omap.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
+        const othersMin = others.reduce((s, o) => s + o.min, 0)
+        // Planeadas ese día que NO se tocaron.
+        const planned = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, dcDay) || recurringDueToday(t.task, dcDay)) && !dayPlanDoneT(t.task, dcDay) && !workedSet.has(t.task.id!))
+        const openByName = (name: string) => { const tt = (allTasks || []).find(x => (x.task.t || '').trim().toLowerCase() === name.trim().toLowerCase()); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
+        const lbl: CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 6 }
+        const stat = (n: number, label: string, c: string) => (
+          <div style={{ flex: 1, background: '#fff', border: '1px solid #ece4d6', borderRadius: 14, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: .9, color: c }}>{n}</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#8b8379' }}>{label}</span>
+          </div>
+        )
+        const row = (key: string, name: string, min: number, done: boolean, onClick: (() => void) | null, dot: string, extra?: string) => (
+          <div key={key} onClick={onClick || undefined} title={onClick ? 'Ver la actividad' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', cursor: onClick ? 'pointer' : 'default', borderBottom: '1px solid #f0e9dc' }}>
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flexShrink: 0 }} />
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: done ? '#a49b90' : '#1c1a17', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+            {extra && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#8a4b28', flexShrink: 0 }}>{extra}</span>}
+            {min > 0 && <span style={{ fontSize: 10.5, fontWeight: 800, color: '#3E6E6E', flexShrink: 0 }}>⏱ {hmm(min)}</span>}
+            {onClick && <span style={{ fontSize: 15, color: '#c9bfae', flexShrink: 0 }}>›</span>}
+          </div>
+        )
+        const listBox = (children: ReactNode) => <div style={{ border: '1px solid #ece4d6', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>{children}</div>
+        return (
+          <div onClick={() => setDayCloseT(false)} style={{ position: 'fixed', inset: 0, zIndex: 88, background: 'rgba(28,26,23,.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 680, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
+              <div style={{ height: 4, background: 'linear-gradient(90deg,#8a4b28,#c2933a)' }} />
+              <div style={{ padding: '20px 24px 24px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.2em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 5 }}>Cierre del día</div>
+                    <div style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1, color: '#1c1a17', textTransform: 'capitalize' }}>{longDayOf(dcDay)}</div>
+                    {dayWorkedMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#3E6E6E', fontWeight: 700 }}>⏱ {hmm(dayWorkedMin)} {isTodayView ? 'trabajadas hoy' : 'ese día'}{othersMin > 0 ? <span style={{ fontWeight: 600, color: '#a49b90' }}> · {hmm(dayWorkedMin - othersMin)} en tareas, {hmm(othersMin)} general/rutinas</span> : null}</div>}
+                  </div>
+                  <button aria-label="Cerrar" onClick={() => setDayCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(28,26,23,.06)', borderRadius: 9, height: 32, width: 32, color: '#8b8379', fontSize: 16 }}>✕</button>
+                </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {stat(doneTasks.length, 'terminadas', '#3E6E6E')}
+                  {stat(openTasks.length, 'en curso', '#8a4b28')}
+                  {stat(planned.length, 'sin tocar', '#a49b90')}
+                </div>
+                {others.length > 0 && (
+                  <div style={{ marginTop: 18 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><div style={lbl}>General y rutinas</div><div style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A', marginBottom: 6 }}>⏱ {hmm(othersMin)}</div></div>
+                    {listBox(others.map((o, k) => row('o' + k, o.name, o.min, false, (allTasks || []).some(x => (x.task.t || '').trim().toLowerCase() === o.name.trim().toLowerCase()) ? () => openByName(o.name) : null, '#94A3B8')))}
+                    <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Es el trabajo fuera de una tarea. Crea/abre la tarea “General” en Épicas para describirlo con subtareas.</div>
+                  </div>
+                )}
+                {doneTasks.length > 0 && (
+                  <div style={{ marginTop: 18 }}><div style={lbl}>✓ Terminadas hoy</div>{listBox(doneTasks.map(w => row(w.taskId, w.name, w.min, true, () => openTaskById(w.taskId), '#6f8f5a')))}</div>
+                )}
+                {openTasks.length > 0 && (
+                  <div style={{ marginTop: 18 }}><div style={lbl}>◐ Avanzaste pero no cerraste</div>{listBox(openTasks.map(w => row(w.taskId, w.name, w.min, false, () => openTaskById(w.taskId), '#c2933a')))}</div>
+                )}
+                {planned.length > 0 && (
+                  <div style={{ marginTop: 18 }}><div style={lbl}>○ Planeadas sin tocar</div>{listBox(planned.slice(0, 10).map(t => row(t.task.id!, t.task.t, 0, false, () => openTaskById(t.task.id), t.color)))}{planned.length > 10 && <div style={{ fontSize: 11, color: '#a49b90', padding: '5px 4px 0' }}>+{planned.length - 10} más</div>}</div>
+                )}
+                <div style={{ marginTop: 20 }}>
+                  <div style={lbl}>✍️ Comentario del día</div>
+                  <textarea value={dayNotesT[dcDay] || ''} onChange={e => setDayNoteT(dcDay, e.target.value)} placeholder="¿Cómo te fue? Lo importante, qué quedó pendiente, cómo te sentiste…"
+                    style={{ width: '100%', minHeight: 66, resize: 'vertical', boxSizing: 'border-box', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--tiempo-ui, system-ui, sans-serif)', color: '#1c1a17', background: '#fff', outline: 'none' }} />
+                </div>
+                {workedTasks.length === 0 && others.length === 0 && planned.length === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#3E6E6E', fontWeight: 600 }}>Sin registro este día ✦</div>}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onPause={applyPauseToHist} onClearPause={clearHistPause} onClose={() => setHistIdx(null)} />}
 
