@@ -225,8 +225,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const subNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [estCustomId, setEstCustomId] = useState<string | null>(null)  // tarea con el Estimado en modo "Personalizado…" (input libre)
-  const [orderEditKey, setOrderEditKey] = useState<string | null>(null) // fila con el número de "con qué empiezo" en edición (teclear la posición, sin arrastrar ni abrir)
-  const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el tiempo estimado en edición inline (sin abrir la tarea)
+  const [orderTapMode, setOrderTapMode] = useState(false)               // "Ordenar tocando": numerar las tareas en el orden que las tocas (sin arrastrar ni teclear)
+  const [orderSeq, setOrderSeq] = useState<string[]>([])                // keys en el orden tocado (1,2,3…) mientras dura el modo
+  const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el selector de tiempo (chip ⏱) abierto
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
@@ -1314,31 +1315,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setPlanSort('plan')
     showToast('Orden fijado')
   }
-  /** Mueve la tarea `key` a la posición 1-based `pos1` dentro de la lista ordenada visible `visList`
-   *  (teclear "con qué número empiezo" en vez de arrastrar). Si se pasa `full` (la lista completa,
-   *  p.ej. planPend cuando hay filtro), fusiona el nuevo orden visible conservando la posición de las
-   *  tareas ocultas por el filtro — igual que el arrastre (commitReorder). Reasigna planOrder. */
-  const reorderPlanToPos = (
-    visList: { e: Epica; t: EpicaTask; i: number }[],
-    key: string,
-    pos1: number,
-    full?: { e: Epica; t: EpicaTask; i: number }[],
-  ) => {
-    setOrderEditKey(null)
-    const from = visList.findIndex(x => planKey(x.e.id, x.t) === key)
-    if (from < 0) return
-    const to = Math.max(0, Math.min(visList.length - 1, Math.round(pos1) - 1))
-    if (to === from) return
-    const vis = visList.slice()
-    const [m] = vis.splice(from, 1); vis.splice(to, 0, m)
-    let merged: { e: Epica; t: EpicaTask; i: number }[]
-    if (full && full.length > visList.length) {
-      const visKeys = new Set(visList.map(x => planKey(x.e.id, x.t)))
-      let vi = 0
-      merged = full.map(f => (visKeys.has(planKey(f.e.id, f.t)) ? vis[vi++] : f))
-    } else merged = vis
-    applyPlanOrder(merged.map(x => ({ e: x.e, i: x.i })))
-    showToast(`Empiezas esta en el #${to + 1}`)
+  /* ── "Ordenar tocando": vas tocando las tareas en el orden que las harás y se numeran 1,2,3… ── */
+  const startTapOrder = () => { setPlanSort('plan'); setOrderSeq([]); setOrderTapMode(true) }
+  const cancelTapOrder = () => { setOrderTapMode(false); setOrderSeq([]) }
+  // Alterna una tarea en la secuencia de toques: la agrega al final, o la quita (renumerando el resto).
+  const orderTapToggle = (key: string) => setOrderSeq(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
+  /** Guarda el orden tocado: las tocadas (en ese orden) van primero; el resto conserva su orden actual.
+   *  `full` (p.ej. planPend) conserva las tareas ocultas por el filtro. Reasigna planOrder. */
+  const commitTapOrder = (visList: { e: Epica; t: EpicaTask; i: number }[], full?: { e: Epica; t: EpicaTask; i: number }[]) => {
+    const base = full && full.length >= visList.length ? full : visList
+    const seqSet = new Set(orderSeq)
+    const tapped = orderSeq.map(k => base.find(x => planKey(x.e.id, x.t) === k)).filter((x): x is { e: Epica; t: EpicaTask; i: number } => !!x)
+    const rest = base.filter(x => !seqSet.has(planKey(x.e.id, x.t)))
+    if (tapped.length) applyPlanOrder([...tapped, ...rest].map(x => ({ e: x.e, i: x.i })))
+    setOrderTapMode(false); setOrderSeq([])
+    if (tapped.length) showToast(`Orden guardado · ${tapped.length} ${tapped.length === 1 ? 'tarea' : 'tareas'}`)
   }
   // Trae al plan de hoy TODAS las pendientes de días anteriores (reprograma plan=hoy).
   const bringOverdue = () => {
@@ -2726,71 +2717,66 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     </div>
   )
 
-  /** Número de "con qué empiezo" (posición). Clic → teclear la posición (sin arrastrar ni abrir la
-   *  tarea). `ordered` = lista visible sobre la que se reordena (si falta, el número es sólo lectura).
-   *  `full` = lista completa para conservar lo oculto por el filtro. `big` = estilo del enfoque de Día. */
-  const orderControl = (
-    key: string, pos: number,
-    ordered: { e: Epica; t: EpicaTask; i: number }[] | undefined,
-    full?: { e: Epica; t: EpicaTask; i: number }[],
-    big = false,
-  ) => {
+  /** Número de "con qué empiezo". Normal: número de sólo lectura (01,02…). En modo "Ordenar tocando"
+   *  (`tap`): un círculo tocable — al tocarlo toma el siguiente número (1,2,3…) en el orden de toques;
+   *  tocarlo de nuevo lo quita. `big` = estilo grande del enfoque de Día. */
+  const orderNum = (key: string, pos: number, tap: boolean, big = false) => {
+    if (tap) {
+      const idx = orderSeq.indexOf(key); const on = idx >= 0
+      return (
+        <button onClick={ev => { ev.stopPropagation(); orderTapToggle(key) }} onPointerDown={ev => ev.stopPropagation()}
+          aria-label={on ? `Es la número ${idx + 1} · toca para quitarla` : 'Tócala en el orden que la harás'}
+          title={on ? `Es la número ${idx + 1} · toca para quitarla` : 'Tócala en el orden que la harás'}
+          style={{ cursor: 'pointer', flexShrink: 0, height: big ? 38 : 26, width: big ? 38 : 26, borderRadius: 99, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            border: on ? 'none' : '2px dashed rgba(194,147,58,0.65)', background: on ? '#C2933A' : 'rgba(194,147,58,0.08)',
+            color: on ? '#fff' : 'rgba(168,122,44,0.75)', font: `800 ${big ? 16 : 12}px var(--font-ui)`, fontVariantNumeric: 'tabular-nums',
+            boxShadow: on ? '0 4px 11px -4px rgba(194,147,58,0.8)' : 'none', transition: 'background .12s, box-shadow .12s' }}>
+          {on ? idx + 1 : (big ? '＋' : '')}
+        </button>
+      )
+    }
     const label = String(pos + 1).padStart(2, '0')
-    if (orderEditKey === key && ordered) {
-      return (
-        <input type="number" min={1} max={ordered.length} defaultValue={pos + 1} autoFocus
-          onClick={ev => ev.stopPropagation()} onPointerDown={ev => ev.stopPropagation()}
-          onFocus={ev => ev.currentTarget.select()}
-          onKeyDown={ev => { if (ev.key === 'Enter') ev.currentTarget.blur(); else if (ev.key === 'Escape') { ev.preventDefault(); setOrderEditKey(null) } }}
-          onBlur={ev => { const v = parseInt(ev.currentTarget.value, 10); if (Number.isFinite(v) && v > 0) reorderPlanToPos(ordered, key, v, full); else setOrderEditKey(null) }}
-          aria-label="¿Con qué número empiezas?"
-          className={big ? 'serif' : undefined}
-          style={big
-            ? { width: 50, fontSize: 24, fontWeight: 600, textAlign: 'center', color: '#A87A2C', border: '1.5px solid #C2933A', borderRadius: 8, padding: '1px 3px', background: 'rgba(194,147,58,0.10)', outline: 'none', fontVariantNumeric: 'tabular-nums' }
-            : { width: 36, fontSize: 12, fontWeight: 800, textAlign: 'center', color: '#A87A2C', border: '1.5px solid #C2933A', borderRadius: 7, padding: '2px 3px', background: 'rgba(194,147,58,0.10)', outline: 'none' }} />
-      )
-    }
-    if (!ordered) {
-      return big
-        ? <span className="serif plan-num" style={{ fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{label}</span>
-        : <span style={{ font: '800 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)', fontVariantNumeric: 'tabular-nums' }}>{label}</span>
-    }
     return big
-      ? <button onClick={ev => { ev.stopPropagation(); setOrderEditKey(key) }} onPointerDown={ev => ev.stopPropagation()} title="Teclea con qué número empiezas (sin arrastrar)" className="serif plan-num" style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{label}</button>
-      : <button onClick={ev => { ev.stopPropagation(); setOrderEditKey(key) }} onPointerDown={ev => ev.stopPropagation()} title="Teclea con qué número empiezas" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 21, height: 19, padding: '0 5px', borderRadius: 6, border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', font: '800 11px var(--font-ui)', fontVariantNumeric: 'tabular-nums' }}>{label}</button>
+      ? <span className="serif plan-num" style={{ fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{label}</span>
+      : <span style={{ font: '800 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)', fontVariantNumeric: 'tabular-nums' }}>{label}</span>
   }
-  /** Tiempo estimado editable inline (sin abrir la tarea). Reusa renderEstControl. Escribe al dayPlan
-   *  del día si la tarea es de varios días, o al estimado propio de la tarea. `day` = día en contexto. */
-  const rowEstControl = (key: string, e: Epica, i: number, t: EpicaTask, day: string) => {
+  /** Chip de TIEMPO por fila (claro y tocable). Muestra ⏱ + el estimado (o "Tiempo" si no tiene).
+   *  Al tocarlo abre un mini-selector con botones (30m,1h,1h30,2h,3h,4h) + "otro" + "quitar", SIN abrir
+   *  la tarea. Escribe al dayPlan de ESE día si la tarea es de varios días, o al estimado propio. */
+  const rowTimeChip = (key: string, e: Epica, i: number, t: EpicaTask, day: string, align: 'left' | 'right' = 'left') => {
     const dp = day ? dayPlanFor(t, day) : undefined
-    const defMin = WEEK_EST_MIN(difForDay(t, day))
-    const onSet = (m: number | null) => {
-      if (dp) setDayPlanField(e, i, day, { estMin: m == null ? undefined : m })
-      else setTaskEstMin(e, i, m)
-      setEstEditKey(null); setEstCustomId(null)
-    }
-    if (estEditKey === key) {
-      return (
-        <span onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          {renderEstControl(key, dp ? dp.estMin : t.estMin, defMin, onSet, true)}
-          <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null); setEstCustomId(null) }} title="Listo" style={{ height: 24, width: 24, borderRadius: 7, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.12)', color: '#2E6E6E', cursor: 'pointer', fontSize: 12, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>✓</button>
-        </span>
-      )
-    }
-    const est = estMinForDay(t, day), real = investedMinOf(t)
-    const over = est > 0 && real > est
+    const own = dp ? (dp.estMin ?? 0) : (t.estMin ?? 0)
+    const shown = estMinForDay(t, day)
+    const hasOwn = own > 0
+    const setM = (m: number | null) => { if (dp) setDayPlanField(e, i, day, { estMin: m == null ? undefined : m }); else setTaskEstMin(e, i, m); setEstEditKey(null) }
     const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
-    const perDay = !!dp?.estMin
+    const open = estEditKey === key
     return (
-      <button onClick={ev => { ev.stopPropagation(); setEstCustomId(null); setEstEditKey(key) }}
-        title={est ? `Estimado ${perDay ? 'de este día ' : ''}${hmm(est)}${real > 0 ? ` · llevas ${hmm(real)}` : ''} · clic para cambiar el tiempo (sin abrir)` : 'Ponle el tiempo que crees que te tomará (sin abrir la tarea)'}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 700,
-          color: est ? (over ? '#B0522E' : '#A87A2C') : 'rgba(20,35,61,0.5)',
-          background: est ? (over ? 'rgba(176,82,46,0.10)' : 'rgba(194,147,58,0.10)') : 'rgba(15,35,64,0.04)',
-          border: `1px ${est ? 'solid' : 'dashed'} ${est ? (over ? 'rgba(176,82,46,0.3)' : 'rgba(194,147,58,0.4)') : 'rgba(15,35,64,0.22)'}`,
-          borderRadius: 99, padding: '1px 8px' }}>
-        ⏳ {est ? hmm(est) : '+ tiempo'}{est && real > 0 ? ` / ${hmm(real)}` : ''}
-      </button>
+      <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }} onClick={ev => ev.stopPropagation()}>
+        <button onClick={ev => { ev.stopPropagation(); setEstEditKey(open ? null : key) }} onPointerDown={ev => ev.stopPropagation()}
+          title={shown > 0 ? `Estimado ${hasOwn ? '' : '(por dificultad) '}${hmm(shown)} · toca para cambiarlo` : 'Ponle el tiempo que crees que te tomará'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '800 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 9px',
+            border: `1px ${hasOwn ? 'solid rgba(194,147,58,0.55)' : 'dashed rgba(15,35,64,0.3)'}`,
+            background: open ? 'rgba(194,147,58,0.2)' : hasOwn ? 'rgba(194,147,58,0.12)' : 'rgba(15,35,64,0.03)', color: hasOwn ? '#A87A2C' : 'rgba(20,35,61,0.62)' }}>
+          ⏱ {shown > 0 ? (hasOwn ? hmm(shown) : `~${hmm(shown)}`) : 'Tiempo'}
+        </button>
+        {open && (
+          <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 5px)', ...(align === 'right' ? { right: 0 } : { left: 0 }), zIndex: 40, display: 'flex', flexWrap: 'wrap', gap: 5, width: 206, padding: 9, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
+            <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>¿Cuánto tiempo?</span>
+            {TIME_PRESETS.map(([m, l]) => { const sel = own === m; return (
+              <button key={m} onClick={ev => { ev.stopPropagation(); setM(m) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 12px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#16365F' }}>{l}</button>
+            )})}
+            <input type="text" defaultValue={hasOwn && !TIME_PRESETS.some(([m]) => m === own) ? fmtCustom(own) : ''} placeholder="otro: 1h30 · 50m"
+              onClick={ev => ev.stopPropagation()} onKeyDown={ev => { if (ev.key === 'Enter') (ev.currentTarget as HTMLInputElement).blur() }}
+              onBlur={ev => { const v = ev.currentTarget.value.trim(); if (!v) return; const mm = parseEst(v); if (mm && mm > 0) setM(mm) }}
+              style={{ flexBasis: '100%', border: '1px solid rgba(15,35,64,0.16)', borderRadius: 8, padding: '6px 9px', font: '600 12px var(--font-ui)', outline: 'none' }} />
+            <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
+              {hasOwn && <button onClick={ev => { ev.stopPropagation(); setM(null) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 9px', font: '700 11px var(--font-ui)', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E' }}>Quitar</button>}
+              <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null) }} style={{ marginLeft: 'auto', cursor: 'pointer', borderRadius: 8, padding: '4px 11px', font: '700 11px var(--font-ui)', border: 'none', background: '#10233F', color: '#fff' }}>Listo</button>
+            </div>
+          </div>
+        )}
+      </span>
     )
   }
 
@@ -2819,11 +2805,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         })()}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
           <span style={{ width: ps.accentW, height: 30, borderRadius: 99, background: ps.accent, flexShrink: 0 }} />
-          {orderControl(key, pos, orderList, planPend, true)}
+          {orderNum(key, pos, orderTapMode && !!orderList, true)}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {pos === 0 && <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 3 }}>Empieza aquí</div>}
-          <div className="plan-title" onClick={() => setTaskView({ eId: e.id, tid: t.id! })} title="Ver tarea" style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id && focus.mitIds.includes(t.id) && <span title="Lo más importante hoy (fijado en Tiempo)" style={{ color: '#C2933A' }}>★ </span>}{t.t}</div>
+          {pos === 0 && !orderTapMode && <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 3 }}>Empieza aquí</div>}
+          <div className="plan-title" onClick={() => { if (orderTapMode && orderList) orderTapToggle(key); else setTaskView({ eId: e.id, tid: t.id! }) }} title={orderTapMode && orderList ? 'Tócala en el orden que la harás' : 'Ver tarea'} style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id && focus.mitIds.includes(t.id) && <span title="Lo más importante hoy (fijado en Tiempo)" style={{ color: '#C2933A' }}>★ </span>}{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
             <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
@@ -2832,8 +2818,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {t.difficulty && (() => { const ds = difStyle(t.difficulty); return (
               <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
             )})()}
-            {/* Tiempo estimado editable inline (clic en el chip · sin abrir la tarea) vs real invertido. */}
-            {rowEstControl(key, e, i, t, viewDate)}
+            {/* Chip de tiempo (claro y tocable · sin abrir la tarea). */}
+            {rowTimeChip(key, e, i, t, viewDate)}
             {/* Tarea estancada: reprogramada muchas veces o días sin avanzar. */}
             {(() => { const r = stuckReason(t); if (!r) return null; return (
               <span title={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 800, color: '#A15B2E', background: 'rgba(176,110,58,0.12)', border: '1px solid rgba(176,110,58,0.4)', borderRadius: 99, padding: '1px 8px' }}>🐌 estancada</span>
@@ -3376,14 +3362,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: done ? '#fff' : workedDay ? 'rgba(194,147,58,0.10)' : '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : workedDay ? '#C2933A' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
             <button onClick={ev => { ev.stopPropagation(); if (dpFor && fromDay) toggleDayPlanDone(e, i, fromDay); else if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={dpFor ? (dpFor.done ? 'Marcar: no trabajado ese día' : 'Marcar: trabajé este día') : (done ? 'Marcar sin terminar' : 'Marcar terminada')} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : workedDay ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: done ? '#fff' : '#C2933A' }}>{done ? <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg> : workedDay ? <span style={{ fontSize: 9, lineHeight: 1 }}>◐</span> : null}</button>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
-            {/* Número de "con qué empiezo" ESE día (teclear la posición en el carril, sin abrir) */}
-            {laneList && !done && (() => { const op = laneList.findIndex(y => planKey(y.e.id, y.t) === k); return op >= 0 ? <span style={{ flexShrink: 0, display: 'inline-flex' }}>{orderControl(k, op, laneList, undefined, false)}</span> : null })()}
+            {/* Número de orden ese día (sólo lectura; en Ajuste se reordena arrastrando entre días) */}
+            {laneList && !done && (() => { const op = laneList.findIndex(y => planKey(y.e.id, y.t) === k); return op >= 0 ? <span style={{ flexShrink: 0, display: 'inline-flex' }}>{orderNum(k, op, false, false)}</span> : null })()}
             <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
             {(() => { const dfd = difForDay(t, fromDay || t.plan || ''); return dfd ? <span title={`Dificultad ${difStyle(dfd).label}${dayPlanFor(t, fromDay || '')?.difficulty ? ' (ese día)' : ''}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={dfd} size={8} /></span> : null })()}
-            {/* Tiempo estimado: clic → editar inline (popover), sin abrir la tarea */}
-            {(() => { const em = estMinForDay(t, fromDay || t.plan || ''); return (
-              <button onClick={ev => { ev.stopPropagation(); setEstCustomId(null); setEstEditKey(estEditKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title={em > 0 ? `Estimado ~${Math.round(em / 60 * 10) / 10}h · clic para cambiar el tiempo (sin abrir)` : 'Ponle el tiempo que crees que te tomará (sin abrir)'} style={{ flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', border: `1px ${em > 0 ? 'solid rgba(194,147,58,0.4)' : 'dashed rgba(15,35,64,0.22)'}`, background: em > 0 ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', color: em > 0 ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{em > 0 ? `~${Math.round(em / 60 * 10) / 10}h` : '⏳+'}</button>
-            )})()}
+            {/* Chip de tiempo (claro y tocable · sin abrir la tarea) */}
+            {rowTimeChip(k, e, i, t, fromDay || t.plan || '')}
             {nDays > 1 && <span title={`Agendada en ${nDays} días`} style={{ flexShrink: 0, font: '700 8.5px var(--font-ui)', color: '#7A6FB0' }}>🗓{nDays}</span>}
             <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
           </div>
@@ -3393,12 +3377,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {fromDay && <button onClick={ev => { ev.stopPropagation(); setTaskPlan(e, i, ''); setWeekMoveKey(null) }} title="Quitar de la semana (sin día)" style={{ height: 26, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', font: '700 10px var(--font-ui)' }}>Sin día</button>}
             </div>
           )}
-          {estEditKey === k && (() => { const day = fromDay || t.plan || ''; const dp = day ? dayPlanFor(t, day) : undefined; const defMin = WEEK_EST_MIN(difForDay(t, day)); const onSet = (m: number | null) => { if (dp) setDayPlanField(e, i, dp.day, { estMin: m == null ? undefined : m }); else setTaskEstMin(e, i, m); setEstEditKey(null); setEstCustomId(null) }; return (
-            <div onPointerDown={ev => ev.stopPropagation()} onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 22, display: 'flex', alignItems: 'center', gap: 6, padding: 8, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, boxShadow: '0 16px 30px -18px rgba(15,35,64,0.6)' }}>
-              {renderEstControl(k, dp ? dp.estMin : t.estMin, defMin, onSet, true)}
-              <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null); setEstCustomId(null) }} title="Listo" style={{ height: 24, width: 24, borderRadius: 7, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.12)', color: '#2E6E6E', cursor: 'pointer', fontSize: 12 }}>✓</button>
-            </div>
-          ) })()}
         </div>
       )
     }
@@ -5121,8 +5099,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       </div>
                     )}
                     {planItems.length > 0 && renderWorkFilters(viewDate)}
-                    {manual && planFilter === 'todas' && filtered.length > 1 && planSel.size === 0 && (
-                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}>El 01 es por dónde empiezas · <b style={{ color: '#A87A2C' }}>toca el número para teclear con cuál empezar</b> (o arrastra) · toca ⏳ para ponerle el tiempo.</div>
+                    {manual && !table && filtered.length > 1 && planSel.size === 0 && (
+                      orderTapMode ? (
+                        <div className="animate-fade" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: 'rgba(194,147,58,0.12)', border: '1px solid rgba(194,147,58,0.45)', borderRadius: 12, padding: '9px 12px', marginBottom: 8 }}>
+                          <span style={{ font: '800 12px var(--font-ui)', color: '#A87A2C' }}>👆 Toca las tareas en el orden que las harás</span>
+                          <span style={{ font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.6)' }}>{orderSeq.length} numerada{orderSeq.length === 1 ? '' : 's'}</span>
+                          <span style={{ flex: 1 }} />
+                          {orderSeq.length > 0 && <button onClick={() => setOrderSeq([])} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: 'rgba(20,35,61,0.6)' }}>Reiniciar</button>}
+                          <button onClick={cancelTapOrder} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
+                          <button onClick={() => commitTapOrder(list, planPend)} style={{ cursor: 'pointer', borderRadius: 9, padding: '6px 14px', font: '800 12px var(--font-ui)', border: 'none', background: '#10233F', color: '#fff' }}>✓ Listo</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4, fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>
+                          <span>El 01 es por dónde empiezas.</span>
+                          <button onClick={startTapOrder} title="Toca las tareas en el orden que las harás y se numeran solas" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 99, padding: '4px 11px', font: '800 11.5px var(--font-ui)', border: '1px solid rgba(194,147,58,0.5)', background: 'rgba(194,147,58,0.12)', color: '#A87A2C' }}>👆 Ordenar tocando</button>
+                          <span>· o arrástralas · toca <b style={{ color: '#A87A2C' }}>⏱</b> para el tiempo.</span>
+                        </div>
+                      )
                     )}
                     {!table && list.length > 1 && planSel.size === 0 && (
                       <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)', marginBottom: 6 }}>Selecciona varias con la casilla ☐ (izquierda) para editarlas en lote: mover de día, prioridad, dificultad, avance, épica…</div>
@@ -6699,6 +6692,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {rows.length > 0 && <button onClick={toggleAll} title={allSel ? 'Quitar selección' : 'Seleccionar todas'} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, display: 'flex' }}><span style={{ height: 16, width: 16, borderRadius: 4, border: allSel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: allSel ? '#10233F' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{allSel && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span></button>}
             <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>{selCount > 0 ? `${selCount} de ${rows.length}` : `${rows.length} tarea${rows.length === 1 ? '' : 's'}`}</span>
           </div>
+          {/* "Ordenar tocando": numerar las tareas en el orden que las tocas (sin arrastrar) */}
+          {orderable && rows.length > 1 && selCount === 0 && (
+            orderTapMode ? (
+              <div className="animate-fade" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'rgba(194,147,58,0.12)', border: '1px solid rgba(194,147,58,0.45)', borderRadius: 11, padding: '8px 10px', marginBottom: 4 }}>
+                <span style={{ font: '800 11px var(--font-ui)', color: '#A87A2C' }}>👆 Tócalas en orden</span>
+                <span style={{ font: '700 10.5px var(--font-ui)', color: 'rgba(20,35,61,0.6)' }}>{orderSeq.length}</span>
+                <span style={{ flex: 1 }} />
+                {orderSeq.length > 0 && <button onClick={() => setOrderSeq([])} style={{ cursor: 'pointer', borderRadius: 7, padding: '4px 9px', font: '700 10.5px var(--font-ui)', border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: 'rgba(20,35,61,0.6)' }}>Reiniciar</button>}
+                <button onClick={cancelTapOrder} style={{ cursor: 'pointer', borderRadius: 7, padding: '4px 9px', font: '700 10.5px var(--font-ui)', border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
+                <button onClick={() => commitTapOrder(ordRows)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '800 11px var(--font-ui)', border: 'none', background: '#10233F', color: '#fff' }}>✓ Listo</button>
+              </div>
+            ) : (
+              <button onClick={startTapOrder} title="Toca las tareas en el orden que las harás y se numeran solas" style={{ alignSelf: 'flex-start', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 99, padding: '4px 11px', marginBottom: 4, font: '800 11px var(--font-ui)', border: '1px solid rgba(194,147,58,0.5)', background: 'rgba(194,147,58,0.12)', color: '#A87A2C' }}>👆 Ordenar tocando</button>
+            )
+          )}
           {/* Barra flotante de acción: mover las seleccionadas a un día/fecha */}
           {selCount > 0 && (
             <div style={{ position: 'sticky', top: 24, zIndex: 3, background: '#10233F', color: '#fff', borderRadius: 11, padding: '9px 11px', marginBottom: 4, display: 'flex', flexDirection: 'column', gap: 8, boxShadow: '0 12px 26px -14px rgba(15,35,64,0.75)' }}>
@@ -6755,31 +6763,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const sel = mdMultiSel.has(k)
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
             const estDay = mdDay || t.plan || ''
-            const dpMd = orderable && estDay ? dayPlanFor(t, estDay) : undefined
-            const emMd = orderable ? estMinForDay(t, estDay) : 0
             const editingEst = orderable && estEditKey === k
             return (
               <div key={k} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, overflow: editingEst ? 'visible' : 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
-                <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 32, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 30, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <span style={{ height: 18, width: 18, borderRadius: 5, border: sel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: sel ? '#C2933A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{sel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
                 </button>
-                {orderable && !done && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 3 }}>{orderControl(k, pos, ordRows, undefined, false)}</span>}
-                <button onClick={() => setMdSel({ eId: e.id, tid: t.id! })} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '8px 11px 8px 2px' }}>
+                {orderable && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 4 }}>{orderNum(k, pos, orderTapMode && !done, false)}</span>}
+                <button onClick={() => { if (orderable && orderTapMode) orderTapToggle(k); else setMdSel({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '8px 4px 8px 2px' }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
                     <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
                     {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
                     {taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ font: '700 9px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}
-                    {orderable && <span role="button" tabIndex={0} onClick={ev => { ev.stopPropagation(); setEstCustomId(null); setEstEditKey(estEditKey === k ? null : k) }} onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); setEstCustomId(null); setEstEditKey(estEditKey === k ? null : k) } }} title={emMd > 0 ? `Estimado ~${Math.round(emMd / 60 * 10) / 10}h · clic para cambiar el tiempo (sin abrir)` : 'Ponle el tiempo que crees que te tomará (sin abrir)'} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 3, borderRadius: 99, padding: '1px 7px', font: '700 9px var(--font-ui)', border: `1px ${emMd > 0 ? 'solid rgba(194,147,58,0.4)' : 'dashed rgba(15,35,64,0.22)'}`, background: emMd > 0 ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', color: emMd > 0 ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>⏳ {emMd > 0 ? `~${Math.round(emMd / 60 * 10) / 10}h` : '+ tiempo'}</span>}
                   </div>
                 </button>
-                {editingEst && (() => { const defMin = WEEK_EST_MIN(difForDay(t, estDay)); const onSet = (m: number | null) => { if (dpMd) setDayPlanField(e, i, dpMd.day, { estMin: m == null ? undefined : m }); else setTaskEstMin(e, i, m); setEstEditKey(null); setEstCustomId(null) }; return (
-                  <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% - 2px)', left: 8, zIndex: 22, display: 'flex', alignItems: 'center', gap: 6, padding: 8, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, boxShadow: '0 16px 30px -18px rgba(15,35,64,0.6)' }}>
-                    {renderEstControl(k, dpMd ? dpMd.estMin : t.estMin, defMin, onSet, true)}
-                    <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null); setEstCustomId(null) }} title="Listo" style={{ height: 24, width: 24, borderRadius: 7, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.12)', color: '#2E6E6E', cursor: 'pointer', fontSize: 12 }}>✓</button>
-                  </div>
-                ) })()}
+                {orderable && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 8 }}>{rowTimeChip(k, e, i, t, estDay, 'right')}</span>}
               </div>
             )
           })}
@@ -8805,6 +8805,8 @@ const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 45 : d === 'media' ? 120 : 
 const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : WEEK_EST_MIN(t.difficulty)
 // Presets del estimado (minutos) para el dropdown, con etiqueta bonita.
 const EST_PRESETS: [number, string][] = [[15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h'], [90, '1 h 30'], [120, '2 h'], [150, '2 h 30'], [180, '3 h'], [240, '4 h'], [360, '6 h'], [480, '8 h']]
+// Presets compactos (etiquetas cortas) para el chip de tiempo por fila.
+const TIME_PRESETS: [number, string][] = [[15, '15m'], [30, '30m'], [45, '45m'], [60, '1h'], [90, '1h30'], [120, '2h'], [180, '3h'], [240, '4h']]
 // Minutos → etiqueta legible: 90 → "1 h 30", 45 → "45 min", 120 → "2 h".
 const fmtEst = (m: number): string => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h} h ${r}` : h ? `${h} h` : `${r} min` }
 // Minutos → forma compacta editable para el input personalizado: 90 → "1h30", 45 → "45m", 120 → "2h".
