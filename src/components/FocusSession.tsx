@@ -512,6 +512,13 @@ export function useFocusSession(hooks: FocusHooks) {
   const otherMap = new Map<string, number>()
   ;(data.history || []).filter(h => h.date === day0 && h.area === 'trabajo' && !h.taskId).forEach(h => otherMap.set(h.name, (otherMap.get(h.name) || 0) + h.dur))
   const todayOther = [...otherMap.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
+  // Igual que todayOther pero para CUALQUIER día (para el cierre de un día pasado y para /tiempo).
+  const otherOnDay = (dy: string): { name: string; min: number }[] => {
+    const m = new Map<string, number>()
+    ;(data.history || []).filter(h => h.date === dy && h.area === 'trabajo' && !h.taskId).forEach(h => m.set(h.name, (m.get(h.name) || 0) + h.dur))
+    if (session && session.area === 'trabajo' && !session.taskId && startedToday && dy === day0) m.set(session.name, (m.get(session.name) || 0) + Math.max(0, Math.round(elapsed)))
+    return [...m.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
+  }
   // Minutos registrados con un NOMBRE concreto en un día (para el tiempo dedicado a una rutina, que en
   // /tiempo se registra por nombre). Incluye la sesión en curso si coincide nombre y día.
   const minByNameOn = (name: string, day: string): number => {
@@ -521,7 +528,7 @@ export function useFocusSession(hooks: FocusHooks) {
   }
   // Total de minutos registrados con ese nombre (todo el historial) — para el "registro" de una rutina.
   const totalMinByName = (name: string): number => (data.history || []).filter(h => h.name === name).reduce((s, h) => s + h.dur, 0)
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, minByNameOn, totalMinByName }
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, otherOnDay, minByNameOn, totalMinByName }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

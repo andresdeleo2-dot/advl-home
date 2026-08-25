@@ -157,6 +157,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [detShowRoutines, setDetShowRoutines] = useState(false)     // mostrar la tira de rutinas diarias en Detalle
   const [workFilter, setWorkFilter] = useState<'' | 'plan' | 'openworked' | 'unworked'>('')  // filtro por estado de trabajo del día (Día/Detalle): planeadas · trabajadas sin terminar · sin trabajar
   const [dayCloseOpen, setDayCloseOpen] = useState(false)          // modal "Cerrar el día" (retro rápida del día)
+  const [dcPeek, setDcPeek] = useState<{ eId: string; tid: string } | null>(null)  // popup ligero de tarea DENTRO del cierre del día
+  const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
   const [diaryEpica, setDiaryEpica] = useState<string>('todas')    // filtro de épica del diario
@@ -528,6 +530,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Presupuesto semanal por épica (horas/semana). Si la columna week_budget existe (migración
   // corrida), se guarda en Supabase y SINCRONIZA entre dispositivos; si no, cae a localStorage.
   useEffect(() => { try { const raw = localStorage.getItem('advl_epicas_budget'); if (raw) setEpicBudgets(JSON.parse(raw)) } catch { /* noop */ } }, [])
+  // Comentario libre por día (para el Cierre del día). Local por ahora (sin migración).
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayNotes.v1'); if (raw) setDayNotes(JSON.parse(raw)) } catch { /* noop */ } }, [])
+  const setDayNote = (day: string, text: string) => setDayNotes(prev => {
+    const next = { ...prev }; if (text.trim()) next[day] = text; else delete next[day]
+    try { localStorage.setItem('epicas.dayNotes.v1', JSON.stringify(next)) } catch { /* noop */ }
+    return next
+  })
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
   const setEpicBudget = (id: string, hours: number) => {
     const h = hours > 0 ? Math.round(hours) : 0
@@ -1840,6 +1849,42 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const si = st.findIndex(x => x.id === sid); if (si < 0) return
     st[si] = { ...st[si], ...patch }
     patchEpic(fresh.id, { tasks })
+  }
+  // ── "General": épica/tarea catch-all para el trabajo misceláneo del día ─────────
+  // Cuando en /tiempo trabajas SIN una tarea de épica (un bloque "General"), aquí puedes
+  // convertirlo en una tarea real (con subtareas, nota, etc.) dentro de una épica "General".
+  const ensureGeneralTask = async (): Promise<{ eId: string; tid: string } | null> => {
+    const list = epicsRef.current.length ? epicsRef.current : epics
+    const ge = list.find(e => (e.name || '').trim().toLowerCase() === 'general' && !e.archived)
+    if (ge) {
+      const gt = ge.tasks.find(t => (t.t || '').trim().toLowerCase() === 'general') || ge.tasks[0]
+      if (gt?.id) return { eId: ge.id, tid: gt.id }
+      const nt: EpicaTask = { id: uid(), t: 'General', status: 'En curso', due: '', note: '', createdAt: todayISO() }
+      await patchEpic(ge.id, { tasks: [...clone(ge.tasks), nt] })
+      return { eId: ge.id, tid: nt.id! }
+    }
+    const tid = uid()
+    const payload = {
+      name: 'General', color: '#6B7280', description: 'Trabajo general / misceláneo: lo que hiciste fuera de una tarea concreta.',
+      status: 'En curso', categoria: null, archived: false, source_table: null, source_sync: null, epic_order: list.length,
+      kpis: [], routines: [], tasks: [{ id: tid, t: 'General', status: 'En curso', due: '', note: '', createdAt: todayISO() }], links: [],
+    }
+    try {
+      const r = await fetch('/api/epicas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const j = await r.json(); if (!j.ok) throw new Error(j.error)
+      const created = normalize(j.data as Epica)
+      setEpics(l => [...l, created])
+      const ct = created.tasks.find(t => t.id === tid) || created.tasks[0]
+      return ct?.id ? { eId: created.id, tid: ct.id } : null
+    } catch { showToast('No se pudo crear General', true); return null }
+  }
+  // Abre un bloque "General/rutina" del cierre: si el nombre es una rutina, su estadística;
+  // si no, la tarea "General" (creándola la primera vez) para describir qué hiciste.
+  const openOtherBlock = async (name: string) => {
+    const list = epicsRef.current.length ? epicsRef.current : epics
+    const key = (name || '').trim().toLowerCase()
+    for (const e of list) { const ri = e.routines.findIndex(r => (r.t || '').trim().toLowerCase() === key); if (ri >= 0) { setRoutineStat({ eId: e.id, ri }); return } }
+    const g = await ensureGeneralTask(); if (g) setDcPeek(g)
   }
   // ── Bitácora de avance (días en que se avanzó en la tarea) ──
   const addProgressDay = (e: Epica, ti: number, d: string) => {
@@ -8022,7 +8067,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const row = (x: { e: Epica; t: EpicaTask; i: number }, extra?: string) => (
           <div key={planKey(x.e.id, x.t)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 4px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
-            <span onClick={() => { setDayCloseOpen(false); setTaskView({ eId: x.e.id, tid: x.t.id! }) }} title="Abrir actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
+            <span onClick={() => setDcPeek({ eId: x.e.id, tid: x.t.id! })} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
             {extra && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>{extra}</span>}
             {/* Calendario por-tarea: mueve SOLO esta actividad a otro día, sin abrirla */}
             <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 14 }}>
@@ -8034,8 +8079,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           </div>
         )
         return (
+          <>
           <div onClick={() => setDayCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 680, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
               <div style={{ padding: '18px 22px 22px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
@@ -8056,6 +8102,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {stat('◐', open.length, 'sin terminar', '#A87A2C')}
                   {stat('○', untouched.length, 'sin tocar', 'rgba(20,35,61,0.55)')}
                 </div>
+                {/* GENERAL Y RUTINAS: bloques de trabajo de ese día que NO son una tarea de épica
+                    (registrados en /tiempo). Clic → estadística de la rutina, o la tarea "General". */}
+                {(() => { const others = focus.otherOnDay(refDay); if (!others.length) return null; return (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                      <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#5B6B7A' }}>General y rutinas</div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A' }}>⏱ {hmm(others.reduce((s, o) => s + o.min, 0))}</div>
+                    </div>
+                    <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', overflow: 'hidden' }}>
+                      {others.map((o, k) => (
+                        <div key={o.name + k} onClick={() => openOtherBlock(o.name)} title="Ver / describir" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', cursor: 'pointer', background: k % 2 ? 'rgba(15,35,64,0.02)' : '#fff', borderBottom: k < others.length - 1 ? '1px solid rgba(15,35,64,0.05)' : 'none' }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 99, background: '#94A3B8', flexShrink: 0 }} />
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.name}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 800, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(o.min)}</span>
+                          <span style={{ fontSize: 15, color: 'rgba(20,35,61,0.3)', flexShrink: 0 }}>›</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>Clic para describir qué hiciste (subtareas, nota…) o ver la rutina.</div>
+                  </div>
+                ) })()}
                 {open.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 4 }}>Avanzaste pero no cerraste</div>
@@ -8069,6 +8136,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {untouched.length > 8 && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)', padding: '4px 4px 0' }}>+{untouched.length - 8} más</div>}
                   </div>
                 )}
+                {/* COMENTARIO DEL DÍA: una nota libre para cerrar el día (cómo te fue, qué falta…). */}
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 6 }}>✍️ Comentario del día</div>
+                  <textarea value={dayNotes[refDay] || ''} onChange={e => setDayNote(refDay, e.target.value)} placeholder="¿Cómo te fue hoy? Lo importante, qué quedó pendiente, cómo te sentiste…"
+                    style={{ width: '100%', minHeight: 64, resize: 'vertical', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--font-ui)', color: '#16365F', background: '#FBFAF6', outline: 'none' }} />
+                </div>
                 {/* ARRASTRE: pendientes de días anteriores que no cerraste. Reasígnalas de un toque. */}
                 {arrastradas.length > 0 && (
                   <div style={{ marginTop: 18, borderRadius: 12, background: 'rgba(176,82,46,0.05)', border: '1px solid rgba(176,82,46,0.25)', padding: '11px 13px' }}>
@@ -8098,6 +8171,64 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             </div>
           </div>
+          {/* PEEK: popup ligero con la info de la tarea (sin salir del cierre). */}
+          {dcPeek && (() => {
+            const ref = findTask(dcPeek.eId, dcPeek.tid); if (!ref) return null
+            const { e, t, i } = ref
+            const subs = t.subtasks || []
+            const subsDone = subs.filter(s => s.done).length
+            const est = estMinOf({ estMin: t.estMin, difficulty: t.difficulty })
+            const minOf = (arr: EpicaProgressEntry[] | undefined, day?: string) => (arr || []).filter(x => !day || x.d === day).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+            const mins = minOf(t.progressLog, refDay), total = minOf(t.progressLog)
+            return (
+              <div onClick={() => setDcPeek(null)} style={{ position: 'fixed', inset: 0, zIndex: 79, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 20px', overflow: 'auto' }}>
+                <div role="dialog" aria-modal="true" aria-label="Info de la actividad" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 440, background: '#fff', borderRadius: 16, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', maxHeight: 'calc(100dvh - 48px)', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ height: 4, background: e.color }} />
+                  <div style={{ padding: '16px 18px', overflow: 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</div>
+                        <div className="serif" style={{ fontWeight: 600, fontSize: 19, lineHeight: 1.15, color: '#10233F' }}>{t.t}</div>
+                      </div>
+                      <button aria-label="Cerrar" onClick={() => setDcPeek(null)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', fontSize: 15, flexShrink: 0 }}>✕</button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 800, borderRadius: 99, padding: '3px 9px', background: 'rgba(15,35,64,0.06)', color: '#16365F' }}>{t.status}</span>
+                      {est > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: '3px 9px', background: 'rgba(194,147,58,0.14)', color: '#A87A2C' }}>~{Math.round(est / 60 * 10) / 10}h estimado</span>}
+                      {mins > 0 && <span style={{ fontSize: 10.5, fontWeight: 800, borderRadius: 99, padding: '3px 9px', background: 'rgba(62,142,142,0.14)', color: '#2E6E6E' }}>⏱ {hmm(mins)} este día</span>}
+                      {total > mins && <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: '3px 9px', background: 'rgba(15,35,64,0.05)', color: 'rgba(20,35,61,0.6)' }}>{hmm(total)} en total</span>}
+                    </div>
+                    {typeof t.progress === 'number' && t.progress > 0 && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><div style={{ width: `${Math.min(100, t.progress)}%`, height: '100%', background: e.color }} /></div>
+                        <div style={{ marginTop: 3, fontSize: 10.5, color: 'rgba(20,35,61,0.5)', fontWeight: 700 }}>{Math.min(100, t.progress)}%</div>
+                      </div>
+                    )}
+                    {!!(t.resumen && t.resumen.trim()) && <div style={{ marginTop: 12, fontSize: 12.5, color: 'rgba(20,35,61,0.7)', lineHeight: 1.5 }}>{t.resumen}</div>}
+                    <div style={{ marginTop: 14 }}>
+                      <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 6 }}>Subtareas{subs.length ? ` · ${subsDone}/${subs.length}` : ''}</div>
+                      {subs.map((s, si) => (
+                        <label key={s.id || si} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 2px', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={!!s.done} onChange={() => toggleSubtask(e, i, si)} style={{ width: 15, height: 15, accentColor: e.color, cursor: 'pointer' }} />
+                          <span style={{ fontSize: 12.5, color: s.done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }}>{s.t}</span>
+                        </label>
+                      ))}
+                      <input placeholder="+ agregar subtarea…" onKeyDown={ev => { if (ev.key === 'Enter') { const v = ev.currentTarget.value; if (v.trim()) { addSubtask(e, i, v); ev.currentTarget.value = '' } } }}
+                        style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, border: '1px dashed rgba(15,35,64,0.2)', borderRadius: 9, padding: '7px 10px', fontSize: 12.5, color: '#16365F', background: 'transparent', outline: 'none' }} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
+                      <button onClick={() => { setDcPeek(null); setDayCloseOpen(false); setTaskView({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, cursor: 'pointer', border: 'none', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: 'linear-gradient(135deg,#2E5A9E,#16365F)', color: '#fff' }}>Abrir completa</button>
+                      <button onClick={() => { setDcPeek(null); openTaskEdit(e.id, t.id!) }} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: '#fff', color: '#16365F' }}>Editar</button>
+                      <label title="Cambiar el día de esta actividad" style={{ position: 'relative', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 10, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 16, flexShrink: 0 }}>📅
+                        <input type="date" defaultValue={t.plan || refDay} aria-label="Cambiar día" onChange={ev => { const d = ev.target.value; if (d && d !== t.plan) { planTaskToDay(e, i, d, { toast: true }); setDcPeek(null) } }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+          </>
         )
       })()}
       {routineStat && (() => {
