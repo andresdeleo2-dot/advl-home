@@ -2595,8 +2595,17 @@ export default function TiempoClient() {
         const tof = (tid?: string) => (allTasks || []).find(x => x.task.id === tid) || null
         // Marca/desmarca una tarea como Terminada (respeta recurrencia al completar).
         const markTask = (tt: TodayTask | null, done: boolean) => { if (!tt) return; const task = done ? completeTaskFields(tt.task) : { ...tt.task, status: 'En curso', doneAt: undefined }; autoSaveTask(tt.epicaId, task) }
-        // Mueve UNA tarea a otro día (mismo modelo que Épicas: plan + planOrder).
-        const moveTaskToDay = (tt: TodayTask | null, day: string) => { if (!tt || !day) return; autoSaveTask(tt.epicaId, { ...tt.task, plan: day, planOrder: nextPlanOrderFor(day) }) }
+        // Mueve UNA tarea a otro día. Si la tarea aparece hoy por una SESIÓN POR DÍA (dayPlan) de dcDay,
+        // mueve también esa sesión — si no, seguiría saliendo hoy y "no se movería".
+        const moveTaskToDay = (tt: TodayTask | null, day: string) => {
+          if (!tt || !day) return
+          const t = tt.task
+          const hasDP = Array.isArray(t.dayPlans) && t.dayPlans.some(dp => dp.day === dcDay)
+          const task: EpicaTask = hasDP
+            ? { ...t, dayPlans: (t.dayPlans || []).map(dp => dp.day === dcDay ? { ...dp, day } : dp), plan: (t.plan === dcDay || !t.plan) ? day : t.plan, planOrder: nextPlanOrderFor(day) }
+            : { ...t, plan: day, planOrder: nextPlanOrderFor(day) }
+          autoSaveTask(tt.epicaId, task)
+        }
         // Tareas de épica trabajadas ese día (por taskId), con su tiempo; estado real desde allTasks.
         const wmap = new Map<string, number>()
         data.history.filter(h => h.date === dcDay && h.taskId).forEach(h => wmap.set(h.taskId!, (wmap.get(h.taskId!) || 0) + h.dur))

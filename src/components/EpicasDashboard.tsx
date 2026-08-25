@@ -8143,7 +8143,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <span onClick={() => setDcPeek({ eId: x.e.id, tid: x.t.id! })} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
               {mt > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(mt)}</span>}
               <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 13 }}>📅
-                <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) planTaskToDay(x.e, x.i, d, { toast: true }) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+                <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) moveOne(x.e, x.t.id!, d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
               </label>
             </div>
           )
@@ -8159,6 +8159,35 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
         // Fila con casilla de SELECCIÓN (para mover varias a otro día) — usada en "No las tocaste".
         const dcSelRefs = () => [...dcSel].map(k => keyToTask(k)).filter(Boolean) as { e: Epica; t: EpicaTask; i: number }[]
+        // Mueve las SELECCIONADAS a `day`. Resuelve por id (robusto) y mueve TAMBIÉN la sesión por día
+        // (dayPlan) de refDay si existe — si no, la tarea seguiría apareciendo hoy y "no se movería".
+        const moveSel = (day: string) => {
+          const byE = new Map<string, string[]>()
+          ;[...dcSel].forEach(k => { const c = k.lastIndexOf(':'); const eId = k.slice(0, c), tid = k.slice(c + 1); const a = byE.get(eId) || []; a.push(tid); byE.set(eId, a) })
+          let n = 0
+          byE.forEach((tids, eId) => {
+            const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
+            const tasks = clone(fresh.tasks)
+            tids.forEach(tid => {
+              const t = tasks.find(x => x.id === tid); if (!t || t.status === 'Terminada') return
+              if (Array.isArray(t.dayPlans) && t.dayPlans.some(dp => dp.day === refDay)) { t.dayPlans = t.dayPlans.map(dp => dp.day === refDay ? { ...dp, day } : dp); if (t.plan === refDay || !t.plan) t.plan = day }
+              else t.plan = day
+              if (!t.priority) t.priority = prioFromDue(t.due)
+              applyPlanStatus(t, day); n++
+            })
+            patchEpic(eId, { tasks })
+          })
+          setDcSel(new Set()); if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(day).toLowerCase()}`)
+        }
+        // Mueve UNA tarea (por id) a `day` — también la sesión por día de refDay si existe.
+        const moveOne = (e: Epica, tid: string, day: string) => {
+          const fresh = epicsRef.current.find(x => x.id === e.id); if (!fresh) return
+          const tasks = clone(fresh.tasks); const t = tasks.find(x => x.id === tid); if (!t) return
+          if (Array.isArray(t.dayPlans) && t.dayPlans.some(dp => dp.day === refDay)) { t.dayPlans = t.dayPlans.map(dp => dp.day === refDay ? { ...dp, day } : dp); if (t.plan === refDay || !t.plan) t.plan = day }
+          else t.plan = day
+          if (!t.priority) t.priority = prioFromDue(t.due)
+          applyPlanStatus(t, day); patchEpic(e.id, { tasks }); showToast(`Movida a ${relLong(day).toLowerCase()}`)
+        }
         const selRow = (x: { e: Epica; t: EpicaTask; i: number }) => {
           const key = planKey(x.e.id, x.t); const sel = dcSel.has(key)
           return (
@@ -8167,7 +8196,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
               <span onClick={() => setDcPeek({ eId: x.e.id, tid: x.t.id! })} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
               <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 13 }}>📅
-                <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) planTaskToDay(x.e, x.i, d, { toast: true }) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+                <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) moveOne(x.e, x.t.id!, d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
               </label>
             </div>
           )
@@ -8245,7 +8274,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>mover a</span>
                             {Array.from({ length: 5 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
                               const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
-                              return <button key={d} onClick={() => { moveTasksTo(dcSelRefs().map(r => ({ e: r.e, i: r.i })), d); setDcSel(new Set()) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: '1px solid rgba(46,90,158,0.3)', background: '#fff', color: '#2E5A9E' }}>{lbl}</button>
+                              return <button key={d} onClick={() => moveSel(d)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: '1px solid rgba(46,90,158,0.3)', background: '#fff', color: '#2E5A9E' }}>{lbl}</button>
                             })}
                             <button onClick={() => { dcSelRefs().forEach(r => setTaskStatus(r.e, r.i, 'Terminada')); setDcSel(new Set()) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Terminar</button>
                             <button onClick={() => setDcSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>Limpiar</button>
