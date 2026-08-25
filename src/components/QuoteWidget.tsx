@@ -18,11 +18,28 @@ const QUOTES: { text: string; author: string }[] = [
   { text: 'La estrategia sin criterio es ruido; el criterio sin estrategia, indecisión.', author: 'Principio ADVL' },
 ]
 
+const dayKey = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}` }
+
 export default function QuoteWidget() {
   const [i, setI] = useState(0)
-  useEffect(() => { setI(Math.floor(Math.random() * QUOTES.length)) }, [])
+  // La frase es la MISMA todo el día (no cambia al refrescar); solo cambia con "Nueva".
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('quote.day.v1')
+      if (raw) { const o = JSON.parse(raw); if (o.day === dayKey() && typeof o.i === 'number') { setI(((o.i % QUOTES.length) + QUOTES.length) % QUOTES.length); return } }
+    } catch { /* noop */ }
+    const d = new Date()
+    const doy = Math.floor((d.getTime() - new Date(d.getFullYear(), 0, 0).getTime()) / 86400000)
+    const idx = doy % QUOTES.length
+    setI(idx)
+    try { localStorage.setItem('quote.day.v1', JSON.stringify({ day: dayKey(), i: idx })) } catch { /* noop */ }
+  }, [])
   const q = QUOTES[i]
-  const next = () => setI(prev => (prev + 1 + Math.floor(Math.random() * (QUOTES.length - 1))) % QUOTES.length)
+  const next = () => setI(prev => {
+    const ni = (prev + 1 + Math.floor(Math.random() * (QUOTES.length - 1))) % QUOTES.length
+    try { localStorage.setItem('quote.day.v1', JSON.stringify({ day: dayKey(), i: ni })) } catch { /* noop */ }
+    return ni
+  })
 
   return (
     <div className="rounded-2xl glass p-4">

@@ -69,6 +69,12 @@ export default function PanelClient() {
   const [momentos, setMomentos] = useState<{ id: number; titulo: string; fecha: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
   const [weather, setWeather] = useState<{ temp: number; feels: number; humidity: number; label: string; icon: string; hourly: { h: number; temp: number; icon: string; pop: number | null }[]; cities: { name: string; temp: number; icon: string }[] } | null>(null)
+  const [peek, setPeek] = useState<
+    | { kind: 'task'; e: Epica; t: EpicaTask }
+    | { kind: 'cumple'; c: { id: string; nombre: string; dia: number; mes: number; anos: number; exc: boolean; days: number } }
+    | { kind: 'fecha'; f: { id: number; titulo: string; personas: string[]; dia: number; mes: number; anos: number; days: number } }
+    | null
+  >(null)
 
   const today = todayISO()
 
@@ -251,12 +257,12 @@ export default function PanelClient() {
                   <div style={{ padding: '8px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></div>
                 ) : (<>
                   {todayTasks.slice(0, 9).map(({ e, t }, k, arr) => (
-                    <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} title={`Abrir “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
+                    <div key={t.id || k} onClick={() => setPeek({ kind: 'task', e, t })} title={`Ver “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
                       <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                       {t.priority === 'alta' && <span title="Prioridad alta" style={{ font: '800 8.5px var(--font-ui)', letterSpacing: '.05em', color: '#B0522E', background: 'rgba(176,82,46,0.1)', border: '1px solid rgba(176,82,46,0.25)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>ALTA</span>}
                       <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
                       <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{e.name}</span>
-                    </Link>
+                    </div>
                   ))}
                   {todayTasks.length > 9 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', paddingTop: 8 }}>+{todayTasks.length - 9} más</div>}
                 </>)}
@@ -281,11 +287,11 @@ export default function PanelClient() {
             {dueSoon.length > 0 && (
               <Slot id="vence" title="Por vencer" icon="⏳" accent="#B0522E" layout={layout} setSlot={setSlot}>
                 {dueSoon.map(({ e, t, days }, k) => (
-                  <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} title={`Abrir “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
+                  <div key={t.id || k} onClick={() => setPeek({ kind: 'task', e, t })} title={`Ver “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
                     <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
                     <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: days === 0 ? '#B0522E' : days <= 3 ? '#A87A2C' : 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{days === 0 ? 'hoy' : days === 1 ? 'mañana' : `en ${days} d`}</span>
-                  </Link>
+                  </div>
                 ))}
               </Slot>
             )}
@@ -306,30 +312,106 @@ export default function PanelClient() {
           {cumples.length > 0 && (
             <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
               {cumples.map((c, k) => (
-                <a key={k} href={`${PERSONAS}&persona=${c.id}`} target="_blank" rel="noopener noreferrer" title={`Abrir a ${c.nombre} en Mi Vida`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <div key={k} onClick={() => setPeek({ kind: 'cumple', c })} title={`Ver a ${c.nombre}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
-                </a>
+                </div>
               ))}
             </Slot>
           )}
           {fechas.length > 0 && (
             <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
               {fechas.map((f, k) => (
-                <a key={k} href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" title="Abrir este momento en Mi Vida" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <div key={k} onClick={() => setPeek({ kind: 'fecha', f })} title="Ver este momento" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: f.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0, paddingTop: 1 }}>{f.dia} {MES3[f.mes]}</span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}{f.anos > 0 ? <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {f.anos} años</span> : ''}</div>
                     {f.personas.length > 0 && <div style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>con {f.personas.join(', ')}</div>}
                   </span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0, paddingTop: 1 }}>{rel(f.days)}</span>
-                </a>
+                </div>
               ))}
             </Slot>
           )}
         </div>
       </main>
+
+      {/* POPUP de info: primero muestra el detalle, con un botón para ir directo a la sección. */}
+      {peek && (() => {
+        const close = () => setPeek(null)
+        const ctaStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', boxSizing: 'border-box', cursor: 'pointer', border: 'none', borderRadius: 11, padding: '12px 16px', font: '800 13px var(--font-ui, system-ui)', textDecoration: 'none' }
+        const shell = (accent: string, dark: boolean, children: ReactNode) => (
+          <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+            <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={{ ...baseCard, width: '100%', maxWidth: 480, background: dark ? 'linear-gradient(158deg,#16305a,#0f2242 62%,#0b1a35)' : '#fff', boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)' }}>
+              <div style={{ height: 4, background: accent }} />
+              <div style={{ padding: '18px 20px 20px' }}>{children}</div>
+            </div>
+          </div>
+        )
+        const closeBtn = (dark: boolean) => <button aria-label="Cerrar" onClick={close} style={{ cursor: 'pointer', border: 'none', background: dark ? 'rgba(255,255,255,0.12)' : 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: dark ? 'rgba(255,255,255,0.7)' : 'rgba(20,35,61,0.55)', fontSize: 15, flexShrink: 0 }}>✕</button>
+
+        if (peek.kind === 'task') {
+          const { e, t } = peek
+          const subs = t.subtasks || []; const done = subs.filter(s => s.done).length
+          const noteText = (t.note || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
+          const pm = t.priority === 'alta' ? { l: 'Prioridad alta', c: '#B0522E' } : t.priority === 'baja' ? { l: 'Prioridad baja', c: '#2E5A9E' } : { l: 'Prioridad media', c: '#A87A2C' }
+          const chip = (txt: string, c: string) => <span style={{ fontSize: 10.5, fontWeight: 800, borderRadius: 99, padding: '3px 10px', background: `${c}18`, color: c }}>{txt}</span>
+          return shell(e.color, false, <>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'rgba(20,35,61,0.55)', marginBottom: 5 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</div>
+                <div className="serif" style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.2, color: '#10233F' }}>{t.t}</div>
+              </div>
+              {closeBtn(false)}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+              {chip(t.status || 'Por hacer', '#16365F')}
+              {chip(pm.l, pm.c)}
+              {t.due && chip(`vence ${Number(t.due.slice(8))} ${MES3[Number(t.due.slice(5, 7)) - 1]}`, '#B0522E')}
+              {typeof t.estMin === 'number' && t.estMin > 0 && chip(`~${Math.round(t.estMin / 60 * 10) / 10}h`, '#2E6E6E')}
+            </div>
+            {typeof t.progress === 'number' && t.progress > 0 && (
+              <div style={{ marginTop: 12 }}><div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><div style={{ width: `${Math.min(100, t.progress)}%`, height: '100%', background: e.color }} /></div><div style={{ marginTop: 3, fontSize: 10.5, color: 'rgba(20,35,61,0.5)', fontWeight: 700 }}>{Math.min(100, t.progress)}%</div></div>
+            )}
+            {!!(t.resumen && t.resumen.trim()) && <div style={{ marginTop: 12, fontSize: 12.5, color: 'rgba(20,35,61,0.7)', lineHeight: 1.5 }}>{t.resumen}</div>}
+            {noteText && <div style={{ marginTop: 10, fontSize: 12, color: 'rgba(20,35,61,0.55)', lineHeight: 1.5, maxHeight: 96, overflow: 'hidden' }}>{noteText}</div>}
+            {subs.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 6 }}>Subtareas · {done}/{subs.length}</div>
+                {subs.map((s, si) => <div key={s.id || si} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}><span style={{ color: s.done ? '#2E6E6E' : 'rgba(20,35,61,0.3)', fontSize: 13 }}>{s.done ? '✓' : '○'}</span><span style={{ fontSize: 12.5, color: s.done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: s.done ? 'line-through' : 'none' }}>{s.t}</span></div>)}
+              </div>
+            )}
+            <div style={{ marginTop: 16 }}><Link href={`/epicas?e=${e.id}&t=${t.id}`} onClick={close} style={{ ...ctaStyle, background: 'linear-gradient(135deg,#2E5A9E,#16365F)', color: '#fff' }}>Abrir en Épicas →</Link></div>
+          </>)
+        }
+
+        if (peek.kind === 'cumple') {
+          const { c } = peek
+          return shell('#E7C56B', true, <>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div><div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>🎂 Cumpleaños</div><div className="serif" style={{ fontSize: 22, color: '#F3EFE6' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}</div></div>
+              {closeBtn(true)}
+            </div>
+            <div style={{ marginTop: 12, fontSize: 13.5, color: 'rgba(243,239,230,0.85)' }}>{c.dia} de {['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][c.mes]} · cumple <b style={{ color: '#F3EFE6' }}>{c.anos}</b></div>
+            <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{c.days === 0 ? '¡Es hoy! 🎉' : `Faltan ${c.days} días`}{c.exc ? ' · Persona excepcional' : ''}</div>
+            <div style={{ marginTop: 16 }}><a href={`${PERSONAS}&persona=${c.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Ver a {c.nombre} en Mi Vida →</a></div>
+          </>)
+        }
+
+        const { f } = peek
+        return shell('#C2933A', true, <>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ minWidth: 0 }}><div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>✦ Fecha a recordar</div><div className="serif" style={{ fontSize: 21, color: '#F3EFE6', lineHeight: 1.2 }}>{f.titulo}</div></div>
+            {closeBtn(true)}
+          </div>
+          <div style={{ marginTop: 12, fontSize: 13.5, color: 'rgba(243,239,230,0.85)' }}>{f.dia} de {['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][f.mes]}{f.anos > 0 ? ` · ${f.anos} años` : ''}</div>
+          {f.personas.length > 0 && <div style={{ marginTop: 4, fontSize: 12.5, color: 'rgba(243,239,230,0.55)' }}>con {f.personas.join(', ')}</div>}
+          <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{f.days === 0 ? '¡Es hoy! 🎉' : `Faltan ${f.days} días`}</div>
+          <div style={{ marginTop: 16 }}><a href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Abrir en Mi Vida →</a></div>
+        </>)
+      })()}
+
       <style>{`@media (max-width: 720px){ .panel-info, .panel-2col{ grid-template-columns: 1fr !important; } .enfoque-split{ grid-template-columns: 1fr !important; } .enfoque-div{ display: none !important; } }`}</style>
     </div>
   )
