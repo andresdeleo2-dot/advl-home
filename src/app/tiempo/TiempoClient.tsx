@@ -100,6 +100,7 @@ export default function TiempoClient() {
   const [view, setView] = useState<'plan' | 'hoy' | 'semana' | 'rutina' | 'historial'>('plan')   // abre en Planificador por defecto
   const [hoyPanel, setHoyPanel] = useState<'both' | 'resumen' | 'tareas'>('both')   // vista Hoy: ambos paneles, o uno maximizado
   const [dayCloseT, setDayCloseT] = useState(false)                    // modal "Cerrar el día" (retro del día, igual que en Épicas)
+  const [dcShowAllT, setDcShowAllT] = useState(false)                  // "ver todas" las tareas sin tocar en el cierre
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1863,6 +1864,7 @@ export default function TiempoClient() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <button onClick={refreshTasks} title="Actualizar tareas de Épicas (mantiene día y filtros)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', transition: 'transform .6s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>↻</span>{refreshing ? 'Actualizando…' : 'Actualizar'}</button>
             <button onClick={requestNotif} title={notifOn ? 'Avisos del navegador activados' : 'Activar avisos del navegador (agendados, recordatorios y fin de bloque)'} style={{ border: '1px solid ' + (notifOn ? '#cfe0c4' : '#e2d9cb'), background: notifOn ? '#eef1e7' : '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: notifOn ? '#4f6238' : '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{notifOn ? '🔔 Avisos on' : '🔔 Activar avisos'}</button>
+            <button onClick={() => setDayCloseT(true)} title="Cerrar el día: retro, general/rutinas, % por actividad y comentario" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '7px 13px', fontSize: 13, fontWeight: 600, color: '#8a4b28', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>✓ Cerrar el día</button>
             <span className="t-clock" style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
             <div className="t-tabs" style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
@@ -1925,7 +1927,6 @@ export default function TiempoClient() {
            ) : (<section className="hoy-panel" style={{ flex: 1 }}>
              <div className="hoy-panel-head">
                <span style={{ fontFamily: SERIF, fontSize: 20, color: '#1c1a17', flex: 1 }}>Resumen del día</span>
-               <button onClick={() => setDayCloseT(true)} title="Cerrar el día: retro, general/rutinas y comentario" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, fontWeight: 600, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>Cerrar el día ✓</button>
                {hoyPanel === 'resumen'
                  ? <button onClick={() => setHoyPanel('both')} title="Ver ambos paneles" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '5px 12px', fontSize: 12.5, color: '#6b645b', cursor: 'pointer' }}>⤢ ver ambos</button>
                  : <>
@@ -2576,41 +2577,64 @@ export default function TiempoClient() {
       {dayCloseT && (() => {
         const dcDay = taskDay
         const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
-        // Tareas de épica trabajadas ese día (por taskId), con su tiempo y si quedaron hechas.
-        const wmap = new Map<string, { name: string; min: number; done: boolean }>()
-        data.history.filter(h => h.date === dcDay && h.taskId).forEach(h => { const c = wmap.get(h.taskId!) || { name: h.name, min: 0, done: false }; c.min += h.dur; c.done = c.done || h.done === true; wmap.set(h.taskId!, c) })
-        const workedTasks = [...wmap.entries()].map(([taskId, v]) => ({ taskId, ...v })).sort((a, b) => b.min - a.min)
+        const di = dayIdxMon(dcDay)
+        const tof = (tid?: string) => (allTasks || []).find(x => x.task.id === tid) || null
+        // Marca/desmarca una tarea como Terminada (respeta recurrencia al completar).
+        const markTask = (tt: TodayTask | null, done: boolean) => { if (!tt) return; const task = done ? completeTaskFields(tt.task) : { ...tt.task, status: 'En curso', doneAt: undefined }; autoSaveTask(tt.epicaId, task) }
+        // Tareas de épica trabajadas ese día (por taskId), con su tiempo; estado real desde allTasks.
+        const wmap = new Map<string, number>()
+        data.history.filter(h => h.date === dcDay && h.taskId).forEach(h => wmap.set(h.taskId!, (wmap.get(h.taskId!) || 0) + h.dur))
+        const workedTasks = [...wmap.entries()].map(([taskId, min]) => { const tt = tof(taskId); return { taskId, min, tt, name: tt?.task.t || (data.history.find(h => h.taskId === taskId)?.name || 'Tarea'), done: tt ? tt.task.status === 'Terminada' : false } }).sort((a, b) => b.min - a.min)
         const workedSet = new Set(workedTasks.map(w => w.taskId))
         const doneTasks = workedTasks.filter(w => w.done)
         const openTasks = workedTasks.filter(w => !w.done)
-        // General + rutinas (bloques de trabajo sin taskId), por nombre.
+        // Rutinas del día (estado ESE día) + su tiempo por nombre.
+        const minName = (name: string) => data.history.filter(h => h.date === dcDay && h.name === name).reduce((s, h) => s + h.dur, 0)
+        const routines = weekRoutines.list.map(r => ({ ...r, doneDay: !!r.week[di], min: minName(r.name) }))
+        const shownRoutines = isTodayView ? routines : routines.filter(r => r.doneDay || r.min > 0)
+        const routineNames = new Set(routines.map(r => (r.name || '').trim().toLowerCase()))
+        // General (bloques sin taskId que NO son una rutina), por nombre.
         const omap = new Map<string, number>()
         data.history.filter(h => h.date === dcDay && h.area === 'trabajo' && !h.taskId).forEach(h => omap.set(h.name, (omap.get(h.name) || 0) + h.dur))
-        const others = [...omap.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
-        const othersMin = others.reduce((s, o) => s + o.min, 0)
+        const generalRows = [...omap.entries()].map(([name, min]) => ({ name, min })).filter(o => !routineNames.has(o.name.trim().toLowerCase())).sort((a, b) => b.min - a.min)
+        const othersMin = generalRows.reduce((s, o) => s + o.min, 0) + routines.reduce((s, r) => s + r.min, 0)
         // Planeadas ese día que NO se tocaron.
         const planned = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, dcDay) || recurringDueToday(t.task, dcDay)) && !dayPlanDoneT(t.task, dcDay) && !workedSet.has(t.task.id!))
+        // % del tiempo por actividad (todo el trabajo del día, por nombre, color de la tarea si aplica).
+        const bmap = new Map<string, { min: number; color: string }>()
+        data.history.filter(h => h.date === dcDay && h.area === 'trabajo').forEach(h => { const cur = bmap.get(h.name) || { min: 0, color: h.taskId ? (tof(h.taskId)?.color || '#8a4b28') : '#94A3B8' }; cur.min += h.dur; bmap.set(h.name, cur) })
+        const breakdown = [...bmap.entries()].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.min - a.min)
+        const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
         const openByName = (name: string) => { const tt = (allTasks || []).find(x => (x.task.t || '').trim().toLowerCase() === name.trim().toLowerCase()); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
         const lbl: CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 6 }
+        const secLbl = (txt: string, extra?: ReactNode) => (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}><span style={lbl}>{txt}</span>{extra}</div>)
         const stat = (n: number, label: string, c: string) => (
           <div style={{ flex: 1, background: '#fff', border: '1px solid #ece4d6', borderRadius: 14, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3 }}>
             <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: .9, color: c }}>{n}</span>
             <span style={{ fontSize: 11, fontWeight: 600, color: '#8b8379' }}>{label}</span>
           </div>
         )
-        const row = (key: string, name: string, min: number, done: boolean, onClick: (() => void) | null, dot: string, extra?: string) => (
-          <div key={key} onClick={onClick || undefined} title={onClick ? 'Ver la actividad' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', cursor: onClick ? 'pointer' : 'default', borderBottom: '1px solid #f0e9dc' }}>
+        const row = (key: string, name: string, min: number, onClick: (() => void) | null, dot: string) => (
+          <div key={key} onClick={onClick || undefined} title={onClick ? 'Ver / describir' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', cursor: onClick ? 'pointer' : 'default', borderBottom: '1px solid #f0e9dc' }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flexShrink: 0 }} />
-            <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: done ? '#a49b90' : '#1c1a17', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-            {extra && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#8a4b28', flexShrink: 0 }}>{extra}</span>}
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
             {min > 0 && <span style={{ fontSize: 10.5, fontWeight: 800, color: '#3E6E6E', flexShrink: 0 }}>⏱ {hmm(min)}</span>}
             {onClick && <span style={{ fontSize: 15, color: '#c9bfae', flexShrink: 0 }}>›</span>}
+          </div>
+        )
+        // Fila con checkbox (marcar/desmarcar hecha) + nombre (→ abre detalle) + tiempo.
+        const cbTask = (key: string, name: string, min: number, checked: boolean, onToggle: () => void, onOpen: () => void, dot: string) => (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderBottom: '1px solid #f0e9dc' }}>
+            <input type="checkbox" checked={checked} onChange={onToggle} title={checked ? 'Desmarcar' : 'Marcar hecha'} style={{ width: 16, height: 16, accentColor: dot, cursor: 'pointer', flexShrink: 0 }} />
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, flexShrink: 0 }} />
+            <span onClick={onOpen} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: checked ? '#a49b90' : '#1c1a17', textDecoration: checked ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{name}</span>
+            {min > 0 && <span style={{ fontSize: 10.5, fontWeight: 800, color: '#3E6E6E', flexShrink: 0 }}>⏱ {hmm(min)}</span>}
           </div>
         )
         const listBox = (children: ReactNode) => <div style={{ border: '1px solid #ece4d6', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>{children}</div>
         return (
           <div onClick={() => setDayCloseT(false)} style={{ position: 'fixed', inset: 0, zIndex: 88, background: 'rgba(28,26,23,.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto', fontFamily: 'var(--tiempo-ui), system-ui, sans-serif' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 680, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 920, background: '#faf7f1', borderRadius: 20, boxShadow: '0 40px 80px -30px rgba(0,0,0,.6)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#8a4b28,#c2933a)' }} />
               <div style={{ padding: '20px 24px 24px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
@@ -2626,28 +2650,56 @@ export default function TiempoClient() {
                   {stat(openTasks.length, 'en curso', '#8a4b28')}
                   {stat(planned.length, 'sin tocar', '#a49b90')}
                 </div>
-                {others.length > 0 && (
-                  <div style={{ marginTop: 18 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><div style={lbl}>General y rutinas</div><div style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A', marginBottom: 6 }}>⏱ {hmm(othersMin)}</div></div>
-                    {listBox(others.map((o, k) => row('o' + k, o.name, o.min, false, (allTasks || []).some(x => (x.task.t || '').trim().toLowerCase() === o.name.trim().toLowerCase()) ? () => openByName(o.name) : null, '#94A3B8')))}
-                    <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Es el trabajo fuera de una tarea. Crea/abre la tarea “General” en Épicas para describirlo con subtareas.</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginTop: 18, alignItems: 'flex-start' }}>
+                  <div style={{ flex: '1 1 360px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {shownRoutines.length > 0 && (
+                      <div>
+                        {secLbl('Rutinas del día', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#3E6E6E' }}>{shownRoutines.filter(r => r.doneDay).length}/{shownRoutines.length} hechas</span>)}
+                        {listBox(shownRoutines.map(r => cbTask('r' + r.epicaId + r.rIdx, r.name, r.min, r.doneDay, () => toggleRoutineDay(r.epicaId, r.rIdx, weekRoutines.monday, di), () => openByName(r.name), r.color)))}
+                        <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Marca o desmarca lo que hiciste hoy.</div>
+                      </div>
+                    )}
+                    {generalRows.length > 0 && (
+                      <div>
+                        {secLbl('General', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A' }}>⏱ {hmm(generalRows.reduce((s, o) => s + o.min, 0))}</span>)}
+                        {listBox(generalRows.map((o, k) => row('g' + k, o.name, o.min, (allTasks || []).some(x => (x.task.t || '').trim().toLowerCase() === o.name.trim().toLowerCase()) ? () => openByName(o.name) : null, '#94A3B8')))}
+                        <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Trabajo fuera de una tarea. Crea/abre la tarea “General” en Épicas para describirlo.</div>
+                      </div>
+                    )}
+                    {doneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(doneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a')))}</div>)}
+                    {openTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(openTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a')))}</div>)}
+                    {planned.length > 0 && (
+                      <div>
+                        {secLbl(isTodayView ? '○ No las tocaste hoy' : '○ Sin tocar', planned.length > 8 ? <button onClick={() => setDcShowAllT(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>{dcShowAllT ? 'ver menos ▴' : `ver todas (${planned.length}) ▾`}</button> : undefined)}
+                        {listBox((dcShowAllT ? planned : planned.slice(0, 8)).map(t => cbTask(t.task.id!, t.task.t, 0, false, () => markTask(t, true), () => openTaskById(t.task.id), t.color)))}
+                      </div>
+                    )}
+                    {workedTasks.length === 0 && generalRows.length === 0 && planned.length === 0 && shownRoutines.length === 0 && <div style={{ fontSize: 13, color: '#a49b90', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
                   </div>
-                )}
-                {doneTasks.length > 0 && (
-                  <div style={{ marginTop: 18 }}><div style={lbl}>✓ Terminadas hoy</div>{listBox(doneTasks.map(w => row(w.taskId, w.name, w.min, true, () => openTaskById(w.taskId), '#6f8f5a')))}</div>
-                )}
-                {openTasks.length > 0 && (
-                  <div style={{ marginTop: 18 }}><div style={lbl}>◐ Avanzaste pero no cerraste</div>{listBox(openTasks.map(w => row(w.taskId, w.name, w.min, false, () => openTaskById(w.taskId), '#c2933a')))}</div>
-                )}
-                {planned.length > 0 && (
-                  <div style={{ marginTop: 18 }}><div style={lbl}>○ Planeadas sin tocar</div>{listBox(planned.slice(0, 10).map(t => row(t.task.id!, t.task.t, 0, false, () => openTaskById(t.task.id), t.color)))}{planned.length > 10 && <div style={{ fontSize: 11, color: '#a49b90', padding: '5px 4px 0' }}>+{planned.length - 10} más</div>}</div>
-                )}
-                <div style={{ marginTop: 20 }}>
-                  <div style={lbl}>✍️ Comentario del día</div>
-                  <textarea value={dayNotesT[dcDay] || ''} onChange={e => setDayNoteT(dcDay, e.target.value)} placeholder="¿Cómo te fue? Lo importante, qué quedó pendiente, cómo te sentiste…"
-                    style={{ width: '100%', minHeight: 66, resize: 'vertical', boxSizing: 'border-box', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--tiempo-ui, system-ui, sans-serif)', color: '#1c1a17', background: '#fff', outline: 'none' }} />
+                  <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div>
+                      {secLbl('⏱ Tu día en tiempo', bdTotal > 0 ? <span style={{ fontSize: 10.5, fontWeight: 700, color: '#8b8379' }}>{hmm(bdTotal)}</span> : undefined)}
+                      {breakdown.length > 0 ? (
+                        <div style={{ borderRadius: 12, border: '1px solid #ece4d6', padding: '12px 13px', background: '#fff' }}>
+                          {breakdown.map((b, k) => { const pct = bdTotal > 0 ? Math.round(b.min / bdTotal * 100) : 0; return (
+                            <div key={b.name + k} style={{ marginBottom: k < breakdown.length - 1 ? 9 : 0 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, marginBottom: 3 }}>
+                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#1c1a17' }}>{b.name}</span>
+                                <span style={{ flexShrink: 0, fontWeight: 700, color: '#8b8379' }}>{pct}% · {hmm(b.min)}</span>
+                              </div>
+                              <div style={{ height: 7, borderRadius: 99, background: '#f0e9dc', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: b.color }} /></div>
+                            </div>
+                          )})}
+                        </div>
+                      ) : <div style={{ fontSize: 12, color: '#a49b90', padding: '8px 2px' }}>Aún no hay tiempo registrado este día.</div>}
+                    </div>
+                    <div>
+                      {secLbl('✍️ Comentario del día')}
+                      <textarea value={dayNotesT[dcDay] || ''} onChange={e => setDayNoteT(dcDay, e.target.value)} placeholder="¿Cómo te fue? Lo importante, qué quedó pendiente, cómo te sentiste…"
+                        style={{ width: '100%', minHeight: 120, resize: 'vertical', boxSizing: 'border-box', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--tiempo-ui, system-ui, sans-serif)', color: '#1c1a17', background: '#fff', outline: 'none' }} />
+                    </div>
+                  </div>
                 </div>
-                {workedTasks.length === 0 && others.length === 0 && planned.length === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#3E6E6E', fontWeight: 600 }}>Sin registro este día ✦</div>}
               </div>
             </div>
           </div>

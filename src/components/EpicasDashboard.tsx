@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
@@ -158,6 +158,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [workFilter, setWorkFilter] = useState<'' | 'plan' | 'openworked' | 'unworked'>('')  // filtro por estado de trabajo del día (Día/Detalle): planeadas · trabajadas sin terminar · sin trabajar
   const [dayCloseOpen, setDayCloseOpen] = useState(false)          // modal "Cerrar el día" (retro rápida del día)
   const [dcPeek, setDcPeek] = useState<{ eId: string; tid: string } | null>(null)  // popup ligero de tarea DENTRO del cierre del día
+  const [dcShowAll, setDcShowAll] = useState(false)                // "ver todas" las tareas sin tocar en el cierre
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
@@ -8064,24 +8065,56 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>{label}</span>
           </div>
         )
-        const row = (x: { e: Epica; t: EpicaTask; i: number }, extra?: string) => (
-          <div key={planKey(x.e.id, x.t)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 4px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+        // Rutinas diarias (de todas las épicas) con su estado ESE día + tiempo dedicado (por nombre).
+        const refMon = mondayISO(refDay)
+        const refDi = (new Date(refDay + 'T00:00:00').getDay() + 6) % 7
+        const routineRows: { e: Epica; ri: number; r: EpicaRoutine; done: boolean; min: number }[] = []
+        for (const e of epics) (e.routines || []).forEach((r, ri) => { if ((r.t || '').trim()) routineRows.push({ e, ri, r, done: !!(r.weeks?.[refMon]?.[refDi]), min: focus.minByNameOn(r.t, refDay) }) })
+        const shownRoutines = refIsToday ? routineRows : routineRows.filter(r => r.done || r.min > 0)
+        const others = focus.otherOnDay(refDay)                 // general/rutinas por nombre (tiempo de /tiempo)
+        const routineNames = new Set(routineRows.map(r => (r.r.t || '').trim().toLowerCase()))
+        const generalRows = others.filter(o => !routineNames.has((o.name || '').trim().toLowerCase()))
+        // % del tiempo por actividad (introspección): tareas (minToday) + general/rutinas (others).
+        const breakdown = [
+          ...planItems.filter(x => minToday(x.t) > 0).map(x => ({ name: x.t.t, min: minToday(x.t), color: x.e.color })),
+          ...others.map(o => ({ name: o.name, min: o.min, color: '#94A3B8' })),
+        ].sort((a, b) => b.min - a.min)
+        const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
+        const secLbl = (txt: string, extra?: ReactNode) => (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+            <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{txt}</span>
+            {extra}
+          </div>
+        )
+        const box = (children: ReactNode) => <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', overflow: 'hidden' }}>{children}</div>
+        // Fila de tarea con checkbox = Terminada (marcar/desmarcar), nombre (→ peek) y 📅 mover.
+        const taskRow = (x: { e: Epica; t: EpicaTask; i: number }) => {
+          const done = x.t.status === 'Terminada'; const mt = minToday(x.t)
+          return (
+            <div key={planKey(x.e.id, x.t)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+              <input type="checkbox" checked={done} onChange={() => setTaskStatus(x.e, x.i, done ? (x.t.planPrev || 'En curso') : 'Terminada')} title={done ? 'Reabrir' : 'Marcar terminada'} style={{ width: 16, height: 16, accentColor: x.e.color, cursor: 'pointer', flexShrink: 0 }} />
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
+              <span onClick={() => setDcPeek({ eId: x.e.id, tid: x.t.id! })} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
+              {mt > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(mt)}</span>}
+              <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 13 }}>📅
+                <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) planTaskToDay(x.e, x.i, d, { toast: true }) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+              </label>
+            </div>
+          )
+        }
+        // Fila de rutina con checkbox = hecha ESE día (marcar/desmarcar).
+        const routineRow = (x: { e: Epica; ri: number; r: EpicaRoutine; done: boolean; min: number }) => (
+          <div key={'r' + x.e.id + x.ri} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+            <input type="checkbox" checked={x.done} onChange={() => toggleRoutineWeekDay(x.e, x.ri, refMon, refDi)} title={x.done ? 'Desmarcar' : 'Marcar hecha'} style={{ width: 16, height: 16, accentColor: x.e.color, cursor: 'pointer', flexShrink: 0 }} />
             <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
-            <span onClick={() => setDcPeek({ eId: x.e.id, tid: x.t.id! })} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
-            {extra && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>{extra}</span>}
-            {/* Calendario por-tarea: mueve SOLO esta actividad a otro día, sin abrirla */}
-            <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 14 }}>
-              📅
-              <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día de la actividad"
-                onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) planTaskToDay(x.e, x.i, d, { toast: true }) }}
-                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
-            </label>
+            <span onClick={() => setRoutineStat({ eId: x.e.id, ri: x.ri })} title="Ver la rutina" style={{ flex: 1, minWidth: 0, fontSize: 13, color: x.done ? 'rgba(20,35,61,0.5)' : '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.r.t}</span>
+            {x.min > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(x.min)}</span>}
           </div>
         )
         return (
           <>
           <div onClick={() => setDayCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 680, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cierre del día" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 920, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
               <div style={{ padding: '18px 22px 22px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
@@ -8102,45 +8135,63 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {stat('◐', open.length, 'sin terminar', '#A87A2C')}
                   {stat('○', untouched.length, 'sin tocar', 'rgba(20,35,61,0.55)')}
                 </div>
-                {/* GENERAL Y RUTINAS: bloques de trabajo de ese día que NO son una tarea de épica
-                    (registrados en /tiempo). Clic → estadística de la rutina, o la tarea "General". */}
-                {(() => { const others = focus.otherOnDay(refDay); if (!others.length) return null; return (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                      <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#5B6B7A' }}>General y rutinas</div>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A' }}>⏱ {hmm(others.reduce((s, o) => s + o.min, 0))}</div>
-                    </div>
-                    <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', overflow: 'hidden' }}>
-                      {others.map((o, k) => (
-                        <div key={o.name + k} onClick={() => openOtherBlock(o.name)} title="Ver / describir" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', cursor: 'pointer', background: k % 2 ? 'rgba(15,35,64,0.02)' : '#fff', borderBottom: k < others.length - 1 ? '1px solid rgba(15,35,64,0.05)' : 'none' }}>
-                          <span style={{ width: 7, height: 7, borderRadius: 99, background: '#94A3B8', flexShrink: 0 }} />
-                          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.name}</span>
-                          <span style={{ fontSize: 10.5, fontWeight: 800, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(o.min)}</span>
-                          <span style={{ fontSize: 15, color: 'rgba(20,35,61,0.3)', flexShrink: 0 }}>›</span>
+                {/* Cuerpo en 2 columnas: IZQ listas con checkbox (marcar/desmarcar) · DER introspección (% por actividad) + comentario. */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginTop: 18, alignItems: 'flex-start' }}>
+                  <div style={{ flex: '1 1 360px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {shownRoutines.length > 0 && (
+                      <div>
+                        {secLbl('Rutinas del día', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{shownRoutines.filter(r => r.done).length}/{shownRoutines.length} hechas</span>)}
+                        {box(shownRoutines.map(routineRow))}
+                        <div style={{ marginTop: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>Marca o desmarca lo que hiciste hoy.</div>
+                      </div>
+                    )}
+                    {generalRows.length > 0 && (
+                      <div>
+                        {secLbl('General', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#5B6B7A' }}>⏱ {hmm(generalRows.reduce((s, o) => s + o.min, 0))}</span>)}
+                        {box(generalRows.map((o, k) => (
+                          <div key={o.name + k} onClick={() => openOtherBlock(o.name)} title="Describir qué hiciste" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', cursor: 'pointer', borderBottom: k < generalRows.length - 1 ? '1px solid rgba(15,35,64,0.05)' : 'none' }}>
+                            <span style={{ width: 7, height: 7, borderRadius: 99, background: '#94A3B8', flexShrink: 0 }} />
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.name}</span>
+                            <span style={{ fontSize: 10.5, fontWeight: 800, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(o.min)}</span>
+                            <span style={{ fontSize: 15, color: 'rgba(20,35,61,0.3)', flexShrink: 0 }}>›</span>
+                          </div>
+                        )))}
+                        <div style={{ marginTop: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>Clic para describir con subtareas/nota (tarea “General”).</div>
+                      </div>
+                    )}
+                    {planDone.length > 0 && (<div>{secLbl('✓ Terminadas')}{box(planDone.map(taskRow))}</div>)}
+                    {open.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{box(open.map(taskRow))}</div>)}
+                    {untouched.length > 0 && (
+                      <div>
+                        {secLbl(refIsToday ? '○ No las tocaste hoy' : '○ Sin tocar', untouched.length > 8 ? <button onClick={() => setDcShowAll(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>{dcShowAll ? 'ver menos ▴' : `ver todas (${untouched.length}) ▾`}</button> : undefined)}
+                        {box((dcShowAll ? untouched : untouched.slice(0, 8)).map(taskRow))}
+                      </div>
+                    )}
+                    {planDone.length === 0 && open.length === 0 && untouched.length === 0 && shownRoutines.length === 0 && generalRows.length === 0 && <div style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
+                  </div>
+                  <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div>
+                      {secLbl('⏱ Tu día en tiempo', bdTotal > 0 ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{hmm(bdTotal)}</span> : undefined)}
+                      {breakdown.length > 0 ? (
+                        <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 13px', background: '#FBFAF6' }}>
+                          {breakdown.map((b, k) => { const pct = bdTotal > 0 ? Math.round(b.min / bdTotal * 100) : 0; return (
+                            <div key={b.name + k} style={{ marginBottom: k < breakdown.length - 1 ? 9 : 0 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, marginBottom: 3 }}>
+                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#16365F' }}>{b.name}</span>
+                                <span style={{ flexShrink: 0, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{pct}% · {hmm(b.min)}</span>
+                              </div>
+                              <div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: b.color }} /></div>
+                            </div>
+                          )})}
                         </div>
-                      ))}
+                      ) : <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)', padding: '8px 2px' }}>Aún no hay tiempo registrado este día. Regístralo en /tiempo para ver el desglose.</div>}
                     </div>
-                    <div style={{ marginTop: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>Clic para describir qué hiciste (subtareas, nota…) o ver la rutina.</div>
+                    <div>
+                      {secLbl('✍️ Comentario del día')}
+                      <textarea value={dayNotes[refDay] || ''} onChange={e => setDayNote(refDay, e.target.value)} placeholder="¿Cómo te fue hoy? Lo importante, qué quedó pendiente, cómo te sentiste…"
+                        style={{ width: '100%', minHeight: 120, resize: 'vertical', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--font-ui)', color: '#16365F', background: '#FBFAF6', outline: 'none' }} />
+                    </div>
                   </div>
-                ) })()}
-                {open.length > 0 && (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 4 }}>Avanzaste pero no cerraste</div>
-                    {open.map(x => row(x, minToday(x.t) > 0 ? `⏱ ${hmm(minToday(x.t))}` : '✎ avancé'))}
-                  </div>
-                )}
-                {untouched.length > 0 && (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 4 }}>No las tocaste hoy</div>
-                    {untouched.slice(0, 8).map(x => row(x))}
-                    {untouched.length > 8 && <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)', padding: '4px 4px 0' }}>+{untouched.length - 8} más</div>}
-                  </div>
-                )}
-                {/* COMENTARIO DEL DÍA: una nota libre para cerrar el día (cómo te fue, qué falta…). */}
-                <div style={{ marginTop: 18 }}>
-                  <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 6 }}>✍️ Comentario del día</div>
-                  <textarea value={dayNotes[refDay] || ''} onChange={e => setDayNote(refDay, e.target.value)} placeholder="¿Cómo te fue hoy? Lo importante, qué quedó pendiente, cómo te sentiste…"
-                    style={{ width: '100%', minHeight: 64, resize: 'vertical', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--font-ui)', color: '#16365F', background: '#FBFAF6', outline: 'none' }} />
                 </div>
                 {/* ARRASTRE: pendientes de días anteriores que no cerraste. Reasígnalas de un toque. */}
                 {arrastradas.length > 0 && (
@@ -8218,7 +8269,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
                       <button onClick={() => { setDcPeek(null); setDayCloseOpen(false); setTaskView({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, cursor: 'pointer', border: 'none', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: 'linear-gradient(135deg,#2E5A9E,#16365F)', color: '#fff' }}>Abrir completa</button>
-                      <button onClick={() => { setDcPeek(null); openTaskEdit(e.id, t.id!) }} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: '#fff', color: '#16365F' }}>Editar</button>
+                      <button onClick={() => { setDcPeek(null); setDayCloseOpen(false); openTaskEdit(e.id, t.id!) }} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: '#fff', color: '#16365F' }}>Editar</button>
                       <label title="Cambiar el día de esta actividad" style={{ position: 'relative', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 10, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 16, flexShrink: 0 }}>📅
                         <input type="date" defaultValue={t.plan || refDay} aria-label="Cambiar día" onChange={ev => { const d = ev.target.value; if (d && d !== t.plan) { planTaskToDay(e, i, d, { toast: true }); setDcPeek(null) } }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
                       </label>
