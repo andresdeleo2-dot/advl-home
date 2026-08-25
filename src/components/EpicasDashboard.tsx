@@ -160,6 +160,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dcPeek, setDcPeek] = useState<{ eId: string; tid: string } | null>(null)  // popup ligero de tarea DENTRO del cierre del día
   const [dcShowAll, setDcShowAll] = useState(false)                // "ver todas" las tareas sin tocar en el cierre
   const [dcClose, setDcClose] = useState(false)                    // en el cierre: mostrando el selector "mover pendientes a…"
+  const [dcSel, setDcSel] = useState<Set<string>>(new Set())       // selección múltiple de tareas en el cierre (para mover varias)
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
@@ -539,7 +540,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.dayNotes.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
-  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false) } }, [dayCloseOpen])
+  useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
   const setEpicBudget = (id: string, hours: number) => {
     const h = hours > 0 ? Math.round(hours) : 0
@@ -6533,7 +6534,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
     )
     return opts.docked ? card : (
-      <div onClick={opts.onClose} style={{ position: 'fixed', inset: 0, zIndex: 72, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+      <div onClick={opts.onClose} style={{ position: 'fixed', inset: 0, zIndex: 82, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
         {card}
       </div>
     )
@@ -7569,7 +7570,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const links = s.links || []
         const setLink = (li: number, k: 'label' | 'url', v: string) => patch({ links: links.map((l, j) => j === li ? { ...l, [k]: v } : l) })
         return (
-          <div onClick={() => setSubPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 79, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+          <div onClick={() => setSubPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 84, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
             <div role="dialog" aria-modal="true" aria-label="Subtarea" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: s.done ? '#2E6E6E' : ep.color }} />
               <div style={{ padding: '18px 22px 22px' }}>
@@ -7667,7 +7668,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const willMove = !isNew && !!target && !!ep && target.id !== ep.id
         const dt = dueTone(taskDraft.due, taskDraft.status === 'Terminada')
         return (
-          <div onClick={() => closeTaskEdit()} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
+          <div onClick={() => closeTaskEdit()} style={{ position: 'fixed', inset: 0, zIndex: 82, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', overflow: 'auto' }}>
             <div role="dialog" aria-modal="true" aria-label="Editar tarea" onClick={e => e.stopPropagation()} className="ep-modal ep-task-modal" style={{ width: '100%', maxWidth: 1160, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100dvh - 32px)' }}>
               <div style={{ height: 4, background: target?.color || ep?.color || '#2E5A9E', flexShrink: 0 }} />
               <div className="ep-modal-head" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '16px 26px 12px', borderBottom: '1px solid rgba(15,35,64,0.08)', flexShrink: 0 }}>
@@ -8083,8 +8084,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         ].sort((a, b) => b.min - a.min)
         const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
         // Subtareas que marcaste hechas ESE día (para el resumen de logros del día).
+        // OJO: doneAt se guarda en UTC (toISOString); hay que compararlo en día LOCAL, no cortar la cadena.
+        const localDay = (isoStr?: string) => { if (!isoStr) return ''; const dt = new Date(isoStr); return isNaN(dt.getTime()) ? isoStr.slice(0, 10) : `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}` }
         const doneSubs: { task: string; sub: string; color: string; eId: string; tid: string }[] = []
-        for (const e of epics) for (const t of e.tasks) for (const s of (t.subtasks || [])) if (s.done && (s.doneAt || '').slice(0, 10) === refDay) doneSubs.push({ task: t.t, sub: s.t, color: e.color, eId: e.id, tid: t.id! })
+        for (const e of epics) for (const t of e.tasks) for (const s of (t.subtasks || [])) if (s.done && localDay(s.doneAt) === refDay) doneSubs.push({ task: t.t, sub: s.t, color: e.color, eId: e.id, tid: t.id! })
         const secLbl = (txt: string, extra?: ReactNode) => (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
             <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{txt}</span>
@@ -8116,6 +8119,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {x.min > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E', flexShrink: 0 }}>⏱ {hmm(x.min)}</span>}
           </div>
         )
+        // Fila con casilla de SELECCIÓN (para mover varias a otro día) — usada en "No las tocaste".
+        const dcSelRefs = () => [...dcSel].map(k => keyToTask(k)).filter(Boolean) as { e: Epica; t: EpicaTask; i: number }[]
+        const selRow = (x: { e: Epica; t: EpicaTask; i: number }) => {
+          const key = planKey(x.e.id, x.t); const sel = dcSel.has(key)
+          return (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px', borderBottom: '1px solid rgba(15,35,64,0.05)', background: sel ? 'rgba(46,90,158,0.06)' : 'transparent' }}>
+              <input type="checkbox" checked={sel} onChange={() => setDcSel(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })} title="Seleccionar para mover" style={{ width: 16, height: 16, accentColor: '#2E5A9E', cursor: 'pointer', flexShrink: 0 }} />
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: x.e.color, flexShrink: 0 }} />
+              <span onClick={() => setDcPeek({ eId: x.e.id, tid: x.t.id! })} title="Ver la actividad" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.t.t}</span>
+              <label onClick={ev => ev.stopPropagation()} title="Cambiar el día de esta actividad" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 13 }}>📅
+                <input type="date" defaultValue={x.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== x.t.plan) planTaskToDay(x.e, x.i, d, { toast: true }) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+              </label>
+            </div>
+          )
+        }
         return (
           <>
           <div onClick={() => setDayCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
@@ -8168,8 +8186,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {open.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{box(open.map(taskRow))}</div>)}
                     {untouched.length > 0 && (
                       <div>
-                        {secLbl(refIsToday ? '○ No las tocaste hoy' : '○ Sin tocar', untouched.length > 8 ? <button onClick={() => setDcShowAll(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>{dcShowAll ? 'ver menos ▴' : `ver todas (${untouched.length}) ▾`}</button> : undefined)}
-                        {box((dcShowAll ? untouched : untouched.slice(0, 8)).map(taskRow))}
+                        {secLbl(refIsToday ? '○ No las tocaste hoy' : '○ Sin tocar', (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <button onClick={() => setDcSel(s => s.size >= untouched.length ? new Set() : new Set(untouched.map(x => planKey(x.e.id, x.t))))} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>{dcSel.size >= untouched.length && untouched.length ? 'ninguna' : 'todas'}</button>
+                            {untouched.length > 8 && <button onClick={() => setDcShowAll(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>{dcShowAll ? 'ver menos ▴' : `ver todas (${untouched.length}) ▾`}</button>}
+                          </div>
+                        ))}
+                        {dcSel.size > 0 && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 10px', marginBottom: 8, borderRadius: 10, background: 'rgba(46,90,158,0.08)', border: '1px solid rgba(46,90,158,0.22)' }}>
+                            <span style={{ fontSize: 11.5, fontWeight: 800, color: '#2E5A9E' }}>{dcSel.size} seleccionadas</span>
+                            <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>mover a</span>
+                            {Array.from({ length: 5 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
+                              const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
+                              return <button key={d} onClick={() => { moveTasksTo(dcSelRefs().map(r => ({ e: r.e, i: r.i })), d); setDcSel(new Set()) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: '1px solid rgba(46,90,158,0.3)', background: '#fff', color: '#2E5A9E' }}>{lbl}</button>
+                            })}
+                            <button onClick={() => { dcSelRefs().forEach(r => setTaskStatus(r.e, r.i, 'Terminada')); setDcSel(new Set()) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Terminar</button>
+                            <button onClick={() => setDcSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>Limpiar</button>
+                          </div>
+                        )}
+                        {box((dcShowAll ? untouched : untouched.slice(0, 8)).map(selRow))}
                       </div>
                     )}
                     {planDone.length === 0 && open.length === 0 && untouched.length === 0 && shownRoutines.length === 0 && generalRows.length === 0 && <div style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', textAlign: 'center', padding: '10px 0' }}>Sin actividades este día.</div>}
@@ -8298,8 +8333,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, border: '1px dashed rgba(15,35,64,0.2)', borderRadius: 9, padding: '7px 10px', fontSize: 12.5, color: '#16365F', background: 'transparent', outline: 'none' }} />
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
-                      <button onClick={() => { setDcPeek(null); setDayCloseOpen(false); setTaskView({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, cursor: 'pointer', border: 'none', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: 'linear-gradient(135deg,#2E5A9E,#16365F)', color: '#fff' }}>Abrir completa</button>
-                      <button onClick={() => { setDcPeek(null); setDayCloseOpen(false); openTaskEdit(e.id, t.id!) }} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: '#fff', color: '#16365F' }}>Editar</button>
+                      <button onClick={() => { setDcPeek(null); setTaskView({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, cursor: 'pointer', border: 'none', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: 'linear-gradient(135deg,#2E5A9E,#16365F)', color: '#fff' }}>Abrir completa</button>
+                      <button onClick={() => { setDcPeek(null); openTaskEdit(e.id, t.id!) }} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, padding: '10px 12px', font: '700 12.5px var(--font-ui)', background: '#fff', color: '#16365F' }}>Editar</button>
                       <label title="Cambiar el día de esta actividad" style={{ position: 'relative', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 10, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 16, flexShrink: 0 }}>📅
                         <input type="date" defaultValue={t.plan || refDay} aria-label="Cambiar día" onChange={ev => { const d = ev.target.value; if (d && d !== t.plan) { planTaskToDay(e, i, d, { toast: true }); setDcPeek(null) } }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
                       </label>
