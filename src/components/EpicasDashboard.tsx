@@ -225,6 +225,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const subNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [estCustomId, setEstCustomId] = useState<string | null>(null)  // tarea con el Estimado en modo "Personalizado…" (input libre)
+  const [orderEditKey, setOrderEditKey] = useState<string | null>(null) // fila con el número de "con qué empiezo" en edición (teclear la posición, sin arrastrar ni abrir)
+  const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el tiempo estimado en edición inline (sin abrir la tarea)
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
@@ -1311,6 +1313,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     applyPlanOrder(list.map(x => ({ e: x.e, i: x.i })))
     setPlanSort('plan')
     showToast('Orden fijado')
+  }
+  /** Mueve la tarea `key` a la posición 1-based `pos1` dentro de la lista ordenada visible `visList`
+   *  (teclear "con qué número empiezo" en vez de arrastrar). Si se pasa `full` (la lista completa,
+   *  p.ej. planPend cuando hay filtro), fusiona el nuevo orden visible conservando la posición de las
+   *  tareas ocultas por el filtro — igual que el arrastre (commitReorder). Reasigna planOrder. */
+  const reorderPlanToPos = (
+    visList: { e: Epica; t: EpicaTask; i: number }[],
+    key: string,
+    pos1: number,
+    full?: { e: Epica; t: EpicaTask; i: number }[],
+  ) => {
+    setOrderEditKey(null)
+    const from = visList.findIndex(x => planKey(x.e.id, x.t) === key)
+    if (from < 0) return
+    const to = Math.max(0, Math.min(visList.length - 1, Math.round(pos1) - 1))
+    if (to === from) return
+    const vis = visList.slice()
+    const [m] = vis.splice(from, 1); vis.splice(to, 0, m)
+    let merged: { e: Epica; t: EpicaTask; i: number }[]
+    if (full && full.length > visList.length) {
+      const visKeys = new Set(visList.map(x => planKey(x.e.id, x.t)))
+      let vi = 0
+      merged = full.map(f => (visKeys.has(planKey(f.e.id, f.t)) ? vis[vi++] : f))
+    } else merged = vis
+    applyPlanOrder(merged.map(x => ({ e: x.e, i: x.i })))
+    showToast(`Empiezas esta en el #${to + 1}`)
   }
   // Trae al plan de hoy TODAS las pendientes de días anteriores (reprograma plan=hoy).
   const bringOverdue = () => {
@@ -2698,7 +2726,75 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     </div>
   )
 
-  const renderPlanRow = (x: { e: Epica; t: EpicaTask; i: number }, pos: number, noDrag = false) => {
+  /** Número de "con qué empiezo" (posición). Clic → teclear la posición (sin arrastrar ni abrir la
+   *  tarea). `ordered` = lista visible sobre la que se reordena (si falta, el número es sólo lectura).
+   *  `full` = lista completa para conservar lo oculto por el filtro. `big` = estilo del enfoque de Día. */
+  const orderControl = (
+    key: string, pos: number,
+    ordered: { e: Epica; t: EpicaTask; i: number }[] | undefined,
+    full?: { e: Epica; t: EpicaTask; i: number }[],
+    big = false,
+  ) => {
+    const label = String(pos + 1).padStart(2, '0')
+    if (orderEditKey === key && ordered) {
+      return (
+        <input type="number" min={1} max={ordered.length} defaultValue={pos + 1} autoFocus
+          onClick={ev => ev.stopPropagation()} onPointerDown={ev => ev.stopPropagation()}
+          onFocus={ev => ev.currentTarget.select()}
+          onKeyDown={ev => { if (ev.key === 'Enter') ev.currentTarget.blur(); else if (ev.key === 'Escape') { ev.preventDefault(); setOrderEditKey(null) } }}
+          onBlur={ev => { const v = parseInt(ev.currentTarget.value, 10); if (Number.isFinite(v) && v > 0) reorderPlanToPos(ordered, key, v, full); else setOrderEditKey(null) }}
+          aria-label="¿Con qué número empiezas?"
+          className={big ? 'serif' : undefined}
+          style={big
+            ? { width: 50, fontSize: 24, fontWeight: 600, textAlign: 'center', color: '#A87A2C', border: '1.5px solid #C2933A', borderRadius: 8, padding: '1px 3px', background: 'rgba(194,147,58,0.10)', outline: 'none', fontVariantNumeric: 'tabular-nums' }
+            : { width: 36, fontSize: 12, fontWeight: 800, textAlign: 'center', color: '#A87A2C', border: '1.5px solid #C2933A', borderRadius: 7, padding: '2px 3px', background: 'rgba(194,147,58,0.10)', outline: 'none' }} />
+      )
+    }
+    if (!ordered) {
+      return big
+        ? <span className="serif plan-num" style={{ fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{label}</span>
+        : <span style={{ font: '800 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)', fontVariantNumeric: 'tabular-nums' }}>{label}</span>
+    }
+    return big
+      ? <button onClick={ev => { ev.stopPropagation(); setOrderEditKey(key) }} onPointerDown={ev => ev.stopPropagation()} title="Teclea con qué número empiezas (sin arrastrar)" className="serif plan-num" style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{label}</button>
+      : <button onClick={ev => { ev.stopPropagation(); setOrderEditKey(key) }} onPointerDown={ev => ev.stopPropagation()} title="Teclea con qué número empiezas" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 21, height: 19, padding: '0 5px', borderRadius: 6, border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', font: '800 11px var(--font-ui)', fontVariantNumeric: 'tabular-nums' }}>{label}</button>
+  }
+  /** Tiempo estimado editable inline (sin abrir la tarea). Reusa renderEstControl. Escribe al dayPlan
+   *  del día si la tarea es de varios días, o al estimado propio de la tarea. `day` = día en contexto. */
+  const rowEstControl = (key: string, e: Epica, i: number, t: EpicaTask, day: string) => {
+    const dp = day ? dayPlanFor(t, day) : undefined
+    const defMin = WEEK_EST_MIN(difForDay(t, day))
+    const onSet = (m: number | null) => {
+      if (dp) setDayPlanField(e, i, day, { estMin: m == null ? undefined : m })
+      else setTaskEstMin(e, i, m)
+      setEstEditKey(null); setEstCustomId(null)
+    }
+    if (estEditKey === key) {
+      return (
+        <span onClick={ev => ev.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {renderEstControl(key, dp ? dp.estMin : t.estMin, defMin, onSet, true)}
+          <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null); setEstCustomId(null) }} title="Listo" style={{ height: 24, width: 24, borderRadius: 7, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.12)', color: '#2E6E6E', cursor: 'pointer', fontSize: 12, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>✓</button>
+        </span>
+      )
+    }
+    const est = estMinForDay(t, day), real = investedMinOf(t)
+    const over = est > 0 && real > est
+    const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
+    const perDay = !!dp?.estMin
+    return (
+      <button onClick={ev => { ev.stopPropagation(); setEstCustomId(null); setEstEditKey(key) }}
+        title={est ? `Estimado ${perDay ? 'de este día ' : ''}${hmm(est)}${real > 0 ? ` · llevas ${hmm(real)}` : ''} · clic para cambiar el tiempo (sin abrir)` : 'Ponle el tiempo que crees que te tomará (sin abrir la tarea)'}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: 10, fontWeight: 700,
+          color: est ? (over ? '#B0522E' : '#A87A2C') : 'rgba(20,35,61,0.5)',
+          background: est ? (over ? 'rgba(176,82,46,0.10)' : 'rgba(194,147,58,0.10)') : 'rgba(15,35,64,0.04)',
+          border: `1px ${est ? 'solid' : 'dashed'} ${est ? (over ? 'rgba(176,82,46,0.3)' : 'rgba(194,147,58,0.4)') : 'rgba(15,35,64,0.22)'}`,
+          borderRadius: 99, padding: '1px 8px' }}>
+        ⏳ {est ? hmm(est) : '+ tiempo'}{est && real > 0 ? ` / ${hmm(real)}` : ''}
+      </button>
+    )
+  }
+
+  const renderPlanRow = (x: { e: Epica; t: EpicaTask; i: number }, pos: number, noDrag = false, orderList?: { e: Epica; t: EpicaTask; i: number }[]) => {
     const { e, t, i } = x
     const key = planKey(e.id, t)
     const ps = prioStyle(t.priority)
@@ -2723,7 +2819,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         })()}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
           <span style={{ width: ps.accentW, height: 30, borderRadius: 99, background: ps.accent, flexShrink: 0 }} />
-          <span className="serif plan-num" style={{ fontSize: 26, lineHeight: 1, fontWeight: 600, color: '#10233F', fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right' }}>{String(pos + 1).padStart(2, '0')}</span>
+          {orderControl(key, pos, orderList, planPend, true)}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           {pos === 0 && <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 3 }}>Empieza aquí</div>}
@@ -2736,10 +2832,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {t.difficulty && (() => { const ds = difStyle(t.difficulty); return (
               <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
             )})()}
-            {/* Estimado por dificultad vs real invertido (bitácora). Sólo cuando hay algo que comparar. */}
-            {(() => { const est = estMinForDay(t, viewDate), real = investedMinOf(t); if (!est && !real) return null; const over = est > 0 && real > est; const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`; const perDay = !!dayPlanFor(t, viewDate)?.estMin; return (
-              <span title={`Estimado ${perDay ? 'de este día' : 'por dificultad'} ${est ? hmm(est) : '—'} · llevas ${hmm(real)} invertidos${over ? ` (${hmm(real - est)} de más)` : ''}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, color: over ? '#B0522E' : 'rgba(20,35,61,0.5)', background: over ? 'rgba(176,82,46,0.10)' : 'rgba(15,35,64,0.05)', border: `1px solid ${over ? 'rgba(176,82,46,0.3)' : 'rgba(15,35,64,0.1)'}`, borderRadius: 99, padding: '1px 7px' }}>⏳ {est ? hmm(est) : '—'}{real > 0 ? ` / ${hmm(real)}` : ''}</span>
-            )})()}
+            {/* Tiempo estimado editable inline (clic en el chip · sin abrir la tarea) vs real invertido. */}
+            {rowEstControl(key, e, i, t, viewDate)}
             {/* Tarea estancada: reprogramada muchas veces o días sin avanzar. */}
             {(() => { const r = stuckReason(t); if (!r) return null; return (
               <span title={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 800, color: '#A15B2E', background: 'rgba(176,110,58,0.12)', border: '1px solid rgba(176,110,58,0.4)', borderRadius: 99, padding: '1px 8px' }}>🐌 estancada</span>
@@ -3267,7 +3361,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const dc = { facil: 0, media: 0, dificil: 0, sin: 0 }; uniqPend.forEach(x => { const d = x.t.difficulty; if (d === 'facil') dc.facil++; else if (d === 'dificil') dc.dificil++; else if (d === 'media') dc.media++; else dc.sin++ })
     const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
 
-    const chip = (x: { e: Epica; t: EpicaTask; i: number }, fromDay: string | null) => {
+    const chip = (x: { e: Epica; t: EpicaTask; i: number }, fromDay: string | null, laneList?: { e: Epica; t: EpicaTask; i: number }[]) => {
       const { e, t, i } = x; const k = planKey(e.id, t); const done = t.status === 'Terminada'; const dragging = weekDrag === k
       // ¿Se trabajó ESTE día? (hay avance en la bitácora con la fecha del carril). Se pinta en dorado
       // aunque no esté terminada, para que se note que ese día sí le metiste mano.
@@ -3282,9 +3376,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             style={{ display: 'inline-flex', alignItems: 'center', gap: 7, maxWidth: '100%', background: done ? '#fff' : workedDay ? 'rgba(194,147,58,0.10)' : '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${done ? '#2E6E6E' : workedDay ? '#C2933A' : prioStyle(t.priority).accent}`, borderRadius: 8, padding: '5px 8px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', opacity: done ? 0.6 : (weekDrag && !dragging ? 0.5 : 1), boxShadow: dragging ? '0 12px 22px -14px rgba(15,35,64,0.5)' : 'none' }}>
             <button onClick={ev => { ev.stopPropagation(); if (dpFor && fromDay) toggleDayPlanDone(e, i, fromDay); else if (!done) completeFromPlan(e, i); else uncompleteFromPlan(e, i) }} onPointerDown={ev => ev.stopPropagation()} title={dpFor ? (dpFor.done ? 'Marcar: no trabajado ese día' : 'Marcar: trabajé este día') : (done ? 'Marcar sin terminar' : 'Marcar terminada')} style={{ flexShrink: 0, height: 15, width: 15, borderRadius: 99, cursor: 'pointer', border: done ? 'none' : workedDay ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.28)', background: done ? '#2E6E6E' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: done ? '#fff' : '#C2933A' }}>{done ? <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg> : workedDay ? <span style={{ fontSize: 9, lineHeight: 1 }}>◐</span> : null}</button>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+            {/* Número de "con qué empiezo" ESE día (teclear la posición en el carril, sin abrir) */}
+            {laneList && !done && (() => { const op = laneList.findIndex(y => planKey(y.e.id, y.t) === k); return op >= 0 ? <span style={{ flexShrink: 0, display: 'inline-flex' }}>{orderControl(k, op, laneList, undefined, false)}</span> : null })()}
             <span style={{ fontSize: 12, fontWeight: 600, color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
             {(() => { const dfd = difForDay(t, fromDay || t.plan || ''); return dfd ? <span title={`Dificultad ${difStyle(dfd).label}${dayPlanFor(t, fromDay || '')?.difficulty ? ' (ese día)' : ''}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={dfd} size={8} /></span> : null })()}
-            {(() => { const em = estMinForDay(t, fromDay || t.plan || ''); return em > 0 ? <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', color: 'rgba(20,35,61,0.4)' }} title={dayPlanFor(t, fromDay || '')?.estMin ? 'Tu estimado ese día' : (typeof t.estMin === 'number' && t.estMin > 0 ? 'Tu estimado' : 'Estimado por dificultad')}>~{Math.round(em / 60 * 10) / 10}h</span> : null })()}
+            {/* Tiempo estimado: clic → editar inline (popover), sin abrir la tarea */}
+            {(() => { const em = estMinForDay(t, fromDay || t.plan || ''); return (
+              <button onClick={ev => { ev.stopPropagation(); setEstCustomId(null); setEstEditKey(estEditKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title={em > 0 ? `Estimado ~${Math.round(em / 60 * 10) / 10}h · clic para cambiar el tiempo (sin abrir)` : 'Ponle el tiempo que crees que te tomará (sin abrir)'} style={{ flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', borderRadius: 99, padding: '0 6px', font: '700 9.5px var(--font-ui)', border: `1px ${em > 0 ? 'solid rgba(194,147,58,0.4)' : 'dashed rgba(15,35,64,0.22)'}`, background: em > 0 ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', color: em > 0 ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{em > 0 ? `~${Math.round(em / 60 * 10) / 10}h` : '⏳+'}</button>
+            )})()}
             {nDays > 1 && <span title={`Agendada en ${nDays} días`} style={{ flexShrink: 0, font: '700 8.5px var(--font-ui)', color: '#7A6FB0' }}>🗓{nDays}</span>}
             <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
           </div>
@@ -3294,6 +3393,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {fromDay && <button onClick={ev => { ev.stopPropagation(); setTaskPlan(e, i, ''); setWeekMoveKey(null) }} title="Quitar de la semana (sin día)" style={{ height: 26, padding: '0 8px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', font: '700 10px var(--font-ui)' }}>Sin día</button>}
             </div>
           )}
+          {estEditKey === k && (() => { const day = fromDay || t.plan || ''; const dp = day ? dayPlanFor(t, day) : undefined; const defMin = WEEK_EST_MIN(difForDay(t, day)); const onSet = (m: number | null) => { if (dp) setDayPlanField(e, i, dp.day, { estMin: m == null ? undefined : m }); else setTaskEstMin(e, i, m); setEstEditKey(null); setEstCustomId(null) }; return (
+            <div onPointerDown={ev => ev.stopPropagation()} onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 22, display: 'flex', alignItems: 'center', gap: 6, padding: 8, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, boxShadow: '0 16px 30px -18px rgba(15,35,64,0.6)' }}>
+              {renderEstControl(k, dp ? dp.estMin : t.estMin, defMin, onSet, true)}
+              <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null); setEstCustomId(null) }} title="Listo" style={{ height: 24, width: 24, borderRadius: 7, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.12)', color: '#2E6E6E', cursor: 'pointer', fontSize: 12 }}>✓</button>
+            </div>
+          ) })()}
         </div>
       )
     }
@@ -3392,7 +3497,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'flex-start', alignContent: 'flex-start', padding: '11px 12px' }}>
                 {items.length === 0
                   ? <span style={{ fontSize: 11.5, color: over ? '#A87A2C' : 'rgba(20,35,61,0.35)', padding: '4px 0' }}>{over ? 'Soltar aquí' : 'Sin actividades · arrastra una o toca “+ tarea”'}</span>
-                  : items.map(x => chip(x, d))}
+                  : items.map(x => chip(x, d, items))}
               </div>
             </div>
           )
@@ -4763,7 +4868,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows) : renderCalendarPanel(enfRows)}</>
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows, { order: true }) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
@@ -5017,7 +5122,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     )}
                     {planItems.length > 0 && renderWorkFilters(viewDate)}
                     {manual && planFilter === 'todas' && filtered.length > 1 && planSel.size === 0 && (
-                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}>En orden de arriba hacia abajo · el 01 es por dónde empiezas · arrastra para reordenar.</div>
+                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 4 }}>El 01 es por dónde empiezas · <b style={{ color: '#A87A2C' }}>toca el número para teclear con cuál empezar</b> (o arrastra) · toca ⏳ para ponerle el tiempo.</div>
                     )}
                     {!table && list.length > 1 && planSel.size === 0 && (
                       <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)', marginBottom: 6 }}>Selecciona varias con la casilla ☐ (izquierda) para editarlas en lote: mover de día, prioridad, dificultad, avance, épica…</div>
@@ -5084,7 +5189,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {list.map((x, pos) => (
                           <div key={planKey(x.e.id, x.t)}>
                             {manual && draggingKey && dropIndex === pos && insLine}
-                            {renderPlanRow(x, pos, !manual)}
+                            {renderPlanRow(x, pos, !manual, manual ? list : undefined)}
                           </div>
                         ))}
                         {manual && draggingKey && dropIndex === list.length && insLine}
@@ -6564,7 +6669,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   // Vista MAESTRO/DETALLE: lista de tareas a la izquierda; al picar una, su detalle
   // completo editable al centro (SIN popup) reusando renderTaskDetail acoplado.
-  const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
+  const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[], opts?: { order?: boolean }) => {
+    // En el Enfoque (opts.order) la lista se ORDENA por "con qué empiezo" (planOrder) y cada fila deja
+    // teclear su número + su tiempo, sin abrir. En el backlog se deja el orden entrante tal cual.
+    const orderable = !!opts?.order
+    const ordRows = orderable
+      ? [...rows].sort((a, b) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)))
+      : rows
     const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
     // Selección múltiple (estado PROPIO mdMultiSel) para mover varias a un día de una. Se acota a
     // las filas VISIBLES: nunca mueve algo fuera del filtro actual.
@@ -6638,16 +6749,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )
           })()}
           {rows.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', padding: '14px 6px' }}>Nada coincide con los filtros.</div>}
-          {rows.map(({ e, t }) => {
+          {ordRows.map(({ e, t, i }, pos) => {
             const k = planKey(e.id, t)
             const on = !!valid && valid.eId === e.id && valid.tid === t.id
             const sel = mdMultiSel.has(k)
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
+            const estDay = mdDay || t.plan || ''
+            const dpMd = orderable && estDay ? dayPlanFor(t, estDay) : undefined
+            const emMd = orderable ? estMinForDay(t, estDay) : 0
+            const editingEst = orderable && estEditKey === k
             return (
-              <div key={k} style={{ flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, overflow: 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
+              <div key={k} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, overflow: editingEst ? 'visible' : 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
                 <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 32, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <span style={{ height: 18, width: 18, borderRadius: 5, border: sel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: sel ? '#C2933A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{sel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
                 </button>
+                {orderable && !done && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 3 }}>{orderControl(k, pos, ordRows, undefined, false)}</span>}
                 <button onClick={() => setMdSel({ eId: e.id, tid: t.id! })} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '8px 11px 8px 2px' }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
@@ -6655,8 +6771,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
                     {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
                     {taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ font: '700 9px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}
+                    {orderable && <span role="button" tabIndex={0} onClick={ev => { ev.stopPropagation(); setEstCustomId(null); setEstEditKey(estEditKey === k ? null : k) }} onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); setEstCustomId(null); setEstEditKey(estEditKey === k ? null : k) } }} title={emMd > 0 ? `Estimado ~${Math.round(emMd / 60 * 10) / 10}h · clic para cambiar el tiempo (sin abrir)` : 'Ponle el tiempo que crees que te tomará (sin abrir)'} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 3, borderRadius: 99, padding: '1px 7px', font: '700 9px var(--font-ui)', border: `1px ${emMd > 0 ? 'solid rgba(194,147,58,0.4)' : 'dashed rgba(15,35,64,0.22)'}`, background: emMd > 0 ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)', color: emMd > 0 ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>⏳ {emMd > 0 ? `~${Math.round(emMd / 60 * 10) / 10}h` : '+ tiempo'}</span>}
                   </div>
                 </button>
+                {editingEst && (() => { const defMin = WEEK_EST_MIN(difForDay(t, estDay)); const onSet = (m: number | null) => { if (dpMd) setDayPlanField(e, i, dpMd.day, { estMin: m == null ? undefined : m }); else setTaskEstMin(e, i, m); setEstEditKey(null); setEstCustomId(null) }; return (
+                  <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% - 2px)', left: 8, zIndex: 22, display: 'flex', alignItems: 'center', gap: 6, padding: 8, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 10, boxShadow: '0 16px 30px -18px rgba(15,35,64,0.6)' }}>
+                    {renderEstControl(k, dpMd ? dpMd.estMin : t.estMin, defMin, onSet, true)}
+                    <button onClick={ev => { ev.stopPropagation(); setEstEditKey(null); setEstCustomId(null) }} title="Listo" style={{ height: 24, width: 24, borderRadius: 7, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.12)', color: '#2E6E6E', cursor: 'pointer', fontSize: 12 }}>✓</button>
+                  </div>
+                ) })()}
               </div>
             )
           })}
