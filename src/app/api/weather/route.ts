@@ -26,16 +26,17 @@ function wmoMeta(code: number) {
   return WMO[code] ?? { label: 'Desconocido', icon: '🌡️' }
 }
 
-function fetchCity(lat: number, lon: number) {
+function fetchCity(lat: number, lon: number, hourly = false) {
+  const h = hourly ? '&hourly=temperature_2m,weathercode,precipitation_probability' : ''
   return fetch(
-    `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weathercode,sunrise,sunset&timezone=auto&forecast_days=4`,
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weathercode,windspeed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weathercode,sunrise,sunset${h}&timezone=auto&forecast_days=4`,
     { next: { revalidate: 1800 } }
   ).then(r => r.json())
 }
 
 export async function GET() {
   const [nau, mty, sf] = await Promise.all([
-    fetchCity(19.4794, -99.2314),  // Naucalpan
+    fetchCity(19.4794, -99.2314, true),  // Naucalpan (con pronóstico por hora)
     fetchCity(25.6866, -100.3161), // Monterrey
     fetchCity(37.7749, -122.4194), // San Francisco
   ])
@@ -61,6 +62,17 @@ export async function GET() {
     label: meta.label,
     icon: meta.icon,
     sun: { sunrise: fmtSun(nau.daily.sunrise[0]), sunset: fmtSun(nau.daily.sunset[0]) },
+    hourly: (() => {
+      const H = nau.hourly
+      if (!H?.time) return []
+      const today: string = nau.daily.time[0]
+      const out: { h: number; temp: number; icon: string; pop: number | null }[] = []
+      for (let i = 0; i < H.time.length; i++) {
+        if (!String(H.time[i]).startsWith(today)) continue
+        out.push({ h: Number(String(H.time[i]).slice(11, 13)), temp: Math.round(H.temperature_2m[i]), icon: wmoMeta(H.weathercode[i]).icon, pop: H.precipitation_probability?.[i] ?? null })
+      }
+      return out
+    })(),
     forecast: nau.daily.time.map((date: string, i: number) => ({
       date,
       max: Math.round(nau.daily.temperature_2m_max[i]),

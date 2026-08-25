@@ -7,7 +7,6 @@ import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
 import CalendarWidget from '@/components/CalendarWidget'
 import QuoteWidget from '@/components/QuoteWidget'
-import WeatherWidget from '@/components/WeatherWidget'
 import BirthdayCelebration from '@/components/BirthdayCelebration'
 import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO, mondayISO } from '@/components/epicas/core'
@@ -61,11 +60,6 @@ function SectionTitle({ icon, children, href, cta, external }: { icon?: string; 
     </div>
   )
 }
-// Ítem dentro de una rejilla masonry (CSS columns): no se parte y empaca sin huecos.
-function MItem({ children }: { children: ReactNode }) {
-  return <div style={{ breakInside: 'avoid', WebkitColumnBreakInside: 'avoid', marginBottom: 16 } as CSSProperties}>{children}</div>
-}
-
 export default function PanelClient() {
   const [epics, setEpics] = useState<Epica[] | null>(null)
   const [now, setNow] = useState<Date | null>(null)
@@ -74,6 +68,7 @@ export default function PanelClient() {
   const [personas, setPersonas] = useState<{ nombre: string; apodo: string | null; cumple: string; excepcional?: boolean }[]>([])
   const [momentos, setMomentos] = useState<{ id: number; titulo: string; fecha: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
+  const [weather, setWeather] = useState<{ temp: number; feels: number; humidity: number; label: string; icon: string; hourly: { h: number; temp: number; icon: string; pop: number | null }[]; cities: { name: string; temp: number; icon: string }[] } | null>(null)
 
   const today = todayISO()
 
@@ -86,6 +81,7 @@ export default function PanelClient() {
     fetch('/api/epicas').then(r => r.json()).then(j => { if (alive && j?.ok) setEpics(j.data as Epica[]) }).catch(() => {})
     fetch('/api/cumples').then(r => r.json()).then(j => { if (alive && j?.ok) setPersonas(j.personas || []) }).catch(() => {})
     fetch('/api/momentos').then(r => r.json()).then(j => { if (alive && j?.ok) setMomentos(j.recuerdos || []) }).catch(() => {})
+    fetch('/api/weather').then(r => r.json()).then(j => { if (alive && j && !j.error) setWeather(j) }).catch(() => {})
     return () => { alive = false }
   }, [])
 
@@ -157,6 +153,13 @@ export default function PanelClient() {
     }).filter((x): x is NonNullable<typeof x> => !!x).sort((a, b) => a.days - b.days).slice(0, 7)
   }, [momentos])
 
+  const hours = useMemo(() => {
+    if (!weather?.hourly?.length) return []
+    const h0 = (now ? now.getHours() : new Date().getHours())
+    const rest = weather.hourly.filter(x => x.h >= h0)
+    return (rest.length ? rest : weather.hourly).slice(0, 11)
+  }, [weather, now])
+
   const routinesDone = routines.filter(r => r.done).length
   const greet = now ? (now.getHours() < 12 ? 'Buenos días' : now.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches') : ''
   const seeAll = (href: string) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(231,197,107,0.9)', textDecoration: 'none' }}>ver todos →</a>
@@ -197,49 +200,82 @@ export default function PanelClient() {
           ))}
         </div>
 
-        {/* Justo después de los KPIs: clima + frase, lado a lado (informativo, sin título de sección) */}
-        <div className="panel-info" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.15fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginBottom: 4 }}>
-          <Slot id="clima" title="Clima" icon="🌤️" bare layout={layout} setSlot={setSlot}><WeatherWidget /></Slot>
+        {/* INFORMATIVO tras KPIs: Clima por HORA + Frase */}
+        <div className="panel-info" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.25fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginBottom: 4 }}>
+          <Slot id="clima" title="Clima" icon="🌤️" accent="#2E5A9E" layout={layout} setSlot={setSlot}>
+            {!weather ? <div style={{ height: 130, opacity: 0 }} /> : (<>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <span style={{ fontFamily: SERIF, fontSize: 42, lineHeight: 1, color: '#10233F' }}>{weather.temp}°</span>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#16365F', marginTop: 2 }}>{weather.label}</div>
+                  <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: 2 }}>Naucalpan · sens. {weather.feels}° · 💧 {weather.humidity}%</div>
+                </div>
+                <span style={{ fontSize: 42, lineHeight: 1 }}>{weather.icon}</span>
+              </div>
+              {hours.length > 0 && (
+                <div style={{ display: 'flex', gap: 2, overflowX: 'auto', paddingTop: 10, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
+                  {hours.map((x, k) => (
+                    <div key={k} style={{ flex: '0 0 auto', minWidth: 48, textAlign: 'center', padding: '5px 3px', borderRadius: 10, background: k === 0 ? 'rgba(46,90,158,0.09)' : 'transparent' }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: k === 0 ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }}>{k === 0 ? 'ahora' : `${x.h}h`}</div>
+                      <div style={{ fontSize: 19, margin: '3px 0 1px' }}>{x.icon}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#10233F' }}>{x.temp}°</div>
+                      {x.pop != null && x.pop >= 20 && <div style={{ fontSize: 9, color: '#2E5A9E', fontWeight: 700 }}>💧{x.pop}%</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {weather.cities?.length > 0 && (
+                <div style={{ display: 'flex', gap: 18, marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
+                  {weather.cities.map((c, k) => (
+                    <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><span style={{ fontSize: 15 }}>{c.icon}</span><span style={{ color: 'rgba(20,35,61,0.6)' }}>{c.name}</span><b style={{ color: '#10233F' }}>{c.temp}°</b></div>
+                  ))}
+                </div>
+              )}
+            </>)}
+          </Slot>
           <Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot>
         </div>
 
-        {/* SECCIÓN · EL DÍA (rutinas, actividades, calendario) */}
+        {/* SECCIÓN · EL DÍA */}
         <SectionTitle icon="📅" href="/epicas" cta="ver en Épicas">El día</SectionTitle>
-        <div style={{ columnWidth: 320, columnGap: 16 }}>
-          <MItem>
-            <Slot id="hoy" title="Actividades de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
-              {epics === null ? <div style={{ height: 90, opacity: 0 }} /> : todayTasks.length === 0 ? (
-                <div style={{ padding: '10px 0', textAlign: 'center', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></div>
-              ) : (<>
-                {todayTasks.slice(0, 8).map(({ e, t }, k, arr) => (
-                  <Link key={t.id || k} href="/epicas" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
-                    <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{e.name}</span>
-                  </Link>
-                ))}
-                {todayTasks.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', paddingTop: 8 }}>+{todayTasks.length - 8} más en Épicas</div>}
-              </>)}
-            </Slot>
-          </MItem>
 
-          {routines.length > 0 && (
-            <MItem>
-              <Slot id="rutinas" title="Rutinas de hoy" icon="🔁" accent="#2E6E6E" layout={layout} setSlot={setSlot} right={<span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{routinesDone}/{routines.length}</span>}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {routines.map((r, k) => (
-                    <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 99, padding: '5px 12px', fontSize: 12.5, fontWeight: 600, background: r.done ? 'rgba(46,110,110,0.12)' : 'rgba(15,35,64,0.05)', border: `1px solid ${r.done ? 'rgba(46,110,110,0.3)' : 'rgba(15,35,64,0.1)'}`, color: r.done ? '#2E6E6E' : 'rgba(20,35,61,0.6)' }}>{r.done ? '✓' : '○'} {r.name}</span>
+        {/* Enfoque de hoy = Actividades + Rutinas en UNA tarjeta grande, dividida */}
+        <div style={{ marginBottom: 16 }}>
+          <Slot id="enfoque" title="Enfoque de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
+            <div className="enfoque-split" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) 1px minmax(0,1fr)', gap: 20, alignItems: 'stretch' }}>
+              <div>
+                <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E5A9E', marginBottom: 8 }}>Actividades · {todayTasks.length}</div>
+                {epics === null ? <div style={{ height: 80, opacity: 0 }} /> : todayTasks.length === 0 ? (
+                  <div style={{ padding: '8px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></div>
+                ) : (<>
+                  {todayTasks.slice(0, 9).map(({ e, t }, k, arr) => (
+                    <Link key={t.id || k} href="/epicas" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
+                      <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{e.name}</span>
+                    </Link>
                   ))}
+                  {todayTasks.length > 9 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', paddingTop: 8 }}>+{todayTasks.length - 9} más</div>}
+                </>)}
+              </div>
+              <div className="enfoque-div" style={{ background: 'rgba(15,35,64,0.08)' }} />
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}><span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E6E6E' }}>Rutinas</span><span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{routinesDone}/{routines.length}</span></div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {routines.map((r, k) => <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 99, padding: '5px 12px', fontSize: 12.5, fontWeight: 600, background: r.done ? 'rgba(46,110,110,0.12)' : 'rgba(15,35,64,0.05)', border: `1px solid ${r.done ? 'rgba(46,110,110,0.3)' : 'rgba(15,35,64,0.1)'}`, color: r.done ? '#2E6E6E' : 'rgba(20,35,61,0.6)' }}>{r.done ? '✓' : '○'} {r.name}</span>)}
+                  {routines.length === 0 && <span style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.45)' }}>Sin rutinas.</span>}
                 </div>
                 <Link href="/epicas" style={{ display: 'inline-block', marginTop: 12, fontSize: 11.5, fontWeight: 700, color: '#2E6E6E', textDecoration: 'none' }}>marcar en Épicas →</Link>
-              </Slot>
-            </MItem>
-          )}
+              </div>
+            </div>
+          </Slot>
+        </div>
 
-          <MItem><Slot id="calendario" title="Calendario" icon="🗓️" bare layout={layout} setSlot={setSlot}><CalendarWidget /></Slot></MItem>
-
-          {dueSoon.length > 0 && (
-            <MItem>
+        {/* Calendario + (Por vencer + accesos) */}
+        <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
+          <Slot id="calendario" title="Calendario" icon="🗓️" bare layout={layout} setSlot={setSlot}><CalendarWidget /></Slot>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {dueSoon.length > 0 && (
               <Slot id="vence" title="Por vencer" icon="⏳" accent="#B0522E" layout={layout} setSlot={setSlot}>
                 {dueSoon.map(({ e, t, days }, k) => (
                   <Link key={t.id || k} href="/epicas" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none', textDecoration: 'none', color: 'inherit' }}>
@@ -249,46 +285,49 @@ export default function PanelClient() {
                   </Link>
                 ))}
               </Slot>
-            </MItem>
-          )}
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {[{ href: '/tiempo', t: 'Tiempo', d: 'Planifica y cierra el día', c: '#8a4b28' }, { href: '/epicas', t: 'Épicas', d: 'Tus frentes y tareas', c: '#2E5A9E' }].map(q => (
+                <Link key={q.href} href={q.href} style={{ ...baseCard, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', padding: '14px 16px', textDecoration: 'none', color: 'inherit', display: 'block' }}>
+                  <div style={{ fontFamily: SERIF, fontSize: 17, color: q.c }}>{q.t} →</div>
+                  <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 3 }}>{q.d}</div>
+                </Link>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* SECCIÓN · PERSONAS Y FECHAS (navy) */}
+        {/* SECCIÓN · PERSONAS Y FECHAS (navy, 2-col grandes) */}
         <SectionTitle icon="👥" href={PERSONAS} external cta="ver en Mi Vida">Personas y fechas</SectionTitle>
-        <div style={{ columnWidth: 340, columnGap: 16 }}>
+        <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px,1fr))', gap: 16, alignItems: 'start' }}>
           {cumples.length > 0 && (
-            <MItem>
-              <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
-                {cumples.map((c, k) => (
-                  <a key={k} href={PERSONAS} target="_blank" rel="noopener noreferrer" title="Abrir en Mi Vida" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
-                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
-                  </a>
-                ))}
-              </Slot>
-            </MItem>
+            <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
+              {cumples.map((c, k) => (
+                <a key={k} href={PERSONAS} target="_blank" rel="noopener noreferrer" title="Abrir en Mi Vida" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{rel(c.days)}</span>
+                </a>
+              ))}
+            </Slot>
           )}
-
           {fechas.length > 0 && (
-            <MItem>
-              <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
-                {fechas.map((f, k) => (
-                  <a key={k} href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" title="Abrir este momento en Mi Vida" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '9px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: f.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0, paddingTop: 1 }}>{f.dia} {MES3[f.mes]}</span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}{f.anos > 0 ? <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {f.anos} años</span> : ''}</div>
-                      {f.personas.length > 0 && <div style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>con {f.personas.join(', ')}</div>}
-                    </span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0, paddingTop: 1 }}>{rel(f.days)}</span>
-                  </a>
-                ))}
-              </Slot>
-            </MItem>
+            <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
+              {fechas.map((f, k) => (
+                <a key={k} href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" title="Abrir este momento en Mi Vida" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none', textDecoration: 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: f.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0, paddingTop: 1 }}>{f.dia} {MES3[f.mes]}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}{f.anos > 0 ? <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {f.anos} años</span> : ''}</div>
+                    {f.personas.length > 0 && <div style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>con {f.personas.join(', ')}</div>}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0, paddingTop: 1 }}>{rel(f.days)}</span>
+                </a>
+              ))}
+            </Slot>
           )}
         </div>
       </main>
-      <style>{`@media (max-width: 640px){ .panel-info{ grid-template-columns: 1fr !important; } }`}</style>
+      <style>{`@media (max-width: 720px){ .panel-info, .panel-2col{ grid-template-columns: 1fr !important; } .enfoque-split{ grid-template-columns: 1fr !important; } .enfoque-div{ display: none !important; } }`}</style>
     </div>
   )
 }
