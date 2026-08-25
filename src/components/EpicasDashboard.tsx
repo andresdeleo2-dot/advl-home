@@ -8248,15 +8248,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
                     {plannedMin > 0 && (
                       <div>
-                        {secLbl('🎯 Planeado vs trabajado', <button onClick={() => setDcCompare(true)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>ver detalle ▸</button>)}
+                        {secLbl('🎯 Estimado vs trabajado', <button onClick={() => setDcCompare(true)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: '#2E5A9E' }}>ver detalle ▸</button>)}
                         <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 14px', background: '#FBFAF6' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
                             <div><div className="serif" style={{ fontSize: 22, color: '#2E6E6E', lineHeight: 1 }}>{hmm(realTaskMin)}</div><div style={{ fontSize: 10, color: 'rgba(20,35,61,0.5)' }}>trabajado</div></div>
                             <div style={{ fontSize: 18, color: 'rgba(15,35,64,0.25)' }}>/</div>
-                            <div style={{ textAlign: 'right' }}><div className="serif" style={{ fontSize: 22, color: '#A87A2C', lineHeight: 1 }}>{hmm(plannedMin)}</div><div style={{ fontSize: 10, color: 'rgba(20,35,61,0.5)' }}>planeado</div></div>
+                            <div style={{ textAlign: 'right' }}><div className="serif" style={{ fontSize: 22, color: '#A87A2C', lineHeight: 1 }}>{hmm(plannedMin)}</div><div style={{ fontSize: 10, color: 'rgba(20,35,61,0.5)' }}>estimado</div></div>
                           </div>
                           <div style={{ height: 8, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><div style={{ width: `${Math.min(100, planPct)}%`, height: '100%', background: planPct >= 100 ? '#2E6E6E' : planPct >= 60 ? '#C2933A' : '#B0522E' }} /></div>
-                          <div style={{ marginTop: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)', fontWeight: 600 }}>{planPct}% de lo planeado{realTaskMin >= plannedMin ? ' · ✓ cumpliste' : ` · faltan ${hmm(Math.max(0, plannedMin - realTaskMin))}`}{otherMinDay > 0 ? ` · +${hmm(otherMinDay)} general/rutinas` : ''}</div>
+                          <div style={{ marginTop: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)', fontWeight: 600 }}>{planPct}% de tu estimado{realTaskMin >= plannedMin ? ' · ✓ cumpliste' : ` · faltan ${hmm(Math.max(0, plannedMin - realTaskMin))}`}{otherMinDay > 0 ? ` · +${hmm(otherMinDay)} general/rutinas` : ''}</div>
+                          <div style={{ marginTop: 3, fontSize: 10, color: 'rgba(20,35,61,0.4)' }}>Estimado = lo que creías que tomaría cada tarea.</div>
                         </div>
                       </div>
                     )}
@@ -8417,9 +8418,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={{ padding: '18px 20px 20px' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
                       <div>
-                        <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 4 }}>Planeado vs trabajado</div>
+                        <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 4 }}>Estimado vs trabajado</div>
                         <div className="serif" style={{ fontSize: 21, color: '#10233F', lineHeight: 1 }}>{cap(new Date(refDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
-                        <div style={{ marginTop: 6, fontSize: 12.5, color: 'rgba(20,35,61,0.6)' }}>Trabajaste <b style={{ color: '#2E6E6E' }}>{hmm(realTaskMin)}</b> de <b style={{ color: '#A87A2C' }}>{hmm(plannedMin)}</b> planeadas · <b>{planPct}%</b>{over > 0 ? ` · ${over} se pasaron` : ''}</div>
+                        <div style={{ marginTop: 6, fontSize: 12.5, color: 'rgba(20,35,61,0.6)' }}>Trabajaste <b style={{ color: '#2E6E6E' }}>{hmm(realTaskMin)}</b> de <b style={{ color: '#A87A2C' }}>{hmm(plannedMin)}</b> estimadas · <b>{planPct}%</b>{over > 0 ? ` · ${over} se pasaron` : ''}</div>
                       </div>
                       <button aria-label="Cerrar" onClick={() => setDcCompare(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
                     </div>
