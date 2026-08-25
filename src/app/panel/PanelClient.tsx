@@ -11,6 +11,7 @@ import BirthdayCelebration from '@/components/BirthdayCelebration'
 import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO, mondayISO } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
+import { fotoSrc, edadEnFecha, colorTipo, diffFechas, formatDiff } from '@/lib/vida'
 
 const SERIF = 'var(--epica-serif, Georgia, serif)'
 const dayIdxMon = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return (new Date(y, m - 1, d).getDay() + 6) % 7 }
@@ -76,17 +77,19 @@ export default function PanelClient() {
   const [workedMin, setWorkedMin] = useState(0)
   const [runningName, setRunningName] = useState<string | null>(null)
   const [personas, setPersonas] = useState<{ id: string; nombre: string; apodo: string | null; cumple: string; excepcional?: boolean; foto?: string | null; celular?: string | null }[]>([])
-  const [momentos, setMomentos] = useState<{ id: number; titulo: string; tipo?: string | null; fecha: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null; descripcion?: string | null; nota?: string | null; fotos?: string[] | null }[]>([])
+  const [momentos, setMomentos] = useState<{ id: number; titulo: string; tipo?: string | null; fecha: string | null; fecha_fin?: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null; descripcion?: string | null; nota?: string | null; fotos?: string[] | null; importancia?: number | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
   const [weather, setWeather] = useState<{ temp: number; feels: number; humidity: number; label: string; icon: string; hourly: { h: number; temp: number; icon: string; pop: number | null }[]; cities: { name: string; temp: number; icon: string }[] } | null>(null)
   const [peek, setPeek] = useState<
     | { kind: 'task'; e: Epica; t: EpicaTask }
     | { kind: 'cumple'; c: { id: string; nombre: string; dia: number; mes: number; anos: number; exc: boolean; days: number; foto?: string | null; celular?: string | null } }
-    | { kind: 'fecha'; f: { id: number; titulo: string; tipo?: string | null; personas: string[]; dia: number; mes: number; anos: number; days: number; descripcion?: string | null; nota?: string | null; foto?: string | null } }
+    | { kind: 'fecha'; f: { id: number; titulo: string; tipo?: string | null; personas: string[]; dia: number; mes: number; anos: number; days: number; descripcion?: string | null; nota?: string | null; fotos: string[]; fecha: string; fechaFin?: string | null; importancia?: number | null } }
     | null
   >(null)
   const [enfEpic, setEnfEpic] = useState<string>('todas')   // filtro por épica en Actividades
   const [enfAll, setEnfAll] = useState(false)               // ver TODAS las actividades del día
+  const [fotoIdx, setFotoIdx] = useState(0)                 // carrusel de fotos en el popup de momento
+  useEffect(() => { setFotoIdx(0) }, [peek])
 
   const today = todayISO()
 
@@ -173,7 +176,7 @@ export default function PanelClient() {
       let next = new Date(hoy.getFullYear(), mo - 1, d, 12)
       if (next.getTime() < hoy.getTime() - 43200000) next = new Date(hoy.getFullYear() + 1, mo - 1, d, 12)
       const days = Math.round((next.getTime() - hoy.getTime()) / 86400000)
-      return { id: mm.id, titulo: mm.titulo, tipo: mm.tipo ?? null, personas: mm.personas || [], days, dia: d, mes: mo - 1, anos: next.getFullYear() - y, descripcion: mm.descripcion ?? null, nota: mm.nota ?? null, foto: (mm.fotos && mm.fotos[0]) || null }
+      return { id: mm.id, titulo: mm.titulo, tipo: mm.tipo ?? null, personas: mm.personas || [], days, dia: d, mes: mo - 1, anos: next.getFullYear() - y, descripcion: mm.descripcion ?? null, nota: mm.nota ?? null, fotos: mm.fotos || [], fecha: mm.fecha as string, fechaFin: mm.fecha_fin ?? null, importancia: mm.importancia ?? null }
     }).filter((x): x is NonNullable<typeof x> => !!x).sort((a, b) => a.days - b.days).slice(0, 7)
   }, [momentos])
 
@@ -420,7 +423,7 @@ export default function PanelClient() {
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                 {c.foto
-                  ? <img src={c.foto} alt="" referrerPolicy="no-referrer" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '2px solid rgba(231,197,107,0.5)' }} onError={ev => { ev.currentTarget.style.display = 'none' }} />
+                  ? <img src={fotoSrc(c.foto)} alt="" referrerPolicy="no-referrer" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '2px solid rgba(231,197,107,0.5)' }} onError={ev => { ev.currentTarget.style.display = 'none' }} />
                   : <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(231,197,107,0.18)', color: '#E7C56B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontFamily: SERIF, flexShrink: 0 }}>{c.nombre.charAt(0)}</div>}
                 <div style={{ minWidth: 0 }}>
                   <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>🎂 Cumpleaños{c.days === 0 ? ' · ¡hoy!' : ''}</div>
@@ -432,6 +435,18 @@ export default function PanelClient() {
             </div>
             <div style={{ marginTop: 14, fontSize: 13.5, color: 'rgba(243,239,230,0.85)' }}>{c.dia} de {MESLARGO[c.mes]} · cumple <b style={{ color: '#F3EFE6' }}>{c.anos}</b> años</div>
             <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{c.days === 0 ? '¡Es hoy! 🎉' : `Faltan ${c.days} días`}{c.exc ? ' · Persona excepcional ✦' : ''}</div>
+            {(() => {
+              const juntos = momentos.filter(m => m.fecha && (m.personas || []).some(p => { const a = p.toLowerCase(), b = c.nombre.toLowerCase(); return a.includes(b) || b.includes(a) })).slice(0, 5)
+              if (!juntos.length) return null
+              return (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)', marginBottom: 8 }}>Momentos juntos · {juntos.length}</div>
+                  <div style={{ borderRadius: 12, border: '1px solid rgba(255,255,255,0.09)', overflow: 'hidden' }}>
+                    {juntos.map((m, mi) => <a key={m.id} href={`${VIDA}?r=${m.id}`} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', textDecoration: 'none', borderBottom: mi < juntos.length - 1 ? '1px solid rgba(255,255,255,0.07)' : 'none' }}><span style={{ fontSize: 12, flexShrink: 0 }}>✦</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.titulo}</span><span style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.45)', flexShrink: 0 }}>{m.fecha?.slice(0, 4)}</span></a>)}
+                  </div>
+                </div>
+              )
+            })()}
             {wa && <div style={{ marginTop: 16 }}><a href={`https://wa.me/${wa}?text=${msg}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: '#25D366', color: '#0b2e1a' }}>💬 Felicitar por WhatsApp</a></div>}
             <div style={{ marginTop: wa ? 8 : 16 }}><a href={`${PERSONAS}&persona=${c.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'rgba(255,255,255,0.08)', color: '#F3EFE6' }}>Ver expediente completo en Mi Vida →</a></div>
           </>)
@@ -439,17 +454,44 @@ export default function PanelClient() {
 
         const { f } = peek
         const desc = stripHtml(f.descripcion) || stripHtml(f.nota)
+        const fotos = (f.fotos || []).filter(Boolean).map(fotoSrc)
+        const idx = fotos.length ? ((fotoIdx % fotos.length) + fotos.length) % fotos.length : 0
+        const dt = f.fecha ? new Date(f.fecha + 'T12:00:00') : null
+        const DN = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
+        const fechaLarga = dt && !isNaN(dt.getTime()) ? `${DN[dt.getDay()]} ${f.dia} de ${MESLARGO[f.mes]} de ${f.fecha.slice(0, 4)}` : `${f.dia} de ${MESLARGO[f.mes]}`
+        const edad = f.fecha ? edadEnFecha(f.fecha) : null
+        const hace = f.fecha ? formatDiff(diffFechas(f.fecha, todayISO())) : ''
+        const dur = f.fechaFin ? formatDiff(diffFechas(f.fecha, f.fechaFin)) : null
+        const tipoC = colorTipo(f.tipo || '')
+        const infoCard = (label: string, value: string) => <div style={{ flex: 1, minWidth: 0, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '10px 12px' }}><div style={{ font: '800 9px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(243,239,230,0.5)' }}>{label}</div><div style={{ fontSize: 13, color: '#F3EFE6', marginTop: 5, lineHeight: 1.3 }}>{value}</div></div>
         return shell('#C2933A', true, <>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-            <div style={{ minWidth: 0 }}><div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>✦ Fecha a recordar{f.tipo ? ` · ${f.tipo}` : ''}</div><div className="serif" style={{ fontSize: 21, color: '#F3EFE6', lineHeight: 1.2 }}>{f.titulo}</div></div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+            <div style={{ minWidth: 0 }}><div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 5 }}>✦ Momento{f.tipo ? ` · ${f.tipo}` : ''}</div><div className="serif" style={{ fontSize: 22, color: '#F3EFE6', lineHeight: 1.15 }}>{f.titulo}</div><div style={{ fontSize: 12, color: 'rgba(243,239,230,0.6)', marginTop: 4, textTransform: 'capitalize' }}>{fechaLarga}{f.anos > 0 ? ` · ${f.anos} años` : ''}</div></div>
             {closeBtn(true)}
           </div>
-          {f.foto && <img src={f.foto} alt="" referrerPolicy="no-referrer" style={{ width: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 12, marginTop: 12 }} onError={ev => { ev.currentTarget.style.display = 'none' }} />}
-          <div style={{ marginTop: 12, fontSize: 13.5, color: 'rgba(243,239,230,0.85)' }}>{f.dia} de {MESLARGO[f.mes]}{f.anos > 0 ? ` · ${f.anos} años` : ''}</div>
-          <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{f.days === 0 ? '¡Es hoy! 🎉' : `Faltan ${f.days} días`}</div>
-          {f.personas.length > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: 'rgba(243,239,230,0.6)' }}>con {f.personas.join(', ')}</div>}
-          {desc && <div style={{ marginTop: 10, fontSize: 12.5, color: 'rgba(243,239,230,0.72)', lineHeight: 1.5, maxHeight: 140, overflow: 'auto' }}>{desc}</div>}
-          <div style={{ marginTop: 16 }}><a href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Ver en Mi Vida →</a></div>
+          {fotos.length > 0 && (
+            <div style={{ position: 'relative', marginBottom: 14 }}>
+              <img src={fotos[idx]} alt="" referrerPolicy="no-referrer" style={{ width: '100%', height: 220, objectFit: 'cover', borderRadius: 12, background: 'rgba(255,255,255,0.05)' }} onError={ev => { ev.currentTarget.style.opacity = '0' }} />
+              {fotos.length > 1 && <>
+                <button onClick={() => setFotoIdx(i => i - 1)} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', border: 'none', background: 'rgba(11,26,51,0.6)', color: '#fff', width: 30, height: 30, borderRadius: 99, fontSize: 15 }}>‹</button>
+                <button onClick={() => setFotoIdx(i => i + 1)} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', border: 'none', background: 'rgba(11,26,51,0.6)', color: '#fff', width: 30, height: 30, borderRadius: 99, fontSize: 15 }}>›</button>
+                <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, display: 'flex', gap: 4, justifyContent: 'center' }}>{fotos.map((_, di) => <span key={di} style={{ width: 6, height: 6, borderRadius: 99, background: di === idx ? '#fff' : 'rgba(255,255,255,0.45)' }} />)}</div>
+              </>}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {edad && infoCard('Etapa', edad.etapa)}
+            {typeof f.importancia === 'number' && f.importancia > 0 && infoCard('Importancia', `${f.importancia}/10`)}
+            {dur && infoCard('Duración', dur)}
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.6)' }}>{f.days === 0 ? '¡Es hoy! 🎉' : `su aniversario en ${f.days} días`}</span>
+            {hace && <span style={{ fontSize: 11, color: 'rgba(243,239,230,0.5)' }}>· hace {hace}</span>}
+            {f.tipo && <span style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: '2px 9px', background: `${tipoC}33`, color: '#F3EFE6' }}>{f.tipo}</span>}
+          </div>
+          {f.personas.length > 0 && <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>{f.personas.map((p, pi) => <span key={pi} style={{ fontSize: 11.5, borderRadius: 99, padding: '3px 10px', background: 'rgba(255,255,255,0.06)', color: 'rgba(243,239,230,0.8)' }}>{p}</span>)}</div>}
+          {desc && <div style={{ marginTop: 12, fontSize: 12.5, color: 'rgba(243,239,230,0.72)', lineHeight: 1.55, maxHeight: 160, overflow: 'auto' }}>{desc}</div>}
+          <div style={{ marginTop: 16 }}><a href={`${VIDA}?r=${f.id}`} target="_blank" rel="noopener noreferrer" style={{ ...ctaStyle, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305' }}>Ver completo en Mi Vida →</a></div>
         </>)
       })()}
 
