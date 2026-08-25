@@ -4687,11 +4687,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && !focus.active && (
                 <button onClick={pickNextNow} title="Elige la mejor siguiente tarea de hoy y arranca el cronómetro" style={{ border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 10, padding: '9px 15px', font: '800 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>⚡ ¿Qué ahora?</button>
               )}
-              {!board && ((isToday && (planItems.length > 0 || arrastradas.length > 0)) || (viewDate < today && planPend.length > 0)) && (() => {
+              {(planMode === 'dia' || ajuste || detalle) && viewDate <= today && (() => {
                 const pastPend = viewDate < today && planPend.length > 0
                 const warn = arrastradas.length > 0 || pastPend
                 return (
-                <button onClick={() => setDayCloseOpen(true)} title={pastPend ? 'Este día quedó sin cerrar — mueve sus pendientes a hoy u otro día' : 'Resumen del día, mover pendientes y arrastre a otros días'} style={{ border: warn ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: warn ? 'rgba(176,82,46,0.06)' : '#fff', color: warn ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día{pastPend ? ` · ${planPend.length} sin cerrar` : arrastradas.length > 0 ? ` · ${arrastradas.length} arrastre` : ''}</button>
+                <button onClick={() => setDayCloseOpen(true)} title={pastPend ? 'Este día quedó sin cerrar — mueve sus pendientes a hoy u otro día' : 'Cierre del día: resumen, planeado vs trabajado, comentario y mover pendientes'} style={{ border: warn ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: warn ? 'rgba(176,82,46,0.06)' : '#fff', color: warn ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día{pastPend ? ` · ${planPend.length} sin cerrar` : arrastradas.length > 0 ? ` · ${arrastradas.length} arrastre` : ''}</button>
                 )
               })()}
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
