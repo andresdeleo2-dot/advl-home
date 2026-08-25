@@ -55,9 +55,28 @@ export async function GET() {
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 
   // Un evento puede estar en más de un calendario (invitación personal + entrada del calendario
-  // de grupo) → mismo id: se deduplica para no mostrar la reunión dos veces ni chocar keys de React.
-  const seen = new Set<string>()
-  const deduped = events.filter(e => { const id = String(e.id ?? ''); if (!id) return true; if (seen.has(id)) return false; seen.add(id); return true })
+  // de grupo) → mismo id. Antes se deduplicaba quedándose con el PRIMERO, pero la copia del
+  // calendario personal (compartido "solo libre/ocupado") llega SIN summary/lugar/descripción →
+  // salía "(sin título)". Ahora se MERGEAN por id prefiriendo el campo no vacío de cualquiera de
+  // las copias, así el título/lugar/descripción del calendario que sí los expone gana.
+  type Ev = typeof events[number]
+  const byId = new Map<string, Ev>()
+  const sinId: Ev[] = []
+  for (const e of events) {
+    const id = String(e.id ?? '')
+    if (!id) { sinId.push(e); continue }
+    const prev = byId.get(id)
+    byId.set(id, prev ? {
+      ...prev,
+      title: prev.title || e.title,
+      location: prev.location || e.location,
+      description: prev.description || e.description,
+      hangoutLink: prev.hangoutLink || e.hangoutLink,
+      htmlLink: prev.htmlLink || e.htmlLink,
+      color: prev.color || e.color,
+    } : e)
+  }
+  const deduped = [...byId.values(), ...sinId].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 
   return NextResponse.json(deduped)
 }
