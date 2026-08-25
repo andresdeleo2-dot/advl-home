@@ -12,6 +12,7 @@ import {
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
+import Confetti from '@/components/Confetti'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
 const PRIOS = ['alta', 'media', 'baja'] as const
@@ -108,6 +109,8 @@ export default function TiempoClient() {
   const [routinePopT, setRoutinePopT] = useState<{ epicaId: string; rIdx: number } | null>(null)  // popup de rutina (paridad con Épicas)
   const [dcCompareT, setDcCompareT] = useState(false)                  // popup "planeado vs trabajado" (detalle por tarea)
   const [dcSubsAllT, setDcSubsAllT] = useState(false)                  // ver TODAS las subtareas terminadas del día
+  const [dayClosedT, setDayClosedT] = useState<Record<string, string>>({})  // días ya cerrados (localStorage 'epicas.dayClosed.v1', compartido)
+  const [dcCelebrateT, setDcCelebrateT] = useState(false)              // confeti al cerrar el día
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1055,6 +1058,10 @@ export default function TiempoClient() {
     try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch {}
     return next
   })
+  // Día cerrado (compartido con Épicas): se marca al cerrar (con confeti); se puede reabrir/ver de nuevo.
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayClosed.v1'); if (raw) setDayClosedT(JSON.parse(raw)) } catch {} }, [])
+  const markDayClosedT = (day: string) => setDayClosedT(prev => { const next = { ...prev, [day]: new Date().toISOString() }; try { localStorage.setItem('epicas.dayClosed.v1', JSON.stringify(next)) } catch {} return next })
+  const celebrateCloseT = () => { setDcCelebrateT(true); setTimeout(() => setDcCelebrateT(false), 4000) }
   const openTaskById = (tid?: string) => { if (!tid) return; const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
   useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false); setDcSelT(new Set()); setDcEpicT('todas'); setDcCompareT(false); setDcSubsAllT(false) } }, [dayCloseT])
 
@@ -2633,7 +2640,7 @@ export default function TiempoClient() {
         for (const t of (allTasks || [])) for (const s of (t.task.subtasks || [])) if (s.done && localDay(s.doneAt) === dcDay) doneSubs.push({ task: t.task.t, sub: s.t, color: t.color, tt: t })
         // Mueve TODAS las pendientes (en curso + sin tocar) del día a otro día, y cierra.
         const pendingAll = [...openTasks.map(w => w.tt).filter(Boolean) as TodayTask[], ...planned]
-        const moveAllPending = (day: string) => { const seen = new Set<string>(); pendingAll.forEach(t => { if (t.task.id && !seen.has(t.task.id)) { seen.add(t.task.id); moveTaskToDay(t, day) } }); setDcCloseT(false); setDayCloseT(false) }
+        const moveAllPending = (day: string) => { const seen = new Set<string>(); pendingAll.forEach(t => { if (t.task.id && !seen.has(t.task.id)) { seen.add(t.task.id); moveTaskToDay(t, day) } }); markDayClosedT(dcDay); celebrateCloseT(); setDcCloseT(false); setDayCloseT(false) }
         // % del tiempo por actividad (todo el trabajo del día, por nombre, color/épica de la tarea si aplica).
         const bmap = new Map<string, { min: number; color: string; eId: string }>()
         data.history.filter(h => h.date === dcDay && h.area === 'trabajo').forEach(h => { const cur = bmap.get(h.name) || { min: 0, color: h.taskId ? (tof(h.taskId)?.color || '#8a4b28') : '#94A3B8', eId: h.taskId ? (tof(h.taskId)?.epicaId || '') : '' }; cur.min += h.dur; bmap.set(h.name, cur) })
@@ -2711,6 +2718,7 @@ export default function TiempoClient() {
                   <div>
                     <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.2em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 5 }}>Cierre del día</div>
                     <div style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1, color: '#1c1a17', textTransform: 'capitalize' }}>{longDayOf(dcDay)}</div>
+                    {dayClosedT[dcDay] && <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, borderRadius: 99, padding: '3px 11px', background: 'rgba(62,110,110,0.12)', border: '1px solid rgba(62,110,110,0.35)', font: '800 11.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#3E6E6E' }}>✓ Día cerrado{(() => { const dt = new Date(dayClosedT[dcDay]); return isNaN(dt.getTime()) ? '' : ` · ${dt.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })}` })()}</div>}
                     {dayWorkedMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#3E6E6E', fontWeight: 700 }}>⏱ {hmm(dayWorkedMin)} {isTodayView ? 'trabajadas hoy' : 'ese día'}{othersMin > 0 ? <span style={{ fontWeight: 600, color: '#a49b90' }}> · {hmm(dayWorkedMin - othersMin)} en tareas, {hmm(othersMin)} general/rutinas</span> : null}</div>}
                   </div>
                   <button aria-label="Cerrar" onClick={() => setDayCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(28,26,23,.06)', borderRadius: 9, height: 32, width: 32, color: '#8b8379', fontSize: 16 }}>✕</button>
@@ -2842,7 +2850,7 @@ export default function TiempoClient() {
                   {!dcCloseT ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12.5, color: '#8b8379', fontWeight: 600 }}>{pendingAll.length > 0 ? `${pendingAll.length} ${pendingAll.length === 1 ? 'pendiente' : 'pendientes'} sin cerrar` : 'Cerraste todo ✦'}</span>
-                      <button onClick={() => { if (pendingAll.length > 0) setDcCloseT(true); else setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--tiempo-ui, system-ui, sans-serif)', background: 'linear-gradient(135deg,#8a4b28,#6f3c20)', color: '#faf7f1', boxShadow: '0 8px 20px -8px rgba(138,75,40,.6)' }}>✓ Cerrar el día</button>
+                      <button onClick={() => { if (pendingAll.length > 0) setDcCloseT(true); else { markDayClosedT(dcDay); celebrateCloseT(); setDayCloseT(false) } }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--tiempo-ui, system-ui, sans-serif)', background: 'linear-gradient(135deg,#8a4b28,#6f3c20)', color: '#faf7f1', boxShadow: '0 8px 20px -8px rgba(138,75,40,.6)' }}>{dayClosedT[dcDay] ? '✓ Cerrar de nuevo' : '✓ Cerrar el día'}</button>
                     </div>
                   ) : (
                     <div>
@@ -2855,7 +2863,7 @@ export default function TiempoClient() {
                         }) })()}
                       </div>
                       <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
-                        <button onClick={() => { setDcCloseT(false); setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28', padding: 0 }}>No mover · solo cerrar</button>
+                        <button onClick={() => { markDayClosedT(dcDay); celebrateCloseT(); setDcCloseT(false); setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28', padding: 0 }}>No mover · solo cerrar</button>
                         <button onClick={() => setDcCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90', padding: 0 }}>Cancelar</button>
                       </div>
                     </div>
@@ -2866,6 +2874,7 @@ export default function TiempoClient() {
           </div>
         )
       })()}
+      {dcCelebrateT && <Confetti count={140} zIndex={9999} />}
       {/* POPUP: planeado vs trabajado, detalle por tarea del día. */}
       {dcCompareT && (() => {
         const dcDay = taskDay

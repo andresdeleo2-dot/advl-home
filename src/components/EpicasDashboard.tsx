@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
+import Confetti from '@/components/Confetti'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
@@ -165,6 +166,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [dcCompare, setDcCompare] = useState(false)                // popup "planeado vs trabajado" (detalle por tarea)
   const [dcSubsAll, setDcSubsAll] = useState(false)                // ver TODAS las subtareas terminadas del día
   const [dayScores, setDayScores] = useState<Record<string, number>>({})  // calificación 1-10 del día (localStorage 'epicas.dayScores.v1')
+  const [dayClosed, setDayClosed] = useState<Record<string, string>>({})  // días ya cerrados (localStorage 'epicas.dayClosed.v1'; valor = ISO del cierre)
+  const [dcCelebrate, setDcCelebrate] = useState(false)            // dispara el confeti al cerrar el día
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({})             // comentario libre por día (localStorage 'epicas.dayNotes.v1')
   const [epicBudgets, setEpicBudgets] = useState<Record<string, number>>({})  // presupuesto de horas/semana por épica (localStorage, sin migración)
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
@@ -551,6 +554,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
+  // Día cerrado: se marca al pulsar "Cerrar el día" (con confeti). Se puede reabrir/ver de nuevo.
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayClosed.v1'); if (raw) setDayClosed(JSON.parse(raw)) } catch { /* noop */ } }, [])
+  const markDayClosed = (day: string, closed: boolean) => setDayClosed(prev => {
+    const next = { ...prev }; if (closed) next[day] = new Date().toISOString(); else delete next[day]
+    try { localStorage.setItem('epicas.dayClosed.v1', JSON.stringify(next)) } catch { /* noop */ }
+    return next
+  })
+  const celebrateClose = () => { setDcCelebrate(true); setTimeout(() => setDcCelebrate(false), 4000) }
   useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false); setDcSubsAll(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
   const setEpicBudget = (id: string, hours: number) => {
@@ -8221,7 +8232,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>Cierre del día</div>
                     <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cap(new Date(refDay + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
-                    {!refIsToday && <div style={{ marginTop: 6, fontSize: 11.5, color: '#B0522E', fontWeight: 700 }}>Este día quedó sin cerrar</div>}
+                    {dayClosed[refDay]
+                      ? <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, borderRadius: 99, padding: '3px 11px', background: 'rgba(46,110,110,0.12)', border: '1px solid rgba(46,110,110,0.35)', font: '800 11.5px var(--font-ui)', color: '#2E6E6E' }}>✓ Día cerrado{(() => { const dt = new Date(dayClosed[refDay]); return isNaN(dt.getTime()) ? '' : ` · ${dt.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })}` })()}</div>
+                      : (!refIsToday && <div style={{ marginTop: 6, fontSize: 11.5, color: '#B0522E', fontWeight: 700 }}>Este día quedó sin cerrar</div>)}
                     {refIsToday
                       ? (focus.workedTodayMin > 0 && (() => { const otherM = Math.max(0, focus.workedTodayMin - totalMin); return (
                           <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(focus.workedTodayMin)} trabajadas hoy{otherM > 0 ? <span style={{ fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}> · {hmm(totalMin)} en tareas, {hmm(otherM)} general/rutinas</span> : null}</div>
@@ -8379,7 +8392,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {!dcClose ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.6)', fontWeight: 600 }}>{planPend.length > 0 ? `${planPend.length} ${planPend.length === 1 ? 'pendiente' : 'pendientes'} sin cerrar` : 'Cerraste todo ✦'}</span>
-                      <button onClick={() => { if (planPend.length > 0) setDcClose(true); else setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>✓ Cerrar el día</button>
+                      <button onClick={() => { if (planPend.length > 0) setDcClose(true); else { markDayClosed(refDay, true); celebrateClose(); setDayCloseOpen(false) } }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>{dayClosed[refDay] ? '✓ Cerrar de nuevo' : '✓ Cerrar el día'}</button>
                     </div>
                   ) : (
                     <div>
@@ -8388,11 +8401,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {Array.from({ length: 8 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
                           const first = d === addDays(today, refIsToday ? 1 : 0)
                           const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
-                          return <button key={d} onClick={() => { moveTodayPendingTo(d); setDcClose(false) }} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
+                          return <button key={d} onClick={() => { moveTodayPendingTo(d); markDayClosed(refDay, true); celebrateClose(); setDcClose(false) }} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
                         })}
                       </div>
                       <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
-                        <button onClick={() => { setDcClose(false); setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--font-ui)', color: '#2E6E6E', padding: 0 }}>No mover · solo cerrar</button>
+                        <button onClick={() => { markDayClosed(refDay, true); celebrateClose(); setDcClose(false); setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--font-ui)', color: '#2E6E6E', padding: 0 }}>No mover · solo cerrar</button>
                         <button onClick={() => setDcClose(false)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 12.5px var(--font-ui)', color: 'rgba(20,35,61,0.5)', padding: 0 }}>Cancelar</button>
                       </div>
                     </div>
@@ -8610,6 +8623,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
 
+      {dcCelebrate && <Confetti count={140} zIndex={9999} />}
       {toast && (
         <div className="ep-abovenav" style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)', display: 'flex', alignItems: 'center', gap: 14 }}>
           <span>{toast.msg}</span>
