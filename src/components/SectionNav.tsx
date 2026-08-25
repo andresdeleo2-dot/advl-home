@@ -9,13 +9,15 @@ import type { ReactNode } from 'react'
 
 const ICONS: Record<string, ReactNode> = {
   accesos: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>),
+  panel: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>),
   epicas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4" /><path d="M4 4h13l-2.5 4L17 12H4" /></svg>),
   tiempo: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 1.8" /></svg>),
 }
 
-export default function SectionNav({ current }: { current: 'accesos' | 'epicas' | 'tiempo' }) {
+export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' }) {
   const items = [
     { id: 'accesos', label: 'Accesos', href: '/' },
+    { id: 'panel', label: 'Panel', href: '/panel' },
     { id: 'epicas', label: 'Épicas', href: '/epicas' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
   ] as const
