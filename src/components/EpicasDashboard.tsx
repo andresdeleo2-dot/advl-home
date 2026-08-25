@@ -228,6 +228,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [orderTapMode, setOrderTapMode] = useState(false)               // "Ordenar tocando": numerar las tareas en el orden que las tocas (sin arrastrar ni teclear)
   const [orderSeq, setOrderSeq] = useState<string[]>([])                // keys en el orden tocado (1,2,3…) mientras dura el modo
   const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el selector de tiempo (chip ⏱) abierto
+  const [waitEditKey, setWaitEditKey] = useState<string | null>(null)   // fila con el selector de "en espera / qué esperas" abierto
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
@@ -262,6 +263,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const resumenReady = useRef(false)     // true si la columna `resumen` existe (resumen de la tarea)
   const estMinReady = useRef(false)      // true si la columna est_min existe (estimado propio de horas por tarea)
   const dayPlansReady = useRef(false)    // true si la columna day_plans existe (sesiones por día)
+  const waitingReady = useRef(false)     // true si la columna waiting_for existe ("qué esperas" de las tareas en espera)
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
@@ -291,6 +293,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       resumenReady.current = !!j.resumenReady
       estMinReady.current = !!j.estMinReady
       dayPlansReady.current = !!j.dayPlansReady
+      waitingReady.current = !!j.waitingReady
       weekBudgetReady.current = !!j.weekBudgetReady
       {
         const raw = j.data as Epica[]
@@ -1709,6 +1712,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     else tasks[ti].estMin = 0   // 0/propiedad presente = “sin estimado propio”, se limpia en la fila (est_min = null? -> guardamos 0 = usa dificultad)
     patchEpic(e.id, { tasks })
   }
+  /** "En espera / Por revisar": marca una tarea como algo que ESPERAS (no que trabajas). La MARCA
+   *  vive en el estado 'Esperando' (sin migrar); `reason` (email/respuesta/…) es el DETALLE y sólo se
+   *  guarda si existe la columna waiting_for. `reason=null` la quita (vuelve a trabajable). */
+  const setTaskWaiting = (e: Epica, ti: number, reason: string | null) => {
+    const tasks = clone(e.tasks)
+    const t = tasks[ti]; if (!t || t.status === 'Terminada') return
+    if (reason) {
+      if (t.status !== 'Esperando') { if (t.planStatusPrev == null) t.planStatusPrev = t.status; t.status = 'Esperando' }
+      if (waitingReady.current) t.waitingFor = reason
+    } else {
+      if (t.status === 'Esperando') t.status = (t.plan === todayISO() ? 'En curso' : (t.planStatusPrev && t.planStatusPrev !== 'Esperando' ? t.planStatusPrev : 'Por hacer'))
+      delete t.planStatusPrev
+      if (waitingReady.current || 'waitingFor' in t) t.waitingFor = ''   // '' → se manda null y limpia la columna
+    }
+    patchEpic(e.id, { tasks })
+    if (reason && !waitingReady.current) showToast('Marcada En espera · corre sql/epicas-11-waiting-for.sql para guardar QUÉ esperas', true)
+  }
   // ── Sesiones por día (dayPlans): setters. Los helpers de LECTURA (dayPlansOf/taskDays/…) se
   //    definen más arriba, antes de planItems, porque planItems los usa. ──
   const mutateDayPlans = (e: Epica, ti: number, fn: (arr: EpicaDayPlan[]) => EpicaDayPlan[]) => {
@@ -2779,6 +2799,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       </span>
     )
   }
+  /** Chip "🔔 En espera / Por revisar": marca la tarea como algo que ESPERAS (email/respuesta/…) en vez
+   *  de trabajarla. Al tocarlo abre un mini-selector para elegir QUÉ esperas o quitar la espera. */
+  const rowWaitChip = (key: string, e: Epica, i: number, t: EpicaTask, align: 'left' | 'right' = 'left') => {
+    const waiting = t.status === 'Esperando'
+    const wm = waitMeta(t.waitingFor)
+    const open = waitEditKey === key
+    return (
+      <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }} onClick={ev => ev.stopPropagation()}>
+        <button onClick={ev => { ev.stopPropagation(); setWaitEditKey(open ? null : key) }} onPointerDown={ev => ev.stopPropagation()}
+          title={waiting ? `En espera${t.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''} · toca para cambiar o quitar` : 'Marcar: no la trabajas, la revisas (esperas algo: email, respuesta, comentario…)'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '800 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 9px',
+            border: `1px ${waiting ? 'solid rgba(168,122,44,0.6)' : 'dashed rgba(15,35,64,0.3)'}`,
+            background: open ? 'rgba(194,147,58,0.22)' : waiting ? 'rgba(194,147,58,0.16)' : 'rgba(15,35,64,0.03)', color: waiting ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>
+          {waiting ? `${wm.icon} ${wm.label}` : '🔔 En espera'}
+        </button>
+        {open && (
+          <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 5px)', ...(align === 'right' ? { right: 0 } : { left: 0 }), zIndex: 40, display: 'flex', flexWrap: 'wrap', gap: 5, width: 208, padding: 9, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
+            <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>¿Qué esperas?</span>
+            {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = waiting && t.waitingFor === val; return (
+              <button key={val} onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, val); setWaitEditKey(null) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#16365F' }}>{ic} {lbl}</button>
+            )})}
+            {waiting && <button onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, null); setWaitEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>}
+            {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+          </div>
+        )}
+      </span>
+    )
+  }
 
   const renderPlanRow = (x: { e: Epica; t: EpicaTask; i: number }, pos: number, noDrag = false, orderList?: { e: Epica; t: EpicaTask; i: number }[]) => {
     const { e, t, i } = x
@@ -2820,6 +2868,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )})()}
             {/* Chip de tiempo (claro y tocable · sin abrir la tarea). */}
             {rowTimeChip(key, e, i, t, viewDate)}
+            {/* Chip "🔔 En espera / Por revisar" (marcar/quitar · elegir qué esperas). */}
+            {rowWaitChip(key, e, i, t)}
             {/* Tarea estancada: reprogramada muchas veces o días sin avanzar. */}
             {(() => { const r = stuckReason(t); if (!r) return null; return (
               <span title={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 800, color: '#A15B2E', background: 'rgba(176,110,58,0.12)', border: '1px solid rgba(176,110,58,0.4)', borderRadius: 99, padding: '1px 8px' }}>🐌 estancada</span>
@@ -2884,6 +2934,29 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <button data-pop onClick={ev => { ev.stopPropagation(); setMenuRect(ev.currentTarget.getBoundingClientRect()); setRowMenu(rowMenu === key ? null : key); setPrioMenu(null) }} aria-label="Más acciones" title="Más acciones" style={{ height: 30, width: 30, border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, cursor: 'pointer', color: 'rgba(20,35,61,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, lineHeight: 1 }}>⋯</button>
           {rowMenu === key && renderRowMenu({ x, pos, total: planPend.length })}
         </div>
+      </div>
+    )
+  }
+
+  /** Fila COMPACTA para la sección "🔔 Por revisar · en espera" del Día: no es para trabajarla,
+   *  sólo para checar si ya llegó lo que esperas. Título abre la tarea; el chip permite cambiar qué
+   *  esperas o marcar "ya llegó" (la regresa a trabajable). */
+  const renderWaitRow = (x: { e: Epica; t: EpicaTask; i: number }) => {
+    const { e, t, i } = x
+    const key = planKey(e.id, t)
+    const wm = waitMeta(t.waitingFor)
+    return (
+      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, border: '1px solid rgba(194,147,58,0.3)', background: 'rgba(194,147,58,0.06)', borderLeft: '3px solid #C2933A' }}>
+        <span style={{ flexShrink: 0, fontSize: 15, lineHeight: 1 }}>{wm.icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div onClick={() => setTaskView({ eId: e.id, tid: t.id! })} title="Ver tarea" style={{ fontSize: 14, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+            <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</button>
+            {t.waitingFor && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>esperas {wm.label.toLowerCase()}</span>}
+            {t.due && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>· {fmtDue(t.due)}</span>}
+          </div>
+        </div>
+        {rowWaitChip(key, e, i, t, 'right')}
       </div>
     )
   }
@@ -3368,6 +3441,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {(() => { const dfd = difForDay(t, fromDay || t.plan || ''); return dfd ? <span title={`Dificultad ${difStyle(dfd).label}${dayPlanFor(t, fromDay || '')?.difficulty ? ' (ese día)' : ''}`} style={{ flexShrink: 0, display: 'inline-flex' }}><DifDots d={dfd} size={8} /></span> : null })()}
             {/* Chip de tiempo (claro y tocable · sin abrir la tarea) */}
             {rowTimeChip(k, e, i, t, fromDay || t.plan || '')}
+            {/* Marca "En espera" (sólo si ya lo está; se marca desde Día/Detalle/detalle) */}
+            {t.status === 'Esperando' && rowWaitChip(k, e, i, t)}
             {nDays > 1 && <span title={`Agendada en ${nDays} días`} style={{ flexShrink: 0, font: '700 8.5px var(--font-ui)', color: '#7A6FB0' }}>🗓{nDays}</span>}
             <button onClick={ev => { ev.stopPropagation(); setWeekMoveKey(weekMoveKey === k ? null : k) }} onPointerDown={ev => ev.stopPropagation()} title="Mover a otro día" style={{ flexShrink: 0, border: 'none', background: 'transparent', color: weekMoveKey === k ? '#A87A2C' : 'rgba(20,35,61,0.35)', cursor: 'pointer', fontSize: 12, padding: 0 }}>📅</button>
           </div>
@@ -5177,17 +5252,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                       )
                     })()}
-                    {table ? renderDayTable(tableRows) : (
-                      <div ref={planListRef}>
-                        {list.map((x, pos) => (
-                          <div key={planKey(x.e.id, x.t)}>
-                            {manual && draggingKey && dropIndex === pos && insLine}
-                            {renderPlanRow(x, pos, !manual, manual ? list : undefined)}
+                    {table ? renderDayTable(tableRows) : (() => {
+                      // Separa lo que ESPERAS (estado 'Esperando' = por revisar) de lo que TRABAJAS.
+                      const listWork = list.filter(x => x.t.status !== 'Esperando')
+                      const listWait = list.filter(x => x.t.status === 'Esperando')
+                      return (
+                        <>
+                          <div ref={planListRef}>
+                            {listWork.map((x, pos) => (
+                              <div key={planKey(x.e.id, x.t)}>
+                                {manual && draggingKey && dropIndex === pos && insLine}
+                                {renderPlanRow(x, pos, !manual, manual ? listWork : undefined)}
+                              </div>
+                            ))}
+                            {manual && draggingKey && dropIndex === listWork.length && insLine}
                           </div>
-                        ))}
-                        {manual && draggingKey && dropIndex === list.length && insLine}
-                      </div>
-                    )}
+                          {listWait.length > 0 && (
+                            <div style={{ marginTop: 14 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                                <span style={{ height: 7, width: 7, borderRadius: 99, background: '#C2933A' }} />
+                                <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 Por revisar · en espera</span>
+                                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{listWait.length}</span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>no las trabajas — solo checa si ya llegó</span>
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {listWait.map(x => renderWaitRow(x))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )
+                    })()}
                     {!table && filtered.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.55)', padding: '6px 0' }}>Ninguna tarea del plan coincide con el filtro.</div>}
                   </>
                 )
@@ -6763,9 +6859,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const sel = mdMultiSel.has(k)
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
             const estDay = mdDay || t.plan || ''
-            const editingEst = orderable && estEditKey === k
+            const editingChip = orderable && (estEditKey === k || waitEditKey === k)
             return (
-              <div key={k} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, overflow: editingEst ? 'visible' : 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
+              <div key={k} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : t.status === 'Esperando' ? '#C2933A' : ps.accent}`, overflow: editingChip ? 'visible' : 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
                 <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 30, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <span style={{ height: 18, width: 18, borderRadius: 5, border: sel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: sel ? '#C2933A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{sel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
                 </button>
@@ -6779,7 +6875,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ font: '700 9px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}
                   </div>
                 </button>
-                {orderable && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 8 }}>{rowTimeChip(k, e, i, t, estDay, 'right')}</span>}
+                {orderable && <span style={{ flexShrink: 0, display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, justifyContent: 'center', paddingRight: 8 }}>{rowTimeChip(k, e, i, t, estDay, 'right')}{rowWaitChip(k, e, i, t, 'right')}</span>}
               </div>
             )
           })}
@@ -8807,6 +8903,12 @@ const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeo
 const EST_PRESETS: [number, string][] = [[15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h'], [90, '1 h 30'], [120, '2 h'], [150, '2 h 30'], [180, '3 h'], [240, '4 h'], [360, '6 h'], [480, '8 h']]
 // Presets compactos (etiquetas cortas) para el chip de tiempo por fila.
 const TIME_PRESETS: [number, string][] = [[15, '15m'], [30, '30m'], [45, '45m'], [60, '1h'], [90, '1h30'], [120, '2h'], [180, '3h'], [240, '4h']]
+// "En espera / Por revisar": qué esperas de la tarea. [valor, icono, etiqueta].
+const WAIT_REASONS: [string, string, string][] = [['email', '📩', 'Email'], ['respuesta', '💬', 'Respuesta'], ['comentario', '🗨️', 'Comentario'], ['llamada', '📞', 'Llamada'], ['otro', '⏳', 'Otro']]
+const waitMeta = (reason?: string): { icon: string; label: string } => {
+  const m = WAIT_REASONS.find(x => x[0] === reason)
+  return m ? { icon: m[1], label: m[2] } : (reason ? { icon: '⏳', label: reason } : { icon: '🔔', label: 'En espera' })
+}
 // Minutos → etiqueta legible: 90 → "1 h 30", 45 → "45 min", 120 → "2 h".
 const fmtEst = (m: number): string => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h} h ${r}` : h ? `${h} h` : `${r} min` }
 // Minutos → forma compacta editable para el input personalizado: 90 → "1h30", 45 → "45m", 120 → "2h".

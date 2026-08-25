@@ -34,6 +34,7 @@ export type TareaRow = {
   plan_hist?: string[] | null
   remind_at?: string | null
   comentarios?: unknown[] | null
+  waiting_for?: string | null
   updated_at?: string | null
 }
 
@@ -69,6 +70,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.plan_hist?.length) t.planHist = r.plan_hist as string[]
   if (r.remind_at) t.remindAt = r.remind_at
   if (r.comentarios?.length) t.comentarios = r.comentarios as EpicaTask['comentarios']
+  if (r.waiting_for) t.waitingFor = r.waiting_for
   if (r.updated_at) t.updatedAt = r.updated_at
   return t
 }
@@ -99,6 +101,10 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     // day_plans: viaja sólo si la tarea tiene la propiedad; el cliente sólo la fija cuando la
     // columna existe (gate dayPlansReady) → seguro sin migrar.
     ...('dayPlans' in t ? { day_plans: (t.dayPlans || []) } : {}),
+    // waiting_for: "qué esperas" (email/respuesta/comentario/otro) para las tareas "En espera".
+    // Viaja sólo si la tarea tiene la propiedad (permite LIMPIAR con null); el cliente sólo la fija
+    // cuando la columna existe (gate waitingReady) → seguro sin migrar.
+    ...('waitingFor' in t ? { waiting_for: (t.waitingFor || null) } : {}),
     id: t.id,
     epica_id: epicaId,
     titulo: t.t || '',

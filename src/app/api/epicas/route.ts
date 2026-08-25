@@ -50,8 +50,8 @@ export async function GET() {
     const { error } = await supabase.from('tareas').select(col).limit(1)
     return !error
   }
-  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady] = await Promise.all([
-    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'),
+  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady] = await Promise.all([
+    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'),
   ])
   // Gate del presupuesto (columna en la tabla EPICAS, no tareas): con épicas basta la primera fila;
   // sin épicas se prueba la columna directo.
@@ -59,7 +59,7 @@ export async function GET() {
     ? ('week_budget' in ((data || [])[0] as object))
     : !(await supabase.from('epicas').select('week_budget').limit(1)).error
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, weekBudgetReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady })
 }
 
 export async function POST(req: Request) {
