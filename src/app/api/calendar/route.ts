@@ -60,23 +60,36 @@ export async function GET() {
   // salía "(sin título)". Ahora se MERGEAN por id prefiriendo el campo no vacío de cualquiera de
   // las copias, así el título/lugar/descripción del calendario que sí los expone gana.
   type Ev = typeof events[number]
+  const mergeEv = (prev: Ev, e: Ev): Ev => ({
+    ...prev,
+    title: prev.title || e.title,
+    location: prev.location || e.location,
+    description: prev.description || e.description,
+    hangoutLink: prev.hangoutLink || e.hangoutLink,
+    htmlLink: prev.htmlLink || e.htmlLink,
+    color: prev.color || e.color,
+  })
+  // 1) Fusiona por id (misma entrada en 2 calendarios).
   const byId = new Map<string, Ev>()
   const sinId: Ev[] = []
   for (const e of events) {
     const id = String(e.id ?? '')
     if (!id) { sinId.push(e); continue }
     const prev = byId.get(id)
-    byId.set(id, prev ? {
-      ...prev,
-      title: prev.title || e.title,
-      location: prev.location || e.location,
-      description: prev.description || e.description,
-      hangoutLink: prev.hangoutLink || e.hangoutLink,
-      htmlLink: prev.htmlLink || e.htmlLink,
-      color: prev.color || e.color,
-    } : e)
+    byId.set(id, prev ? mergeEv(prev, e) : e)
   }
-  const deduped = [...byId.values(), ...sinId].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+  // 2) Fusiona por MISMA hora exacta (la copia del calendario personal llega sin título
+  //    pero con OTRO id que la del grupo; comparten start+end). Solo eventos con hora
+  //    (NO día completo, para no colapsar dos cumpleaños del mismo día).
+  const byTime = new Map<string, Ev>()
+  const passthrough: Ev[] = []
+  for (const e of [...byId.values(), ...sinId]) {
+    if (e.allDay || !e.start) { passthrough.push(e); continue }
+    const k = `${e.start}|${e.end ?? ''}`
+    const prev = byTime.get(k)
+    byTime.set(k, prev ? mergeEv(prev, e) : e)
+  }
+  const deduped = [...byTime.values(), ...passthrough].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 
   return NextResponse.json(deduped)
 }
