@@ -597,21 +597,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   const daysSinceISO = (d: string): number | null => d ? Math.max(0, Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(d + 'T00:00:00').getTime()) / 86400000)) : null
   // Mueve una LISTA de tareas (por épica+índice) a un día, con planOrder corrido único entre épicas.
-  const moveTasksTo = (list: { e: Epica; i: number }[], dayISO: string): number => {
+  const moveTasksTo = (list: { e: Epica; i: number }[], dayISO: string, fromDay?: string): number => {
     const byE = new Map<string, number[]>()
     list.forEach(x => { const a = byE.get(x.e.id) || []; a.push(x.i); byE.set(x.e.id, a) })
     let n = 0, base = maxPlanOrderFor(dayISO)
     byE.forEach((idxs, eId) => {
       const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
       const tasks = clone(fresh.tasks)
-      idxs.forEach(i => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; t.plan = dayISO; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base; applyPlanStatus(t, dayISO); n++ })
+      idxs.forEach(i => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; const prev = t.plan; t.plan = dayISO; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base; relocateDayPlan(t, fromDay ?? prev ?? '', dayISO); applyPlanStatus(t, dayISO); n++ })
       patchEpic(eId, { tasks })
     })
     return n
   }
   // Cierre del día: mueve las pendientes del día en vista a otro día.
   const moveTodayPendingTo = (dayISO: string) => {
-    const n = moveTasksTo(planPend.map(x => ({ e: x.e, i: x.i })), dayISO)
+    const n = moveTasksTo(planPend.map(x => ({ e: x.e, i: x.i })), dayISO, viewDate)
     setDayCloseOpen(false)
     if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(dayISO).toLowerCase()}`)
   }
@@ -1170,12 +1170,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       delete task.planStatusPrev
     }
   }
-  const planTaskToDay = (e: Epica, i: number, dayISO: string, opts?: { toast?: boolean }) => {
+  // Al mover una tarea de un día a otro hay que llevarse también su "Día de trabajo" (dayPlan) del
+  // día de origen; si no, un dayPlan PASADO ya trabajado sigue anclando la tarea a ese día (taskDays
+  // lo incluye) y "reaparece" en el día anterior por más que muevas el plan. Mueve/fusiona la sesión.
+  const relocateDayPlan = (t: EpicaTask, fromDay: string, toDay: string) => {
+    if (!fromDay || fromDay === toDay || !Array.isArray(t.dayPlans) || !t.dayPlans.some(dp => dp.day === fromDay)) return
+    t.dayPlans = (t.dayPlans.some(dp => dp.day === toDay)
+      ? t.dayPlans.filter(dp => dp.day !== fromDay)                                  // el destino ya tiene sesión → quita la del origen (no duplica)
+      : t.dayPlans.map(dp => dp.day === fromDay ? { ...dp, day: toDay } : dp)         // si no, la reubica al destino
+    ).sort((a, b) => a.day.localeCompare(b.day))
+  }
+  const planTaskToDay = (e: Epica, i: number, dayISO: string, opts?: { toast?: boolean; fromDay?: string }) => {
     const tasks = clone(e.tasks)
     const prev = tasks[i].plan
     tasks[i].plan = dayISO
     if (!tasks[i].priority) tasks[i].priority = prioFromDue(tasks[i].due)
     if (prev !== dayISO || tasks[i].planOrder == null) tasks[i].planOrder = maxPlanOrderFor(dayISO) + 1000
+    relocateDayPlan(tasks[i], opts?.fromDay ?? prev ?? '', dayISO)   // lleva la sesión del día de origen
     applyPlanStatus(tasks[i], dayISO)
     const snaps = opts?.toast ? snapshot([e.id]) : []
     patchEpic(e.id, { tasks })
@@ -1400,6 +1411,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         t.plan = day
         if (!t.priority) t.priority = prioFromDue(t.due)
         t.planOrder = base
+        relocateDayPlan(t, viewDate, day)   // lleva la sesión del día en vista (no la deja anclada al día anterior)
         applyPlanStatus(t, day)
       })
       patchEpic(eId, { tasks })
@@ -2622,7 +2634,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
         </>}
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', padding: '4px 10px 6px' }}>Mover a</div>
-        {mi('→  Posponer a mañana', () => { planTaskToDay(e, i, addDays(viewDate, 1), { toast: true }); setRowMenu(null) })}
+        {mi('→  Posponer a mañana', () => { planTaskToDay(e, i, addDays(viewDate, 1), { toast: true, fromDay: viewDate }); setRowMenu(null) })}
         {mi('Mover a otro día…', () => { setRowMenu(null); setCalMonth((e.tasks[i]?.plan || viewDate).slice(0, 7)); setMovePick({ eId: e.id, tid: t.id! }) })}
         <div style={{ height: 1, background: 'rgba(15,35,64,0.08)', margin: '5px 4px' }} />
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', padding: '4px 10px 6px' }}>Prioridad</div>
