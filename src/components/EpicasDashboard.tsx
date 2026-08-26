@@ -1028,6 +1028,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Días en que la tarea está agendada = plan (día "primario") ∪ días de dayPlans. Para que la MISMA
   // tarea aparezca en CADA uno de esos días en las vistas Día/Ajuste/Semana.
   const taskDays = (t: EpicaTask): string[] => {
+    // "En espera / Por revisar" NO es trabajo agendado: no cuenta en ningún día (carga, "de N hechas",
+    // "sin cerrar", tira de días, calendario). Vive sólo en su bandeja (waitingAll). Al quitar la espera
+    // vuelve a su día normal.
+    if (t.status === 'Esperando') return []
     const s = new Set<string>()
     // Un "Día de trabajo" sigue "anclando" la tarea en las vistas si es HOY/FUTURO, o si es PASADO pero
     // ya se trabajó/marcó (◐, queda como registro). Un día pasado NO trabajado se resuelve como "no
@@ -3428,7 +3432,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.status !== ARCHIVED) taskDays(t).forEach(d => { if (byDayTotal.has(d)) byDayTotal.get(d)!.push({ e, t }) }) }))
     const filtering = effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas' || workFilter !== ''
     const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
-    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
+    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && x.t.status !== 'Esperando' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat()
     const pend = all.filter(x => x.t.status !== 'Terminada')
     // Únicas: una tarea multi-día cuenta UNA vez para "N actividades" y la dificultad (aunque salga en varios días).
@@ -3597,7 +3601,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
     const matchF = (e: Epica, t: EpicaTask) => (effEpica === 'todas' || e.id === effEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t)
-    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && matchF(x.e, x.t))
+    const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && x.t.status !== 'Esperando' && matchF(x.e, x.t))
     const firstWeekDays = Array.from({ length: 7 }, (_, k) => addDays(weekMondays[0], k))
     const hmw = (m: number) => { const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
     const thisMon = mondayISO(today)
