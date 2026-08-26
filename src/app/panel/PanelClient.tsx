@@ -5,6 +5,7 @@ import Link from 'next/link'
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
+import PushReminders from '@/components/PushReminders'
 import CalendarWidget from '@/components/CalendarWidget'
 import QuoteWidget from '@/components/QuoteWidget'
 import BirthdayCelebration from '@/components/BirthdayCelebration'
@@ -218,6 +219,7 @@ export default function PanelClient() {
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontFamily: SERIF, fontSize: 40, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{now ? now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
             <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.6)', marginTop: 4 }}>{runningName ? `▶ ${runningName} en curso` : `⏱ ${hmm(workedMin)} trabajadas hoy`}</div>
+            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}><PushReminders /></div>
           </div>
         </div>
 

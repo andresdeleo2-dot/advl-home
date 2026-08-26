@@ -3,6 +3,26 @@
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */
 const CACHE = 'advl-v1'
 
+/* Recordatorios PUSH: llegan aunque la app esté cerrada (los manda /api/push/send por cron). */
+self.addEventListener('push', (e) => {
+  let d = {}
+  try { d = e.data ? e.data.json() : {} } catch { d = { title: '⏰ Recordatorio', body: e.data ? e.data.text() : '' } }
+  const title = d.title || '⏰ Recordatorio'
+  e.waitUntil(self.registration.showNotification(title, {
+    body: d.body || '', icon: '/icon-180.png', badge: '/icon-32.png',
+    tag: d.tag || undefined, data: { url: d.url || '/epicas' }, requireInteraction: false,
+  }))
+})
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close()
+  const url = (e.notification.data && e.notification.data.url) || '/'
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const c of all) { if ('focus' in c) { try { await c.navigate(url) } catch {} ; return c.focus() } }
+    if (self.clients.openWindow) return self.clients.openWindow(url)
+  })())
+})
+
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
