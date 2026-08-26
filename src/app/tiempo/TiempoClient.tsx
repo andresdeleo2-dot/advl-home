@@ -4192,7 +4192,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   const schedIds = new Set(scheduled.map(s => s.taskId).filter(Boolean))
   // Épicas presentes en las tareas por agendar (para el filtro).
   const planEpicas = [...new Map((tasks || []).filter(t => !schedIds.has(t.task.id)).map(t => [t.epicaId, { id: t.epicaId, name: t.epicaName, color: t.color }])).values()]
+  // Mismo orden que en Épicas: por planOrder (el acomodo manual del Día), no el orden crudo de llegada.
   const pending = (tasks || []).filter(t => !schedIds.has(t.task.id) && (!epFilter || t.epicaId === epFilter))
+    .sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))
   // Las "en espera" (estado 'Esperando') NO se agendan: se separan de "por agendar" a su propia lista.
   const pendWork = pending.filter(t => t.task.status !== 'Esperando')
   const pendWait = pending.filter(t => t.task.status === 'Esperando')
@@ -4489,29 +4491,10 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         <div className="t-card plan-side" style={{ ...card(12), padding: 18 }}>
           {/* Empezar algo GENERAL al instante (siempre disponible) */}
           <QuickStart onStart={onGeneral} />
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12 }}>
-            <span style={LBL}>por agendar · {isToday ? 'hoy' : longDayOf(day)}</span>
-            <span style={{ fontSize: 12, color: '#a49b90' }}>{pendWork.length}</span>
-          </div>
-          {/* Nueva tarea + filtro por épica */}
-          <button onClick={() => onNewTask(epFilter || undefined)} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer', background: 'transparent' }}>+ Nueva tarea{epFilter ? ` en ${planEpicas.find(e => e.id === epFilter)?.name || ''}` : ''}</button>
-          {planEpicas.length > 1 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              <button onClick={() => setEpFilter(null)} style={{ border: `1px solid ${!epFilter ? '#b4653a' : '#e7dfd2'}`, background: !epFilter ? '#f5ece2' : '#faf7f1', color: !epFilter ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer' }}>Todas</button>
-              {planEpicas.map(e => { const on = epFilter === e.id; return (
-                <button key={e.id} onClick={() => setEpFilter(on ? null : e.id)} title={e.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${on ? '#b4653a' : '#e7dfd2'}`, background: on ? '#f5ece2' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer', maxWidth: 130 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
-                </button>
-              ) })}
-            </div>
-          )}
-          {pendWork.length ? pendWork.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurForDay(t.task, day), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
-            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? 'Sin tareas por agendar en esa épica.' : pendWait.length ? 'Nada por agendar — solo tienes cosas en espera abajo.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
-          )}
-          {/* "🔔 En espera / Por revisar": no se agendan, solo se checan (¿ya llegó?). */}
+          {/* 🔔 RECORDATORIO hasta arriba: lo que ESPERAS (no se agenda, solo checas si ya llegó). */}
           {pendWait.length > 0 && (
             <>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12, marginTop: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12 }}>
                 <span style={{ ...LBL, color: '#8a4b28' }}>🔔 en espera · por revisar</span>
                 <span style={{ fontSize: 12, color: '#a49b90' }}>{pendWait.length}</span>
               </div>
@@ -4541,6 +4524,26 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               })}
             </>
           )}
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12 }}>
+            <span style={LBL}>por agendar · {isToday ? 'hoy' : longDayOf(day)}</span>
+            <span style={{ fontSize: 12, color: '#a49b90' }}>{pendWork.length}</span>
+          </div>
+          {/* Nueva tarea + filtro por épica */}
+          <button onClick={() => onNewTask(epFilter || undefined)} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer', background: 'transparent' }}>+ Nueva tarea{epFilter ? ` en ${planEpicas.find(e => e.id === epFilter)?.name || ''}` : ''}</button>
+          {planEpicas.length > 1 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              <button onClick={() => setEpFilter(null)} style={{ border: `1px solid ${!epFilter ? '#b4653a' : '#e7dfd2'}`, background: !epFilter ? '#f5ece2' : '#faf7f1', color: !epFilter ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer' }}>Todas</button>
+              {planEpicas.map(e => { const on = epFilter === e.id; return (
+                <button key={e.id} onClick={() => setEpFilter(on ? null : e.id)} title={e.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${on ? '#b4653a' : '#e7dfd2'}`, background: on ? '#f5ece2' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer', maxWidth: 130 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
+                </button>
+              ) })}
+            </div>
+          )}
+          {pendWork.length ? pendWork.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurForDay(t.task, day), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
+            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? 'Sin tareas por agendar en esa épica.' : pendWait.length ? 'Nada por agendar — solo tienes cosas en espera arriba.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
+          )}
+          {/* "En espera · por revisar" se muestra ARRIBA (recordatorio), justo debajo de "empezar algo ahora". */}
           {routines.length > 0 && (
             <>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, borderTop: '1px solid #eee6da', paddingTop: 12, marginTop: 4 }}>
