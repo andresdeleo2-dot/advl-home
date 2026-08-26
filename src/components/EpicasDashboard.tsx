@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask } from '@/lib/tareas'
+import { readWaitSince, markWaitSince, waitAgeDays, WAIT_NUDGE_DAYS } from '@/lib/waiting'
 import Confetti from '@/components/Confetti'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
@@ -229,6 +230,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [orderSeq, setOrderSeq] = useState<string[]>([])                // keys en el orden tocado (1,2,3…) mientras dura el modo
   const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el selector de tiempo (chip ⏱) abierto
   const [waitEditKey, setWaitEditKey] = useState<string | null>(null)   // fila con el selector de "en espera / qué esperas" abierto
+  const [waitSince, setWaitSince] = useState<Record<string, string>>({}) // taskId → fecha en que se marcó "en espera" (para "llevas N días esperando")
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
@@ -271,6 +273,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
   useEffect(() => { epicsRef.current = epics }, [epics])
+  useEffect(() => { setWaitSince(readWaitSince()) }, [])   // carga "esperando desde" tras montar (evita desajuste de hidratación)
   // Persiste un avance pendiente si el componente se desmonta a media edición
   useEffect(() => () => {
     if (progressTimer.current) clearTimeout(progressTimer.current)
@@ -1751,7 +1754,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (waitingReady.current || 'waitingFor' in t) t.waitingFor = ''   // '' → se manda null y limpia la columna
     }
     patchEpic(e.id, { tasks })
+    if (t.id) { markWaitSince(t.id, !!reason, todayISO()); setWaitSince(readWaitSince()) }   // "esperando desde" para el seguimiento
     if (reason && !waitingReady.current) showToast('Marcada En espera · corre sql/epicas-11-waiting-for.sql para guardar QUÉ esperas', true)
+  }
+  // "Dar seguimiento": la espera lleva mucho y hay que MOVERSE — quita la espera y la pone HOY, activa.
+  // Todo en UNA sola escritura (si separara "quitar espera" y "mover a hoy" en dos patch, se pisarían).
+  const followUpWaiting = (e: Epica, ti: number) => {
+    const tasks = clone(e.tasks)
+    const t = tasks[ti]; if (!t) return
+    if (t.status === 'Esperando') t.status = 'En curso'
+    delete t.planStatusPrev
+    if (waitingReady.current || 'waitingFor' in t) t.waitingFor = ''
+    const day = todayISO()
+    t.plan = day
+    if (!t.priority) t.priority = prioFromDue(t.due)
+    t.planOrder = maxPlanOrderFor(day) + 1000
+    applyPlanStatus(t, day)
+    patchEpic(e.id, { tasks })
+    if (t.id) { markWaitSince(t.id, false, day); setWaitSince(readWaitSince()) }
+    setWaitEditKey(null)
+    showToast('Movida a hoy para darle seguimiento')
   }
   // ── Sesiones por día (dayPlans): setters. Los helpers de LECTURA (dayPlansOf/taskDays/…) se
   //    definen más arriba, antes de planItems, porque planItems los usa. ──
@@ -2845,6 +2867,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <button key={val} onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, val); setWaitEditKey(null) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#16365F' }}>{ic} {lbl}</button>
             )})}
             {waiting && <button onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, null); setWaitEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>}
+            {waiting && <button onClick={ev => { ev.stopPropagation(); followUpWaiting(e, i) }} title="Ya llevas mucho esperando: tráela a hoy para moverte (mandar recordatorio, insistir…)" style={{ flexBasis: '100%', cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: '1px solid rgba(168,122,44,0.5)', background: 'rgba(194,147,58,0.12)', color: '#8a5a1a' }}>📌 Dar seguimiento · traer a hoy</button>}
             {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
           </div>
         )}
@@ -2969,17 +2992,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const { e, t, i } = x
     const key = planKey(e.id, t)
     const wm = waitMeta(t.waitingFor)
+    const age = t.id ? waitAgeDays(waitSince, t.id, today) : null   // días que llevas esperando (si se registró)
+    const nudge = age != null && age >= WAIT_NUDGE_DAYS             // ya es mucho → resáltala como recordatorio
+    const ageLbl = age == null ? null : age === 0 ? 'hoy' : age === 1 ? 'hace 1 día' : `hace ${age} días`
     return (
-      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, border: '1px solid rgba(194,147,58,0.3)', background: 'rgba(194,147,58,0.06)', borderLeft: '3px solid #C2933A' }}>
+      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, border: `1px solid ${nudge ? 'rgba(176,82,46,0.45)' : 'rgba(194,147,58,0.3)'}`, background: nudge ? 'rgba(176,82,46,0.07)' : 'rgba(194,147,58,0.06)', borderLeft: `3px solid ${nudge ? '#B0522E' : '#C2933A'}` }}>
         <span style={{ flexShrink: 0, fontSize: 15, lineHeight: 1 }}>{wm.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div onClick={() => setTaskView({ eId: e.id, tid: t.id! })} title="Ver tarea" style={{ fontSize: 14, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
             <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</button>
             {t.waitingFor && <span style={{ fontSize: 11, fontWeight: 700, color: '#A87A2C' }}>esperas {wm.label.toLowerCase()}</span>}
+            {ageLbl && <span title="Tiempo que llevas esperando" style={{ fontSize: 10.5, fontWeight: 700, color: nudge ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>· {ageLbl}</span>}
             {t.due && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>· {fmtDue(t.due)}</span>}
           </div>
         </div>
+        {nudge && <button onClick={() => followUpWaiting(e, i)} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#B0522E', borderRadius: 99, padding: '4px 9px', font: '800 10.5px var(--font-ui)' }}>📌 Seguir</button>}
         {rowWaitChip(key, e, i, t, 'right')}
       </div>
     )

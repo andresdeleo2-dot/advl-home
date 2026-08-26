@@ -12,6 +12,7 @@ import {
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
+import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS } from '@/lib/waiting'
 import Confetti from '@/components/Confetti'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
@@ -131,6 +132,7 @@ export default function TiempoClient() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [waitPickId, setWaitPickId] = useState<string | null>(null)   // fila "en espera" con el selector de "qué esperas" abierto
+  const [waitSince, setWaitSince] = useState<Record<string, string>>({}) // taskId → fecha en que se marcó "en espera" (para "llevas N días esperando")
   const [selMeetingId, setSelMeetingId] = useState<string | null>(null)
   const [editTask, setEditTask] = useState<{ epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean } | null>(null)
   const [histIdx, setHistIdx] = useState<number | null>(null)
@@ -218,6 +220,7 @@ export default function TiempoClient() {
   // Rollover de medianoche: si la pestaña queda abierta y cambia el día, avanza `taskDay`
   // (solo si venía siguiendo a "hoy"), para que lo que hagas hoy no caiga en el día de ayer.
   const prevTodayRef = useRef(iso(new Date()))
+  useEffect(() => { setWaitSince(readWaitSince()) }, [])   // carga "esperando desde" tras montar
   useEffect(() => {
     const rt = iso(new Date())
     if (rt !== prevTodayRef.current) {
@@ -1190,6 +1193,7 @@ export default function TiempoClient() {
       delete task.planStatusPrev
     }
     autoSaveTask(tt.epicaId, task)
+    if (t.id) { markWaitSince(t.id, !!reason, iso(new Date())); setWaitSince(readWaitSince()) }   // "esperando desde"
   }
   const unplanTask = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, { ...task, plan: '' })
@@ -1963,6 +1967,7 @@ export default function TiempoClient() {
             onNewTask={(epId) => { const e = epicasList.find(x => x.id === epId) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: planDay, links: [] } }) }}
             onWaiting={setWaitingT}
             waitingReady={waitingReadyRef.current}
+            waitSince={waitSince}
           />
         ) : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
@@ -2341,14 +2346,18 @@ export default function TiempoClient() {
                         {waitTasks.map(tt => {
                           const wm = waitMetaT(tt.task.waitingFor)
                           const open = waitPickId === tt.task.id
+                          const age = tt.task.id ? waitAgeDays(waitSince, tt.task.id, iso(new Date())) : null
+                          const nudge = age != null && age >= WAIT_NUDGE_DAYS
+                          const ageLbl = waitAgeLabel(age)
                           return (
-                            <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 12, border: '1px solid #ecd9b8', borderLeft: '3px solid #c2933a', background: '#f8efdc' }}>
+                            <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 12, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
                               <span style={{ flexShrink: 0, fontSize: 15, lineHeight: 1 }}>{wm.icon}</span>
                               <span onClick={() => setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } })} title="Ver / trabajar la tarea" style={{ flex: 1, minWidth: 0, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 3 }}>
                                 <span style={{ fontSize: 14.5, fontWeight: 500, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.task.t || 'Sin título'}</span>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                   <Tag c={tt.color} bg={tt.color + '22'}>{tt.epicaName}</Tag>
                                   {tt.task.waitingFor && <span style={{ fontSize: 12, fontWeight: 600, color: '#8a4b28' }}>esperas {wm.label.toLowerCase()}</span>}
+                                  {ageLbl && <span title="Tiempo que llevas esperando" style={{ fontSize: 11.5, fontWeight: 700, color: nudge ? '#b0522e' : '#a49b90' }}>· {ageLbl}</span>}
                                 </span>
                               </span>
                               <button onClick={() => setWaitPickId(open ? null : tt.task.id!)} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? `${wm.icon} ${wm.label}` : 'En espera'} ▾</button>
@@ -4085,7 +4094,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask, onWaiting, waitingReady }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask, onWaiting, waitingReady, waitSince }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -4116,6 +4125,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onOpenMeeting: (m: Meeting) => void
   onWaiting: (t: TodayTask, reason: string | null) => void
   waitingReady: boolean
+  waitSince: Record<string, string>
 }) {
   const [epFilter, setEpFilter] = useState<string | null>(null)
   const [waitPick, setWaitPick] = useState<string | null>(null)   // fila en espera con el selector abierto
@@ -4501,12 +4511,15 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               {pendWait.map(tt => {
                 const wm = waitMetaT(tt.task.waitingFor)
                 const open = waitPick === tt.task.id
+                const age = tt.task.id ? waitAgeDays(waitSince, tt.task.id, today) : null
+                const nudge = age != null && age >= WAIT_NUDGE_DAYS   // ya llevas mucho esperando
+                const ageLbl = waitAgeLabel(age)
                 return (
-                  <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, border: '1px solid #ecd9b8', borderLeft: '3px solid #c2933a', background: '#f8efdc' }}>
+                  <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
                     <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1 }}>{wm.icon}</span>
                     <div onClick={() => onOpenTask(tt.task.id!)} title="Ver / trabajar la tarea" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
                       <div style={{ fontSize: 14, lineHeight: 1.3, color: '#1c1a17', wordBreak: 'break-word' }} title={tt.task.t}>{tt.task.t || 'Sin título'}</div>
-                      <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.epicaName}{tt.task.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''}</div>
+                      <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.epicaName}{tt.task.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''}{ageLbl ? ` · ${ageLbl}` : ''}</div>
                     </div>
                     <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); setWaitPick(open ? null : tt.task.id!) }} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? wm.label : 'En espera'} ▾</button>
                     {open && (

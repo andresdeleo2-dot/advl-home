@@ -1,0 +1,33 @@
+// "Esperando desde" (seguimiento de las tareas "En espera / Por revisar"): guarda la FECHA en que
+// marcaste cada tarea como "en espera", para mostrar cuánto llevas esperando y avisar si ya es mucho.
+// Es local por dispositivo (localStorage compartido entre /epicas y /tiempo — mismo origen). Indicador
+// suave: si falta el dato (otro dispositivo, marcada antes de esta feature), simplemente no se muestra.
+export const WAIT_SINCE_KEY = 'epicas.waitingSince.v1'
+// Días a partir de los cuales una espera "lleva mucho" y se resalta como recordatorio de seguimiento.
+export const WAIT_NUDGE_DAYS = 4
+
+export function readWaitSince(): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  try { return JSON.parse(localStorage.getItem(WAIT_SINCE_KEY) || '{}') } catch { return {} }
+}
+
+// on=true al marcar "en espera" (fija la fecha si no había); on=false al quitarla (borra el registro).
+export function markWaitSince(taskId: string, on: boolean, todayIso: string) {
+  if (typeof window === 'undefined' || !taskId) return
+  const m = readWaitSince()
+  if (on) { if (m[taskId]) return; m[taskId] = todayIso } else { if (!(taskId in m)) return; delete m[taskId] }
+  try { localStorage.setItem(WAIT_SINCE_KEY, JSON.stringify(m)) } catch { /* storage lleno/bloqueado */ }
+}
+
+// Días transcurridos desde que se marcó "en espera" (0 = hoy). null si no hay registro.
+export function waitAgeDays(since: Record<string, string>, taskId: string, todayIso: string): number | null {
+  const d = since[taskId]; if (!d) return null
+  const n = Math.floor((new Date(todayIso + 'T00:00:00').getTime() - new Date(d + 'T00:00:00').getTime()) / 86400000)
+  return n >= 0 ? n : 0
+}
+
+// Etiqueta legible del tiempo esperando: 0 → "hoy", 1 → "hace 1 día", n → "hace n días".
+export function waitAgeLabel(age: number | null): string | null {
+  if (age == null) return null
+  return age === 0 ? 'hoy' : age === 1 ? 'hace 1 día' : `hace ${age} días`
+}
