@@ -4338,6 +4338,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const rut = activeEpics.flatMap(e => (e.routines || []).map(r => ({ e, r, n: getRoutineWeek(r, mon).filter(Boolean).length })))
     const rutTotal = rut.reduce((n, x) => n + x.n, 0), rutMax = rut.length * 7
 
+    // ── Tiempo invertido (de la bitácora) y productividad (calificación del cierre) ──
+    const minIn = (t: EpicaTask, a: string, b: string) => (t.progressLog || []).reduce((s, l) => s + (l.d >= a && l.d <= b && typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
+    const weekMin = all.reduce((n, x) => n + minIn(x.t, mon, sun), 0)
+    const lastWeekMin = all.reduce((n, x) => n + minIn(x.t, lastMon, lastSun), 0)
+    const minPerEpica = (() => {
+      const m = new Map<string, { e: Epica; min: number }>()
+      activeEpics.forEach(e => { if (effResEpica !== 'todas' && e.id !== effResEpica) return; const mm = (e.tasks || []).reduce((n, t) => n + minIn(t, mon, sun), 0); if (mm > 0) m.set(e.id, { e, min: mm }) })
+      return [...m.values()].sort((a, b) => b.min - a.min)
+    })()
+    const minPerDay = days.map(d => all.reduce((n, x) => n + minIn(x.t, d, d), 0))
+    const maxDayMin = Math.max(1, ...minPerDay)
+    const hmw = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m` }
+    // Productividad: calificación 1-10 del cierre del día (localStorage), sólo los días de la semana que la tienen.
+    const weekScores = days.map(d => dayScores[d]).filter((v): v is number => typeof v === 'number')
+    const avgScore = weekScores.length ? Math.round((weekScores.reduce((a, b) => a + b, 0) / weekScores.length) * 10) / 10 : null
+    const DNAMES = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
+
     const tile = (label: string, value: string, hint: string, color: string) => (
       <div key={label} className="glass" style={{ borderRadius: 15, padding: '14px 16px' }}>
         <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{label}</div>
@@ -4407,7 +4424,43 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const abiertos = activeEpics.flatMap(e => (e.kpis || []).filter(m => !milestoneDone(m, e))).length
             return tile('Objetivos', String(logr), logr ? 'cumplidos ✦' : `${abiertos} abiertos`, logr ? '#C2933A' : 'rgba(20,35,61,0.5)')
           })()}
+          {tile('Trabajado', weekMin > 0 ? hmw(weekMin) : '—', lastWeekMin > 0 ? `${hmw(lastWeekMin)} la semana previa` : 'de tu bitácora', '#2E5A9E')}
+          {avgScore != null && tile('Productividad', `${avgScore}`, `/10 · ${weekScores.length} ${weekScores.length === 1 ? 'día calificado' : 'días calificados'}`, avgScore >= 7 ? '#2E6E6E' : avgScore >= 5 ? '#A87A2C' : '#B0522E')}
         </div>
+
+        {/* ⏱ TIEMPO Y PRODUCTIVIDAD — cuánto trabajaste, en qué épicas y cómo te calificaste */}
+        {(weekMin > 0 || avgScore != null) && (
+          <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20 }}>
+            {secTitle('⏱ Tiempo y productividad', `${hmw(weekMin)} en la bitácora${avgScore != null ? ` · te calificaste ${avgScore}/10` : ''}`)}
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 62, marginBottom: minPerEpica.length ? 15 : 0 }}>
+              {minPerDay.map((m, k) => {
+                const isTd = days[k] === today
+                return (
+                  <div key={k} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                    <div title={hmw(m)} style={{ width: '100%', maxWidth: 30, height: 40, display: 'flex', alignItems: 'flex-end' }}>
+                      <div style={{ width: '100%', height: `${m > 0 ? Math.max(8, Math.round((m / maxDayMin) * 40)) : 2}px`, borderRadius: 5, background: m > 0 ? (isTd ? '#C2933A' : '#2E5A9E') : 'rgba(15,35,64,0.08)' }} />
+                    </div>
+                    <span style={{ font: '700 9.5px var(--font-ui)', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{DNAMES[k]}</span>
+                  </div>
+                )
+              })}
+            </div>
+            {minPerEpica.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {minPerEpica.map(({ e, min }) => (
+                  <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                    <span style={{ width: 116, flexShrink: 0, fontSize: 12, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
+                    <div style={{ flex: 1, height: 8, borderRadius: 99, background: 'rgba(15,35,64,0.06)', overflow: 'hidden' }}>
+                      <div style={{ width: `${weekMin ? Math.round((min / weekMin) * 100) : 0}%`, height: '100%', background: e.color }} />
+                    </div>
+                    <span style={{ width: 54, textAlign: 'right', flexShrink: 0, font: '800 11.5px var(--font-ui)', color: '#16365F' }}>{hmw(min)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : weekMin === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>No registraste tiempo esta semana. Ponle tiempo a las tareas o usa el Modo foco y aquí verás en qué se fue.</div>}
+          </div>
+        )}
 
         {/* Burndown */}
         <div className="glass" style={{ borderRadius: 16, padding: '15px 17px', marginBottom: 20 }}>
