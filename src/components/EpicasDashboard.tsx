@@ -1054,6 +1054,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planTotal = planItems.length
   const planPct = planTotal ? Math.round((planDone.length / planTotal) * 100) : 0
   const planAllDone = planTotal > 0 && planDone.length === planTotal
+  // "🔔 En espera / Por revisar": bandeja PERSISTENTE, NO atada a un día. Una tarea marcada
+  // 'Esperando' se queda aquí (en CUALQUIER día que abras) hasta que TÚ la quites ("ya llegó").
+  // Antes se filtraba por el día del plan → al cambiar de día desaparecía. Por eso se saca aparte.
+  const waitingAll = useMemo(() => {
+    const arr: { e: Epica; t: EpicaTask; i: number }[] = []
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status === 'Esperando') arr.push({ e, t, i }) }))
+    return arr.sort((a, b) => (a.t.waitingFor || 'zzz').localeCompare(b.t.waitingFor || 'zzz') || (a.t.plan || '').localeCompare(b.t.plan || ''))
+  }, [activeEpics])
   // Actividad de HOY en CUALQUIER tarea: lo que TRABAJASTE (avance con fecha de hoy), CERRASTE hoy, o
   // marcaste hecho hoy en un "Día de trabajo" — aunque la tarea esté planeada para OTRO día. Así el
   // enfoque de hoy muestra "lo que hiciste hoy" aunque no tuvieras nada planeado para hoy.
@@ -1095,7 +1103,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Predicados de estado reutilizables por los filtros (Día, backlog y épicas).
   const isStuck = (t: EpicaTask) => stuckReason(t) != null                                   // 🐌 estancada
   const isMultiDay = (t: EpicaTask) => diasTrabajados(t) >= 2                                 // ⧗ trabajada en varios días
-  const isCarried = (t: EpicaTask) => !!t.plan && t.plan < today && t.status !== 'Terminada' && t.status !== ARCHIVED  // ⏳ de días anteriores
+  const isCarried = (t: EpicaTask) => !!t.plan && t.plan < today && t.status !== 'Terminada' && t.status !== ARCHIVED && t.status !== 'Esperando'  // ⏳ de días anteriores (las "en espera" NO arrastran: viven en su bandeja)
   // Días que llevas con una tarea (desde que la creaste; si no hay fecha de creación, desde que la planeaste).
   const diasCon = (t: EpicaTask): number => {
     const desde = t.createdAt || t.plan
@@ -1108,7 +1116,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const arrastradas = useMemo(() => {
     if (viewDate !== today) return [] as { e: Epica; t: EpicaTask; i: number }[]
     const arr: { e: Epica; t: EpicaTask; i: number }[] = []
-    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && t.plan < today && t.status !== 'Terminada' && t.status !== ARCHIVED) arr.push({ e, t, i }) }))
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.plan && t.plan < today && t.status !== 'Terminada' && t.status !== ARCHIVED && t.status !== 'Esperando') arr.push({ e, t, i }) }))
     return arr.sort((a, b) => (a.t.plan || '').localeCompare(b.t.plan || ''))
   }, [activeEpics, viewDate, today])
   // conteo de tareas por día (para la tira y el calendario)
@@ -5253,35 +5261,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       )
                     })()}
                     {table ? renderDayTable(tableRows) : (() => {
-                      // Separa lo que ESPERAS (estado 'Esperando' = por revisar) de lo que TRABAJAS.
+                      // Sólo lo TRABAJABLE. Lo que ESPERAS (estado 'Esperando') va en su propia bandeja
+                      // persistente al pie del Día (abajo), no se mezcla con el trabajo de este día.
                       const listWork = list.filter(x => x.t.status !== 'Esperando')
-                      const listWait = list.filter(x => x.t.status === 'Esperando')
                       return (
-                        <>
-                          <div ref={planListRef}>
-                            {listWork.map((x, pos) => (
-                              <div key={planKey(x.e.id, x.t)}>
-                                {manual && draggingKey && dropIndex === pos && insLine}
-                                {renderPlanRow(x, pos, !manual, manual ? listWork : undefined)}
-                              </div>
-                            ))}
-                            {manual && draggingKey && dropIndex === listWork.length && insLine}
-                          </div>
-                          {listWait.length > 0 && (
-                            <div style={{ marginTop: 14 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                                <span style={{ height: 7, width: 7, borderRadius: 99, background: '#C2933A' }} />
-                                <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 Por revisar · en espera</span>
-                                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{listWait.length}</span>
-                                <span style={{ flex: 1 }} />
-                                <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>no las trabajas — solo checa si ya llegó</span>
-                              </div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {listWait.map(x => renderWaitRow(x))}
-                              </div>
+                        <div ref={planListRef}>
+                          {listWork.map((x, pos) => (
+                            <div key={planKey(x.e.id, x.t)}>
+                              {manual && draggingKey && dropIndex === pos && insLine}
+                              {renderPlanRow(x, pos, !manual, manual ? listWork : undefined)}
                             </div>
-                          )}
-                        </>
+                          ))}
+                          {manual && draggingKey && dropIndex === listWork.length && insLine}
+                        </div>
                       )
                     })()}
                     {!table && filtered.length === 0 && <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.55)', padding: '6px 0' }}>Ninguna tarea del plan coincide con el filtro.</div>}
@@ -5380,6 +5372,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )}
             </>
           )}
+
+          {/* 🔔 EN ESPERA / POR REVISAR — bandeja PERSISTENTE (no depende del día ni del plan).
+              Se queda aquí en cualquier día hasta que marques "ya llegó · quitar espera". */}
+          {(() => {
+            const waits = waitingAll.filter(x => dayEpica === 'todas' || x.e.id === dayEpica)
+            if (waits.length === 0) return null
+            return (
+              <div style={{ marginTop: 20, paddingTop: 15, borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
+                  <span style={{ height: 7, width: 7, borderRadius: 99, background: '#C2933A' }} />
+                  <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 Por revisar · en espera</span>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{waits.length}</span>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>no las trabajas — solo checa si ya llegó · se quedan hasta que las quites</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {waits.map(x => renderWaitRow(x))}
+                </div>
+              </div>
+            )
+          })()}
           </>)}
         </div>
       </div>
