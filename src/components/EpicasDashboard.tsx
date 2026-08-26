@@ -232,6 +232,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [waitEditKey, setWaitEditKey] = useState<string | null>(null)   // fila con el selector de "en espera / qué esperas" abierto
   const [waitSince, setWaitSince] = useState<Record<string, string>>({}) // taskId → fecha en que se marcó "en espera" (para "llevas N días esperando")
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
+  const [editingComment, setEditingComment] = useState<{ at: string; text: string } | null>(null)  // comentario en edición (at = su id) + borrador
   const [faltanOpen, setFaltanOpen] = useState(true)                // seccion "Faltan por cerrar" plegable
   const [faltanView, setFaltanView] = useState<'lista' | 'tabla'>('lista')
   const [movidasOpen, setMovidasOpen] = useState(true)              // seccion "Se movieron / no se cumplieron"
@@ -1724,6 +1725,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const tasks = clone(e.tasks)
     const list = (tasks[ti].comentarios || []).filter(c => c.at !== at)
     tasks[ti].comentarios = list   // se manda aunque quede vacío (la columna ya existe)
+    patchEpic(e.id, { tasks })
+  }
+  // Editar un comentario: conserva `at` (fecha de creación) y agrega la fecha de esta edición a editedAt.
+  const editComment = (e: Epica, ti: number, at: string, text: string) => {
+    const txt = (text || '').trim(); if (!txt) return
+    const tasks = clone(e.tasks)
+    const list = (tasks[ti].comentarios || []).map(c => c.at === at
+      ? { ...c, text: txt, editedAt: [...(c.editedAt || []), new Date().toISOString()] }
+      : c)
+    tasks[ti].comentarios = list
     patchEpic(e.id, { tasks })
   }
   const setTaskTitle = (e: Epica, ti: number, v: string) => {
@@ -6802,15 +6813,38 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={eb}>Comentarios {(t.comentarios?.length ?? 0) > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}>{t.comentarios!.length}</span>}</div>
                   {(t.comentarios?.length ?? 0) > 0 && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 9 }}>
-                      {[...t.comentarios!].sort((a, b) => b.at.localeCompare(a.at)).map(c => (
+                      {[...t.comentarios!].sort((a, b) => b.at.localeCompare(a.at)).map(c => {
+                        const editing = editingComment?.at === c.at
+                        const fmtC = (s: string) => new Date(s).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                        const edits = c.editedAt || []
+                        return (
                         <div key={c.at} className="ep-sub-row" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, color: '#14233D', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.text}</div>
-                            <div style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)', marginTop: 3 }}>{new Date(c.at).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+                            {editing ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <textarea autoFocus value={editingComment!.text} onChange={ev => setEditingComment({ at: c.at, text: ev.target.value })}
+                                  onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && editingComment!.text.trim()) { editComment(ep, i, c.at, editingComment!.text); setEditingComment(null) } else if (ev.key === 'Escape') setEditingComment(null) }}
+                                  rows={2} style={{ width: '100%', resize: 'vertical', border: '1px solid rgba(194,147,58,0.55)', borderRadius: 8, padding: '7px 9px', fontSize: 13, color: '#16365F', background: '#fff', outline: 'none', fontFamily: 'inherit' }} />
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                  <button onClick={() => { if (editingComment!.text.trim()) { editComment(ep, i, c.at, editingComment!.text); setEditingComment(null) } }} disabled={!editingComment!.text.trim()} style={{ cursor: editingComment!.text.trim() ? 'pointer' : 'default', borderRadius: 7, padding: '5px 12px', font: '800 11.5px var(--font-ui)', border: 'none', background: editingComment!.text.trim() ? '#2E6E6E' : 'rgba(15,35,64,0.08)', color: editingComment!.text.trim() ? '#fff' : 'rgba(20,35,61,0.4)' }}>Guardar</button>
+                                  <button onClick={() => setEditingComment(null)} style={{ cursor: 'pointer', borderRadius: 7, padding: '5px 12px', font: '700 11.5px var(--font-ui)', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div style={{ fontSize: 13, color: '#14233D', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.text}</div>
+                                <div style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)', marginTop: 3 }}>
+                                  {fmtC(c.at)}
+                                  {edits.length > 0 && <span title={`Ediciones:\n${edits.map(fmtC).join('\n')}`} style={{ color: '#A87A2C', fontWeight: 700 }}> · editado {fmtC(edits[edits.length - 1])}{edits.length > 1 ? ` (${edits.length}×)` : ''}</span>}
+                                </div>
+                              </>
+                            )}
                           </div>
-                          <button className="ep-sub-del" onClick={() => removeComment(ep, i, c.at)} aria-label="Borrar comentario" title="Borrar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                          {!editing && <button onClick={() => setEditingComment({ at: c.at, text: c.text })} aria-label="Editar comentario" title="Editar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 12.5, lineHeight: 1 }}>✎</button>}
+                          {!editing && <button className="ep-sub-del" onClick={() => removeComment(ep, i, c.at)} aria-label="Borrar comentario" title="Borrar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13, lineHeight: 1 }}>✕</button>}
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   )}
                   <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7 }}>

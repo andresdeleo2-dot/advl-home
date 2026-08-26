@@ -100,7 +100,7 @@ export type EpicaTask = {
   repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)
 }
 export type EpicaProgressEntry = { d: string; note?: string; pct?: number; min?: number; logId?: string } // d = 'YYYY-MM-DD', pct = % al final de ese día; min = minutos trabajados (desde Tiempo); logId = liga con el registro de Tiempo
-export type EpicaTaskComment = { at: string; text: string }                 // at = ISO datetime
+export type EpicaTaskComment = { at: string; text: string; editedAt?: string[] }   // at = creación (ISO); editedAt = ISO de cada edición
 export type EpicaLink = { l: string; url: string; type: string; primary?: boolean }
 
 export type Epica = {
