@@ -119,6 +119,7 @@ export default function TiempoClient() {
   const [dayClosedT, setDayClosedT] = useState<Record<string, string>>({})  // días ya cerrados (localStorage 'epicas.dayClosed.v1', compartido)
   const [dcCelebrateT, setDcCelebrateT] = useState(false)              // confeti al cerrar el día
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
+  const [dayAgendedNW, setDayAgendedNW] = useState<Record<string, Array<{ taskId: string; name: string; min: number }>>>({})  // histórico de "agendaste pero no trabajaste" por día
   const [dcHistOpen, setDcHistOpen] = useState(false)                  // "cierres anteriores": lista completa vs. los últimos
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
@@ -1068,6 +1069,16 @@ export default function TiempoClient() {
     return next
   })
   // Calificación 1-10 del día (mismo almacén que Épicas).
+  // Historial de "agendaste pero no trabajaste" por día (localStorage).
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayAgendedNW.v1'); if (raw) setDayAgendedNW(JSON.parse(raw)) } catch {} }, [])
+  const saveDayAgendedNW = (day: string, items: Array<{ taskId: string; name: string; min: number }>) => {
+    const next = { ...dayAgendedNW }
+    if (items.length > 0) next[day] = items
+    else delete next[day]
+    try { localStorage.setItem('epicas.dayAgendedNW.v1', JSON.stringify(next)) } catch {}
+    setDayAgendedNW(next)
+  }
+  // Calificación 1-10 del día (mismo almacén que Épicas).
   useEffect(() => { try { const raw = localStorage.getItem('epicas.dayScores.v1'); if (raw) setDayScoresT(JSON.parse(raw)) } catch {} }, [])
   const setDayScoreT = (day: string, score: number | null) => setDayScoresT(prev => {
     const next = { ...prev }; if (score != null && score > 0) next[day] = score; else delete next[day]
@@ -1076,7 +1087,10 @@ export default function TiempoClient() {
   })
   // Día cerrado (compartido con Épicas): se marca al cerrar (con confeti); se puede reabrir/ver de nuevo.
   useEffect(() => { try { const raw = localStorage.getItem('epicas.dayClosed.v1'); if (raw) setDayClosedT(JSON.parse(raw)) } catch {} }, [])
-  const markDayClosedT = (day: string) => setDayClosedT(prev => { const next = { ...prev, [day]: new Date().toISOString() }; try { localStorage.setItem('epicas.dayClosed.v1', JSON.stringify(next)) } catch {} return next })
+  const markDayClosedT = (day: string, agendedNW?: Array<{ taskId: string; name: string; min: number }>) => {
+    setDayClosedT(prev => { const next = { ...prev, [day]: new Date().toISOString() }; try { localStorage.setItem('epicas.dayClosed.v1', JSON.stringify(next)) } catch {} return next })
+    if (agendedNW) saveDayAgendedNW(day, agendedNW)
+  }
   const celebrateCloseT = () => { setDcCelebrateT(true); setTimeout(() => setDcCelebrateT(false), 4000) }
   const openTaskById = (tid?: string) => { if (!tid) return; const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }
   useEffect(() => { if (!dayCloseT) { setDcCloseT(false); setDcShowAllT(false); setDcSelT(new Set()); setDcEpicT('todas'); setDcCompareT(false); setDcSubsAllT(false) } }, [dayCloseT])
@@ -2698,7 +2712,7 @@ export default function TiempoClient() {
         // Rutinas del día (estado ESE día) + su tiempo por nombre.
         const minName = (name: string) => data.history.filter(h => h.date === dcDay && h.name === name).reduce((s, h) => s + h.dur, 0)
         const routines = weekRoutines.list.map(r => ({ ...r, doneDay: !!r.week[di], min: minName(r.name) }))
-        const shownRoutines = isTodayView ? routines : routines.filter(r => r.doneDay || r.min > 0)
+        const shownRoutines = routines  // mostrar TODAS (cerrar día muestra todas las rutinas para poder hacer clic sí/no)
         const routineNames = new Set(routines.map(r => (r.name || '').trim().toLowerCase()))
         // General (bloques sin taskId que NO son una rutina), por nombre.
         const omap = new Map<string, number>()
@@ -2712,9 +2726,22 @@ export default function TiempoClient() {
         const localDay = (isoStr?: string) => { if (!isoStr) return ''; const dt = new Date(isoStr); return isNaN(dt.getTime()) ? isoStr.slice(0, 10) : iso(dt) }
         const doneSubs: { task: string; sub: string; color: string; tt: TodayTask }[] = []
         for (const t of (allTasks || [])) for (const s of (t.task.subtasks || [])) if (s.done && localDay(s.doneAt) === dcDay) doneSubs.push({ task: t.task.t, sub: s.t, color: t.color, tt: t })
+        // AGENDASTE PERO NO TRABAJASTE (definir TEMPRANO para usarlo en cerrar día).
+        const schedDay = (data.scheduled || []).filter(s => (s.date || dcDay) === dcDay && s.area === 'trabajo')
+        const schedNW = (() => {
+          const m = new Map<string, { taskId: string; name: string; min: number; tt?: TodayTask }>()
+          for (const s of schedDay) {
+            if (!s.taskId || workedSet.has(s.taskId)) continue
+            const tt = tof(s.taskId) || undefined
+            if (tt && (tt.task.status === 'Terminada' || tt.task.status === 'Archivada')) continue
+            const cur = m.get(s.taskId) || { taskId: s.taskId, name: tt?.task.t || s.name || 'Tarea', min: 0, tt }
+            cur.min += s.dur; m.set(s.taskId, cur)
+          }
+          return [...m.values()].sort((a, b) => b.min - a.min)
+        })()
         // Mueve TODAS las pendientes (en curso + sin tocar) del día a otro día, y cierra.
         const pendingAll = [...openTasks.map(w => w.tt).filter(Boolean) as TodayTask[], ...planned]
-        const moveAllPending = (day: string) => { const seen = new Set<string>(); pendingAll.forEach(t => { if (t.task.id && !seen.has(t.task.id)) { seen.add(t.task.id); moveTaskToDay(t, day) } }); markDayClosedT(dcDay); celebrateCloseT(); setDcCloseT(false); setDayCloseT(false) }
+        const moveAllPending = (day: string) => { const seen = new Set<string>(); pendingAll.forEach(t => { if (t.task.id && !seen.has(t.task.id)) { seen.add(t.task.id); moveTaskToDay(t, day) } }); markDayClosedT(dcDay, schedNW); celebrateCloseT(); setDcCloseT(false); setDayCloseT(false) }
         // % del tiempo por actividad (todo el trabajo del día, por nombre, color/épica de la tarea si aplica).
         const bmap = new Map<string, { min: number; color: string; eId: string }>()
         data.history.filter(h => h.date === dcDay && h.area === 'trabajo').forEach(h => { const cur = bmap.get(h.name) || { min: 0, color: h.taskId ? (tof(h.taskId)?.color || '#8a4b28') : '#94A3B8', eId: h.taskId ? (tof(h.taskId)?.epicaId || '') : '' }; cur.min += h.dur; bmap.set(h.name, cur) })
@@ -2734,24 +2761,9 @@ export default function TiempoClient() {
         const bdTotal = breakdown.reduce((s, b) => s + b.min, 0)
         // PLANEADO = lo que AGENDASTE en el Planificador ese día (bloques data.scheduled de trabajo),
         // no el estimado genérico de la tarea. REAL = lo que trabajaste (historial).
-        const schedDay = (data.scheduled || []).filter(s => (s.date || dcDay) === dcDay && s.area === 'trabajo')
         const planMin = schedDay.reduce((s, b) => s + b.dur, 0)
         const realMin = dayWorkedMin
         const planPct = planMin > 0 ? Math.min(150, Math.round(realMin / planMin * 100)) : 0
-        // AGENDASTE PERO NO TRABAJASTE: bloques con tarea en el Planificador que no registraron tiempo
-        // (registro de lo que se planeó y no se hizo). Distinto de "sin tocar" (ese mira el plan del día);
-        // aquí importa que TENÍA bloque ese día, aunque su plan sea otro.
-        const schedNW = (() => {
-          const m = new Map<string, { taskId: string; name: string; min: number; tt?: TodayTask }>()
-          for (const s of schedDay) {
-            if (!s.taskId || workedSet.has(s.taskId)) continue
-            const tt = tof(s.taskId) || undefined
-            if (tt && (tt.task.status === 'Terminada' || tt.task.status === 'Archivada')) continue
-            const cur = m.get(s.taskId) || { taskId: s.taskId, name: tt?.task.t || s.name || 'Tarea', min: 0, tt }
-            cur.min += s.dur; m.set(s.taskId, cur)
-          }
-          return [...m.values()].sort((a, b) => b.min - a.min)
-        })()
         const schedNWF = schedNW.filter(x => epOK(x.tt?.epicaId))
         const lbl: CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 6 }
         const secLbl = (txt: string, extra?: ReactNode) => (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}><span style={lbl}>{txt}</span>{extra}</div>)
@@ -2844,20 +2856,23 @@ export default function TiempoClient() {
                     )}
                     {fDoneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(fDoneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
                     {fOpenTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(fOpenTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
-                    {schedNWF.length > 0 && (
-                      <div>
-                        {secLbl('📅 Agendaste pero no trabajaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#b0522e' }}>{schedNWF.length}</span>)}
-                        {listBox(schedNWF.map(x => (
-                          <div key={'snw:' + x.taskId} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderBottom: '1px solid #f0e9dc' }}>
-                            <span style={{ width: 7, height: 7, borderRadius: 99, background: '#b0522e', flexShrink: 0 }} />
-                            <span onClick={() => openTaskById(x.taskId)} title="Ver la tarea" style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.name}</span>
-                            <span title="Tiempo que agendaste y no trabajaste" style={{ fontSize: 10.5, fontWeight: 800, color: '#b0522e', flexShrink: 0 }}>⏱ {hmm(x.min)} sin trabajar</span>
-                            {x.tt && <label onClick={ev => ev.stopPropagation()} title="Mover a otro día" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid #e2d9cb', background: '#fff', fontSize: 13 }}>📅<input type="date" defaultValue={x.tt.task.plan || dcDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d) moveTaskToDay(x.tt!, d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} /></label>}
-                          </div>
-                        )))}
-                        <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Las agendaste en el Planificador pero no les registraste tiempo.</div>
-                      </div>
-                    )}
+                    {(() => {
+                      const snwToShow = isTodayView ? schedNWF : (dayAgendedNW[dcDay] || [])
+                      return snwToShow.length > 0 ? (
+                        <div>
+                          {secLbl('📅 Agendaste pero no trabajaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#b0522e' }}>{snwToShow.length}</span>)}
+                          {listBox(snwToShow.map(x => (
+                            <div key={'snw:' + x.taskId} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderBottom: '1px solid #f0e9dc' }}>
+                              <span style={{ width: 7, height: 7, borderRadius: 99, background: '#b0522e', flexShrink: 0 }} />
+                              <span onClick={() => openTaskById(x.taskId)} title="Ver la tarea" style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.name}</span>
+                              <span title="Tiempo que agendaste y no trabajaste" style={{ fontSize: 10.5, fontWeight: 800, color: '#b0522e', flexShrink: 0 }}>⏱ {hmm(x.min)} sin trabajar</span>
+                              {isTodayView && (x as any).tt && <label onClick={ev => ev.stopPropagation()} title="Mover a otro día" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid #e2d9cb', background: '#fff', fontSize: 13 }}>📅<input type="date" defaultValue={(x as any).tt?.task.plan || dcDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && (x as any).tt) moveTaskToDay((x as any).tt, d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} /></label>}
+                            </div>
+                          )))}
+                          <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Las agendaste en el Planificador pero no les registraste tiempo.</div>
+                        </div>
+                      ) : null
+                    })()}
                     {fPlanned.length > 0 && (
                       <div>
                         {secLbl(isTodayView ? '○ No las tocaste hoy' : '○ Sin tocar', (
@@ -2983,7 +2998,7 @@ export default function TiempoClient() {
                   {!dcCloseT ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12.5, color: '#8b8379', fontWeight: 600 }}>{pendingAll.length > 0 ? `${pendingAll.length} ${pendingAll.length === 1 ? 'pendiente' : 'pendientes'} sin cerrar` : 'Cerraste todo ✦'}</span>
-                      <button onClick={() => { if (pendingAll.length > 0) setDcCloseT(true); else { markDayClosedT(dcDay); celebrateCloseT(); setDayCloseT(false) } }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--tiempo-ui, system-ui, sans-serif)', background: 'linear-gradient(135deg,#8a4b28,#6f3c20)', color: '#faf7f1', boxShadow: '0 8px 20px -8px rgba(138,75,40,.6)' }}>{dayClosedT[dcDay] ? '✓ Cerrar de nuevo' : '✓ Cerrar el día'}</button>
+                      <button onClick={() => { if (pendingAll.length > 0) setDcCloseT(true); else { markDayClosedT(dcDay, schedNW); celebrateCloseT(); setDayCloseT(false) } }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--tiempo-ui, system-ui, sans-serif)', background: 'linear-gradient(135deg,#8a4b28,#6f3c20)', color: '#faf7f1', boxShadow: '0 8px 20px -8px rgba(138,75,40,.6)' }}>{dayClosedT[dcDay] ? '✓ Cerrar de nuevo' : '✓ Cerrar el día'}</button>
                     </div>
                   ) : (
                     <div>
@@ -2996,7 +3011,7 @@ export default function TiempoClient() {
                         }) })()}
                       </div>
                       <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
-                        <button onClick={() => { markDayClosedT(dcDay); celebrateCloseT(); setDcCloseT(false); setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28', padding: 0 }}>No mover · solo cerrar</button>
+                        <button onClick={() => { markDayClosedT(dcDay, schedNW); celebrateCloseT(); setDcCloseT(false); setDayCloseT(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28', padding: 0 }}>No mover · solo cerrar</button>
                         <button onClick={() => setDcCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 12.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#a49b90', padding: 0 }}>Cancelar</button>
                       </div>
                     </div>
