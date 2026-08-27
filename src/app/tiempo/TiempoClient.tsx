@@ -5179,13 +5179,27 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           <div className="td-col">
           <NLbl>Estado</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => setT(p => {
-              // "Terminada" pasa por la fuente única (completeRecurring): recurrente → reprograma /
-              // cierra serie; normal → Terminada hoy. Igual que en Épicas.
-              if (s === 'Terminada' && p.status !== 'Terminada') return completeRecurring(p, iso(new Date()), nextPlanOrder)
-              return { ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || iso(new Date())) : undefined }
-            })} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
+            {[...TASK_STATUSES, 'Archivada'].map(s => { const ts = taskStyle(s); const on = t.status === s; return <button key={s} onClick={() => {
+              if (t.id) { const wasW = t.status === 'Esperando', willW = s === 'Esperando'; if (wasW !== willW) markWaitSince(t.id, willW, iso(new Date())) }
+              setT(p => {
+                // "Terminada" pasa por la fuente única (completeRecurring): recurrente → reprograma /
+                // cierra serie; normal → Terminada hoy. Igual que en Épicas.
+                if (s === 'Terminada' && p.status !== 'Terminada') return completeRecurring(p, iso(new Date()), nextPlanOrder)
+                return { ...p, status: s, doneAt: s === 'Terminada' ? (p.doneAt || iso(new Date())) : undefined }
+              })
+            }} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button> })}
           </div>
+          {/* Al elegir "Esperando": QUÉ esperas (email/respuesta/…), como en las otras vistas. */}
+          {t.status === 'Esperando' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#a87a2c' }}>🔔 ¿Qué esperas?</span>
+              {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
+                <button key={val} onClick={() => setT(p => ({ ...p, waitingFor: val }))} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 700, border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#c2933a' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
+              )})}
+              <button onClick={() => { if (t.id) markWaitSince(t.id, false, iso(new Date())); setT(p => ({ ...p, status: p.plan === iso(new Date()) ? 'En curso' : 'Por hacer', waitingFor: '' })) }} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', fontSize: 11.5, fontWeight: 800, border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
+              <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Sale arriba en &quot;En espera · por revisar&quot;.</span>
+            </div>
+          )}
 
           {objetivos.length > 0 && (<><NLbl>Contribuye a</NLbl>
             <select value={linkedId} onChange={e => onLinkObjetivo(epId, t.id!, e.target.value || null)} style={{ ...nf, width: '100%', fontWeight: 600, color: linkedId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>
@@ -5239,8 +5253,16 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
                 pisaba la fecha nativa a medio escribir → parecía "no guardar". El `key` por tarea (arriba)
                 re-monta el editor al abrir otra, así defaultValue toma la fecha correcta. */}
             {t.status === 'Terminada' && <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Terminada el</NLbl><input type="date" defaultValue={t.doneAt || ''} onChange={e => setT({ ...t, doneAt: e.target.value || undefined })} style={{ ...nf, border: '1px solid rgba(62,142,142,0.4)', color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff' }} /></label>}
-            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input type="date" defaultValue={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
+            <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Hacer (plan)</NLbl><input key={`plan:${t.plan || ''}`} type="date" defaultValue={t.plan || ''} onChange={e => setT({ ...t, plan: e.target.value })} style={nf} /></label>
             <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Vence</NLbl><input type="date" defaultValue={t.due || ''} onChange={e => setT({ ...t, due: e.target.value })} style={nf} /></label>
+          </div>
+          {/* Posponer con un toque (mueve la fecha de "Hacer") */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 7, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.42)' }}>Posponer</span>
+            {([['+1 día', 1], ['+3 días', 3], ['+1 sem', 7]] as [string, number][]).map(([lbl, n]) => (
+              <button key={n} onClick={() => setT(p => { const base = (p.plan && p.plan >= iso(new Date())) ? p.plan : iso(new Date()); const d = new Date(base + 'T00:00:00'); d.setDate(d.getDate() + n); return { ...p, plan: iso(d) } })} style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 9px', fontSize: 11, fontWeight: 700, border: '1px solid rgba(46,90,158,0.3)', background: 'rgba(46,90,158,0.06)', color: '#2E5A9E' }}>{lbl}</button>
+            ))}
+            {t.plan && <button onClick={() => setT(p => ({ ...p, plan: '' }))} title="Quitar la fecha (queda sin día)" style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 9px', fontSize: 11, fontWeight: 700, border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E' }}>Sin fecha</button>}
           </div>
           <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" disabled={!remindReady} title={remindReady ? undefined : 'Corre sql/epicas-06-remind.sql en Supabase para usar recordatorios'} defaultValue={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%', opacity: remindReady ? 1 : 0.5 }} /></label>
 
