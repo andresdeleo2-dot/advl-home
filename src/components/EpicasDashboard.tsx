@@ -6451,7 +6451,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               <a key={li} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer"
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
                                 <span style={{ width: 7, height: 7, borderRadius: 99, background: c, flexShrink: 0 }} />
-                                {l.l}
+                                {l.l || (l as { label?: string }).label || l.url}
                               </a>
                             )
                           })}
@@ -6607,7 +6607,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {/* Fechas (editables) */}
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16 }}>
                   {t.status === 'Terminada' && <div><div style={eb}>Terminada el</div><input type="date" value={t.doneAt || ''} onChange={e => setTaskDoneAt(ep, i, e.target.value)} style={{ border: '1px solid rgba(62,142,142,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.doneAt ? '#2E6E6E' : 'rgba(20,35,61,0.4)', background: t.doneAt ? 'rgba(62,142,142,0.08)' : '#fff', outline: 'none' }} /></div>}
-                  <div><div style={eb}>Hacer</div><input type="date" value={t.plan || ''} onChange={e => setTaskPlan(ep, i, e.target.value)} style={{ border: '1px solid rgba(46,90,158,0.35)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} /></div>
+                  <div><div style={eb}>Hacer</div>
+                    <input type="date" value={t.plan || ''} onChange={e => setTaskPlan(ep, i, e.target.value)} style={{ border: '1px solid rgba(46,90,158,0.35)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 7, flexWrap: 'wrap' }}>
+                      <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.42)' }}>Posponer</span>
+                      {([['+1 día', 1], ['+3 días', 3], ['+1 sem', 7]] as [string, number][]).map(([lbl, n]) => (
+                        <button key={n} onClick={() => { const base = (t.plan && t.plan >= today) ? t.plan : today; planTaskToDay(ep, i, addDays(base, n), { toast: true, fromDay: t.plan || viewDate }) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 9px', font: '700 11px var(--font-ui)', border: '1px solid rgba(46,90,158,0.3)', background: 'rgba(46,90,158,0.06)', color: '#2E5A9E' }}>{lbl}</button>
+                      ))}
+                      {t.plan && <button onClick={() => setTaskPlan(ep, i, '')} title="Quitar la fecha (queda sin día)" style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 9px', font: '700 11px var(--font-ui)', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E' }}>Sin fecha</button>}
+                    </div>
+                  </div>
                   <div><div style={eb}>Vence</div><input type="date" value={t.due} onChange={e => setTaskDue(ep, i, e.target.value)} style={{ border: `1px solid ${dt.border}`, borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} /></div>
                   {/* Recordatorio: dispara una notificación a esa hora (con la app abierta) */}
                   <div>
