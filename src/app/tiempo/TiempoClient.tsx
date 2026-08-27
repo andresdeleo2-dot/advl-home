@@ -4207,7 +4207,10 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
     .sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))
   // Las "en espera" (estado 'Esperando') NO se agendan: se separan de "por agendar" a su propia lista.
   const pendWork = pending.filter(t => t.task.status !== 'Esperando')
-  const pendWait = pending.filter(t => t.task.status === 'Esperando')
+  // La bandeja "en espera" muestra TODAS las tareas 'Esperando' del día, aunque ya estén AGENDADAS
+  // (bloque en el planner). Antes salía de `pending`, que excluye las agendadas → una tarea en espera
+  // con bloque (p.ej. una entrevista) desaparecía de aquí aunque sí saliera en Épicas.
+  const pendWait = (tasks || []).filter(t => t.task.status === 'Esperando' && (!epFilter || t.epicaId === epFilter))
   const colorFor = (s: ScheduledBlock) => (tasks || []).find(t => t.task.id === s.taskId)?.color || AREAS[s.area]?.color || '#8b8379'
   const hours: number[] = []; for (let h = gridStart; h <= gridEnd; h += 60) hours.push(h)
   const gridH = (gridEnd - gridStart) * PXM
