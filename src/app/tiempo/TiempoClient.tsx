@@ -119,6 +119,7 @@ export default function TiempoClient() {
   const [dayClosedT, setDayClosedT] = useState<Record<string, string>>({})  // días ya cerrados (localStorage 'epicas.dayClosed.v1', compartido)
   const [dcCelebrateT, setDcCelebrateT] = useState(false)              // confeti al cerrar el día
   const [dayNotesT, setDayNotesT] = useState<Record<string, string>>({})  // comentario por día (localStorage compartido con Épicas)
+  const [dcHistOpen, setDcHistOpen] = useState(false)                  // "cierres anteriores": lista completa vs. los últimos
   const [dur, setDur] = useState(90)
   const [act, setAct] = useState('Trabajo profundo')
   const [data, setData] = useState<AppData>(() => defaults())
@@ -2737,6 +2738,21 @@ export default function TiempoClient() {
         const planMin = schedDay.reduce((s, b) => s + b.dur, 0)
         const realMin = dayWorkedMin
         const planPct = planMin > 0 ? Math.min(150, Math.round(realMin / planMin * 100)) : 0
+        // AGENDASTE PERO NO TRABAJASTE: bloques con tarea en el Planificador que no registraron tiempo
+        // (registro de lo que se planeó y no se hizo). Distinto de "sin tocar" (ese mira el plan del día);
+        // aquí importa que TENÍA bloque ese día, aunque su plan sea otro.
+        const schedNW = (() => {
+          const m = new Map<string, { taskId: string; name: string; min: number; tt?: TodayTask }>()
+          for (const s of schedDay) {
+            if (!s.taskId || workedSet.has(s.taskId)) continue
+            const tt = tof(s.taskId) || undefined
+            if (tt && (tt.task.status === 'Terminada' || tt.task.status === 'Archivada')) continue
+            const cur = m.get(s.taskId) || { taskId: s.taskId, name: tt?.task.t || s.name || 'Tarea', min: 0, tt }
+            cur.min += s.dur; m.set(s.taskId, cur)
+          }
+          return [...m.values()].sort((a, b) => b.min - a.min)
+        })()
+        const schedNWF = schedNW.filter(x => epOK(x.tt?.epicaId))
         const lbl: CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: '#a49b90', marginBottom: 6 }
         const secLbl = (txt: string, extra?: ReactNode) => (<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}><span style={lbl}>{txt}</span>{extra}</div>)
         const stat = (n: number, label: string, c: string) => (
@@ -2828,6 +2844,20 @@ export default function TiempoClient() {
                     )}
                     {fDoneTasks.length > 0 && (<div>{secLbl('✓ Terminadas')}{listBox(fDoneTasks.map(w => cbTask(w.taskId, w.name, w.min, true, () => markTask(w.tt, false), () => openTaskById(w.taskId), '#6f8f5a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
                     {fOpenTasks.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{listBox(fOpenTasks.map(w => cbTask(w.taskId, w.name, w.min, false, () => markTask(w.tt, true), () => openTaskById(w.taskId), '#c2933a', w.tt ? { plan: w.tt.task.plan, onMove: d => moveTaskToDay(w.tt, d) } : undefined)))}</div>)}
+                    {schedNWF.length > 0 && (
+                      <div>
+                        {secLbl('📅 Agendaste pero no trabajaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#b0522e' }}>{schedNWF.length}</span>)}
+                        {listBox(schedNWF.map(x => (
+                          <div key={'snw:' + x.taskId} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', borderBottom: '1px solid #f0e9dc' }}>
+                            <span style={{ width: 7, height: 7, borderRadius: 99, background: '#b0522e', flexShrink: 0 }} />
+                            <span onClick={() => openTaskById(x.taskId)} title="Ver la tarea" style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.name}</span>
+                            <span title="Tiempo que agendaste y no trabajaste" style={{ fontSize: 10.5, fontWeight: 800, color: '#b0522e', flexShrink: 0 }}>⏱ {hmm(x.min)} sin trabajar</span>
+                            {x.tt && <label onClick={ev => ev.stopPropagation()} title="Mover a otro día" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid #e2d9cb', background: '#fff', fontSize: 13 }}>📅<input type="date" defaultValue={x.tt.task.plan || dcDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d) moveTaskToDay(x.tt!, d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} /></label>}
+                          </div>
+                        )))}
+                        <div style={{ marginTop: 5, fontSize: 10.5, color: '#a49b90' }}>Las agendaste en el Planificador pero no les registraste tiempo.</div>
+                      </div>
+                    )}
                     {fPlanned.length > 0 && (
                       <div>
                         {secLbl(isTodayView ? '○ No las tocaste hoy' : '○ Sin tocar', (
@@ -2918,6 +2948,36 @@ export default function TiempoClient() {
                     </div>
                   </div>
                 </div>
+                {/* 📆 HISTORIAL DE CIERRES — un resumen de cómo se cerraron los días anteriores. */}
+                {(() => {
+                  const closedDays = Object.keys(dayClosedT).filter(d => dayClosedT[d]).sort((a, b) => b.localeCompare(a))
+                  if (closedDays.length === 0) return null
+                  const shown = dcHistOpen ? closedDays : closedDays.slice(0, 4)
+                  const hoursOf = (d: string) => data.history.filter(h => h.date === d && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+                  const fmtD = (d: string) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt.getTime()) ? d : cap(dt.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' })) }
+                  return (
+                    <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid #ece4d6' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: '#a49b90' }}>📆 Cierres anteriores</span>
+                        {closedDays.length > 4 && <button onClick={() => setDcHistOpen(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--tiempo-ui, system-ui, sans-serif)', color: '#8a4b28' }}>{dcHistOpen ? 'ver menos ▴' : `ver todos (${closedDays.length}) ▾`}</button>}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {shown.map(d => { const sc = dayScoresT[d]; const note = (dayNotesT[d] || '').trim(); const hrs = hoursOf(d); const scColor = sc == null ? '#c9bfae' : sc < 4 ? '#b0522e' : sc < 7 ? '#c2933a' : '#3E6E6E'; return (
+                          <div key={'clz:' + d} onClick={() => setTaskDay(d)} title="Abrir el cierre de ese día" style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '9px 12px', borderRadius: 12, border: d === dcDay ? '1px solid #d9b98e' : '1px solid #ece4d6', background: d === dcDay ? '#f5ece2' : '#fff', cursor: 'pointer' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: '#1c1a17' }}>{fmtD(d)}</span>
+                              {hrs > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: '#3E6E6E' }}>⏱ {hmm(hrs)}</span>}
+                              {sc != null && <span style={{ fontSize: 11, fontWeight: 800, color: scColor }}>★ {Math.round(sc * 10) / 10}/10</span>}
+                              <span style={{ flex: 1 }} />
+                              {(() => { const dt = new Date(dayClosedT[d]); return isNaN(dt.getTime()) ? null : <span style={{ fontSize: 10.5, color: '#a49b90' }}>cerrado {dt.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}</span> })()}
+                            </div>
+                            {note && <div style={{ fontSize: 12, color: '#6b645b', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{note}</div>}
+                          </div>
+                        ) })}
+                      </div>
+                    </div>
+                  )
+                })()}
                 {/* FOOTER: botón para cerrar el día. Si hay pendientes, pregunta a qué día moverlas TODAS. */}
                 <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #ece4d6' }}>
                   {!dcCloseT ? (
