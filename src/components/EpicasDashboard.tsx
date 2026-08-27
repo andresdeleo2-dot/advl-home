@@ -6468,8 +6468,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ marginBottom: 16 }}>
                   <div style={eb}>Estado</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => setTaskStatus(ep, i, s)} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
+                    {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => { const wasW = t.status === 'Esperando', willW = s === 'Esperando'; setTaskStatus(ep, i, s); if (t.id && wasW !== willW) { markWaitSince(t.id, willW, todayISO()); setWaitSince(readWaitSince()) } }} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
                   </div>
+                  {/* Al elegir "Esperando": QUÉ esperas (email/respuesta/…), igual que en las otras vistas. */}
+                  {t.status === 'Esperando' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 ¿Qué esperas?</span>
+                      {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
+                        <button key={val} onClick={() => setTaskWaiting(ep, i, val)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
+                      )})}
+                      <button onClick={() => setTaskWaiting(ep, i, null)} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
+                      <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Aparece en la bandeja &quot;En espera · Por revisar&quot; con su &quot;hace N días&quot;.</span>
+                      {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+                    </div>
+                  )}
                 </div>
 
                 {/* Objetivo al que contribuye */}
