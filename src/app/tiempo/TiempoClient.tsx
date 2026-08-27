@@ -4433,7 +4433,6 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
             {scheduled.map(s => {
               const start = drag?.kind === 'move' && drag.id === s.id ? drag.curMin : s.start
               const dur = drag?.kind === 'resize' && drag.id === s.id ? drag.curDur : s.dur
-              const t = (tasks || []).find(x => x.task.id === s.taskId)
               const col = colorFor(s); const tall = dur * PXM >= 46
               const active = drag && 'id' in drag && drag.id === s.id
               const sel = selBlocks.has(s.id)
@@ -4451,7 +4450,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     {tall && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onStart(s)} title={s.started ? 'Volver a comenzar' : 'Comenzar ahora'} style={planBtn}>▶</button>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
-                      {t && <button onPointerDown={e => e.stopPropagation()} onClick={() => onEdit(t)} title="Ver la tarea" style={planBtn}>👁</button>}
+                      {s.taskId && <button onPointerDown={e => e.stopPropagation()} onClick={() => onOpenTask(s.taskId!)} title="Ver la tarea" style={planBtn}>👁</button>}
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onClone(s.id)} title="Duplicar: ponla otra vez hoy a otra hora" style={planBtn}>⧉</button>
                       <button onPointerDown={e => e.stopPropagation()} onClick={() => onRemove(s.id)} title="Quitar del plan" style={planBtn}>×</button>
                     </div>}
@@ -4472,14 +4471,13 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
             {actBar && !drag && (() => {
               const s = actBar.kind === 'sched' ? scheduled.find(x => x.id === actBar.ref) : null
               const w = actBar.kind === 'worked' ? worked.find(x => String(x._idx) === actBar.ref) : null
-              const t = s ? (tasks || []).find(x => x.task.id === s.taskId) : null
               return (
                 <div onPointerDown={e => e.stopPropagation()} onPointerEnter={() => { if (actTimer.current) clearTimeout(actTimer.current) }} onPointerLeave={hideActBarSoon}
                   style={{ position: 'absolute', top: Math.max(0, actBar.top - 34), ...(actBar.lane === 'right' ? { right: 8 } : { left: 'calc(50% - 8px)', transform: 'translateX(-100%)' }), zIndex: 40, display: 'flex', gap: 3, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 999, padding: '4px 6px', boxShadow: '0 8px 22px -8px rgba(28,26,23,.4)' }}>
                   {s && (<>
                     <button onClick={() => onStart(s)} title={s.started ? 'Volver a comenzar' : 'Comenzar ahora'} style={actBtn}>▶</button>
                     <button onClick={() => setTimeEdit({ target: 'sched', ref: s.id, start: s.start, dur: s.dur, live: false, name: s.name })} title="Editar hora" style={actBtn}>✎</button>
-                    {t && <button onClick={() => onEdit(t)} title="Ver la tarea" style={actBtn}>👁</button>}
+                    {s.taskId && <button onClick={() => { onOpenTask(s.taskId!); setActBar(null) }} title="Ver la tarea" style={actBtn}>👁</button>}
                     <button onClick={() => { onClone(s.id); setActBar(null) }} title="Duplicar: ponla otra vez hoy a otra hora" style={actBtn}>⧉</button>
                     <button onClick={() => { onRemove(s.id); setActBar(null) }} title="Quitar del plan" style={actBtn}>×</button>
                   </>)}
