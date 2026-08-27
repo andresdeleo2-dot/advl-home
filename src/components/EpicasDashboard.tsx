@@ -1170,7 +1170,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // así la propia tarea (con su plan viejo) no infla el conteo del día destino.
   // Si la tarea queda planeada para HOY → estado "En curso" (recordando el previo); si sale → se revierte.
   const applyPlanStatus = (task: EpicaTask, newPlanDay: string) => {
-    if (task.status === 'Terminada') return
+    if (task.status === 'Terminada' || task.status === 'Esperando') return   // estados deliberados: no los pises con "En curso"
     if (newPlanDay === todayISO()) {
       if (task.status !== 'En curso') { if (task.planStatusPrev == null) task.planStatusPrev = task.status; task.status = 'En curso' }
     } else {
@@ -2196,7 +2196,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const editOpenSnapshotRef = useRef<EpicaTask | null>(null)   // tarea tal cual estaba al ABRIR el editor (para saber qué campos tocó el editor y no pisar cambios concurrentes del Modo foco)
   // Campos que el editor de tarea GESTIONA (para el dirty-check y para no pisar lo demás). Excluye
   // volátiles (updatedAt/progressLog/comentarios/remindAt) que cambian por sync/sesión aunque no edites.
-  const EDITOR_FIELDS: (keyof EpicaTask)[] = ['t', 'status', 'due', 'note', 'resumen', 'links', 'priority', 'difficulty', 'plan', 'subtasks', 'progress', 'repeat', 'repeatUntil']
+  const EDITOR_FIELDS: (keyof EpicaTask)[] = ['t', 'status', 'due', 'note', 'resumen', 'links', 'priority', 'difficulty', 'plan', 'subtasks', 'progress', 'repeat', 'repeatUntil', 'waitingFor']
   const editorSlice = (t: EpicaTask | null) => { if (!t) return ''; const o: Record<string, unknown> = {}; for (const k of EDITOR_FIELDS) if (t[k] !== undefined) o[k] = t[k]; return JSON.stringify(o) }
   useEffect(() => { try { const r = localStorage.getItem(DRAFT_CACHE_KEY); if (r) draftCacheRef.current = JSON.parse(r) } catch { /* noop */ } }, [])
   const persistDrafts = () => { try { localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(draftCacheRef.current)) } catch { /* noop */ } }
@@ -2284,6 +2284,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (t.status === 'Terminada') t.doneAt = taskDraft.doneAt || todayISO()
       else delete t.doneAt   // evita arrastrar una fecha de terminación obsoleta
     }
+    // "En espera / Por revisar": el QUÉ esperas (waitingFor) vive sólo cuando el estado final es
+    // 'Esperando'; en cualquier otro estado se limpia. Además registra "esperando desde" (seguimiento).
+    if (t.status === 'Esperando') { if (waitingReady.current) t.waitingFor = taskDraft.waitingFor || '' }
+    else if (waitingReady.current || 'waitingFor' in t) t.waitingFor = ''
+    if (t.id && (orig.status === 'Esperando') !== (t.status === 'Esperando')) { markWaitSince(t.id, t.status === 'Esperando', todayISO()); setWaitSince(readWaitSince()) }
     // Resumen (sólo si la columna existe): se toma del borrador; '' limpia el campo (→ null).
     if (resumenReady.current) t.resumen = (taskDraft.resumen || '').trim()
     if (!t.t) { closeTaskEdit(); return }
@@ -8111,6 +8116,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     return <button key={s} onClick={() => setTaskDraft(d => ({ ...d, status: s }))} style={{ cursor: 'pointer', borderRadius: 8, padding: '7px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${ts.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ts.bg : '#fff', color: on ? ts.c : 'rgba(20,35,61,0.55)' }}>{ts.label}</button>
                   })}
                 </div>
+                {/* Al marcar "Esperando": QUÉ esperas (email/respuesta/…), igual que el chip de las otras vistas. */}
+                {taskDraft.status === 'Esperando' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 8, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 ¿Qué esperas?</span>
+                    {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = taskDraft.waitingFor === val; return (
+                      <button key={val} onClick={() => setTaskDraft(d => ({ ...d, waitingFor: val }))} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
+                    )})}
+                    <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Aparece en la bandeja &quot;En espera · Por revisar&quot;.</span>
+                    {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+                  </div>
+                )}
 
                 <label style={lbl}>Avance</label>
                 <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: -4, marginBottom: 9 }}>Qué tan completa la sientes. Arrastra la barra o fíjala al 100%.</div>
