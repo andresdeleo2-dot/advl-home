@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v8-bitacora-popup-orden-reciente */
+/* BUILD-MARKER: v9-bitacora-popup-epicas */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */

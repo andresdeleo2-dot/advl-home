@@ -186,6 +186,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogEdit, setBacklogEdit] = useState(false)        // edición inline tipo Excel en el backlog
   const [editCell, setEditCell] = useState<{ key: string; field: 'title' | 'progress'; val: string } | null>(null) // celda en edición (input controlado)
   const [logExpanded, setLogExpanded] = useState(false)        // ver toda la bitácora de avance
+  const [logPop, setLogPop] = useState<string | null>(null)    // día de bitácora abierto en popup (por fecha)
   const [draggingKey, setDraggingKey] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())   // selección múltiple del enfoque
@@ -6562,6 +6563,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   // Tiempo invertido: suma de los minutos registrados desde la sección Tiempo (campo `min`).
                   const investedMin = log.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
                   const fmtMin = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
+                  const fmtLogDate = (d: string) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }) }
                   return (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
@@ -6583,25 +6585,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                                 {shown.map(entry => {
                                   const isTd = entry.d === todayISO()
                                   const dlt = deltas[entry.d]
+                                  const min = (entry as { min?: number }).min
+                                  const userNote = /^⏱.*trabajad[oa]$/i.test((entry.note || '').trim()) ? '' : (entry.note || '')
                                   return (
-                                    <div key={entry.d} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)' }}>
-                                      {/* Fecha editable del avance */}
-                                      <input type="date" defaultValue={entry.d} onChange={e => setProgressDate(ep, i, entry.d, e.target.value)} title="Cambiar la fecha de este avance" aria-label="Fecha del avance"
-                                        style={{ flexShrink: 0, width: 132, border: `1px solid ${isTd ? 'rgba(194,147,58,0.4)' : 'rgba(15,35,64,0.12)'}`, borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F', background: '#fff', outline: 'none' }} />
-                                      {/* % total al final de ese día (editable) + delta derivado */}
-                                      <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                                        <input type="number" min={0} max={100} defaultValue={typeof entry.pct === 'number' ? entry.pct : ''} placeholder="—"
-                                          onBlur={e => { const v = e.target.value.trim(); setProgressPct(ep, i, entry.d, v === '' ? null : Number(v)) }}
-                                          title="% total al final de ese día" aria-label="Porcentaje ese día"
-                                          style={{ width: 46, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 4px', fontSize: 12, fontWeight: 700, color: '#14233D', background: '#fff', outline: 'none', textAlign: 'right' }} />
-                                        <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>%</span>
-                                        {typeof dlt === 'number' && (
-                                          <span title="Avanzaste esto ese día (vs. el día anterior con %)" style={{ marginLeft: 2, fontSize: 11, fontWeight: 800, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{dlt > 0 ? '+' : ''}{dlt}%</span>
-                                        )}
-                                      </span>
-                                      {(() => { const m = (entry as { min?: number }).min; return m ? <span title="Tiempo trabajado ese día" style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: '#2E6E6E', whiteSpace: 'nowrap' }}>⏱ {fmtMin(m)}</span> : null })()}
-                                      <input defaultValue={/^⏱.*trabajad[oa]$/i.test((entry.note || '').trim()) ? '' : (entry.note || '')} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} placeholder="¿Qué hiciste ese día?" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
-                                      <button onClick={() => removeProgressDay(ep, i, entry.d)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.55)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                                    <div key={entry.d} onClick={() => setLogPop(entry.d)} title="Editar este día (avance % y nota)" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)', cursor: 'pointer', flexWrap: 'wrap' }}>
+                                      <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F', whiteSpace: 'nowrap' }}>{fmtLogDate(entry.d)}</span>
+                                      {min ? <span title="Tiempo trabajado ese día" style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: '#2E6E6E', whiteSpace: 'nowrap' }}>⏱ {fmtMin(min)}</span> : null}
+                                      {typeof entry.pct === 'number' ? <span title="Avance total al final de ese día" style={{ flexShrink: 0, fontSize: 11.5, fontWeight: 800, color: '#14233D', whiteSpace: 'nowrap' }}>{entry.pct}%</span> : null}
+                                      {typeof dlt === 'number' && (
+                                        <span title="Avanzaste esto ese día (vs. el día anterior con %)" style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{dlt > 0 ? '+' : ''}{dlt}%</span>
+                                      )}
+                                      <span style={{ flex: 1, minWidth: 90, fontSize: 12.5, color: userNote ? '#14233D' : 'rgba(20,35,61,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userNote || '¿Qué hiciste ese día?'}</span>
+                                      <span style={{ flexShrink: 0, fontSize: 15, color: 'rgba(20,35,61,0.3)' }}>›</span>
+                                      <button onClick={ev => { ev.stopPropagation(); removeProgressDay(ep, i, entry.d) }} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.55)', fontSize: 13, lineHeight: 1 }}>✕</button>
                                     </div>
                                   )
                                 })}
@@ -6612,6 +6608,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             )
                           })()
                       }
+                      {/* Popup por día: avance % (contribución), tiempo trabajado y nota. Guarda en la tarea (Supabase). */}
+                      {logPop != null && (() => {
+                        const entry = log.find(x => x.d === logPop); if (!entry) return null
+                        const min = (entry as { min?: number }).min
+                        const dlt = deltas[entry.d]
+                        const userNote = /^⏱.*trabajad[oa]$/i.test((entry.note || '').trim()) ? '' : (entry.note || '')
+                        return (
+                          <div onClick={() => setLogPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 92, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
+                            <div role="dialog" aria-modal="true" aria-label="Avance del día" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 460, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+                              <div style={{ height: 4, background: ep.color }} />
+                              <div style={{ padding: '18px 22px 22px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                    <span style={{ fontSize: 18, fontWeight: 700, color: '#10233F', textTransform: 'capitalize' }}>{fmtLogDate(entry.d)}</span>
+                                    {min ? <span style={{ fontSize: 12, fontWeight: 800, color: '#2E6E6E' }}>⏱ {fmtMin(min)} trabajado</span> : null}
+                                  </div>
+                                  <button aria-label="Cerrar" onClick={() => setLogPop(null)} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
+                                </div>
+                                <div style={{ ...eb, marginBottom: 6 }}>Fecha</div>
+                                <input type="date" defaultValue={entry.d} onChange={e => { const nd = e.target.value; if (nd) { setProgressDate(ep, i, entry.d, nd); setLogPop(nd) } }} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 14, fontWeight: 600, color: '#14233D', outline: 'none', marginBottom: 16 }} />
+                                <ProgressSlider value={typeof entry.pct === 'number' ? entry.pct : 0} color={ep.color} labelStyle={eb} onCommit={v => setProgressPct(ep, i, entry.d, v)} onHundred={() => setProgressPct(ep, i, entry.d, 100)} />
+                                {typeof dlt === 'number' && <div style={{ marginTop: -8, marginBottom: 16, fontSize: 12, fontWeight: 700, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>Contribuiste {dlt > 0 ? '+' : ''}{dlt}% ese día (vs. el día anterior con %)</div>}
+                                <div style={{ ...eb, marginBottom: 6 }}>¿Qué hiciste ese día?</div>
+                                <textarea defaultValue={userNote} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} rows={5} placeholder="Describe el avance de ese día…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '10px 12px', fontSize: 13.5, lineHeight: 1.5, color: '#14233D', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }} />
+                                <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                                  <button onClick={() => { removeProgressDay(ep, i, entry.d); setLogPop(null) }} style={{ border: '1px solid rgba(176,82,46,0.35)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '11px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Borrar día</button>
+                                  <button onClick={() => setLogPop(null)} style={{ flex: 1, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 11, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Listo</button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </div>
                   )
                 })()}
