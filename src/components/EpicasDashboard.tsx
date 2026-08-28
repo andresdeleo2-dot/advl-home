@@ -6576,7 +6576,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         : (() => {
                             const CAP = 4
                             const collapsed = log.length > CAP && !logExpanded
-                            const shown = collapsed ? log.slice(0, CAP) : log
+                            const ordered = log.slice().sort((a, b) => (b.d || '').localeCompare(a.d || ''))  // más reciente primero
+                            const shown = collapsed ? ordered.slice(0, CAP) : ordered
                             return (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: logExpanded ? 260 : undefined, overflowY: logExpanded ? 'auto' : 'visible' }}>
                                 {shown.map(entry => {

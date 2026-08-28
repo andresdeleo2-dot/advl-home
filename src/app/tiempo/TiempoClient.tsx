@@ -5145,6 +5145,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const [nlLabel, setNlLabel] = useState('')              // nuevo link: etiqueta
   const [nlUrl, setNlUrl] = useState('')                  // nuevo link: url
   const [subPop, setSubPop] = useState<number | null>(null)  // subtarea abierta (editar nota/links/%)
+  const [logPop, setLogPop] = useState<number | null>(null)  // día de bitácora abierto (editar %/nota en popup); guarda el índice ORIGINAL en progressLog
   const [slLabel, setSlLabel] = useState('')             // nuevo link de subtarea: etiqueta
   const [slUrl, setSlUrl] = useState('')                 // nuevo link de subtarea: url
   const noteRef = useRef<HTMLDivElement>(null)
@@ -5153,7 +5154,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   // La nota es contentEditable NO controlado: se fija una sola vez al abrir; así el
   // re-render del reloj (cada segundo) no reescribe ni borra lo que estás tecleando.
   useEffect(() => { if (noteRef.current) noteRef.current.innerHTML = sanitizeHtml(info.task.note || '') }, [])
-  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (subPop !== null) { setSubPop(null); return } flushRef.current(); onClose() } }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose, subPop])
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (logPop !== null) { setLogPop(null); return } if (subPop !== null) { setSubPop(null); return } flushRef.current(); onClose() } }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose, subPop, logPop])
   // Diseño navy idéntico al editor de Épicas.
   const nf: CSSProperties = { background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '8px 10px', fontSize: 13, color: '#14233D', boxSizing: 'border-box' }
   const eb: CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }
@@ -5166,6 +5167,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   // La nota "⏱ Xh Ym trabajado" la pone Tiempo automáticamente; para editar la nota real la tratamos
   // como vacía (el tiempo ya se muestra aparte con `min`). Así el usuario escribe QUÉ hizo ese día.
   const isAutoNote = (n?: string) => !n || /^⏱.*trabajad[oa]$/i.test(n.trim())
+  const fmtLogDate = (d: string) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }) }
   const logAdvance = () => {
     setLog(a => {
       const i = a.findIndex(e => e.d === bitDate && (e as { min?: number }).min == null)
@@ -5317,13 +5319,14 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           </div>
           <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...nf, width: '100%', marginBottom: 6 }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {(t.progressLog || []).slice().reverse().map((e, ri) => { const i = (t.progressLog || []).length - 1 - ri; const min = (e as { min?: number }).min; const userNote = isAutoNote(e.note) ? '' : (e.note || ''); return (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                <input key={`${i}:${e.d}`} type="date" defaultValue={e.d} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, d: ev.target.value } : x))} style={{ ...nf, padding: '6px 8px', fontSize: 12 }} />
-                <input type="number" min={0} max={100} value={typeof e.pct === 'number' ? e.pct : ''} placeholder="—" onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, pct: ev.target.value === '' ? undefined : Number(ev.target.value) } : x))} style={{ ...nf, width: 58, padding: '6px 8px', fontSize: 12 }} /><span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>%</span>
+            {(t.progressLog || []).map((e, idx) => ({ e, idx })).sort((a, b) => (b.e.d || '').localeCompare(a.e.d || '')).map(({ e, idx }) => { const min = (e as { min?: number }).min; const userNote = isAutoNote(e.note) ? '' : (e.note || ''); return (
+              <div key={idx} onClick={() => setLogPop(idx)} title="Editar este día (avance % y nota)" style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', cursor: 'pointer', padding: '8px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)', border: '1px solid rgba(15,35,64,0.07)' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#16365F', whiteSpace: 'nowrap', flexShrink: 0 }}>{fmtLogDate(e.d)}</span>
                 {min ? <span title="Tiempo trabajado ese día" style={{ fontSize: 11.5, fontWeight: 700, color: '#3E6E6E', whiteSpace: 'nowrap', flexShrink: 0 }}>⏱ {hm(min)}</span> : null}
-                <input value={userNote} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, note: ev.target.value } : x))} placeholder="¿Qué hiciste ese día?" style={{ ...nf, flex: 1, minWidth: 130, padding: '6px 8px', fontSize: 12 }} />
-                <button onClick={() => setLog(a => a.filter((_, j) => j !== i))} title="Borrar este registro" style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
+                {typeof e.pct === 'number' ? <span title="Avance total al final de ese día" style={{ fontSize: 11.5, fontWeight: 800, color: '#A87A2C', whiteSpace: 'nowrap', flexShrink: 0 }}>{e.pct}%</span> : null}
+                <span style={{ flex: 1, minWidth: 100, fontSize: 12.5, color: userNote ? '#14233D' : 'rgba(20,35,61,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{userNote || '¿Qué hiciste ese día?'}</span>
+                <span style={{ fontSize: 15, color: 'rgba(20,35,61,0.3)', flexShrink: 0 }}>›</span>
+                <button onClick={ev => { ev.stopPropagation(); setLog(a => a.filter((_, j) => j !== idx)) }} title="Borrar este registro" style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
               </div>
             ) })}
           </div>
@@ -5470,6 +5473,40 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
                 <button onClick={addSl} style={smallBtn}>+ Link</button>
               </div>
               <button onClick={() => setSubPop(null)} style={{ marginTop: 4, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 11, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Listo</button>
+            </div>
+          </div>
+        )
+      })()}
+      {/* Popup para editar un día de la bitácora: avance % + nota de lo que se hizo. Guarda en la tarea (Supabase) vía auto-save. */}
+      {logPop !== null && (t.progressLog || [])[logPop] && (() => {
+        const e = (t.progressLog || [])[logPop!]
+        const min = (e as { min?: number }).min
+        const userNote = isAutoNote(e.note) ? '' : (e.note || '')
+        const updLog = (patch: Partial<EpicaProgressEntry>) => setLog(a => a.map((x, j) => j === logPop ? { ...x, ...patch } : x))
+        const pctVal = typeof e.pct === 'number' ? e.pct : 0
+        return (
+          <div onClick={e2 => { e2.stopPropagation(); setLogPop(null) }} style={{ position: 'fixed', inset: 0, zIndex: 97, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflow: 'auto' }}>
+            <div onClick={e2 => e2.stopPropagation()} role="dialog" aria-modal="true" aria-label="Avance del día" style={{ width: '100%', maxWidth: 460, background: '#fff', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 14, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontFamily: SERIF, fontWeight: 600, fontSize: 20, color: '#10233F', textTransform: 'capitalize' }}>{fmtLogDate(e.d)}</span>
+                  {min ? <span style={{ fontSize: 12, fontWeight: 700, color: '#3E6E6E' }}>⏱ {hm(min)} trabajado</span> : null}
+                </div>
+                <button onClick={() => setLogPop(null)} style={{ flexShrink: 0, border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', cursor: 'pointer', fontSize: 14 }}>✕</button>
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}><NLbl>Fecha</NLbl><input key={`lpdate:${logPop}`} type="date" defaultValue={e.d} onChange={ev => updLog({ d: ev.target.value })} style={{ ...nf }} /></label>
+              <div>
+                <NLbl>Avance total al final del día · {pctVal}%</NLbl>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                  <input type="range" min={0} max={100} step={1} value={pctVal} onChange={ev => updLog({ pct: Number(ev.target.value) })} style={{ flex: 1, accentColor: '#C2933A' }} />
+                  <input type="number" min={0} max={100} value={typeof e.pct === 'number' ? e.pct : ''} placeholder="—" onChange={ev => updLog({ pct: ev.target.value === '' ? undefined : Number(ev.target.value) })} style={{ ...nf, width: 66 }} />
+                </div>
+              </div>
+              <div><NLbl>¿Qué hiciste ese día?</NLbl><textarea value={userNote} onChange={ev => updLog({ note: ev.target.value })} rows={5} placeholder="Describe el avance de ese día…" style={{ ...nf, width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, marginTop: 4 }} /></div>
+              <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+                <button onClick={() => { setLog(a => a.filter((_, j) => j !== logPop)); setLogPop(null) }} style={{ border: '1px solid rgba(176,82,46,0.35)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 10, padding: '11px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Borrar día</button>
+                <button onClick={() => setLogPop(null)} style={{ flex: 1, background: '#16365F', color: '#fff', border: 'none', borderRadius: 10, padding: 11, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Listo</button>
+              </div>
             </div>
           </div>
         )
