@@ -6598,7 +6598,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                                           <span title="Avanzaste esto ese día (vs. el día anterior con %)" style={{ marginLeft: 2, fontSize: 11, fontWeight: 800, color: dlt > 0 ? '#2E6E6E' : dlt < 0 ? '#B0522E' : 'rgba(20,35,61,0.4)' }}>{dlt > 0 ? '+' : ''}{dlt}%</span>
                                         )}
                                       </span>
-                                      <input defaultValue={entry.note || ''} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} placeholder="Nota del día…" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
+                                      {(() => { const m = (entry as { min?: number }).min; return m ? <span title="Tiempo trabajado ese día" style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: '#2E6E6E', whiteSpace: 'nowrap' }}>⏱ {fmtMin(m)}</span> : null })()}
+                                      <input defaultValue={/^⏱.*trabajad[oa]$/i.test((entry.note || '').trim()) ? '' : (entry.note || '')} onBlur={e => setProgressNote(ep, i, entry.d, e.target.value)} placeholder="¿Qué hiciste ese día?" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
                                       <button onClick={() => removeProgressDay(ep, i, entry.d)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.55)', fontSize: 13, lineHeight: 1 }}>✕</button>
                                     </div>
                                   )

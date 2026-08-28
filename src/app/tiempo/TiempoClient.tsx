@@ -1225,7 +1225,7 @@ export default function TiempoClient() {
     if (!cur.some(l => l.logId === row.logId)) return
     const log = newDur == null
       ? cur.filter(l => l.logId !== row.logId)
-      : cur.map(l => l.logId === row.logId ? { ...l, min: newDur, note: `⏱ ${hm(newDur)} trabajado` } : l)
+      : cur.map(l => l.logId === row.logId ? { ...l, min: newDur, note: (!l.note || /^⏱.*trabajad[oa]$/i.test(l.note.trim())) ? `⏱ ${hm(newDur)} trabajado` : l.note } : l)
     const upd: EpicaTask = { ...tt.task, progressLog: log }
     syncTask(row.epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task: upd } : x))
@@ -5163,6 +5163,9 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const linkedId = objetivos.find(k => (k.taskIds || []).includes(t.id!))?.id || ''
   const addSubQuick = () => { const v = newSub.trim(); if (!v) return; setT(p => ({ ...p, subtasks: [...(p.subtasks || []), { id: uid(), t: v, done: false }] })); setNewSub('') }
   const setLog = (fn: (a: EpicaProgressEntry[]) => EpicaProgressEntry[]) => setT(p => ({ ...p, progressLog: fn(p.progressLog || []) }))
+  // La nota "⏱ Xh Ym trabajado" la pone Tiempo automáticamente; para editar la nota real la tratamos
+  // como vacía (el tiempo ya se muestra aparte con `min`). Así el usuario escribe QUÉ hizo ese día.
+  const isAutoNote = (n?: string) => !n || /^⏱.*trabajad[oa]$/i.test(n.trim())
   const logAdvance = () => {
     setLog(a => {
       const i = a.findIndex(e => e.d === bitDate && (e as { min?: number }).min == null)
@@ -5314,12 +5317,13 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           </div>
           <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...nf, width: '100%', marginBottom: 6 }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {(t.progressLog || []).slice().reverse().map((e, ri) => { const i = (t.progressLog || []).length - 1 - ri; const min = (e as { min?: number }).min; return (
+            {(t.progressLog || []).slice().reverse().map((e, ri) => { const i = (t.progressLog || []).length - 1 - ri; const min = (e as { min?: number }).min; const userNote = isAutoNote(e.note) ? '' : (e.note || ''); return (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                 <input key={`${i}:${e.d}`} type="date" defaultValue={e.d} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, d: ev.target.value } : x))} style={{ ...nf, padding: '6px 8px', fontSize: 12 }} />
                 <input type="number" min={0} max={100} value={typeof e.pct === 'number' ? e.pct : ''} placeholder="—" onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, pct: ev.target.value === '' ? undefined : Number(ev.target.value) } : x))} style={{ ...nf, width: 58, padding: '6px 8px', fontSize: 12 }} /><span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>%</span>
-                <span style={{ flex: 1, minWidth: 80, fontSize: 12.5, color: '#4c5a70' }}>{min ? `⏱ ${hm(min)} trabajado` : e.note || ''}</span>
-                <button onClick={() => setLog(a => a.filter((_, j) => j !== i))} style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)', cursor: 'pointer' }}>✕</button>
+                {min ? <span title="Tiempo trabajado ese día" style={{ fontSize: 11.5, fontWeight: 700, color: '#3E6E6E', whiteSpace: 'nowrap', flexShrink: 0 }}>⏱ {hm(min)}</span> : null}
+                <input value={userNote} onChange={ev => setLog(a => a.map((x, j) => j === i ? { ...x, note: ev.target.value } : x))} placeholder="¿Qué hiciste ese día?" style={{ ...nf, flex: 1, minWidth: 130, padding: '6px 8px', fontSize: 12 }} />
+                <button onClick={() => setLog(a => a.filter((_, j) => j !== i))} title="Borrar este registro" style={{ border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)', cursor: 'pointer', flexShrink: 0 }}>✕</button>
               </div>
             ) })}
           </div>
