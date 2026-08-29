@@ -12,16 +12,11 @@ import {
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
-import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS } from '@/lib/waiting'
+import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta as waitMetaT } from '@/lib/waiting'
+import { isAutoNote, fmtLogDate } from '@/lib/tareas'
 import Confetti from '@/components/Confetti'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
-// "En espera / Por revisar": qué esperas de la tarea. [valor, icono, etiqueta].
-const WAIT_REASONS: [string, string, string][] = [['email', '📩', 'Email'], ['respuesta', '💬', 'Respuesta'], ['comentario', '🗨️', 'Comentario'], ['llamada', '📞', 'Llamada'], ['otro', '⏳', 'Otro']]
-const waitMetaT = (reason?: string): { icon: string; label: string } => {
-  const m = WAIT_REASONS.find(x => x[0] === reason)
-  return m ? { icon: m[1], label: m[2] } : (reason ? { icon: '⏳', label: reason } : { icon: '🔔', label: 'En espera' })
-}
 const PRIOS = ['alta', 'media', 'baja'] as const
 const DIFFS = ['facil', 'media', 'dificil'] as const
 const PRIO_TONE: Record<string, string> = { alta: '#B0522E', media: '#A87A2C', baja: '#5B6B86' }
@@ -1204,11 +1199,20 @@ export default function TiempoClient() {
       if (t.status !== 'Esperando' && t.planStatusPrev == null) task.planStatusPrev = t.status
     } else {
       const restore = t.plan === iso(new Date()) ? 'En curso' : (t.planStatusPrev && t.planStatusPrev !== 'Esperando' ? t.planStatusPrev : 'Por hacer')
-      task = { ...t, status: restore, waitingFor: '' }
+      task = { ...t, status: restore, ...(waitingReadyRef.current ? { waitingFor: '' } : {}) }
       delete task.planStatusPrev
     }
     autoSaveTask(tt.epicaId, task)
     if (t.id) { markWaitSince(t.id, !!reason, iso(new Date())); setWaitSince(readWaitSince()) }   // "esperando desde"
+  }
+  // "Dar seguimiento": la espera lleva mucho y hay que MOVERSE — quita la espera y la pone HOY,
+  // activa, en una sola escritura (paridad con Épicas · followUpWaiting).
+  const followUpWaitingT = (tt: TodayTask) => {
+    const t = tt.task; const day = iso(new Date())
+    const task: EpicaTask = { ...t, status: t.status === 'Esperando' ? 'En curso' : t.status, plan: day, planOrder: nextPlanOrderFor(day), ...(waitingReadyRef.current ? { waitingFor: '' } : {}) }
+    delete task.planStatusPrev
+    autoSaveTask(tt.epicaId, task)
+    if (t.id) { markWaitSince(t.id, false, day); setWaitSince(readWaitSince()) }
   }
   const unplanTask = (epicaId: string, task: EpicaTask) => {
     syncTask(epicaId, { ...task, plan: '' })
@@ -1225,7 +1229,7 @@ export default function TiempoClient() {
     if (!cur.some(l => l.logId === row.logId)) return
     const log = newDur == null
       ? cur.filter(l => l.logId !== row.logId)
-      : cur.map(l => l.logId === row.logId ? { ...l, min: newDur, note: (!l.note || /^⏱.*trabajad[oa]$/i.test(l.note.trim())) ? `⏱ ${hm(newDur)} trabajado` : l.note } : l)
+      : cur.map(l => l.logId === row.logId ? { ...l, min: newDur, note: isAutoNote(l.note) ? `⏱ ${hm(newDur)} trabajado` : l.note } : l)
     const upd: EpicaTask = { ...tt.task, progressLog: log }
     syncTask(row.epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === row.taskId ? { ...x, task: upd } : x))
@@ -1981,6 +1985,7 @@ export default function TiempoClient() {
             onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }}
             onNewTask={(epId) => { const e = epicasList.find(x => x.id === epId) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: planDay, links: [] } }) }}
             onWaiting={setWaitingT}
+            onFollowUp={followUpWaitingT}
             waitingReady={waitingReadyRef.current}
             waitSince={waitSince}
           />
@@ -2375,6 +2380,7 @@ export default function TiempoClient() {
                                   {ageLbl && <span title="Tiempo que llevas esperando" style={{ fontSize: 11.5, fontWeight: 700, color: nudge ? '#b0522e' : '#a49b90' }}>· {ageLbl}</span>}
                                 </span>
                               </span>
+                              {nudge && <button onClick={() => followUpWaitingT(tt)} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
                               <button onClick={() => setWaitPickId(open ? null : tt.task.id!)} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? `${wm.icon} ${wm.label}` : 'En espera'} ▾</button>
                               {open && (
                                 <div style={{ position: 'absolute', top: 'calc(100% - 2px)', right: 8, zIndex: 30, display: 'flex', flexWrap: 'wrap', gap: 5, width: 212, padding: 9, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 12, boxShadow: '0 18px 34px -18px rgba(28,26,23,0.5)' }}>
@@ -3140,7 +3146,7 @@ export default function TiempoClient() {
           </div>
         )
       })()}
-      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onPause={applyPauseToHist} onClearPause={clearHistPause} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -4169,7 +4175,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask, onWaiting, waitingReady, waitSince }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -4199,6 +4205,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onAddDone: (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => void
   onOpenMeeting: (m: Meeting) => void
   onWaiting: (t: TodayTask, reason: string | null) => void
+  onFollowUp: (t: TodayTask) => void
   waitingReady: boolean
   waitSince: Record<string, string>
 }) {
@@ -4598,6 +4605,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                       <div style={{ fontSize: 14, lineHeight: 1.3, color: '#1c1a17', wordBreak: 'break-word' }} title={tt.task.t}>{tt.task.t || 'Sin título'}</div>
                       <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.epicaName}{tt.task.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''}{ageLbl ? ` · ${ageLbl}` : ''}</div>
                     </div>
+                    {nudge && <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); onFollowUp(tt) }} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
                     <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); setWaitPick(open ? null : tt.task.id!) }} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? wm.label : 'En espera'} ▾</button>
                     {open && (
                       <div style={{ position: 'absolute', top: 'calc(100% - 2px)', right: 6, zIndex: 30, display: 'flex', flexWrap: 'wrap', gap: 5, width: 210, padding: 9, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 12, boxShadow: '0 18px 34px -18px rgba(28,26,23,0.5)' }}>
@@ -5121,12 +5129,13 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
+function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, waitingReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[] }[]
   resumenReady: boolean
   remindReady: boolean
   comentariosReady: boolean
+  waitingReady: boolean
   nextPlanOrder: (day: string) => number
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
@@ -5139,6 +5148,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const [epId, setEpId] = useState(info.epicaId)
   const [startDur, setStartDur] = useState(0)
   const [comment, setComment] = useState('')
+  const [editingComment, setEditingComment] = useState<{ at: string; text: string } | null>(null)  // comentario en edición (at = su id) + borrador
   const [newSub, setNewSub] = useState('')
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
@@ -5167,8 +5177,6 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const setLog = (fn: (a: EpicaProgressEntry[]) => EpicaProgressEntry[]) => setT(p => ({ ...p, progressLog: fn(p.progressLog || []) }))
   // La nota "⏱ Xh Ym trabajado" la pone Tiempo automáticamente; para editar la nota real la tratamos
   // como vacía (el tiempo ya se muestra aparte con `min`). Así el usuario escribe QUÉ hizo ese día.
-  const isAutoNote = (n?: string) => !n || /^⏱.*trabajad[oa]$/i.test(n.trim())
-  const fmtLogDate = (d: string) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }) }
   const logAdvance = () => {
     setLog(a => {
       const i = a.findIndex(e => e.d === bitDate && (e as { min?: number }).min == null)
@@ -5196,6 +5204,9 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const setSubs = (fn: (a: NonNullable<EpicaTask['subtasks']>) => NonNullable<EpicaTask['subtasks']>) => setT(p => ({ ...p, subtasks: fn(p.subtasks || []) }))
   const setLinks = (fn: (a: NonNullable<EpicaTask['links']>) => NonNullable<EpicaTask['links']>) => setT(p => ({ ...p, links: fn(p.links || []) }))
   const addComment = () => { if (!comment.trim()) return; setT(p => ({ ...p, comentarios: [...(p.comentarios || []), { at: new Date().toISOString(), text: comment.trim() }] })); setComment('') }
+  // Editar un comentario: conserva `at` (fecha de creación) y agrega la fecha de esta edición a editedAt (paridad con Épicas).
+  const editComment = (at: string, text: string) => { const txt = text.trim(); if (!txt) return; setT(p => ({ ...p, comentarios: (p.comentarios || []).map(c => c.at === at ? { ...c, text: txt, editedAt: [...(c.editedAt || []), new Date().toISOString()] } : c) })) }
+  const removeComment = (at: string) => setT(p => ({ ...p, comentarios: (p.comentarios || []).filter(c => c.at !== at) }))
   // Marcar terminada desde aquí: guarda TODO (edits + terminada en la fecha "hacer") en una escritura y cierra.
   const markDoneHere = () => {
     if (saveT.current) { clearTimeout(saveT.current); saveT.current = null }
@@ -5278,10 +5289,11 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
               <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#a87a2c' }}>🔔 ¿Qué esperas?</span>
               {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
-                <button key={val} onClick={() => setT(p => ({ ...p, waitingFor: val }))} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 700, border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#c2933a' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
+                <button key={val} onClick={() => { if (waitingReady) setT(p => ({ ...p, waitingFor: val })) }} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 700, border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#c2933a' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
               )})}
-              <button onClick={() => { if (t.id) markWaitSince(t.id, false, iso(new Date())); setT(p => ({ ...p, status: p.plan === iso(new Date()) ? 'En curso' : 'Por hacer', waitingFor: '' })) }} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', fontSize: 11.5, fontWeight: 800, border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
+              <button onClick={() => { if (t.id) markWaitSince(t.id, false, iso(new Date())); setT(p => ({ ...p, status: p.plan === iso(new Date()) ? 'En curso' : 'Por hacer', ...(waitingReady ? { waitingFor: '' } : {}) })) }} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', fontSize: 11.5, fontWeight: 800, border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
               <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Sale arriba en &quot;En espera · por revisar&quot;.</span>
+              {!waitingReady && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-11-waiting-for.sql para guardar qué esperas.</span>}
             </div>
           )}
 
@@ -5403,10 +5415,43 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           </div>
 
           <NLbl>Comentarios</NLbl>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {(t.comentarios || []).map((c, i) => (
-              <div key={i} style={{ fontSize: 13, color: '#3a4a63', lineHeight: 1.5 }}><span style={{ color: 'rgba(20,35,61,0.45)' }}>{new Date(c.at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })} · </span>{c.text}</div>
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(t.comentarios || []).length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 3 }}>
+                {[...(t.comentarios || [])].sort((a, b) => b.at.localeCompare(a.at)).map(c => {
+                  const editing = editingComment?.at === c.at
+                  const fmtC = (s: string) => new Date(s).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                  const edits = c.editedAt || []
+                  return (
+                    <div key={c.at} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {editing ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <textarea autoFocus value={editingComment!.text} onChange={ev => setEditingComment({ at: c.at, text: ev.target.value })}
+                              onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && editingComment!.text.trim()) { editComment(c.at, editingComment!.text); setEditingComment(null) } else if (ev.key === 'Escape') setEditingComment(null) }}
+                              rows={2} style={{ ...nf, width: '100%', resize: 'vertical', border: '1px solid rgba(194,147,58,0.55)', fontFamily: 'inherit' }} />
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button onClick={() => { if (editingComment!.text.trim()) { editComment(c.at, editingComment!.text); setEditingComment(null) } }} disabled={!editingComment!.text.trim()} style={{ cursor: editingComment!.text.trim() ? 'pointer' : 'default', borderRadius: 7, padding: '5px 12px', fontSize: 11.5, fontWeight: 800, border: 'none', background: editingComment!.text.trim() ? '#2E6E6E' : 'rgba(15,35,64,0.08)', color: editingComment!.text.trim() ? '#fff' : 'rgba(20,35,61,0.4)' }}>Guardar</button>
+                              <button onClick={() => setEditingComment(null)} style={{ cursor: 'pointer', borderRadius: 7, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 13, color: '#3a4a63', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.text}</div>
+                            <div style={{ fontSize: 10, color: 'rgba(20,35,61,0.45)', marginTop: 3 }}>
+                              {fmtC(c.at)}
+                              {edits.length > 0 && <span title={`Ediciones:\n${edits.map(fmtC).join('\n')}`} style={{ color: '#a87a2c', fontWeight: 700 }}> · editado {fmtC(edits[edits.length - 1])}{edits.length > 1 ? ` (${edits.length}×)` : ''}</span>}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      {!editing && <button onClick={() => setEditingComment({ at: c.at, text: c.text })} aria-label="Editar comentario" title="Editar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 12.5, lineHeight: 1 }}>✎</button>}
+                      {!editing && <button onClick={() => removeComment(c.at)} aria-label="Borrar comentario" title="Borrar" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 13, lineHeight: 1 }}>✕</button>}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
             {comentariosReady ? (
               <div style={{ display: 'flex', gap: 7 }}>
                 <input value={comment} placeholder="Escribe un comentario…" onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addComment() }} style={{ ...nf, flex: 1 }} />

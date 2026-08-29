@@ -135,3 +135,17 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
 export function sameTask(a: EpicaTask, b: EpicaTask): boolean {
   return JSON.stringify(taskToRow(a, '')) === JSON.stringify(taskToRow(b, ''))
 }
+
+/* ── Bitácora de avance (progressLog): helpers compartidos por Épicas y Tiempo ── */
+
+/** La nota "⏱ Xh Ym trabajado" la pone Tiempo automáticamente al registrar tiempo — no es una nota
+ *  real del usuario. Tratarla como vacía para no pisar/confundir lo que sí escribiste ese día. */
+export function isAutoNote(note?: string): boolean {
+  return !note || /^⏱.*trabajad[oa]$/i.test(note.trim())
+}
+
+/** Formatea una fecha 'YYYY-MM-DD' de la bitácora como "mié 27 ago". */
+export function fmtLogDate(d: string): string {
+  const dt = new Date(d + 'T00:00:00')
+  return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' })
+}

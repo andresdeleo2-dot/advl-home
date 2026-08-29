@@ -110,7 +110,13 @@ export async function GET() {
     if (e.allDay || !e.start) { passthrough.push(e); continue }
     const k = `${e.start}|${e.end ?? ''}`
     const prev = byTime.get(k)
-    byTime.set(k, prev ? mergeEv(prev, e) : e)
+    if (!prev) { byTime.set(k, e); continue }
+    // Sólo es la MISMA reunión repartida en 2 calendarios si al menos una copia no tiene título (la
+    // copia "solo libre/ocupado" lo omite) o comparten título. Si AMBAS ya tienen título propio y
+    // DISTINTO, son 2 eventos reales que sólo coinciden en horario — no se fusionan, se quedan los 2
+    // (antes cualquier coincidencia de hora fusionaba, y una de las dos citas reales desaparecía).
+    if (!prev.title || !e.title || prev.title === e.title) byTime.set(k, mergeEv(prev, e))
+    else passthrough.push(e)
   }
   const deduped = [...byTime.values(), ...passthrough].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
 

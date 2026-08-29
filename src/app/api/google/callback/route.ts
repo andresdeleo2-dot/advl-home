@@ -7,21 +7,30 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
   const err = url.searchParams.get('error')
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID
   const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET
   const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT || `${url.origin}/api/google/callback`
 
-  const page = (title: string, body: string, ok = false) =>
-    new NextResponse(
+  const page = (title: string, body: string, ok = false) => {
+    const res = new NextResponse(
       `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
       `<body style="font:15px/1.6 system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 18px;color:#16365F">` +
       `<h2 style="color:${ok ? '#2E6E6E' : '#B0522E'}">${title}</h2>${body}</body>`,
       { status: ok ? 200 : 400, headers: { 'content-type': 'text/html; charset=utf-8' } }
     )
+    res.cookies.delete('g_oauth_state')   // de un solo uso, se borre o no se borre por otra vía
+    return res
+  }
 
+  // Anti-CSRF: el ?state= debe coincidir con el que se guardó al iniciar el flujo en /api/google/auth
+  // (cookie httpOnly). Si no coincide (o falta), este ?code= no viene de una petición que iniciamos
+  // nosotros — no se canjea, así no muestras/guardas el refresh_token de la cuenta de alguien más.
+  const cookieState = req.cookies.get('g_oauth_state')?.value
   if (err) return page('Google canceló el permiso', `<p>Motivo: <code>${err}</code>. Vuelve a intentar en <code>/api/google/auth</code>.</p>`)
   if (!code) return page('Falta el código', `<p>Entra primero a <a href="/api/google/auth">/api/google/auth</a> para dar el permiso.</p>`)
+  if (!state || !cookieState || state !== cookieState) return page('Enlace inválido o vencido', `<p>Este enlace no coincide con un permiso que hayas iniciado tú (o ya venció, 10 min). Empieza de nuevo en <a href="/api/google/auth">/api/google/auth</a> — nunca abras un link de este tipo que te llegue de otro lado.</p>`)
   if (!clientId || !clientSecret) return page('Falta configurar el cliente', `<p>Agrega <code>GOOGLE_OAUTH_CLIENT_ID</code> y <code>GOOGLE_OAUTH_CLIENT_SECRET</code> en Vercel y reintenta.</p>`)
 
   try {

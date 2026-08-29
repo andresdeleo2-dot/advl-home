@@ -31,3 +31,11 @@ export function waitAgeLabel(age: number | null): string | null {
   if (age == null) return null
   return age === 0 ? 'hoy' : age === 1 ? 'hace 1 día' : `hace ${age} días`
 }
+
+// "En espera / Por revisar": qué esperas de la tarea. [valor, icono, etiqueta].
+export const WAIT_REASONS: [string, string, string][] = [['email', '📩', 'Email'], ['respuesta', '💬', 'Respuesta'], ['comentario', '🗨️', 'Comentario'], ['llamada', '📞', 'Llamada'], ['otro', '⏳', 'Otro']]
+
+export function waitMeta(reason?: string): { icon: string; label: string } {
+  const m = WAIT_REASONS.find(x => x[0] === reason)
+  return m ? { icon: m[1], label: m[2] } : (reason ? { icon: '⏳', label: reason } : { icon: '🔔', label: 'En espera' })
+}

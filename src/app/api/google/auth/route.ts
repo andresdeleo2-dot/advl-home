@@ -10,6 +10,10 @@ export async function GET(req: NextRequest) {
   }
   const origin = new URL(req.url).origin
   const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT || `${origin}/api/google/callback`
+  // state anti-CSRF: liga la respuesta de Google a ESTA petición. Sin esto, alguien podría iniciar
+  // su PROPIO consentimiento, mandarte el link de vuelta con SU ?code=, y si lo abres logueado el
+  // callback canjearía y mostraría el refresh_token de esa OTRA cuenta como si fuera el tuyo.
+  const state = crypto.randomUUID()
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -18,6 +22,9 @@ export async function GET(req: NextRequest) {
     access_type: 'offline',   // pide refresh_token (lectura aunque no estés presente)
     prompt: 'consent',        // fuerza a que SIEMPRE devuelva refresh_token la primera vez
     include_granted_scopes: 'true',
+    state,
   })
-  return NextResponse.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`)
+  const res = NextResponse.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`)
+  res.cookies.set('g_oauth_state', state, { httpOnly: true, secure: true, sameSite: 'lax', maxAge: 600, path: '/api/google' })
+  return res
 }

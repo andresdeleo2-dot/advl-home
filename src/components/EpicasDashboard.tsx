@@ -3,8 +3,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
-import { sameTask } from '@/lib/tareas'
-import { readWaitSince, markWaitSince, waitAgeDays, WAIT_NUDGE_DAYS } from '@/lib/waiting'
+import { sameTask, isAutoNote, fmtLogDate } from '@/lib/tareas'
+import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta } from '@/lib/waiting'
 import Confetti from '@/components/Confetti'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
@@ -567,11 +567,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   })
   // Día cerrado: se marca al pulsar "Cerrar el día" (con confeti). Se puede reabrir/ver de nuevo.
   useEffect(() => { try { const raw = localStorage.getItem('epicas.dayClosed.v1'); if (raw) setDayClosed(JSON.parse(raw)) } catch { /* noop */ } }, [])
-  const markDayClosed = (day: string, closed: boolean) => setDayClosed(prev => {
-    const next = { ...prev }; if (closed) next[day] = new Date().toISOString(); else delete next[day]
-    try { localStorage.setItem('epicas.dayClosed.v1', JSON.stringify(next)) } catch { /* noop */ }
-    return next
-  })
+  const markDayClosed = (day: string, closed: boolean, agendedNW?: Array<{ taskId: string; name: string; min: number }>) => {
+    setDayClosed(prev => {
+      const next = { ...prev }; if (closed) next[day] = new Date().toISOString(); else delete next[day]
+      try { localStorage.setItem('epicas.dayClosed.v1', JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+    // "Agendaste pero no trabajaste": historial compartido con /tiempo (mismo localStorage) — si el
+    // cierre se hace aquí, en Épicas, tiene que quedar igual de registrado que si se cerrara desde
+    // /tiempo, o el historial de "cierres anteriores" de Tiempo tiene un hueco para ese día.
+    if (agendedNW) {
+      try {
+        const raw = localStorage.getItem('epicas.dayAgendedNW.v1')
+        const all = raw ? JSON.parse(raw) : {}
+        if (agendedNW.length > 0) all[day] = agendedNW; else delete all[day]
+        localStorage.setItem('epicas.dayAgendedNW.v1', JSON.stringify(all))
+      } catch { /* noop */ }
+    }
+  }
   const celebrateClose = () => { setDcCelebrate(true); setTimeout(() => setDcCelebrate(false), 4000) }
   useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false); setDcSubsAll(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
@@ -1033,10 +1046,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Días en que la tarea está agendada = plan (día "primario") ∪ días de dayPlans. Para que la MISMA
   // tarea aparezca en CADA uno de esos días en las vistas Día/Ajuste/Semana.
   const taskDays = (t: EpicaTask): string[] => {
-    // "En espera / Por revisar" NO es trabajo agendado: no cuenta en ningún día (carga, "de N hechas",
-    // "sin cerrar", tira de días, calendario). Vive sólo en su bandeja (waitingAll). Al quitar la espera
-    // vuelve a su día normal.
-    if (t.status === 'Esperando') return []
+    // OJO: NO excluir 'Esperando' aquí — esta función decide en qué día se COLOCA la tarea
+    // (Semana/Ajuste/Tablero/Detalle la necesitan para mostrarla en su día, con su propio chip de
+    // espera). Los conteos/horas que NO deben inflarse con 'Esperando' (carga, "de N hechas", tira
+    // de días) excluyen el status donde se agregan, no aquí — si no, la tarea desaparece de TODAS
+    // las vistas que colocan por día, no solo de los conteos (regresión ya encontrada una vez).
     const s = new Set<string>()
     // Un "Día de trabajo" sigue "anclando" la tarea en las vistas si es HOY/FUTURO, o si es PASADO pero
     // ya se trabajó/marcó (◐, queda como registro). Un día pasado NO trabajado se resuelve como "no
@@ -1053,7 +1067,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planItems = useMemo(() => {
     const arr: { e: Epica; t: EpicaTask; i: number }[] = []
     // La tarea aparece en el día si su plan es ese día O si tiene un "Día de trabajo" (dayPlan) ese día.
-    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && taskDays(t).includes(viewDate)) arr.push({ e, t, i }) }))
+    activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && t.status !== 'Esperando' && taskDays(t).includes(viewDate)) arr.push({ e, t, i }) }))
     return arr.sort((a, b) =>
       ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)) ||
       ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9)))
@@ -1132,7 +1146,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const planCounts = useMemo(() => {
     const m = new Map<string, { total: number; done: number }>()
     activeEpics.forEach(e => (e.tasks || []).forEach(t => {
-      if (t.status === ARCHIVED) return
+      if (t.status === ARCHIVED || t.status === 'Esperando') return
       // Cuenta en CADA día en que la tarea está agendada (plan + Días de trabajo), como las vistas.
       taskDays(t).forEach(d => {
         const c = m.get(d) || { total: 0, done: 0 }
@@ -3011,7 +3025,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const wm = waitMeta(t.waitingFor)
     const age = t.id ? waitAgeDays(waitSince, t.id, today) : null   // días que llevas esperando (si se registró)
     const nudge = age != null && age >= WAIT_NUDGE_DAYS             // ya es mucho → resáltala como recordatorio
-    const ageLbl = age == null ? null : age === 0 ? 'hoy' : age === 1 ? 'hace 1 día' : `hace ${age} días`
+    const ageLbl = waitAgeLabel(age)
     return (
       <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, border: `1px solid ${nudge ? 'rgba(176,82,46,0.45)' : 'rgba(194,147,58,0.3)'}`, background: nudge ? 'rgba(176,82,46,0.07)' : 'rgba(194,147,58,0.06)', borderLeft: `3px solid ${nudge ? '#B0522E' : '#C2933A'}` }}>
         <span style={{ flexShrink: 0, fontSize: 15, lineHeight: 1 }}>{wm.icon}</span>
@@ -3168,7 +3182,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
       {/* Resumen de la semana: cuántas actividades, pendientes, dificultad y trabajo estimado */}
       {(() => {
-        const all = [...byDay.values()].flat().filter(x => passF(x.t))
+        const all = [...byDay.values()].flat().filter(x => passF(x.t) && x.t.status !== 'Esperando')
         if (all.length === 0) return null
         const pend = all.filter(x => x.t.status !== 'Terminada')
         const uniqAll = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); all.forEach(x => { if (x.t.id) uniqAll.set(x.t.id, x) })
@@ -3474,11 +3488,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // aunque estés filtrando por una épica y muevas actividades.
     const byDayTotal = new Map<string, { e: Epica; t: EpicaTask }[]>()
     days.forEach(d => byDayTotal.set(d, []))
-    activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.status !== ARCHIVED) taskDays(t).forEach(d => { if (byDayTotal.has(d)) byDayTotal.get(d)!.push({ e, t }) }) }))
+    activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.status !== ARCHIVED && t.status !== 'Esperando') taskDays(t).forEach(d => { if (byDayTotal.has(d)) byDayTotal.get(d)!.push({ e, t }) }) }))
     const filtering = effWeekEpica !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas' || workFilter !== ''
     const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && x.t.status !== 'Esperando' && matchF(x.e, x.t))
-    const all = [...byDay.values()].flat()
+    const all = [...byDay.values()].flat().filter(x => x.t.status !== 'Esperando')
     const pend = all.filter(x => x.t.status !== 'Terminada')
     // Únicas: una tarea multi-día cuenta UNA vez para "N actividades" y la dificultad (aunque salga en varios días).
     const uniqAll = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); all.forEach(x => { if (x.t.id) uniqAll.set(x.t.id, x) })
@@ -3677,7 +3691,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
         days.forEach(d => byDay.set(d, []))
         activeEpics.forEach(e => (e.tasks || []).forEach((t, i) => { if (t.status !== ARCHIVED && matchF(e, t)) taskDays(t).forEach(d => { if (byDay.has(d)) byDay.get(d)!.push({ e, t, i }) }) }))
-        const all = [...byDay.values()].flat(); const pend = all.filter(x => x.t.status !== 'Terminada')
+        const all = [...byDay.values()].flat().filter(x => x.t.status !== 'Esperando'); const pend = all.filter(x => x.t.status !== 'Terminada')
         const uniqW = new Map<string, { e: Epica; t: EpicaTask; i: number }>(); all.forEach(x => { if (x.t.id) uniqW.set(x.t.id, x) })
         const uniqWN = uniqW.size || all.length
         const uniqWPend = [...uniqW.values()].filter(x => x.t.status !== 'Terminada').length
@@ -6563,7 +6577,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   // Tiempo invertido: suma de los minutos registrados desde la sección Tiempo (campo `min`).
                   const investedMin = log.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
                   const fmtMin = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h}h ${r}m` : h ? `${h}h` : `${r}m` }
-                  const fmtLogDate = (d: string) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }) }
                   return (
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
@@ -6586,7 +6599,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                                   const isTd = entry.d === todayISO()
                                   const dlt = deltas[entry.d]
                                   const min = (entry as { min?: number }).min
-                                  const userNote = /^⏱.*trabajad[oa]$/i.test((entry.note || '').trim()) ? '' : (entry.note || '')
+                                  const userNote = isAutoNote(entry.note) ? '' : (entry.note || '')
                                   return (
                                     <div key={entry.d} onClick={() => setLogPop(entry.d)} title="Editar este día (avance % y nota)" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px', borderRadius: 9, background: isTd ? 'rgba(194,147,58,0.09)' : 'rgba(15,35,64,0.03)', cursor: 'pointer', flexWrap: 'wrap' }}>
                                       <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, color: isTd ? '#A87A2C' : '#16365F', whiteSpace: 'nowrap' }}>{fmtLogDate(entry.d)}</span>
@@ -6613,7 +6626,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         const entry = log.find(x => x.d === logPop); if (!entry) return null
                         const min = (entry as { min?: number }).min
                         const dlt = deltas[entry.d]
-                        const userNote = /^⏱.*trabajad[oa]$/i.test((entry.note || '').trim()) ? '' : (entry.note || '')
+                        const userNote = isAutoNote(entry.note) ? '' : (entry.note || '')
                         return (
                           <div onClick={() => setLogPop(null)} style={{ position: 'fixed', inset: 0, zIndex: 92, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
                             <div role="dialog" aria-modal="true" aria-label="Avance del día" onClick={ev => ev.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 460, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
@@ -8600,6 +8613,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // scheduled, vía focus.schedOnDay) — NO el estimado genérico de cada tarea. Solo aparecen las
         // tareas que agendaste o trabajaste ese día (no las 21 del backlog).
         const schedDay = focus.schedOnDay(refDay)
+        // AGENDASTE PERO NO TRABAJASTE: bloques del Planificador con tarea que no registró tiempo ese
+        // día. Paridad con /tiempo: mismo dato (focus.schedOnDay), mismo cálculo.
+        const schedNW = (() => {
+          const m = new Map<string, { taskId: string; name: string; min: number }>()
+          for (const s of schedDay) {
+            if (!s.taskId || workedSet.has(s.taskId)) continue
+            const ref = cmpTaskById.get(s.taskId)
+            if (ref && (ref.t.status === 'Terminada' || ref.t.status === ARCHIVED)) continue
+            const cur = m.get(s.taskId) || { taskId: s.taskId, name: ref?.t.t || 'Tarea', min: 0 }
+            cur.min += s.min; m.set(s.taskId, cur)
+          }
+          return [...m.values()].sort((a, b) => b.min - a.min)
+        })()
+        const schedNWF = schedNW.filter(x => epOK(cmpTaskById.get(x.taskId)?.e.id || ''))
         const schedByTask = (tid: string) => schedDay.filter(s => s.taskId === tid).reduce((a, b) => a + b.min, 0)
         const cmpIds = new Set<string>()
         schedDay.forEach(s => { if (s.taskId) cmpIds.add(s.taskId) })
@@ -8747,6 +8774,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     )}
                     {fDone.length > 0 && (<div>{secLbl('✓ Terminadas')}{box(fDone.map(taskRow))}</div>)}
                     {fOpen.length > 0 && (<div>{secLbl('◐ Avanzaste pero no cerraste')}{box(fOpen.map(taskRow))}</div>)}
+                    {schedNWF.length > 0 && (
+                      <div>
+                        {secLbl('📅 Agendaste pero no trabajaste', <span style={{ fontSize: 10.5, fontWeight: 700, color: '#B0522E' }}>{schedNWF.length}</span>)}
+                        {box(schedNWF.map(x => {
+                          const ref = cmpTaskById.get(x.taskId)
+                          return (
+                            <div key={'snw:' + x.taskId} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px', borderBottom: '1px solid rgba(15,35,64,0.05)' }}>
+                              <span style={{ width: 7, height: 7, borderRadius: 99, background: ref?.e.color || '#B0522E', flexShrink: 0 }} />
+                              <span onClick={() => ref && setDcPeek({ eId: ref.e.id, tid: x.taskId })} title="Ver la tarea" style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>{x.name}</span>
+                              <span title="Tiempo que agendaste y no trabajaste" style={{ fontSize: 10.5, fontWeight: 800, color: '#B0522E', flexShrink: 0 }}>⏱ {hmm(x.min)} sin trabajar</span>
+                              {ref && <label onClick={ev => ev.stopPropagation()} title="Mover a otro día" style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', fontSize: 13 }}>📅
+                                <input type="date" defaultValue={ref.t.plan || refDay} aria-label="Cambiar día" onChange={e => { const d = e.target.value; if (d && d !== ref.t.plan) moveOne(ref.e, x.taskId, d) }} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%', border: 'none', padding: 0 }} />
+                              </label>}
+                            </div>
+                          )
+                        }))}
+                        <div style={{ marginTop: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>Las agendaste en el Planificador pero no les registraste tiempo.</div>
+                      </div>
+                    )}
                     {fUntouched.length > 0 && (
                       <div>
                         {secLbl(refIsToday ? '○ No las tocaste hoy' : '○ Sin tocar', (
@@ -8856,7 +8902,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {!dcClose ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.6)', fontWeight: 600 }}>{planPend.length > 0 ? `${planPend.length} ${planPend.length === 1 ? 'pendiente' : 'pendientes'} sin cerrar` : 'Cerraste todo ✦'}</span>
-                      <button onClick={() => { if (planPend.length > 0) setDcClose(true); else { markDayClosed(refDay, true); celebrateClose(); setDayCloseOpen(false) } }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>{dayClosed[refDay] ? '✓ Cerrar de nuevo' : '✓ Cerrar el día'}</button>
+                      <button onClick={() => { if (planPend.length > 0) setDcClose(true); else { markDayClosed(refDay, true, schedNW); celebrateClose(); setDayCloseOpen(false) } }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>{dayClosed[refDay] ? '✓ Cerrar de nuevo' : '✓ Cerrar el día'}</button>
                     </div>
                   ) : (
                     <div>
@@ -8865,11 +8911,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {Array.from({ length: 8 }, (_, k) => addDays(today, k + (refIsToday ? 1 : 0))).map(d => {
                           const first = d === addDays(today, refIsToday ? 1 : 0)
                           const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
-                          return <button key={d} onClick={() => { moveTodayPendingTo(d); markDayClosed(refDay, true); celebrateClose(); setDcClose(false) }} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
+                          return <button key={d} onClick={() => { moveTodayPendingTo(d); markDayClosed(refDay, true, schedNW); celebrateClose(); setDcClose(false) }} style={{ cursor: 'pointer', borderRadius: 9, padding: '8px 12px', font: '700 12px var(--font-ui)', border: first ? 'none' : '1px solid rgba(15,35,64,0.14)', background: first ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#fff', color: first ? '#1B1305' : 'rgba(20,35,61,0.65)' }}>{lbl}</button>
                         })}
                       </div>
                       <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
-                        <button onClick={() => { markDayClosed(refDay, true); celebrateClose(); setDcClose(false); setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--font-ui)', color: '#2E6E6E', padding: 0 }}>No mover · solo cerrar</button>
+                        <button onClick={() => { markDayClosed(refDay, true, schedNW); celebrateClose(); setDcClose(false); setDayCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 12.5px var(--font-ui)', color: '#2E6E6E', padding: 0 }}>No mover · solo cerrar</button>
                         <button onClick={() => setDcClose(false)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 12.5px var(--font-ui)', color: 'rgba(20,35,61,0.5)', padding: 0 }}>Cancelar</button>
                       </div>
                     </div>
@@ -9148,12 +9194,6 @@ const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeo
 const EST_PRESETS: [number, string][] = [[15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h'], [90, '1 h 30'], [120, '2 h'], [150, '2 h 30'], [180, '3 h'], [240, '4 h'], [360, '6 h'], [480, '8 h']]
 // Presets compactos (etiquetas cortas) para el chip de tiempo por fila.
 const TIME_PRESETS: [number, string][] = [[15, '15m'], [30, '30m'], [45, '45m'], [60, '1h'], [90, '1h30'], [120, '2h'], [180, '3h'], [240, '4h']]
-// "En espera / Por revisar": qué esperas de la tarea. [valor, icono, etiqueta].
-const WAIT_REASONS: [string, string, string][] = [['email', '📩', 'Email'], ['respuesta', '💬', 'Respuesta'], ['comentario', '🗨️', 'Comentario'], ['llamada', '📞', 'Llamada'], ['otro', '⏳', 'Otro']]
-const waitMeta = (reason?: string): { icon: string; label: string } => {
-  const m = WAIT_REASONS.find(x => x[0] === reason)
-  return m ? { icon: m[1], label: m[2] } : (reason ? { icon: '⏳', label: reason } : { icon: '🔔', label: 'En espera' })
-}
 // Minutos → etiqueta legible: 90 → "1 h 30", 45 → "45 min", 120 → "2 h".
 const fmtEst = (m: number): string => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60; return h && r ? `${h} h ${r}` : h ? `${h} h` : `${r} min` }
 // Minutos → forma compacta editable para el input personalizado: 90 → "1h30", 45 → "45m", 120 → "2h".
