@@ -8151,6 +8151,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                 <div className="ep-modal-body" style={{ padding: '14px 26px 8px', overflowY: 'auto', flex: 1 }}>
 
+                {/* ENLACES DE LA ÉPICA — mismo bloque plegable que el peek y Tiempo (paridad de editores).
+                    Usa `target` (no `ep`): si cambias la épica arriba, muestra los links de la nueva. */}
+                {(() => {
+                  const links = (target?.links || []).filter(l => l.url && l.url !== '#')
+                  if (links.length === 0) return null
+                  return (
+                    <div style={{ marginBottom: 16, borderRadius: 12, border: '1px solid rgba(15,35,64,0.10)', overflow: 'hidden' }}>
+                      <button onClick={() => setTaskLinksOpen(o => !o)} aria-expanded={taskLinksOpen}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', border: 'none', background: '#FBFAF6', padding: '10px 12px' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 99, background: target?.color, flexShrink: 0 }} />
+                        <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.6)' }}>Enlaces de {target?.name}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{links.length}</span>
+                        <span style={{ flex: 1 }} />
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" style={{ color: 'rgba(20,35,61,0.45)', transform: taskLinksOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                      </button>
+                      {taskLinksOpen && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                          {links.map((l, li) => {
+                            const c = typeColor(l.type)
+                            return (
+                              <a key={li} href={safeUrl(l.url)} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, color: '#16365F', background: '#fff', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 99, padding: '5px 11px' }}>
+                                <span style={{ width: 7, height: 7, borderRadius: 99, background: c, flexShrink: 0 }} />
+                                {l.l || (l as { label?: string }).label || l.url}
+                              </a>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+
                 <label style={lbl}>Tarea</label>
                 <input autoFocus value={taskDraft.t} onChange={e => setTaskDraft(d => ({ ...d, t: e.target.value }))} placeholder="¿Qué hay que hacer?" style={inpBig} />
 
