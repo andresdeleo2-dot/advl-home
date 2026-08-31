@@ -377,7 +377,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setPlanSort(p.planSort); setPlanFilter(p.planFilter); setPlanMode(p.planMode === '2sem' || p.planMode === 'mes' ? '3sem' : p.planMode)
     setWeekEpica(p.weekEpica); setWeekDif(p.weekDif); setRoutinesOpen(p.routinesOpen); setBoardHideDone(p.boardHideDone); setDayView(p.dayView); setBoardView(p.boardView || 'tablero'); setEpicView(p.epicView); setDayCapacity(p.dayCapacity || 8)
     setEpicSort(p.epicSort); setEpicFilter(p.epicFilter)
-    setBacklogOpen(p.backlogOpen); setBacklogSort(p.backlogSort); setBacklogDone(p.backlogDone)
+    // Migración de una sola vez: 'due' (Vence) era el default VIEJO, guardado en localStorage aunque
+    // nunca lo hayas elegido tú a propósito (se persistía solo). Como Vence casi nunca se llena, ese
+    // orden se veía prácticamente al azar. Si sigue en el default viejo exacto, pásalo al nuevo
+    // ('plan'/Hacer, el campo que sí usas) — si de verdad elegiste 'due' con otra dirección, se respeta.
+    const savedSort = (p.backlogSort && p.backlogSort.key === 'due' && p.backlogSort.dir === 'asc') ? { key: 'plan', dir: 'asc' } as const : p.backlogSort
+    setBacklogOpen(p.backlogOpen); setBacklogSort(savedSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
     setBacklogFEpica(p.backlogFEpica); setBacklogFStatus(p.backlogFStatus); setBacklogFPrio(p.backlogFPrio)
     // La épica destacada se restaura tal cual: loadEpics conserva el valor previo

@@ -462,7 +462,7 @@ export const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
   estadoFilter: 'activas', catFilter: 'todas',
   planSort: 'plan', planFilter: 'todas', planMode: 'dia', weekEpica: 'todas', weekDif: 'todas', routinesOpen: true, boardHideDone: false, dayView: 'lista', boardView: 'tablero', epicView: 'lista', dayCapacity: 8, epicSort: 'grupo', epicFilter: 'todas',
-  backlogOpen: false, backlogSort: { key: 'due', dir: 'asc' }, backlogView: 'tabla',
+  backlogOpen: false, backlogSort: { key: 'plan', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
 }

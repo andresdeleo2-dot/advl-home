@@ -1490,7 +1490,15 @@ export default function TiempoClient() {
   // Empezar una actividad GENERAL (revisar cosas, algo sin tarea): timer libre al instante.
   // Empieza una actividad "general" (contador libre). NO cambia de vista: la sesión se ve como
   // popup flotante y como banda EN CURSO en el Planificador, así funciona en Hoy o en el Planificador.
-  const startGeneral = (name: string) => { beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0 }) }
+  // Se liga a LA tarea "General" (épica "General") si ya existe, para que TODO lo que registres
+  // aquí — sea cual sea el nombre que le pongas — se acumule en un solo lugar (su bitácora), en vez
+  // de quedar como bloques sueltos sin ningún registro central. Si esa tarea no existe (nunca se
+  // creó), se guarda igual que antes: un bloque con nombre, sin tarea.
+  const startGeneral = (name: string) => {
+    const ge = epicasList.find(e => (e.name || '').trim().toLowerCase() === 'general')
+    const gt = ge ? (allTasks || []).find(x => x.epicaId === ge.id && (x.task.t || '').trim().toLowerCase() === 'general') : null
+    beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0, ...(gt?.task.id ? { epicaId: ge!.id, taskId: gt.task.id } : {}) })
+  }
   // "¿Qué ahora?": elige la mejor tarea de HOY (vencidas → prioridad → entrega) y arranca el bloque.
   const pickNextTiempo = () => {
     const pool = (workTasks || []).filter(x => x.task.status !== 'Terminada')   // las "en espera" no se trabajan
