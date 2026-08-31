@@ -144,7 +144,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
-  const [backlogSort, setBacklogSort] = useState<SortSpec>({ key: 'due', dir: 'asc' })
+  const [backlogSort, setBacklogSort] = useState<SortSpec>({ key: 'plan', dir: 'asc' })
   // Orden de la lista Detalle del Enfoque ("Todas las actividades") — INDEPENDIENTE de backlogSort
   // (son secciones distintas; si compartieran el mismo estado, ordenar en una movería la otra sin
   // que la hubieras tocado). 'manual' = el comportamiento de siempre (planOrder + tocar para ordenar).
@@ -9217,7 +9217,10 @@ const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeo
 /* ── Ordenar (no filtrar) una lista de tareas por un criterio — compartido entre Backlog y Enfoque
    para que las dos "Detalle" (y Tarjetas) usen EXACTAMENTE el mismo comparador. ── */
 type SortSpec = { key: string; dir: 'asc' | 'desc' }
-const SORT_KEYS: [string, string][] = [['due', 'Fecha'], ['plan', 'Hacer'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance']]
+// "Hacer" primero: es la fecha que de verdad se usa en toda la app (el 📅 de cada fila ES esta). El
+// otro campo de fecha se llama "Vence" (no "Fecha") para que no se confundan — son cosas distintas
+// y "Vence" casi nunca se llena, así que ordenar por ahí parece "no hacer nada" si no sabes cuál es cuál.
+const SORT_KEYS: [string, string][] = [['plan', 'Hacer'], ['due', 'Vence'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance']]
 const nextSort = (cur: SortSpec, key: string): SortSpec => cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }
 function sortRows<T extends { e: Epica; t: EpicaTask }>(rows: T[], sort: SortSpec): T[] {
   const dirMul = sort.dir === 'asc' ? 1 : -1
