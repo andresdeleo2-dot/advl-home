@@ -5729,6 +5729,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       else if (k === 'status') r = TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)
       else if (k === 'priority') r = PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']
       else if (k === 'progress') r = (a.t.progress || 0) - (b.t.progress || 0)
+      else if (k === 'estMin') r = estMinOf(a.t) - estMinOf(b.t)
       else if (k === 'plan') r = (a.t.plan || '9999-99').localeCompare(b.t.plan || '9999-99')
       else r = (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
       return r * dirMul || a.t.t.localeCompare(b.t.t, 'es')
@@ -5974,6 +5975,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={bulkDelete} style={{ cursor: 'pointer', border: '1px solid rgba(255,150,120,0.4)', background: 'rgba(255,120,90,0.18)', color: '#FFD9CC', borderRadius: 8, padding: '6px 11px', fontSize: 11.5, fontWeight: 700 }}>Eliminar</button>
                 <span style={{ flex: 1 }} />
                 <button onClick={() => setBacklogSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.7)', fontSize: 11.5, fontWeight: 700 }}>Limpiar</button>
+              </div>
+            )}
+
+            {/* Ordenar (no filtrar) lo que ya estás viendo — Tabla lo hace con clic en el encabezado;
+                Detalle y Tarjetas no tienen columnas, así que aquí van los mismos criterios como chips. */}
+            {(backlogView === 'detalle' || backlogView === 'tarjetas') && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+                <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)' }}>Ordenar por</span>
+                {([['due', 'Fecha'], ['plan', 'Hacer'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance']] as [string, string][]).map(([key, label]) => {
+                  const on = backlogSort.key === key
+                  return (
+                    <button key={key} onClick={() => setSort(key)} aria-pressed={on} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', font: '700 11px var(--font-ui)', border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}{on ? (backlogSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>
+                  )
+                })}
               </div>
             )}
 
@@ -7073,7 +7088,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const sel = mdMultiSel.has(k)
             const done = t.status === 'Terminada'; const ps = prioStyle(t.priority); const ts = taskStyle(t.status)
             const estDay = mdDay || t.plan || ''
-            const editingChip = orderable && (estEditKey === k || waitEditKey === k)
+            const editingChip = estEditKey === k || waitEditKey === k
             return (
               <div key={k} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'stretch', borderRadius: 10, border: on ? '1.5px solid #10233F' : sel ? '1.5px solid #C2933A' : '1px solid rgba(15,35,64,0.10)', background: sel ? 'rgba(194,147,58,0.08)' : on ? '#fff' : 'rgba(255,255,255,0.6)', borderLeft: `3px solid ${done ? '#2E6E6E' : t.status === 'Esperando' ? '#C2933A' : ps.accent}`, overflow: editingChip ? 'visible' : 'hidden', boxShadow: on ? '0 6px 16px -12px rgba(15,35,64,0.5)' : 'none' }}>
                 <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 30, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -7089,7 +7104,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ font: '700 9px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}
                   </div>
                 </button>
-                {orderable && <span style={{ flexShrink: 0, display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, justifyContent: 'center', paddingRight: 8 }}>{rowTimeChip(k, e, i, t, estDay, 'right')}{rowWaitChip(k, e, i, t, 'right')}</span>}
+                <span style={{ flexShrink: 0, display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, justifyContent: 'center', paddingRight: 8 }}>{rowTimeChip(k, e, i, t, estDay, 'right')}{rowWaitChip(k, e, i, t, 'right')}</span>
               </div>
             )
           })}
