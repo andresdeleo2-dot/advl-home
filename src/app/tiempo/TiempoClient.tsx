@@ -4602,7 +4602,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                   <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
                     <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1 }}>{wm.icon}</span>
                     <div onClick={() => onOpenTask(tt.task.id!)} title="Ver / trabajar la tarea" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
-                      <div style={{ fontSize: 14, lineHeight: 1.3, color: '#1c1a17', wordBreak: 'break-word' }} title={tt.task.t}>{tt.task.t || 'Sin título'}</div>
+                      <div style={{ fontSize: 14, lineHeight: 1.3, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tt.task.t}>{tt.task.t || 'Sin título'}</div>
                       <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.epicaName}{tt.task.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''}{ageLbl ? ` · ${ageLbl}` : ''}</div>
                     </div>
                     {nudge && <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); onFollowUp(tt) }} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
