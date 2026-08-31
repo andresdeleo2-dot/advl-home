@@ -5724,15 +5724,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const dirMul = backlogSort.dir === 'asc' ? 1 : -1
     const cmp = (a: typeof rows[number], b: typeof rows[number]) => {
       const k = backlogSort.key; let r = 0
-      if (k === 't') r = a.t.t.localeCompare(b.t.t, 'es')
-      else if (k === 'epica') r = a.e.name.localeCompare(b.e.name, 'es')
-      else if (k === 'status') r = TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)
-      else if (k === 'priority') r = PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']
-      else if (k === 'progress') r = (a.t.progress || 0) - (b.t.progress || 0)
-      else if (k === 'estMin') r = estMinOf(a.t) - estMinOf(b.t)
-      else if (k === 'plan') r = (a.t.plan || '9999-99').localeCompare(b.t.plan || '9999-99')
-      else r = (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
-      return r * dirMul || a.t.t.localeCompare(b.t.t, 'es')
+      if (k === 't') r = a.t.t.localeCompare(b.t.t, 'es') * dirMul
+      else if (k === 'epica') r = a.e.name.localeCompare(b.e.name, 'es') * dirMul
+      else if (k === 'status') r = (TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)) * dirMul
+      else if (k === 'priority') r = (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) * dirMul
+      else if (k === 'progress') r = ((a.t.progress || 0) - (b.t.progress || 0)) * dirMul
+      else if (k === 'estMin') r = (estMinOf(a.t) - estMinOf(b.t)) * dirMul
+      else {
+        // 'plan' (Hacer) y el default 'due' (Fecha/Vence): las tareas SIN esa fecha van SIEMPRE al
+        // final, sea ascendente o descendente. Antes usaban un valor centinela ('9999-99') y se
+        // multiplicaba por dirMul al final junto con todo lo demás — al invertir a ▼, ese centinela
+        // se volvía el "más chico" y las tareas sin fecha saltaban al PRINCIPIO en vez de quedarse
+        // al final, que es lo que se veía como "ordenar por fecha no funciona bien".
+        const av = k === 'plan' ? a.t.plan : a.t.due
+        const bv = k === 'plan' ? b.t.plan : b.t.due
+        if (!av && !bv) r = 0
+        else if (!av) return 1
+        else if (!bv) return -1
+        else r = av.localeCompare(bv) * dirMul
+      }
+      return r || a.t.t.localeCompare(b.t.t, 'es')
     }
     const sorted = [...rows].sort(cmp)
     const setSort = (key: string) => setBacklogSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
