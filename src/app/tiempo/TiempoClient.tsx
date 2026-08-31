@@ -2370,18 +2370,21 @@ export default function TiempoClient() {
                           const nudge = age != null && age >= WAIT_NUDGE_DAYS
                           const ageLbl = waitAgeLabel(age)
                           return (
-                            <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 12, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
-                              <span style={{ flexShrink: 0, fontSize: 15, lineHeight: 1 }}>{wm.icon}</span>
-                              <span onClick={() => setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } })} title="Ver / trabajar la tarea" style={{ flex: 1, minWidth: 0, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                                <span style={{ fontSize: 14.5, fontWeight: 500, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.task.t || 'Sin título'}</span>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                  <Tag c={tt.color} bg={tt.color + '22'}>{tt.epicaName}</Tag>
-                                  {tt.task.waitingFor && <span style={{ fontSize: 12, fontWeight: 600, color: '#8a4b28' }}>esperas {wm.label.toLowerCase()}</span>}
-                                  {ageLbl && <span title="Tiempo que llevas esperando" style={{ fontSize: 11.5, fontWeight: 700, color: nudge ? '#b0522e' : '#a49b90' }}>· {ageLbl}</span>}
-                                </span>
+                            <div key={tt.task.id} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 12px', borderRadius: 12, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
+                              {/* Título en su propia línea con todo el ancho — si compite con los botones
+                                  de abajo en una sola fila, en columnas angostas casi no le queda espacio. */}
+                              <span onClick={() => setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } })} title="Ver / trabajar la tarea" style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer' }}>
+                                <span style={{ flexShrink: 0, fontSize: 15, lineHeight: 1 }}>{wm.icon}</span>
+                                <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 500, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.task.t || 'Sin título'}</span>
                               </span>
-                              {nudge && <button onClick={() => followUpWaitingT(tt)} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
-                              <button onClick={() => setWaitPickId(open ? null : tt.task.id!)} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? `${wm.icon} ${wm.label}` : 'En espera'} ▾</button>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <Tag c={tt.color} bg={tt.color + '22'}>{tt.epicaName}</Tag>
+                                {tt.task.waitingFor && <span style={{ fontSize: 12, fontWeight: 600, color: '#8a4b28' }}>esperas {wm.label.toLowerCase()}</span>}
+                                {ageLbl && <span title="Tiempo que llevas esperando" style={{ fontSize: 11.5, fontWeight: 700, color: nudge ? '#b0522e' : '#a49b90' }}>· {ageLbl}</span>}
+                                <span style={{ flex: 1 }} />
+                                {nudge && <button onClick={() => followUpWaitingT(tt)} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
+                                <button onClick={() => setWaitPickId(open ? null : tt.task.id!)} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 11px', fontSize: 12.5, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? `${wm.icon} ${wm.label}` : 'En espera'} ▾</button>
+                              </span>
                               {open && (
                                 <div style={{ position: 'absolute', top: 'calc(100% - 2px)', right: 8, zIndex: 30, display: 'flex', flexWrap: 'wrap', gap: 5, width: 212, padding: 9, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 12, boxShadow: '0 18px 34px -18px rgba(28,26,23,0.5)' }}>
                                   <span style={{ flexBasis: '100%', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#a49b90' }}>¿Qué esperas?</span>
@@ -4599,14 +4602,19 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                 const nudge = age != null && age >= WAIT_NUDGE_DAYS   // ya llevas mucho esperando
                 const ageLbl = waitAgeLabel(age)
                 return (
-                  <div key={tt.task.id} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 14, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
-                    <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1 }}>{wm.icon}</span>
-                    <div onClick={() => onOpenTask(tt.task.id!)} title="Ver / trabajar la tarea" style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
-                      <div style={{ fontSize: 14, lineHeight: 1.3, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tt.task.t}>{tt.task.t || 'Sin título'}</div>
-                      <div style={{ fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.epicaName}{tt.task.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''}{ageLbl ? ` · ${ageLbl}` : ''}</div>
+                  <div key={tt.task.id} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 14, border: `1px solid ${nudge ? '#e0b09a' : '#ecd9b8'}`, borderLeft: `3px solid ${nudge ? '#b0522e' : '#c2933a'}`, background: nudge ? '#f6e3da' : '#f8efdc' }}>
+                    {/* Título en SU PROPIA línea con todo el ancho — si compite con los botones de abajo
+                        en una sola fila, en columnas angostas (barra lateral, móvil) casi no le queda
+                        espacio y se corta a un par de letras. */}
+                    <div onClick={() => onOpenTask(tt.task.id!)} title="Ver / trabajar la tarea" style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer' }}>
+                      <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1 }}>{wm.icon}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 1.3, color: '#1c1a17', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tt.task.t}>{tt.task.t || 'Sin título'}</span>
                     </div>
-                    {nudge && <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); onFollowUp(tt) }} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
-                    <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); setWaitPick(open ? null : tt.task.id!) }} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? wm.label : 'En espera'} ▾</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: '#a49b90', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tt.epicaName}{tt.task.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''}{ageLbl ? ` · ${ageLbl}` : ''}</span>
+                      {nudge && <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); onFollowUp(tt) }} title="Llevas mucho esperando: tráela a hoy para darle seguimiento" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(176,82,46,0.5)', background: 'rgba(176,82,46,0.10)', color: '#b0522e', borderRadius: 999, padding: '5px 10px', fontSize: 11.5, fontWeight: 800 }}>📌 Seguir</button>}
+                      <button onPointerDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); setWaitPick(open ? null : tt.task.id!) }} title="Cambiar qué esperas o quitar la espera" style={{ flexShrink: 0, border: '1px solid #e2b877', background: open ? '#f3e2c2' : '#fff', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: '#8a4b28', cursor: 'pointer' }}>{tt.task.waitingFor ? wm.label : 'En espera'} ▾</button>
+                    </div>
                     {open && (
                       <div style={{ position: 'absolute', top: 'calc(100% - 2px)', right: 6, zIndex: 30, display: 'flex', flexWrap: 'wrap', gap: 5, width: 210, padding: 9, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 12, boxShadow: '0 18px 34px -18px rgba(28,26,23,0.5)' }}>
                         <span style={{ flexBasis: '100%', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#a49b90' }}>¿Qué esperas?</span>
