@@ -144,7 +144,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
-  const [backlogSort, setBacklogSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'due', dir: 'asc' })
+  const [backlogSort, setBacklogSort] = useState<SortSpec>({ key: 'due', dir: 'asc' })
+  // Orden de la lista Detalle del Enfoque ("Todas las actividades") — INDEPENDIENTE de backlogSort
+  // (son secciones distintas; si compartieran el mismo estado, ordenar en una movería la otra sin
+  // que la hubieras tocado). 'manual' = el comportamiento de siempre (planOrder + tocar para ordenar).
+  const [enfSort, setEnfSort] = useState<SortSpec>({ key: 'manual', dir: 'asc' })
   const [backlogDone, setBacklogDone] = useState(false)
   const [backlogFEpica, setBacklogFEpica] = useState<string>('todas')
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
@@ -5057,7 +5061,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows, { order: true }) : renderCalendarPanel(enfRows)}</>
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) }) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
@@ -5721,32 +5725,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (!passWork(t, today)) return   // filtro por estado de trabajo de hoy
       rows.push({ e, t, i })
     }))
-    const dirMul = backlogSort.dir === 'asc' ? 1 : -1
-    const cmp = (a: typeof rows[number], b: typeof rows[number]) => {
-      const k = backlogSort.key; let r = 0
-      if (k === 't') r = a.t.t.localeCompare(b.t.t, 'es') * dirMul
-      else if (k === 'epica') r = a.e.name.localeCompare(b.e.name, 'es') * dirMul
-      else if (k === 'status') r = (TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)) * dirMul
-      else if (k === 'priority') r = (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) * dirMul
-      else if (k === 'progress') r = ((a.t.progress || 0) - (b.t.progress || 0)) * dirMul
-      else if (k === 'estMin') r = (estMinOf(a.t) - estMinOf(b.t)) * dirMul
-      else {
-        // 'plan' (Hacer) y el default 'due' (Fecha/Vence): las tareas SIN esa fecha van SIEMPRE al
-        // final, sea ascendente o descendente. Antes usaban un valor centinela ('9999-99') y se
-        // multiplicaba por dirMul al final junto con todo lo demás — al invertir a ▼, ese centinela
-        // se volvía el "más chico" y las tareas sin fecha saltaban al PRINCIPIO en vez de quedarse
-        // al final, que es lo que se veía como "ordenar por fecha no funciona bien".
-        const av = k === 'plan' ? a.t.plan : a.t.due
-        const bv = k === 'plan' ? b.t.plan : b.t.due
-        if (!av && !bv) r = 0
-        else if (!av) return 1
-        else if (!bv) return -1
-        else r = av.localeCompare(bv) * dirMul
-      }
-      return r || a.t.t.localeCompare(b.t.t, 'es')
-    }
-    const sorted = [...rows].sort(cmp)
-    const setSort = (key: string) => setBacklogSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
+    const sorted = sortRows(rows, backlogSort)
+    const setSort = (key: string) => setBacklogSort(s => nextSort(s, key))
     const th = (key: string, label: string) => (
       <th onClick={() => setSort(key)} style={{ cursor: 'pointer', textAlign: 'left', padding: '8px 10px', font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: backlogSort.key === key ? '#A87A2C' : 'rgba(15,35,64,0.5)', whiteSpace: 'nowrap', userSelect: 'none' }}>{label}{backlogSort.key === key ? (backlogSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
     )
@@ -5990,11 +5970,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )}
 
             {/* Ordenar (no filtrar) lo que ya estás viendo — Tabla lo hace con clic en el encabezado;
-                Detalle y Tarjetas no tienen columnas, así que aquí van los mismos criterios como chips. */}
-            {(backlogView === 'detalle' || backlogView === 'tarjetas') && (
+                Tarjetas no tiene columnas, así que aquí van los mismos criterios como chips.
+                (Detalle trae su propia fila de chips, compartida con la del Enfoque — renderMasterDetail). */}
+            {backlogView === 'tarjetas' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)' }}>Ordenar por</span>
-                {([['due', 'Fecha'], ['plan', 'Hacer'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance']] as [string, string][]).map(([key, label]) => {
+                {SORT_KEYS.map(([key, label]) => {
                   const on = backlogSort.key === key
                   return (
                     <button key={key} onClick={() => setSort(key)} aria-pressed={on} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', font: '700 11px var(--font-ui)', border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}{on ? (backlogSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>
@@ -6003,7 +5984,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )}
 
-            {isBoard ? renderBoard(rows) : backlogView === 'detalle' ? renderMasterDetail(sorted) : backlogView === 'calendario' ? renderCalendarPanel(sorted) : backlogView === 'semana' ? renderBacklogWeek() : backlogView === 'tarjetas' ? (
+            {isBoard ? renderBoard(rows) : backlogView === 'detalle' ? renderMasterDetail(rows, { sort: backlogSort, onSortKey: setSort }) : backlogView === 'calendario' ? renderCalendarPanel(sorted) : backlogView === 'semana' ? renderBacklogWeek() : backlogView === 'tarjetas' ? (
             <div style={{ padding: '4px 12px 12px' }}>
               {sorted.length === 0
                 ? <div style={{ padding: '26px 10px', textAlign: 'center', fontSize: 13, color: 'rgba(20,35,61,0.5)' }}>Nada coincide con los filtros.</div>
@@ -6998,13 +6979,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   // Vista MAESTRO/DETALLE: lista de tareas a la izquierda; al picar una, su detalle
   // completo editable al centro (SIN popup) reusando renderTaskDetail acoplado.
-  const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[], opts?: { order?: boolean }) => {
-    // En el Enfoque (opts.order) la lista se ORDENA por "con qué empiezo" (planOrder) y cada fila deja
-    // teclear su número + su tiempo, sin abrir. En el backlog se deja el orden entrante tal cual.
+  const renderMasterDetail = (rows: { e: Epica; t: EpicaTask; i: number }[], opts?: { order?: boolean; sort?: SortSpec; onSortKey?: (key: string) => void }) => {
+    // En el Enfoque (opts.order) el modo por defecto ("Manual") ORDENA por "con qué empiezo"
+    // (planOrder) y cada fila deja teclear su número + su tiempo, sin abrir — pero si eliges otro
+    // criterio en "Ordenar por" (Fecha/Prioridad/…), se ordena por ESE en vez de planOrder. En el
+    // backlog no hay modo manual: siempre respeta el criterio elegido (opts.sort).
     const orderable = !!opts?.order
-    const ordRows = orderable
+    const sort = opts?.sort
+    const useManualOrder = orderable && (!sort || sort.key === 'manual')
+    const ordRows = useManualOrder
       ? [...rows].sort((a, b) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)))
-      : rows
+      : sort ? sortRows(rows, sort) : rows
     const valid = mdSel && rows.some(x => x.e.id === mdSel.eId && x.t.id === mdSel.tid) ? mdSel : (rows[0] ? { eId: rows[0].e.id, tid: rows[0].t.id! } : null)
     // Selección múltiple (estado PROPIO mdMultiSel) para mover varias a un día de una. Se acota a
     // las filas VISIBLES: nunca mueve algo fuera del filtro actual.
@@ -7028,8 +7013,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {rows.length > 0 && <button onClick={toggleAll} title={allSel ? 'Quitar selección' : 'Seleccionar todas'} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, display: 'flex' }}><span style={{ height: 16, width: 16, borderRadius: 4, border: allSel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: allSel ? '#10233F' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{allSel && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span></button>}
             <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>{selCount > 0 ? `${selCount} de ${rows.length}` : `${rows.length} tarea${rows.length === 1 ? '' : 's'}`}</span>
           </div>
-          {/* "Ordenar tocando": numerar las tareas en el orden que las tocas (sin arrastrar) */}
-          {orderable && rows.length > 1 && selCount === 0 && (
+          {/* Ordenar (no filtrar) lo que se está viendo — mismos criterios que el backlog. En el
+              Enfoque incluye "Manual" (el orden de "con qué empiezo" + tocar para renumerar). */}
+          {sort && opts?.onSortKey && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
+              {(orderable ? [['manual', 'Manual'], ...SORT_KEYS] : SORT_KEYS).map(([key, label]) => {
+                const on = sort.key === key
+                return (
+                  <button key={key} onClick={() => opts.onSortKey!(key)} aria-pressed={on} style={{ cursor: 'pointer', borderRadius: 99, padding: '3px 9px', font: '700 10.5px var(--font-ui)', border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}{on && key !== 'manual' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>
+                )
+              })}
+            </div>
+          )}
+          {/* "Ordenar tocando": numerar las tareas en el orden que las tocas (sin arrastrar) — sólo
+              tiene sentido en modo Manual (si hay un criterio activo, el orden ya lo decide ese). */}
+          {useManualOrder && rows.length > 1 && selCount === 0 && (
             orderTapMode ? (
               <div className="animate-fade" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'rgba(194,147,58,0.12)', border: '1px solid rgba(194,147,58,0.45)', borderRadius: 11, padding: '8px 10px', marginBottom: 4 }}>
                 <span style={{ font: '800 11px var(--font-ui)', color: '#A87A2C' }}>👆 Tócalas en orden</span>
@@ -7105,8 +7103,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => toggleOne(k)} aria-label={sel ? 'Quitar de la selección' : 'Seleccionar tarea'} title="Seleccionar (para mover varias de una)" style={{ flexShrink: 0, width: 30, cursor: 'pointer', border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <span style={{ height: 18, width: 18, borderRadius: 5, border: sel ? 'none' : '1.5px solid rgba(15,35,64,0.28)', background: sel ? '#C2933A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{sel && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg>}</span>
                 </button>
-                {orderable && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 4 }}>{orderNum(k, pos, orderTapMode && !done, false)}</span>}
-                <button onClick={() => { if (orderable && orderTapMode) orderTapToggle(k); else setMdSel({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '8px 4px 8px 2px' }}>
+                {useManualOrder && <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', paddingRight: 4 }}>{orderNum(k, pos, orderTapMode && !done, false)}</span>}
+                <button onClick={() => { if (useManualOrder && orderTapMode) orderTapToggle(k); else setMdSel({ eId: e.id, tid: t.id! }) }} style={{ flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '8px 4px 8px 2px' }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
@@ -9216,6 +9214,36 @@ const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 45 : d === 'media' ? 120 : 
 // Estimado EFECTIVO de una tarea en minutos: tu estimado propio (estMin) si lo pusiste; si no,
 // el default por dificultad. Es lo que alimenta la carga estimada del día ("~Xh") para planear.
 const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : WEEK_EST_MIN(t.difficulty)
+/* ── Ordenar (no filtrar) una lista de tareas por un criterio — compartido entre Backlog y Enfoque
+   para que las dos "Detalle" (y Tarjetas) usen EXACTAMENTE el mismo comparador. ── */
+type SortSpec = { key: string; dir: 'asc' | 'desc' }
+const SORT_KEYS: [string, string][] = [['due', 'Fecha'], ['plan', 'Hacer'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance']]
+const nextSort = (cur: SortSpec, key: string): SortSpec => cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }
+function sortRows<T extends { e: Epica; t: EpicaTask }>(rows: T[], sort: SortSpec): T[] {
+  const dirMul = sort.dir === 'asc' ? 1 : -1
+  const cmp = (a: T, b: T) => {
+    const k = sort.key; let r = 0
+    if (k === 't') r = a.t.t.localeCompare(b.t.t, 'es') * dirMul
+    else if (k === 'epica') r = a.e.name.localeCompare(b.e.name, 'es') * dirMul
+    else if (k === 'status') r = (TASK_STATUSES.indexOf(a.t.status) - TASK_STATUSES.indexOf(b.t.status)) * dirMul
+    else if (k === 'priority') r = (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) * dirMul
+    else if (k === 'progress') r = ((a.t.progress || 0) - (b.t.progress || 0)) * dirMul
+    else if (k === 'estMin') r = (estMinOf(a.t) - estMinOf(b.t)) * dirMul
+    else if (k === 'manual') return 0   // "Manual": se deja el orden que ya traía la lista (planOrder u otro)
+    else {
+      // 'plan' (Hacer) y el default 'due' (Fecha/Vence): las SIN esa fecha van SIEMPRE al final,
+      // sea ascendente o descendente (no se multiplican por dirMul, a diferencia de todo lo demás).
+      const av = k === 'plan' ? a.t.plan : a.t.due
+      const bv = k === 'plan' ? b.t.plan : b.t.due
+      if (!av && !bv) r = 0
+      else if (!av) return 1
+      else if (!bv) return -1
+      else r = av.localeCompare(bv) * dirMul
+    }
+    return r || a.t.t.localeCompare(b.t.t, 'es')
+  }
+  return [...rows].sort(cmp)
+}
 // Presets del estimado (minutos) para el dropdown, con etiqueta bonita.
 const EST_PRESETS: [number, string][] = [[15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h'], [90, '1 h 30'], [120, '2 h'], [150, '2 h 30'], [180, '3 h'], [240, '4 h'], [360, '6 h'], [480, '8 h']]
 // Presets compactos (etiquetas cortas) para el chip de tiempo por fila.
