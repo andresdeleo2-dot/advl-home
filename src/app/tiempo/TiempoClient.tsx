@@ -15,6 +15,7 @@ import { sanitizeHtml } from '@/lib/sanitize'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta as waitMetaT } from '@/lib/waiting'
 import { isAutoNote, fmtLogDate } from '@/lib/tareas'
 import Confetti from '@/components/Confetti'
+import TaskLinks from '@/components/TaskLinks'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
 const PRIOS = ['alta', 'media', 'baja'] as const
@@ -5169,8 +5170,6 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
   const [epLinksOpen, setEpLinksOpen] = useState(true)   // dropdown "Enlaces de {épica}" (abierto por defecto para que se vean)
-  const [nlLabel, setNlLabel] = useState('')              // nuevo link: etiqueta
-  const [nlUrl, setNlUrl] = useState('')                  // nuevo link: url
   const [subPop, setSubPop] = useState<number | null>(null)  // subtarea abierta (editar nota/links/%)
   const [logPop, setLogPop] = useState<number | null>(null)  // día de bitácora abierto (editar %/nota en popup); guarda el índice ORIGINAL en progressLog
   const [slLabel, setSlLabel] = useState('')             // nuevo link de subtarea: etiqueta
@@ -5216,7 +5215,6 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const epLinks = (epObj?.links || []).filter(l => l.url && l.url !== '#')   // conexiones de la épica (Personas, etc.)
   const diasTrab = new Set((t.progressLog || []).map(l => l.d)).size          // días distintos trabajados
   const diasCon = t.createdAt ? Math.max(0, Math.round((Date.parse(iso(new Date()) + 'T00:00:00') - Date.parse(t.createdAt + 'T00:00:00')) / 86400000)) : 0
-  const addLink = () => { const url = nlUrl.trim(), label = nlLabel.trim(); if (!url && !label) return; setLinks(a => [...a, { label, url }]); setNlLabel(''); setNlUrl('') }
   const setSubs = (fn: (a: NonNullable<EpicaTask['subtasks']>) => NonNullable<EpicaTask['subtasks']>) => setT(p => ({ ...p, subtasks: fn(p.subtasks || []) }))
   const setLinks = (fn: (a: NonNullable<EpicaTask['links']>) => NonNullable<EpicaTask['links']>) => setT(p => ({ ...p, links: fn(p.links || []) }))
   const addComment = () => { if (!comment.trim()) return; setT(p => ({ ...p, comentarios: [...(p.comentarios || []), { at: new Date().toISOString(), text: comment.trim() }] })); setComment('') }
@@ -5413,22 +5411,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
             </div>
           </div>
 
-          <div style={{ marginTop: 14, marginBottom: 6 }}><span style={eb}>Links</span></div>
-          {(t.links || []).length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 8 }}>
-              {(t.links || []).map((l, i) => (
-                <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#A87A2C', background: 'rgba(194,147,58,0.10)', border: '1px solid rgba(194,147,58,0.28)', borderRadius: 99, padding: '6px 6px 6px 12px' }}>
-                  <a href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>🔗 {l.label || l.url}</a>
-                  <button onClick={() => setLinks(a => a.filter((_, j) => j !== i))} aria-label="Quitar link" style={{ border: 'none', background: 'transparent', color: 'rgba(168,122,44,0.75)', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: '0 2px' }}>✕</button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-            <input value={nlLabel} placeholder="Etiqueta" onChange={e => setNlLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} style={{ ...nf, flex: '0 0 120px', width: 120 }} />
-            <input value={nlUrl} placeholder="https://…" onChange={e => setNlUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addLink() }} style={{ ...nf, flex: 1, minWidth: 0 }} />
-            <button onClick={addLink} style={smallBtn}>+ Link</button>
-          </div>
+          <div style={{ marginTop: 14 }}><TaskLinks links={t.links || []} onChange={ls => setLinks(() => ls)} /></div>
 
           <NLbl>Comentarios</NLbl>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

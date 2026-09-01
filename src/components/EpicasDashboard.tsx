@@ -6,6 +6,7 @@ import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask, isAutoNote, fmtLogDate } from '@/lib/tareas'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta } from '@/lib/waiting'
 import Confetti from '@/components/Confetti'
+import TaskLinks from '@/components/TaskLinks'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
@@ -6860,34 +6861,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                 {/* LINKS — editables aquí mismo (agregar / editar / ordenar / quitar) */}
                 <div style={{ marginBottom: 16 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <span style={eb}>Links {(t.links?.length ?? 0) > 0 && <span style={{ color: '#A87A2C', fontWeight: 800 }}>{t.links!.length}</span>}</span>
-                    <button onClick={() => setTaskLinks(ep, i, [...(t.links || []), { label: '', url: '' }])} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11.5, fontWeight: 700 }}>+ Link</button>
-                  </div>
-                  {/* La lista se re-monta cuando cambia (agregar/quitar/ordenar/editar) para que
-                      los inputs uncontrolled muestren siempre el valor correcto. */}
-                  <div key={`links:${t.id}:${JSON.stringify(t.links || [])}`} style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                    {(t.links || []).length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Sin links. Agrega con “+ Link”.</div>}
-                    {(t.links || []).map((l, li) => {
-                      const nn = (t.links || []).length
-                      const arr: CSSProperties = { height: 30, width: 26, borderRadius: 7, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 11, lineHeight: 1, flexShrink: 0 }
-                      const move = (dir: -1 | 1) => { const j = li + dir; if (j < 0 || j >= nn) return; const ls = [...(t.links || [])];[ls[li], ls[j]] = [ls[j], ls[li]]; setTaskLinks(ep, i, ls) }
-                      return (
-                        <div key={li} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
-                          {nn > 1 && (
-                            <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-                              <button aria-label="Subir" title="Subir" disabled={li === 0} onClick={() => move(-1)} style={{ ...arr, cursor: li === 0 ? 'default' : 'pointer', opacity: li === 0 ? 0.35 : 1 }}>↑</button>
-                              <button aria-label="Bajar" title="Bajar" disabled={li === nn - 1} onClick={() => move(1)} style={{ ...arr, cursor: li === nn - 1 ? 'default' : 'pointer', opacity: li === nn - 1 ? 0.35 : 1 }}>↓</button>
-                            </span>
-                          )}
-                          <input defaultValue={l.label} onBlur={ev => { const v = ev.target.value; if (v !== l.label) setTaskLinks(ep, i, (t.links || []).map((x, j) => j === li ? { ...x, label: v } : x)) }} placeholder="Nombre" style={{ flex: '0 0 120px', width: 120, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12.5, color: '#14233D', outline: 'none' }} />
-                          <input defaultValue={l.url} onBlur={ev => { const v = ev.target.value; if (v !== l.url) setTaskLinks(ep, i, (t.links || []).map((x, j) => j === li ? { ...x, url: v } : x)) }} placeholder="https://…" style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '7px 9px', fontSize: 12, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', color: '#14233D', outline: 'none' }} />
-                          {l.url && <a href={safeUrl(l.url)} target={(l.url || '').startsWith('http') ? '_blank' : undefined} rel="noreferrer" title="Abrir" style={{ flexShrink: 0, textDecoration: 'none', color: '#A87A2C', fontSize: 14 }}>↗</a>}
-                          <button aria-label="Quitar link" onClick={() => setTaskLinks(ep, i, (t.links || []).filter((_, j) => j !== li))} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.1)', background: '#fff', borderRadius: 8, height: 30, width: 30, color: 'rgba(20,35,61,0.5)' }}>✕</button>
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <TaskLinks links={t.links || []} onChange={ls => setTaskLinks(ep, i, ls)} />
                 </div>
 
                 {/* COMENTARIOS — se agregan aquí mismo, sin abrir "Editar" */}
@@ -8369,29 +8343,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {taskDraft.due && <button onClick={() => setTaskDraft(d => ({ ...d, due: '' }))} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '9px 12px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>Quitar</button>}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <label style={lbl}>Links</label>
-                  <button onClick={() => setTaskDraft(d => ({ ...d, links: [...(d.links || []), { label: '', url: '' }] }))} style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 8, padding: '5px 10px', fontSize: 11, fontWeight: 700, marginTop: 16 }}>+ Link</button>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                  {(taskDraft.links || []).map((l, i) => {
-                    const nLinks = (taskDraft.links || []).length
-                    const arr: CSSProperties = { height: 26, width: 24, borderRadius: 6, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.55)', fontSize: 11, lineHeight: 1 }
-                    return (
-                    <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
-                      {nLinks > 1 && (
-                        <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-                          <button aria-label="Subir link" title="Subir" disabled={i === 0} onClick={() => setTaskDraft(d => { const links = [...(d.links || [])]; if (i <= 0) return d;[links[i - 1], links[i]] = [links[i], links[i - 1]]; return { ...d, links } })} style={{ ...arr, cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.35 : 1 }}>↑</button>
-                          <button aria-label="Bajar link" title="Bajar" disabled={i >= nLinks - 1} onClick={() => setTaskDraft(d => { const links = [...(d.links || [])]; if (i >= links.length - 1) return d;[links[i + 1], links[i]] = [links[i], links[i + 1]]; return { ...d, links } })} style={{ ...arr, cursor: i >= nLinks - 1 ? 'default' : 'pointer', opacity: i >= nLinks - 1 ? 0.35 : 1 }}>↓</button>
-                        </span>
-                      )}
-                      <input value={l.label} onChange={e => setTaskDraft(d => { const links = [...(d.links || [])]; links[i] = { ...links[i], label: e.target.value }; return { ...d, links } })} placeholder="Nombre" style={{ ...inpSmall, flex: '0 0 120px' }} />
-                      <input value={l.url} onChange={e => setTaskDraft(d => { const links = [...(d.links || [])]; links[i] = { ...links[i], url: e.target.value }; return { ...d, links } })} placeholder="https://…" style={{ ...inpSmall, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: 12 }} />
-                      <button aria-label="Eliminar enlace" onClick={() => setTaskDraft(d => ({ ...d, links: (d.links || []).filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
-                    </div>
-                    )
-                  })}
-                </div>
+                <TaskLinks links={taskDraft.links || []} onChange={ls => setTaskDraft(d => ({ ...d, links: ls }))} />
 
                 {(() => { const st = taskDraft.subtasks || []; const done = st.filter(s => s.done).length; return (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

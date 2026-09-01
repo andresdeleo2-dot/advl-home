@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v19-fix-default-real-y-general-vinculado */
+/* BUILD-MARKER: v20-links-de-tarea-rediseno */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */
