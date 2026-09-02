@@ -4234,6 +4234,13 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   const actTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showActBar = (b: { kind: 'sched' | 'worked' | 'session'; ref: string; top: number; lane: 'left' | 'right' }) => { if (actTimer.current) clearTimeout(actTimer.current); setActBar(b) }
   const hideActBarSoon = () => { if (actTimer.current) clearTimeout(actTimer.current); actTimer.current = setTimeout(() => setActBar(null), 260) }
+  // Registros VIEJOS (de antes de que el historial guardara routineRef) que vinieron de una rutina se
+  // reconocen por NOMBRE (mismo criterio que ya usa el resto de /tiempo para agrupar "General"/rutinas).
+  const routineByName = useMemo(() => {
+    const m = new Map<string, { epicaId: string; rIdx: number }>()
+    for (const r of routines) if (r.epicaId != null && r.rIdx != null) m.set(r.name.trim().toLowerCase(), { epicaId: r.epicaId, rIdx: r.rIdx })
+    return m
+  }, [routines])
   const isToday = day === today
   const week = weekOfISO(day)
   const DN = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
@@ -4446,7 +4453,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const tall = dur * PXM >= 40
               const future = isToday && w.start > now && !w.done
               const openable = !!w.taskId
-              const routineRef = w.routineRef
+              const routineRef = w.routineRef || (!w.taskId ? routineByName.get(w.name.trim().toLowerCase()) : undefined)
               const activeR = drag?.kind === 'wresize' && drag.idx === w._idx
               // Sesión con PAUSAS: se dibuja un bloque por intervalo trabajado (con el hueco de la
               // pausa libre) en vez de un bloque continuo que ocupaba también el tiempo en pausa.
@@ -4588,7 +4595,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     <button onClick={() => setTimeEdit({ target: 'worked', ref: String(w._idx), start: w.start, dur: w.dur, live: false, name: w.name })} title="Editar hora" style={actBtn}>✎</button>
                     <button onClick={() => onResume(w)} title="Volver a empezar" style={actBtn}>↻</button>
                     {w.taskId && <button onClick={() => onOpenTask(w.taskId!)} title="Ver la tarea" style={actBtn}>👁</button>}
-                    {w.routineRef && <button onClick={() => onOpenRoutine(w.routineRef!)} title="Ver / marcar la rutina" style={actBtn}>👁</button>}
+                    {!w.taskId && (w.routineRef || routineByName.get(w.name.trim().toLowerCase())) && <button onClick={() => onOpenRoutine(w.routineRef || routineByName.get(w.name.trim().toLowerCase())!)} title="Ver / marcar la rutina" style={actBtn}>👁</button>}
                   </>)}
                   {actBar.kind === 'session' && session && (
                     <button onClick={() => setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name })} title="Editar la hora en que empezaste" style={{ ...actBtn, color: '#c0392b' }}>✎ inicio</button>
