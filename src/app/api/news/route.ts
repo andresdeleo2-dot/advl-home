@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-export const revalidate = 3600 // 1h — noticias no necesitan refrescar más seguido, y cuida la cuota gratis de Gemini
+export const revalidate = 86400 // 24h — el nivel gratis de Gemini con búsqueda tiene poca cuota al día; con esto es 1 llamada/día como mucho
 
 // Temas a seguir. Para cambiarlos: edita esta lista (no hay UI para esto — es de un solo usuario).
 const TOPICS = ['Videojuegos', 'Finanzas y economía', 'Política (México y mundo)', 'Series y TV']
@@ -26,7 +26,7 @@ Responde ÚNICAMENTE con un JSON array (sin markdown, sin texto antes o después
         contents: [{ parts: [{ text: prompt }] }],
         tools: [{ google_search: {} }],
       }),
-      next: { revalidate: 3600 },
+      next: { revalidate: 86400 },
     })
     const j = await r.json()
     if (j.error) return NextResponse.json({ error: j.error.message || 'error de Gemini' }, { status: 502 })
