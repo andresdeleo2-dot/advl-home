@@ -31,10 +31,10 @@ export default function NewsWidget() {
 
   const load = () => {
     setItems(null); setErr('')
-    fetch('/api/news').then(r => r.json()).then(j => {
+    fetch('/api/news', { signal: AbortSignal.timeout(30000) }).then(r => r.json()).then(j => {
       if (j.error) { setErr(j.error); return }
       setItems(j.items || [])
-    }).catch(() => setErr('No se pudo cargar'))
+    }).catch(() => setErr('No se pudo cargar (tardó demasiado o falló la conexión)'))
   }
   useEffect(load, [])
 

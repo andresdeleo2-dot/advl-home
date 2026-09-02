@@ -23,7 +23,9 @@ const gnewsUrl = (q: string) => `https://news.google.com/rss/search?q=${encodeUR
 async function fetchTrack(t: NewsTrack): Promise<NewsItem[]> {
   const url = t.feedUrl || gnewsUrl(t.query!)
   try {
-    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (advl-home panel)' }, next: { revalidate: 3600 } })
+    // Límite de tiempo por fuente: un tema agregado a mano con una URL/búsqueda que se cuelga NO
+    // debe bloquear toda la sección — con 8s, si esta fuente no responde, se omite y siguen las demás.
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (advl-home panel)' }, next: { revalidate: 3600 }, signal: AbortSignal.timeout(8000) })
     if (!r.ok) return []
     const xml = await r.text()
     // Google News mete "- Fuente" al final del título; un feed directo (feedUrl) no.
@@ -52,6 +54,7 @@ async function polishWithGemini(items: NewsItem[]): Promise<NewsItem[]> {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
       method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      signal: AbortSignal.timeout(20000),
     })
     const j = await r.json()
     const text: string = (j?.candidates?.[0]?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('')
