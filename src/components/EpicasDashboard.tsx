@@ -7,6 +7,7 @@ import { sameTask, isAutoNote, fmtLogDate } from '@/lib/tareas'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta } from '@/lib/waiting'
 import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
+import BreakButton from '@/components/BreakButton'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
@@ -558,6 +559,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const why = (dl != null && dl < 0) ? `venció hace ${-dl}d` : pick.t.priority === 'alta' ? 'prioridad alta' : (dl != null && dl <= 3) ? `vence ${relLong(pick.t.due).toLowerCase()}` : 'es lo siguiente en tu orden'
     if (focus.begin({ name: pick.t.t, epicaId: pick.e.id, taskId: pick.t.id!, dur: estMinOf(pick.t) })) showToast(`▶ «${pick.t.t}» · ${why}`)
   }
+  // Break/desestrés: área 'ocio' (NO 'trabajo') — el total del día ya excluye esa área, así que
+  // nunca infla "trabajado hoy" aunque el cronómetro esté corriendo. minutes=0 → libre.
+  const startBreak = (minutes: number) => { focus.begin({ name: 'Break · desestrés', area: 'ocio', dur: minutes }) }
   // Presupuesto semanal por épica (horas/semana). Si la columna week_budget existe (migración
   // corrida), se guarda en Supabase y SINCRONIZA entre dispositivos; si no, cae a localStorage.
   useEffect(() => { try { const raw = localStorage.getItem('advl_epicas_budget'); if (raw) setEpicBudgets(JSON.parse(raw)) } catch { /* noop */ } }, [])
@@ -5002,6 +5006,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && !focus.active && (
                 <button onClick={pickNextNow} title="Elige la mejor siguiente tarea de hoy y arranca el cronómetro" style={{ border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 10, padding: '9px 15px', font: '800 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>⚡ ¿Qué ahora?</button>
               )}
+              {!board && <BreakButton onStart={startBreak} />}
               {(planMode === 'dia' || ajuste || detalle) && viewDate <= today && (() => {
                 const pastPend = viewDate < today && planPend.length > 0
                 const warn = arrastradas.length > 0 || pastPend

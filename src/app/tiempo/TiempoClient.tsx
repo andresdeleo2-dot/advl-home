@@ -16,6 +16,7 @@ import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAY
 import { isAutoNote, fmtLogDate } from '@/lib/tareas'
 import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
+import BreakButton from '@/components/BreakButton'
 
 const TASK_STATUSES = ['Por hacer', 'En curso', 'Esperando', 'Terminada']
 const PRIOS = ['alta', 'media', 'baja'] as const
@@ -1500,6 +1501,10 @@ export default function TiempoClient() {
     const gt = ge ? (allTasks || []).find(x => x.epicaId === ge.id && (x.task.t || '').trim().toLowerCase() === 'general') : null
     beginSession({ name: name.trim() || 'General', area: 'trabajo', start: Math.round(now), dur: 0, ...(gt?.task.id ? { epicaId: ge!.id, taskId: gt.task.id } : {}) })
   }
+  // Break/desestrés: área 'ocio' (NO 'trabajo') — por diseño, "trabajadas hoy"/"invertidas" sólo
+  // suman área trabajo, así que esto nunca infla esos totales aunque el cronómetro esté corriendo.
+  // minutes=0 → libre (paras cuando quieras); minutes>0 → sesión con esa duración de referencia.
+  const startBreak = (minutes: number) => { beginSession({ name: 'Break · desestrés', area: 'ocio', start: Math.round(now), dur: minutes }) }
   // "¿Qué ahora?": elige la mejor tarea de HOY (vencidas → prioridad → entrega) y arranca el bloque.
   const pickNextTiempo = () => {
     const pool = (workTasks || []).filter(x => x.task.status !== 'Terminada')   // las "en espera" no se trabajan
@@ -1972,6 +1977,7 @@ export default function TiempoClient() {
             onSessionStart={setSessionStart}
             allOpenTasks={allTasks}
             onGeneral={startGeneral}
+            onBreak={startBreak}
             onStartRoutine={r => startRoutine(r.name, r.epicaId, r.rIdx)}
             onAddDone={planAddDone}
             onOpenMeeting={setMeetView}
@@ -2293,7 +2299,10 @@ export default function TiempoClient() {
                   {tasksError && <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 14, padding: '10px 14px', fontSize: 13, color: '#8a3c2a' }}>No se pudieron cargar las tareas.<button onClick={refreshTasks} style={{ border: '1px solid #e8cabf', background: '#faf7f1', borderRadius: 999, padding: '5px 12px', fontSize: 12.5, color: '#8a3c2a', cursor: 'pointer' }}>Reintentar</button></div>}
 
                   {act === 'Trabajo profundo' && <>
-                    <QuickStart onStart={startGeneral} />
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 260 }}><QuickStart onStart={startGeneral} /></div>
+                      <BreakButton onStart={startBreak} />
+                    </div>
                     {!data.session && (workTasks || []).some(x => x.task.status !== 'Terminada') && (
                       <button onClick={pickNextTiempo} title="Elige la mejor tarea de hoy y arranca el cronómetro" style={{ alignSelf: 'flex-start', border: 'none', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', borderRadius: 999, padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>⚡ ¿Qué ahora?</button>
                     )}
@@ -4188,7 +4197,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onOpenRoutine, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onBreak, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onOpenRoutine, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -4215,6 +4224,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onSessionStart: (startMin: number) => void
   allOpenTasks: TodayTask[] | null
   onGeneral: (name: string) => void
+  onBreak: (minutes: number) => void
   onStartRoutine: (r: PlanRoutine) => void
   onAddDone: (p: { name: string; area: Area; start: number; dur: number; taskId?: string; epicaId?: string }) => void
   onOpenMeeting: (m: Meeting) => void
@@ -4610,6 +4620,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         <div className="t-card plan-side" style={{ ...card(12), padding: 18 }}>
           {/* Empezar algo GENERAL al instante (siempre disponible) */}
           <QuickStart onStart={onGeneral} />
+          <div style={{ marginTop: -2 }}><BreakButton onStart={onBreak} /></div>
           {/* 🔔 RECORDATORIO hasta arriba: lo que ESPERAS (no se agenda, solo checas si ya llegó). */}
           {pendWait.length > 0 && (
             <>
