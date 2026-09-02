@@ -507,11 +507,20 @@ export function useFocusSession(hooks: FocusHooks) {
   const startedToday = session?.startedAt ? iso(new Date(session.startedAt)) === day0 : true
   const runningTodayMin = (session && session.area === 'trabajo' && startedToday) ? Math.max(0, Math.round(elapsed)) : 0
   const workedTodayMin = (data.history || []).filter(h => h.date === day0 && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0) + runningTodayMin
+  // Break/desestrés de hoy (área 'ocio', el botón "☕ Tomar un break") — mismo cálculo que arriba
+  // pero SEPARADO de workedTodayMin a propósito: nunca debe sumarse a "trabajadas".
+  const runningBreakMin = (session && session.area === 'ocio' && startedToday) ? Math.max(0, Math.round(elapsed)) : 0
+  const breakTodayMin = (data.history || []).filter(h => h.date === day0 && h.area === 'ocio').reduce((s, h) => s + h.dur, 0) + runningBreakMin
   // Bloques de trabajo de hoy SIN tarea de épica (General + rutinas), agrupados por nombre — para
   // que Épicas los pueda listar por nombre (no solo el total).
   const otherMap = new Map<string, number>()
   ;(data.history || []).filter(h => h.date === day0 && h.area === 'trabajo' && !h.taskId).forEach(h => otherMap.set(h.name, (otherMap.get(h.name) || 0) + h.dur))
   const todayOther = [...otherMap.entries()].map(([name, min]) => ({ name, min })).sort((a, b) => b.min - a.min)
+  // Break (área 'ocio') de CUALQUIER día — para el cierre de un día pasado (hoy usa breakTodayMin).
+  const breakOnDay = (dy: string): number => {
+    const base = (data.history || []).filter(h => h.date === dy && h.area === 'ocio').reduce((s, h) => s + h.dur, 0)
+    return base + (session && session.area === 'ocio' && startedToday && dy === day0 ? Math.max(0, Math.round(elapsed)) : 0)
+  }
   // Igual que todayOther pero para CUALQUIER día (para el cierre de un día pasado y para /tiempo).
   const otherOnDay = (dy: string): { name: string; min: number }[] => {
     const m = new Map<string, number>()
@@ -539,7 +548,7 @@ export function useFocusSession(hooks: FocusHooks) {
     if (session && session.area === 'trabajo' && session.taskId && startedToday && dy === day0) { const c = m.get(session.taskId) || { name: session.name, min: 0, done: false }; c.min += Math.max(0, Math.round(elapsed)); m.set(session.taskId, c) }
     return [...m.entries()].map(([taskId, v]) => ({ taskId, ...v })).sort((a, b) => b.min - a.min)
   }
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, breakTodayMin, runningBreakMin, breakOnDay, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

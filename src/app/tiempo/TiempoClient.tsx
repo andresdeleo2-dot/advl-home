@@ -2747,6 +2747,8 @@ export default function TiempoClient() {
         data.history.filter(h => h.date === dcDay && h.area === 'trabajo' && !h.taskId).forEach(h => omap.set(h.name, (omap.get(h.name) || 0) + h.dur))
         const generalRows = [...omap.entries()].map(([name, min]) => ({ name, min })).filter(o => !routineNames.has(o.name.trim().toLowerCase())).sort((a, b) => b.min - a.min)
         const othersMin = generalRows.reduce((s, o) => s + o.min, 0) + routines.reduce((s, r) => s + r.min, 0)
+        // Break (área 'ocio') de ESTE día — aparte de dayWorkedMin a propósito, nunca cuenta como trabajado.
+        const dayBreakMin = data.history.filter(h => h.date === dcDay && h.area === 'ocio').reduce((s, h) => s + h.dur, 0) + (isTodayView && data.session?.area === 'ocio' ? Math.max(0, Math.round(data.session.dur || 0)) : 0)
         // Planeadas ese día que NO se tocaron.
         const planned = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, dcDay) || recurringDueToday(t.task, dcDay)) && !dayPlanDoneT(t.task, dcDay) && !workedSet.has(t.task.id!))
         // Subtareas que marcaste hechas ESE día (resumen de logros del día).
@@ -2849,6 +2851,7 @@ export default function TiempoClient() {
                     <div style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1, color: '#1c1a17', textTransform: 'capitalize' }}>{longDayOf(dcDay)}</div>
                     {dayClosedT[dcDay] && <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, borderRadius: 99, padding: '3px 11px', background: 'rgba(62,110,110,0.12)', border: '1px solid rgba(62,110,110,0.35)', font: '800 11.5px var(--tiempo-ui, system-ui, sans-serif)', color: '#3E6E6E' }}>✓ Día cerrado{(() => { const dt = new Date(dayClosedT[dcDay]); return isNaN(dt.getTime()) ? '' : ` · ${dt.toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })}` })()}</div>}
                     {dayWorkedMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#3E6E6E', fontWeight: 700 }}>⏱ {hmm(dayWorkedMin)} {isTodayView ? 'trabajadas hoy' : 'ese día'}{othersMin > 0 ? <span style={{ fontWeight: 600, color: '#a49b90' }}> · {hmm(dayWorkedMin - othersMin)} en tareas, {hmm(othersMin)} general/rutinas</span> : null}</div>}
+                    {dayBreakMin > 0 && <div style={{ marginTop: 3, fontSize: 12.5, color: '#2E6E5A', fontWeight: 700 }}>☕ {hmm(dayBreakMin)} de break {isTodayView ? 'hoy' : 'ese día'}</div>}
                   </div>
                   <button aria-label="Cerrar" onClick={() => setDayCloseT(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(28,26,23,.06)', borderRadius: 9, height: 32, width: 32, color: '#8b8379', fontSize: 16 }}>✕</button>
                 </div>
@@ -4401,7 +4404,11 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
       {(() => {
         // Sesión EN CURSO (si corre hoy y es trabajo): su transcurrido cuenta en "trabajadas hoy".
         const runningMin = (isToday && session && session.area === 'trabajo' && session.startedToday !== false) ? Math.max(0, Math.round(session.dur || 0)) : 0
-        const realMin = worked.reduce((a, w) => a + w.dur, 0) + runningMin
+        // OJO: `worked` trae TODO lo del día salvo 'sueno' (incl. 'ocio'/break) — "trabajadas" debe
+        // sumar SÓLO área trabajo, si no un break inflaba este total como si fuera trabajo real.
+        const realMin = worked.filter(w => w.area === 'trabajo').reduce((a, w) => a + w.dur, 0) + runningMin
+        const runningBreakMin = (isToday && session && session.area === 'ocio' && session.startedToday !== false) ? Math.max(0, Math.round(session.dur || 0)) : 0
+        const breakMin = worked.filter(w => w.area === 'ocio').reduce((a, w) => a + w.dur, 0) + runningBreakMin
         const planTotalMin = scheduled.reduce((a, s) => a + s.dur, 0)
         const nowM = Math.round(now)
         // "a esta hora" = lo agendado cuyo horario ya llegó (start ≤ ahora), a duración completa.
@@ -4417,6 +4424,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         return (
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             {stat(hm(realMin), `trabajadas${isToday ? ' hoy' : ''}`, '#6f8256', runningMin > 0 ? `▶ +${hm(runningMin)} en curso` : undefined)}
+            {breakMin > 0 && stat(hm(breakMin), `☕ break${isToday ? ' hoy' : ''}`, '#2E6E5A', runningBreakMin > 0 ? `▶ +${hm(runningBreakMin)} en curso` : undefined)}
             {stat(hm(planTotalMin), 'planeadas · total', '#c2933a')}
             {isToday && stat(hm(planByNow), 'planeadas a esta hora', '#8a4b28')}
             {isToday && planByNow > 0 && (

@@ -5187,6 +5187,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#2E6E6E' }}>Trabajaste hoy</span>
                   {dayTotal > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: '#2E6E6E' }}>⏱ {hmm(dayTotal)}</span>}
                   {(focus.runningTodayMin || 0) > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: '#6f8256' }}>▶ +{hmm(focus.runningTodayMin)} en curso</span>}
+                  {(focus.breakTodayMin || 0) > 0 && <span title="Tiempo de break — no cuenta como trabajado" style={{ fontSize: 11.5, fontWeight: 800, color: '#2E6E5A' }}>☕ {hmm(focus.breakTodayMin)}</span>}
+                  {(focus.runningBreakMin || 0) > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: '#2E6E5A' }}>▶ +{hmm(focus.runningBreakMin)} en curso</span>}
                   <span style={{ flex: 1 }} />
                   <a href="/tiempo" style={{ fontSize: 10, fontWeight: 700, color: 'rgba(46,110,110,0.75)', textDecoration: 'none' }}>ver en Tiempo →</a>
                 </div>
@@ -8557,6 +8559,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // Sin tocar = planeadas hoy que NO tienen tiempo registrado hoy.
         const untouched = planPend.filter(x => !workedSet.has(x.t.id!))
         const totalMin = worked.reduce((s, w) => s + w.min, 0)
+        const breakMinDay = focus.breakOnDay(refDay)
         const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
         const stat = (emoji: string, n: number, label: string, c: string) => (
           <div className="glass" style={{ borderRadius: 13, padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -8717,6 +8720,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(focus.workedTodayMin)} trabajadas hoy{otherM > 0 ? <span style={{ fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}> · {hmm(totalMin)} en tareas, {hmm(otherM)} general/rutinas</span> : null}</div>
                         ) })())
                       : (totalMin > 0 && <div style={{ marginTop: 6, fontSize: 12.5, color: '#2E6E6E', fontWeight: 700 }}>⏱ {hmm(totalMin)} de trabajo registrado ese día</div>)}
+                    {refIsToday
+                      ? (focus.breakTodayMin > 0 && <div style={{ marginTop: 3, fontSize: 12.5, color: '#2E6E5A', fontWeight: 700 }}>☕ {hmm(focus.breakTodayMin)} de break hoy</div>)
+                      : (breakMinDay > 0 && <div style={{ marginTop: 3, fontSize: 12.5, color: '#2E6E5A', fontWeight: 700 }}>☕ {hmm(breakMinDay)} de break ese día</div>)}
                   </div>
                   <button aria-label="Cerrar" onClick={() => setDayCloseOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
