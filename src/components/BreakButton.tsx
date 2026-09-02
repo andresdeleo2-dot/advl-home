@@ -3,7 +3,7 @@
 import { useState, type CSSProperties } from 'react'
 
 const PRESETS = [5, 10, 15, 30]
-const DRIVE_URL = 'https://drive.google.com/drive/u/0/home'
+const DRIVE_URL = 'https://drive.google.com/file/d/1lEcxA-Wnsp7rqkgyR3hvX9DWpbfvrjSj/view?usp=drive_link'
 
 /** Botón "Tomar un break" — arranca un cronómetro (o uno con tiempo fijo) marcado como 'ocio', para
  *  que NO cuente como trabajado (Tiempo y Épicas ya excluyen esa área de los totales del día).
