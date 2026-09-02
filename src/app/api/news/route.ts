@@ -47,25 +47,39 @@ async function fetchTrack(t: NewsTrack): Promise<NewsItem[]> {
   } catch { return [] }
 }
 
+/** Una sola llamada a Gemini; puede fallar (503 "high demand" es frecuente con modelos nuevos). */
+async function callGemini(key: string, prompt: string): Promise<unknown[] | null> {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+    method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    signal: AbortSignal.timeout(20000),
+  })
+  const j = await r.json()
+  if (j.error) return null
+  const text: string = (j?.candidates?.[0]?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('')
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+  const parsed = JSON.parse(cleaned)
+  return Array.isArray(parsed) ? parsed : null
+}
+
 /** Pule los resúmenes con Gemini (generación simple, SIN búsqueda — esa parte de la cuota gratis
- *  sí funciona). Si falla por lo que sea, se quedan los resúmenes crudos del RSS — nunca se rompe. */
+ *  sí funciona). Reintenta una vez si falla (el modelo nuevo da 503 "high demand" seguido — suele
+ *  ser cosa de segundos). Si de plano no responde, se quedan los resúmenes crudos del RSS — nunca
+ *  se rompe la sección por esto. */
 async function polishWithGemini(items: NewsItem[]): Promise<NewsItem[]> {
   const key = process.env.GEMINI_API_KEY
   if (!key || items.length === 0) return items
   const prompt = `Para cada noticia de esta lista, escribe un resumen en español de 3 a 5 oraciones que saque lo MÁS IMPORTANTE: qué pasó exactamente, cifras/fechas/nombres concretos si los hay, y por qué importa — no una frase genérica, sino los datos reales que trae el extracto. Basado ÚNICAMENTE en el título y el extracto dados (no inventes nada que no esté ahí; si el extracto es corto, saca todo el jugo posible sin inventar). Si la noticia trae unas "Instrucciones" propias, dales prioridad a esos aspectos en el resumen. Responde SOLO con un JSON array en el MISMO ORDEN, cada elemento: {"summary": "…"}.\n\n${items.map((it, i) => `${i + 1}. Título: ${it.title}\nExtracto: ${it.summary}${it.instructions ? `\nInstrucciones para este tema: ${it.instructions}` : ''}`).join('\n\n')}`
-  try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
-      method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      signal: AbortSignal.timeout(20000),
-    })
-    const j = await r.json()
-    const text: string = (j?.candidates?.[0]?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('')
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
-    const parsed = JSON.parse(cleaned)
-    if (!Array.isArray(parsed) || parsed.length !== items.length) return items
-    return items.map((it, i) => (typeof parsed[i]?.summary === 'string' && parsed[i].summary.trim()) ? { ...it, summary: parsed[i].summary.trim() } : it)
-  } catch { return items }
+  let parsed: unknown[] | null = null
+  for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+    if (attempt > 0) await new Promise(res => setTimeout(res, 2500))
+    try { parsed = await callGemini(key, prompt) } catch { parsed = null }
+  }
+  if (!parsed || parsed.length !== items.length) return items
+  return items.map((it, i) => {
+    const s = (parsed![i] as { summary?: string } | undefined)?.summary
+    return (typeof s === 'string' && s.trim()) ? { ...it, summary: s.trim() } : it
+  })
 }
 
 async function loadTracks(): Promise<NewsTrack[]> {

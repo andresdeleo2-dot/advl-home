@@ -116,6 +116,7 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [err, setErr] = useState('')
   const [saving, setSaving] = useState(false)
   const [topicIn, setTopicIn] = useState('')
+  const [newTopicMode, setNewTopicMode] = useState(false)   // true = escribiendo una categoría nueva (en vez de elegir una existente)
   const [labelIn, setLabelIn] = useState('')
   const [kind, setKind] = useState<'query' | 'feed'>('query')
   const [valueIn, setValueIn] = useState('')
@@ -179,8 +180,18 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 
           <div style={{ borderTop: '1px solid rgba(15,35,64,0.08)', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ font: '700 10px/1 var(--font-ui, system-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Agregar tema</div>
-            <input list="news-topics" value={topicIn} onChange={e => setTopicIn(e.target.value)} placeholder="Categoría (ej. Videojuegos, o una nueva)" style={nf} />
-            <datalist id="news-topics">{topics.map(tp => <option key={tp} value={tp} />)}</datalist>
+            {newTopicMode || topics.length === 0 ? (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input autoFocus value={topicIn} onChange={e => setTopicIn(e.target.value)} placeholder="Nombre de la nueva categoría (ej. Deportes)" style={{ ...nf, flex: 1 }} />
+                {topics.length > 0 && <button onClick={() => { setNewTopicMode(false); setTopicIn('') }} title="Elegir una categoría existente" style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '0 12px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>}
+              </div>
+            ) : (
+              <select value={topicIn} onChange={e => { if (e.target.value === '__new__') { setNewTopicMode(true); setTopicIn('') } else setTopicIn(e.target.value) }} style={{ ...nf, cursor: 'pointer', color: topicIn ? '#14233D' : 'rgba(20,35,61,0.45)' }}>
+                <option value="" disabled>Elige una categoría…</option>
+                {topics.map(tp => <option key={tp} value={tp}>{TOPIC_ICON[tp] || '📰'} {tp}</option>)}
+                <option value="__new__">+ Nueva categoría…</option>
+              </select>
+            )}
             <input value={labelIn} onChange={e => setLabelIn(e.target.value)} placeholder="Nombre del tema (ej. Zelda 3)" style={nf} />
             <div style={{ display: 'flex', gap: 6 }}>
               <button onClick={() => setKind('query')} style={{ flex: 1, cursor: 'pointer', borderRadius: 8, padding: '7px 0', fontSize: 12, fontWeight: 700, border: kind === 'query' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: kind === 'query' ? '#10233F' : '#fff', color: kind === 'query' ? '#fff' : 'rgba(20,35,61,0.6)' }}>🔍 Buscar (recomendado)</button>
