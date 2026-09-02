@@ -7,6 +7,7 @@ import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
 import PushReminders from '@/components/PushReminders'
 import CalendarWidget from '@/components/CalendarWidget'
+import NewsWidget from '@/components/NewsWidget'
 import QuoteWidget from '@/components/QuoteWidget'
 import BirthdayCelebration from '@/components/BirthdayCelebration'
 import PersonaExpediente from '@/components/PersonaExpediente'
@@ -345,6 +346,12 @@ export default function PanelClient() {
             </div>
           </div>
         </div>
+
+        {/* SECCIÓN · NOTICIAS (Gemini con búsqueda en vivo, se refresca cada hora) */}
+        <SectionTitle icon="📰">Noticias</SectionTitle>
+        <Slot id="noticias" title="Videojuegos · Finanzas · Política · Series" icon="📰" layout={layout} setSlot={setSlot}>
+          <NewsWidget />
+        </Slot>
 
         {/* SECCIÓN · PERSONAS Y FECHAS (navy, 2-col grandes) */}
         <SectionTitle icon="👥" href={PERSONAS} external cta="ver en Mi Vida">Personas y fechas</SectionTitle>
