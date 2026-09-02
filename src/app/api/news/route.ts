@@ -1,27 +1,9 @@
 import { NextResponse } from 'next/server'
+import { supabase } from '@/lib/supabase'
+import { DEFAULT_TRACKS, type NewsTrack } from '@/lib/newsTracks'
 
 export const revalidate = 3600 // 1h — los RSS/Google News son gratis/sin límite; lo único con cuota es el pulido de Gemini (generación simple, no búsqueda)
 
-/* Cada tema puede tener VARIOS focos específicos (lo que de verdad quieres seguir) más uno general
- * de respaldo. `query` arma un feed de Google News (búsqueda, gratis, sin API key — cubre lo
- * específico: un juego, una empresa, un país…); `feedUrl` es un RSS directo de un medio (para lo
- * general/amplio del tema). Para agregar/quitar seguimientos: edita esta lista. */
-const TRACKS: { topic: string; label: string; query?: string; feedUrl?: string }[] = [
-  // Videojuegos
-  { topic: 'Videojuegos', label: 'GTA VI', query: 'GTA 6 OR "GTA VI" OR "Grand Theft Auto VI"' },
-  { topic: 'Videojuegos', label: 'Wolverine', query: '"Marvel\'s Wolverine" juego OR videojuego' },
-  { topic: 'Videojuegos', label: 'Más lanzamientos', feedUrl: 'https://es.ign.com/feed.xml' },
-  // Finanzas y economía
-  { topic: 'Finanzas y economía', label: 'Microsoft', query: 'Microsoft empresa OR acciones OR Nasdaq' },
-  { topic: 'Finanzas y economía', label: 'Mercado Libre', query: '"Mercado Libre" empresa OR acciones OR MELI' },
-  { topic: 'Finanzas y economía', label: 'Economía general', feedUrl: 'https://expansion.mx/rss' },
-  // Política
-  { topic: 'Política', label: 'México', query: 'política México' },
-  { topic: 'Política', label: 'Reino Unido', query: 'política "Reino Unido" OR UK politics' },
-  { topic: 'Política', label: 'Estados Unidos', query: 'política "Estados Unidos"' },
-  // Series y TV
-  { topic: 'Series y TV', label: 'Series y TV', feedUrl: 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/television/portada' },
-]
 const PER_TRACK = 3
 const MODEL = 'gemini-3.6-flash'
 
@@ -38,7 +20,7 @@ const tag = (block: string, name: string): string => {
 }
 const gnewsUrl = (q: string) => `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=es-419&gl=MX&ceid=MX:es-419`
 
-async function fetchTrack(t: (typeof TRACKS)[number]): Promise<NewsItem[]> {
+async function fetchTrack(t: NewsTrack): Promise<NewsItem[]> {
   const url = t.feedUrl || gnewsUrl(t.query!)
   try {
     const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (advl-home panel)' }, next: { revalidate: 3600 } })
@@ -80,10 +62,19 @@ async function polishWithGemini(items: NewsItem[]): Promise<NewsItem[]> {
   } catch { return items }
 }
 
+async function loadTracks(): Promise<NewsTrack[]> {
+  try {
+    const { data } = await supabase.from('news_config').select('tracks').eq('id', 'main').maybeSingle()
+    const saved = data?.tracks as NewsTrack[] | undefined
+    return Array.isArray(saved) && saved.length > 0 ? saved : DEFAULT_TRACKS
+  } catch { return DEFAULT_TRACKS }   // tabla no existe todavía (falta correr sql/news-config.sql) — no rompe la sección
+}
+
 export async function GET() {
-  const results = await Promise.all(TRACKS.map(fetchTrack))
+  const tracks = await loadTracks()
+  const results = await Promise.all(tracks.map(fetchTrack))
   const raw = results.flat()
   const items = await polishWithGemini(raw)
-  const topics = [...new Set(TRACKS.map(t => t.topic))]
+  const topics = [...new Set(tracks.map(t => t.topic))]
   return NextResponse.json({ items, topics, updatedAt: new Date().toISOString() })
 }

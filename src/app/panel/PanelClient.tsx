@@ -38,12 +38,15 @@ const signoDe = (mes0: number, dia: number) => {
 
 type Tt = { e: Epica; t: EpicaTask }
 type SlotState = 'normal' | 'collapsed'
+// Estado inicial de cada slot cuando el usuario NUNCA lo ha tocado (nada guardado en localStorage
+// todavía). El resto arrancan expandidos como siempre; sólo Noticias arranca cerrado.
+const SLOT_DEFAULTS: Record<string, SlotState> = { noticias: 'collapsed' }
 
 const baseCard: CSSProperties = { borderRadius: 16, overflow: 'hidden', boxShadow: '0 20px 44px -34px rgba(15,35,64,0.5)' }
 
 // Tarjeta con COLOR propio + minimizar/expandir (–/+). `bare` = el widget ya trae su tarjeta.
 function Slot({ id, title, icon, accent = '#2E5A9E', dark, bare, children, layout, setSlot, right }: { id: string; title: string; icon?: string; accent?: string; dark?: boolean; bare?: boolean; children: ReactNode; layout: Record<string, SlotState>; setSlot: (id: string, s: SlotState) => void; right?: ReactNode }) {
-  const collapsed = layout[id] === 'collapsed'
+  const collapsed = (layout[id] ?? SLOT_DEFAULTS[id] ?? 'normal') === 'collapsed'
   const toggle = (
     <button onClick={() => setSlot(id, collapsed ? 'normal' : 'collapsed')} title={collapsed ? 'Mostrar' : 'Minimizar'} style={{ cursor: 'pointer', border: 'none', background: dark ? 'rgba(255,255,255,0.14)' : 'rgba(15,35,64,0.06)', borderRadius: 8, width: 26, height: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: dark ? 'rgba(255,255,255,0.75)' : 'rgba(20,35,61,0.55)', fontSize: 16, lineHeight: 1, flexShrink: 0 }}>{collapsed ? '+' : '–'}</button>
   )
@@ -106,7 +109,7 @@ export default function PanelClient() {
 
   useEffect(() => { setNow(new Date()); const id = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(id) }, [])
   useEffect(() => { try { const raw = localStorage.getItem('panel.layout.v1'); if (raw) setLayout(JSON.parse(raw)) } catch { /* noop */ } }, [])
-  const setSlot = (id: string, s: SlotState) => setLayout(prev => { const next = { ...prev, [id]: s }; if (s === 'normal') delete next[id]; try { localStorage.setItem('panel.layout.v1', JSON.stringify(next)) } catch { /* noop */ } return next })
+  const setSlot = (id: string, s: SlotState) => setLayout(prev => { const next = { ...prev, [id]: s }; if (s === (SLOT_DEFAULTS[id] || 'normal')) delete next[id]; try { localStorage.setItem('panel.layout.v1', JSON.stringify(next)) } catch { /* noop */ } return next })
 
   useEffect(() => {
     let alive = true
