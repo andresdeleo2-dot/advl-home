@@ -251,12 +251,12 @@ export function useFocusSession(hooks: FocusHooks) {
     // Sólo emite segmentos si son coherentes (fin > inicio en TODOS): si alguno cruza medianoche
     // (toMin usa hora local → fin < inicio), se omiten y se registra como bloque continuo.
     const segments = rawSegs.length && rawSegs.every(([a, b]) => b > a) ? rawSegs : undefined
-    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
+    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}), ...(s.routineRef ? { routineRef: s.routineRef } : {}) }
     save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0
     logToEpica(s, elapsed, entryDay, markDone, logId)
-    // Si la sesión venía de una rutina, marca su día como hecho (llena el chip de hoy).
-    if (s.routineRef) hooksRef.current.onFinishRoutine?.(s.routineRef.epicaId, s.routineRef.rIdx, iso(new Date()))
+    // Si la sesión venía de una rutina y elegiste "y hecha", marca su día como hecho (llena el chip de hoy).
+    if (s.routineRef && markDone) hooksRef.current.onFinishRoutine?.(s.routineRef.epicaId, s.routineRef.rIdx, iso(new Date()))
     hooksRef.current.onToast?.(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`)
   }, [now, save, logToEpica])
 
@@ -366,7 +366,7 @@ export function useFocusSession(hooks: FocusHooks) {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <div onClick={paused ? resumeSession : pauseSession} style={{ flex: 1, minWidth: 110, textAlign: 'center', background: paused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: paused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>{paused ? '▶ Reanudar' : '⏸ Pausar'}</div>
             <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 100, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
-            {session.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>✓ y hecha</div>}
+            {(session.taskId || session.routineRef) && <div onClick={() => finish(true)} title={session.routineRef ? 'Registra el tiempo y marca la rutina hecha hoy' : undefined} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>✓ y hecha</div>}
             {!isOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>+15m</div>}
             <div onClick={cancel} title="Descartar" style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
           </div>
@@ -465,7 +465,7 @@ export function useFocusSession(hooks: FocusHooks) {
               <button onClick={paused ? resumeSession : pauseSession} style={{ border: 'none', background: paused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: paused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>{paused ? '▶ Reanudar' : '⏸ Pausar'}</button>
               {!isOpen && <button onClick={extend} style={{ border: '1px solid #3a352e', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>+15m</button>}
               <button onClick={() => finish(false)} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Terminar</button>
-              {session.taskId && <button onClick={() => finish(true)} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
+              {(session.taskId || session.routineRef) && <button onClick={() => finish(true)} title={session.routineRef ? 'Registra el tiempo y marca la rutina hecha hoy' : undefined} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
               <button onClick={cancel} title="Descartar sin registrar" style={{ border: '1px solid #3a352e', background: 'transparent', color: '#a49b90', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>Descartar</button>
             </div>
 

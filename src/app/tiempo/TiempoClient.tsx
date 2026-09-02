@@ -1425,7 +1425,7 @@ export default function TiempoClient() {
     const allSegs: [number, number][] = [...(s.segs || []), ...(s.pausedAt == null && openStart != null ? [[openStart, Date.now()] as [number, number]] : [])]
     const rawSegs = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : []
     const segments = rawSegs.length && rawSegs.every(([a, b]) => b > a) ? rawSegs : undefined   // omite si alguno cruza medianoche
-    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}) }
+    const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}), ...(s.routineRef ? { routineRef: s.routineRef } : {}) }
     save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
     setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
     showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, markDone) })
@@ -1440,8 +1440,8 @@ export default function TiempoClient() {
         if (markDone) setSelTaskId(id => id === s.taskId ? null : id)
       }
     }
-    // Si la sesión venía de una RUTINA, marca su día como hecho (llena el chip de hoy).
-    if (s.routineRef) setRoutineDone(s.routineRef.epicaId, s.routineRef.rIdx, today)
+    // Si la sesión venía de una RUTINA y elegiste "y hecha", marca su día como hecho (llena el chip de hoy).
+    if (s.routineRef && markDone) setRoutineDone(s.routineRef.epicaId, s.routineRef.rIdx, today)
   }
   // Vincular una tarea a un objetivo (KPI) de su épica ("Contribuye a"). Escribe a la épica.
   const linkObjetivo = (epicaId: string, taskId: string, milestoneId: string | null) => {
@@ -1992,6 +1992,7 @@ export default function TiempoClient() {
             onEdit={(t) => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })}
             onStartTask={(t) => startTask({ epicaId: t.epicaId, task: t.task }, durByDiff(t.task))}
             onOpenTask={(tid) => { const tt = (allTasks || []).find(x => x.task.id === tid); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }}
+            onOpenRoutine={setRoutinePopT}
             onNewTask={(epId) => { const e = epicasList.find(x => x.id === epId) || epicasList[0]; setEditTask({ creating: true, epicaId: e?.id || '', epicaName: e?.name || '', color: e?.color || '#b4653a', task: { id: uid(), t: '', status: 'Por hacer', due: '', note: '', plan: planDay, links: [] } }) }}
             onWaiting={setWaitingT}
             onFollowUp={followUpWaitingT}
@@ -2335,7 +2336,7 @@ export default function TiempoClient() {
                                 {(() => { const doneToday = r.week[dayIdxMon(taskDay)]; return (
                                   <button onClick={() => toggleRoutineDay(r.epicaId, r.rIdx, weekRoutines.monday, dayIdxMon(taskDay))} title={doneToday ? 'Marcada hecha hoy · clic para deshacer' : 'Marcar hecha hoy'} style={{ border: 'none', background: doneToday ? '#6f8256' : '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '6px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>{doneToday ? '✓ Hecha hoy' : '✓ Terminada'}</button>
                                 ) })()}
-                                <button onClick={() => startRoutine(r.name, r.epicaId, r.rIdx)} title="Empezar ahora (al terminar se marca hecha hoy)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>▶ Empezar</button>
+                                <button onClick={() => startRoutine(r.name, r.epicaId, r.rIdx)} title="Empezar ahora (al terminar, elige “✓ y hecha” para marcarla)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>▶ Empezar</button>
                                 <button onClick={() => scheduleRoutineAt(r.name)} title="Agendar a una hora del día" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '6px 13px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer' }}>⏰ Agendar</button>
                               </div>
                             </div>
@@ -3242,7 +3243,7 @@ export default function TiempoClient() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <div onClick={V.sessionPaused ? resumeSession : pauseSession} style={{ flex: 1, minWidth: 110, textAlign: 'center', background: V.sessionPaused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: V.sessionPaused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}>{V.sessionPaused ? '▶ Reanudar' : '⏸ Pausar'}</div>
             <div onClick={() => finish(false)} style={{ flex: 1, minWidth: 100, textAlign: 'center', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '11px 12px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' }}>Terminar</div>
-            {data.session?.taskId && <div onClick={() => finish(true)} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>✓ y hecha</div>}
+            {(data.session?.taskId || data.session?.routineRef) && <div onClick={() => finish(true)} title={data.session?.routineRef ? 'Registra el tiempo y marca la rutina hecha hoy' : undefined} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>✓ y hecha</div>}
             {!V.sessionOpen && <div onClick={extend} style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, cursor: 'pointer' }}>+15m</div>}
             <div onClick={cancel} title="Descartar" style={{ textAlign: 'center', border: '1px solid #4a443c', borderRadius: 999, padding: '11px 12px', fontSize: 12.5, color: '#a49b90', cursor: 'pointer' }}>Descartar</div>
           </div>
@@ -3326,7 +3327,7 @@ export default function TiempoClient() {
               <button onClick={V.sessionPaused ? resumeSession : pauseSession} style={{ border: 'none', background: V.sessionPaused ? 'linear-gradient(135deg,#E7C56B,#C2933A)' : '#35302a', color: V.sessionPaused ? '#1B1305' : '#faf7f1', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>{V.sessionPaused ? '▶ Reanudar' : '⏸ Pausar'}</button>
               {!V.sessionOpen && <button onClick={extend} style={{ border: '1px solid #3a352e', background: 'transparent', color: '#cdc4b8', borderRadius: 999, padding: '13px 20px', fontSize: 14, cursor: 'pointer' }}>+15m</button>}
               <button onClick={() => finish(false)} style={{ border: 'none', background: '#faf7f1', color: '#1c1a17', borderRadius: 999, padding: '13px 22px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Terminar</button>
-              {data.session?.taskId && <button onClick={() => finish(true)} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
+              {(data.session?.taskId || data.session?.routineRef) && <button onClick={() => finish(true)} title={data.session?.routineRef ? 'Registra el tiempo y marca la rutina hecha hoy' : undefined} style={{ border: '1px solid #6f8256', background: 'rgba(111,130,86,0.15)', color: '#a9c48c', borderRadius: 999, padding: '13px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>✓ y hecha</button>}
             </div>
 
             {/* Subtareas de la tarea en foco: márcalas conforme avanzas y agrega nuevas sin salir del foco.
@@ -4187,7 +4188,7 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onOpenRoutine, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince }: {
   day: string; today: string; onPickDay: (d: string) => void
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
@@ -4208,6 +4209,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   onEdit: (t: TodayTask) => void
   onStartTask: (t: TodayTask) => void
   onOpenTask: (taskId: string) => void
+  onOpenRoutine: (ref: { epicaId: string; rIdx: number }) => void
   onNewTask: (epicaId?: string) => void
   session: PlanSession | null
   onSessionStart: (startMin: number) => void
@@ -4444,6 +4446,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               const tall = dur * PXM >= 40
               const future = isToday && w.start > now && !w.done
               const openable = !!w.taskId
+              const routineRef = w.routineRef
               const activeR = drag?.kind === 'wresize' && drag.idx === w._idx
               // Sesión con PAUSAS: se dibuja un bloque por intervalo trabajado (con el hueco de la
               // pausa libre) en vez de un bloque continuo que ocupaba también el tiempo en pausa.
@@ -4461,6 +4464,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                             {first && <div style={{ marginLeft: 'auto', display: 'flex', gap: 2, flexShrink: 0 }}>
                               <button onClick={ev => { ev.stopPropagation(); onResume(w) }} title="Volver a empezar" style={planBtn}>↻</button>
                               {openable && <button onClick={ev => { ev.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver la tarea" style={planBtn}>👁</button>}
+                              {routineRef && <button onClick={ev => { ev.stopPropagation(); onOpenRoutine(routineRef) }} title="Ver / marcar la rutina" style={planBtn}>👁</button>}
                             </div>}
                           </div>
                           {first && big && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
@@ -4482,6 +4486,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                       <button onClick={e => { e.stopPropagation(); setTimeEdit({ target: 'worked', ref: String(w._idx), start: w.start, dur: w.dur, live: false, name: w.name }) }} title="Editar hora de inicio y fin" style={planBtn}>✎</button>
                       <button onClick={e => { e.stopPropagation(); onResume(w) }} title="Volver a empezar" style={planBtn}>↻</button>
                       {openable && <button onClick={e => { e.stopPropagation(); onOpenTask(w.taskId!) }} title="Ver la tarea" style={planBtn}>👁</button>}
+                      {routineRef && <button onClick={e => { e.stopPropagation(); onOpenRoutine(routineRef) }} title="Ver / marcar la rutina" style={planBtn}>👁</button>}
                     </div>}
                   </div>
                   {tall && <div style={{ fontSize: 12.5, color: '#3f4a37', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</div>}
@@ -4583,6 +4588,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     <button onClick={() => setTimeEdit({ target: 'worked', ref: String(w._idx), start: w.start, dur: w.dur, live: false, name: w.name })} title="Editar hora" style={actBtn}>✎</button>
                     <button onClick={() => onResume(w)} title="Volver a empezar" style={actBtn}>↻</button>
                     {w.taskId && <button onClick={() => onOpenTask(w.taskId!)} title="Ver la tarea" style={actBtn}>👁</button>}
+                    {w.routineRef && <button onClick={() => onOpenRoutine(w.routineRef!)} title="Ver / marcar la rutina" style={actBtn}>👁</button>}
                   </>)}
                   {actBar.kind === 'session' && session && (
                     <button onClick={() => setTimeEdit({ target: 'session', ref: 'session', start: session.start, dur: session.dur, live: true, name: session.name })} title="Editar la hora en que empezaste" style={{ ...actBtn, color: '#c0392b' }}>✎ inicio</button>

@@ -19,7 +19,7 @@ export type Block = { id: string; name: string; area: Area; start: number; dur: 
 export type Session = { name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; pausedAccum?: number; pausedAt?: number; origStart?: number; startedAt?: number; segAt?: number; routineRef?: { epicaId: string; rIdx: number }; mod?: number; segs?: [number, number][] } | null
 // segments = intervalos trabajados en MINUTOS del día [inicio,fin] (para dibujar el registro con
 // huecos donde pausaste). Ausente = bloque continuo (start..start+dur), como siempre.
-export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean; logId?: string; segments?: [number, number][] }
+export type HistoryRow = { date: string; name: string; area: Area; start: number; dur: number; epicaId?: string; taskId?: string; done?: boolean; logId?: string; segments?: [number, number][]; routineRef?: { epicaId: string; rIdx: number } }
 
 /** Tarea de Épicas (o actividad libre) agendada para HOY a una hora concreta. Al llegar
  *  la hora, la app pregunta si la quieres iniciar. Vive sólo en el estado de Tiempo. */
