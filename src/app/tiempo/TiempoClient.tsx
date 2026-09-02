@@ -5376,6 +5376,19 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
             <input type="date" defaultValue={bitDate} onChange={e => setBitDate(e.target.value)} style={{ ...nf, padding: '6px 9px' }} />
             <button onClick={logAdvance} style={{ background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', border: 'none', borderRadius: 9, padding: '7px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Avancé este día</button>
           </div>
+          {(() => {
+            const log = t.progressLog || []
+            const investedMin = log.reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+            const daysWithTime = log.filter(x => typeof (x as { min?: number }).min === 'number' && (x as { min?: number }).min! > 0).length
+            if (investedMin <= 0) return null
+            const avgMin = daysWithTime > 0 ? investedMin / daysWithTime : 0
+            return (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 8, padding: '7px 10px', borderRadius: 9, background: 'rgba(62,110,110,0.07)' }}>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: '#2E6E6E' }}>⏱ {hm(investedMin)} invertidas en total</span>
+                <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>· {daysWithTime} {daysWithTime === 1 ? 'día' : 'días'} con tiempo · ~{hm(Math.round(avgMin))}/día en promedio</span>
+              </div>
+            )
+          })()}
           <input value={bitNote} onChange={e => setBitNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') logAdvance() }} placeholder="Nota del avance (opcional)…" style={{ ...nf, width: '100%', marginBottom: 6 }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {(t.progressLog || []).map((e, idx) => ({ e, idx })).sort((a, b) => (b.e.d || '').localeCompare(a.e.d || '')).map(({ e, idx }) => { const min = (e as { min?: number }).min; const userNote = isAutoNote(e.note) ? '' : (e.note || ''); return (

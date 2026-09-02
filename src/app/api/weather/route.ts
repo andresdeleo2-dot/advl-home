@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 
-export const revalidate = 1800 // 30 min
+// force-dynamic (no revalidate estático): este route depende de una llamada en vivo a Open-Meteo.
+// Con `revalidate`, Next intenta pre-renderizarlo EN BUILD — si Open-Meteo falla/tarda justo en ese
+// momento, tumba el build entero. El fetch interno ya cachea 30 min vía `next: { revalidate }`.
+export const dynamic = 'force-dynamic'
 
 const WMO: Record<number, { label: string; icon: string }> = {
   0:  { label: 'Despejado', icon: '☀️' },
@@ -35,11 +38,16 @@ function fetchCity(lat: number, lon: number, hourly = false) {
 }
 
 export async function GET() {
-  const [nau, mty, sf] = await Promise.all([
-    fetchCity(19.4794, -99.2314, true),  // Naucalpan (con pronóstico por hora)
-    fetchCity(25.6866, -100.3161), // Monterrey
-    fetchCity(37.7749, -122.4194), // San Francisco
-  ])
+  let nau, mty, sf
+  try {
+    [nau, mty, sf] = await Promise.all([
+      fetchCity(19.4794, -99.2314, true),  // Naucalpan (con pronóstico por hora)
+      fetchCity(25.6866, -100.3161), // Monterrey
+      fetchCity(37.7749, -122.4194), // San Francisco
+    ])
+  } catch {
+    return NextResponse.json({ error: 'weather fetch failed' }, { status: 500 })
+  }
 
   if (!nau?.current || !nau?.daily) return NextResponse.json({ error: 'weather fetch failed' }, { status: 500 })
 
