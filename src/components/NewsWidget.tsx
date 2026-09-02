@@ -119,6 +119,7 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [labelIn, setLabelIn] = useState('')
   const [kind, setKind] = useState<'query' | 'feed'>('query')
   const [valueIn, setValueIn] = useState('')
+  const [instrIn, setInstrIn] = useState('')
 
   useEffect(() => {
     fetch('/api/news/config').then(r => r.json()).then(j => setTracks(j.tracks || [])).catch(() => setErr('No se pudieron cargar los temas'))
@@ -136,10 +137,10 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 
   const remove = (i: number) => { if (!tracks) return; save(tracks.filter((_, j) => j !== i)) }
   const add = () => {
-    const topic = topicIn.trim(), label = labelIn.trim(), value = valueIn.trim()
+    const topic = topicIn.trim(), label = labelIn.trim(), value = valueIn.trim(), instructions = instrIn.trim()
     if (!topic || !label || !value || !tracks) return
-    const t: NewsTrack = kind === 'query' ? { topic, label, query: value } : { topic, label, feedUrl: value }
-    save([...tracks, t]).then(() => { setTopicIn(''); setLabelIn(''); setValueIn('') })
+    const t: NewsTrack = { topic, label, ...(kind === 'query' ? { query: value } : { feedUrl: value }), ...(instructions ? { instructions } : {}) }
+    save([...tracks, t]).then(() => { setTopicIn(''); setLabelIn(''); setValueIn(''); setInstrIn('') })
   }
 
   const topics = tracks ? [...new Set(tracks.map(t => t.topic))] : []
@@ -164,6 +165,7 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
                     {tracks.map((t, i) => t.topic === tp && (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
                         <span style={{ fontSize: 12.5, fontWeight: 600, color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.label}</span>
+                        {t.instructions && <span title={t.instructions} style={{ fontSize: 11, flexShrink: 0 }}>📝</span>}
                         <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{t.query ? '🔍 búsqueda' : '📡 rss'}</span>
                         <button aria-label="Quitar" title="Quitar" onClick={() => remove(i)} disabled={saving} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(176,82,46,0.75)', fontSize: 13 }}>✕</button>
                       </div>
@@ -185,6 +187,7 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
               <button onClick={() => setKind('feed')} style={{ flex: 1, cursor: 'pointer', borderRadius: 8, padding: '7px 0', fontSize: 12, fontWeight: 700, border: kind === 'feed' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: kind === 'feed' ? '#10233F' : '#fff', color: kind === 'feed' ? '#fff' : 'rgba(20,35,61,0.6)' }}>📡 Link RSS</button>
             </div>
             <input value={valueIn} onChange={e => setValueIn(e.target.value)} placeholder={kind === 'query' ? 'Qué buscar (ej. Nintendo Switch 3)' : 'URL del feed RSS (https://…)'} style={{ ...nf, fontFamily: kind === 'feed' ? 'ui-monospace,SFMono-Regular,Menlo,monospace' : 'inherit' }} />
+            <textarea value={instrIn} onChange={e => setInstrIn(e.target.value)} rows={2} placeholder="¿Algo específico que quieras que se enfoque en el resumen? (opcional — ej. 'solo fecha de lanzamiento y precio')" style={{ ...nf, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4 }} />
             {err && <div style={{ fontSize: 12, color: '#B0522E' }}>{err}</div>}
             <button onClick={add} disabled={saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()} style={{ cursor: saving ? 'default' : 'pointer', borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 700, border: 'none', background: (saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()) ? 'rgba(15,35,64,0.08)' : 'linear-gradient(135deg,#E7C56B,#C2933A)', color: (saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()) ? 'rgba(20,35,61,0.4)' : '#1B1305' }}>{saving ? 'Guardando…' : '+ Agregar tema'}</button>
           </div>

@@ -7,7 +7,7 @@ export const revalidate = 3600 // 1h — los RSS/Google News son gratis/sin lím
 const PER_TRACK = 3
 const MODEL = 'gemini-3.6-flash'
 
-export type NewsItem = { topic: string; label: string; title: string; summary: string; source: string; url: string; pubDate?: string }
+export type NewsItem = { topic: string; label: string; title: string; summary: string; source: string; url: string; pubDate?: string; instructions?: string }
 
 // Decodificar ANTES de quitar tags: algunos feeds (IGN) traen el <img> del extracto ESCAPADO
 // (&lt;img …&gt;) dentro del texto — si se quitan tags primero, ese escape sobrevive y al
@@ -36,9 +36,12 @@ async function fetchTrack(t: NewsTrack): Promise<NewsItem[]> {
       const title = t.feedUrl ? rawTitle : rawTitle.replace(/\s-\s[^-]+$/, '')
       return {
         topic: t.topic, label: t.label, title,
-        summary: stripHtml(tag(block, 'description')).slice(0, 260),
+        // Más margen que antes (era 260): entre más texto crudo tenga Gemini para trabajar,
+        // más sustancioso puede ser el resumen — no es sólo cosmético, es la materia prima.
+        summary: stripHtml(tag(block, 'description')).slice(0, 600),
         source: src, url: decodeEntities(tag(block, 'link')),
         pubDate: tag(block, 'pubDate') || undefined,
+        instructions: t.instructions,
       }
     }).filter(x => x.title && x.url)
   } catch { return [] }
@@ -49,7 +52,7 @@ async function fetchTrack(t: NewsTrack): Promise<NewsItem[]> {
 async function polishWithGemini(items: NewsItem[]): Promise<NewsItem[]> {
   const key = process.env.GEMINI_API_KEY
   if (!key || items.length === 0) return items
-  const prompt = `Para cada noticia de esta lista, escribe un resumen de 1-2 oraciones en español, claro y neutral, basado ÚNICAMENTE en el título y el extracto dados (no inventes datos que no estén ahí; si el extracto no da para más, resume solo el título). Responde SOLO con un JSON array en el MISMO ORDEN, cada elemento: {"summary": "…"}.\n\n${items.map((it, i) => `${i + 1}. Título: ${it.title}\nExtracto: ${it.summary}`).join('\n\n')}`
+  const prompt = `Para cada noticia de esta lista, escribe un resumen en español de 3 a 5 oraciones que saque lo MÁS IMPORTANTE: qué pasó exactamente, cifras/fechas/nombres concretos si los hay, y por qué importa — no una frase genérica, sino los datos reales que trae el extracto. Basado ÚNICAMENTE en el título y el extracto dados (no inventes nada que no esté ahí; si el extracto es corto, saca todo el jugo posible sin inventar). Si la noticia trae unas "Instrucciones" propias, dales prioridad a esos aspectos en el resumen. Responde SOLO con un JSON array en el MISMO ORDEN, cada elemento: {"summary": "…"}.\n\n${items.map((it, i) => `${i + 1}. Título: ${it.title}\nExtracto: ${it.summary}${it.instructions ? `\nInstrucciones para este tema: ${it.instructions}` : ''}`).join('\n\n')}`
   try {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
       method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },

@@ -3,7 +3,7 @@
  * específico: un juego, una empresa, un país…). `feedUrl` es un RSS directo de un medio (para lo
  * general/amplio del tema). Se guardan en Supabase (news_config) para poder agregar/quitar desde
  * el Panel sin tocar código; si la tabla no existe o está vacía, se usa esta lista por defecto. */
-export type NewsTrack = { topic: string; label: string; query?: string; feedUrl?: string }
+export type NewsTrack = { topic: string; label: string; query?: string; feedUrl?: string; instructions?: string }
 
 export const DEFAULT_TRACKS: NewsTrack[] = [
   // Videojuegos
