@@ -246,6 +246,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [orderSeq, setOrderSeq] = useState<string[]>([])                // keys en el orden tocado (1,2,3…) mientras dura el modo
   const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el selector de tiempo (chip ⏱) abierto
   const [waitEditKey, setWaitEditKey] = useState<string | null>(null)   // fila con el selector de "en espera / qué esperas" abierto
+  const [featureEditKey, setFeatureEditKey] = useState<string | null>(null)   // fila con el selector de Feature abierto (cambiarlo sin abrir la tarea)
   const [waitSince, setWaitSince] = useState<Record<string, string>>({}) // taskId → fecha en que se marcó "en espera" (para "llevas N días esperando")
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [editingComment, setEditingComment] = useState<{ at: string; text: string } | null>(null)  // comentario en edición (at = su id) + borrador
@@ -2739,14 +2740,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </select>
         <div {...clickable(() => setTaskView({ eId: featured.id, tid: t.id! }), `Ver tarea: ${t.t}`)} title="Ver tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
-          {t.featureId && (() => {
-            const feat = (featured.features || []).find(f => f.id === t.featureId)
-            return feat ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}>
-                <span style={{ height: 6, width: 6, borderRadius: 99, background: feat.color || '#5B6B86', flexShrink: 0 }} />{feat.t}
-              </span>
-            ) : null
-          })()}
+          {(featured.features || []).length > 0 && <div style={{ marginTop: 3 }}>{rowFeatureChip('row:' + t.id, featured, t._i, t)}</div>}
           {(subs.length > 0 || typeof t.progress === 'number') && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
               {subs.length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: subsDone === subs.length ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {subsDone}/{subs.length} · {Math.round((subsDone / subs.length) * 100)}%</span>}
@@ -3039,6 +3033,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {waiting && <button onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, null); setWaitEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>}
             {waiting && <button onClick={ev => { ev.stopPropagation(); followUpWaiting(e, i) }} title="Ya llevas mucho esperando: tráela a hoy para moverte (mandar recordatorio, insistir…)" style={{ flexBasis: '100%', cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: '1px solid rgba(168,122,44,0.5)', background: 'rgba(194,147,58,0.12)', color: '#8a5a1a' }}>📌 Dar seguimiento · traer a hoy</button>}
             {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+          </div>
+        )}
+      </span>
+    )
+  }
+
+  /** Cambiar el Feature de una tarea SIN abrir el editor — mismo patrón que rowWaitChip
+   *  (chip que abre un popover al tocarlo). Sólo tiene sentido si la épica ya tiene Features. */
+  const rowFeatureChip = (key: string, e: Epica, i: number, t: EpicaTask, align: 'left' | 'right' = 'left') => {
+    if (!(e.features || []).length) return null
+    const feat = (e.features || []).find(f => f.id === t.featureId)
+    const fc = feat?.color || '#5B6B86'
+    const open = featureEditKey === key
+    return (
+      <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }} onClick={ev => ev.stopPropagation()}>
+        <button onClick={ev => { ev.stopPropagation(); setFeatureEditKey(open ? null : key) }} onPointerDown={ev => ev.stopPropagation()}
+          title={feat ? `Feature: ${feat.t} · toca para cambiar o quitar` : 'Sin Feature · toca para asignar'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '800 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 9px',
+            border: feat ? `1px solid ${hexA(fc, 0.6)}` : '1px dashed rgba(15,35,64,0.3)',
+            background: open ? hexA(fc, feat ? 0.22 : 0.1) : feat ? hexA(fc, 0.14) : 'rgba(15,35,64,0.03)', color: feat ? fc : 'rgba(20,35,61,0.55)' }}>
+          {feat ? <><span style={{ width: 6, height: 6, borderRadius: 99, background: fc, flexShrink: 0 }} />{feat.t}</> : '+ feature'}
+        </button>
+        {open && (
+          <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 5px)', ...(align === 'right' ? { right: 0 } : { left: 0 }), zIndex: 40, display: 'flex', flexWrap: 'wrap', gap: 5, width: 200, padding: 9, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
+            <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>Feature</span>
+            {(e.features || []).map(f => { const sel = t.featureId === f.id; const c = f.color || '#5B6B86'; return (
+              <button key={f.id} onClick={ev => { ev.stopPropagation(); setTaskFeature(e, i, sel ? null : f.id); setFeatureEditKey(null) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? c : '#fff', color: sel ? '#fff' : '#16365F' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: sel ? '#fff' : c, flexShrink: 0 }} />{f.t}</button>
+            )})}
+            {feat && <button onClick={ev => { ev.stopPropagation(); setTaskFeature(e, i, null); setFeatureEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Quitar Feature</button>}
+            {!featuresReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-12-features.sql para guardarlo.</span>}
           </div>
         )}
       </span>
@@ -7743,9 +7767,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               )}
 
-              {(featured.features || []).length > 0 && (
+              {(featureOptions.length > 0 || hasSinFeature) && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 9, marginBottom: 18 }}>
-                  {(featured.features || []).map(f => {
+                  {/* Sólo Features con tareas bajo el chip de estado activo (cascada, igual que el filtro de abajo) */}
+                  {featureOptions.map(f => {
                     const featTasks = featured.tasks.filter(t => t.featureId === f.id)
                     const featEpica = { ...featured, tasks: featTasks }
                     const doneN = featTasks.filter(t => t.status === 'Terminada').length
@@ -7770,6 +7795,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       </button>
                     )
                   })}
+                  {/* "Sin feature": para llegar de un toque a las tareas de esta épica sin agrupar */}
+                  {hasSinFeature && (() => {
+                    const sinTasks = featured.tasks.filter(t => t.status !== ARCHIVED && !t.featureId)
+                    const doneN = sinTasks.filter(t => t.status === 'Terminada').length
+                    const on = epicFeatureFilter === 'sin'
+                    return (
+                      <button type="button" onClick={() => setEpicFeatureFilter(on ? 'todas' : 'sin')} title="Filtrar las tareas de abajo sin Feature asignado"
+                        style={{ textAlign: 'left', cursor: 'pointer', borderRadius: 12, padding: '10px 12px', background: on ? 'rgba(15,35,64,0.08)' : 'rgba(15,35,64,0.02)', border: on ? '1.5px solid rgba(15,35,64,0.35)' : '1px dashed rgba(15,35,64,0.2)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                          <span style={{ height: 8, width: 8, borderRadius: 99, border: '1.5px solid rgba(20,35,61,0.35)', flexShrink: 0 }} />
+                          <span style={{ font: '700 11.5px var(--font-ui)', color: 'rgba(20,35,61,0.6)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Sin feature</span>
+                        </div>
+                        <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{doneN}/{sinTasks.length} {sinTasks.length === 1 ? 'tarea' : 'tareas'}</span>
+                      </button>
+                    )
+                  })()}
                 </div>
               )}
 
