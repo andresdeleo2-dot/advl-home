@@ -667,7 +667,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const lastFocus = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!anyModal) {
-      lastFocus.current?.focus?.()
+      lastFocus.current?.focus?.({ preventScroll: true })
       lastFocus.current = null
       return
     }
@@ -677,14 +677,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const focusables = () => Array.from(panel.querySelectorAll<HTMLElement>(
       'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
     )).filter(el => el.offsetParent !== null)
-    focusables()[0]?.focus()
+    // preventScroll: sin esto, .focus() hace que el navegador salte al elemento — dentro del
+    // editor de Épica eso es el input "Nombre" hasta arriba, así que cualquier cosa que dispare
+    // este efecto de nuevo (con el modal ya abierto y desplazado) te mandaba de vuelta al inicio.
+    focusables()[0]?.focus({ preventScroll: true })
     const onTab = (ev: KeyboardEvent) => {
       if (ev.key !== 'Tab') return
       const f = focusables()
       if (!f.length) return
       const first = f[0], last = f[f.length - 1]
-      if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus() }
-      else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus() }
+      if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus({ preventScroll: true }) }
+      else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus({ preventScroll: true }) }
     }
     panel.addEventListener('keydown', onTab)
     return () => panel.removeEventListener('keydown', onTab)
