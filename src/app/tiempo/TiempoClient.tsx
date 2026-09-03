@@ -9,7 +9,7 @@ import {
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
 } from '@/lib/tiempo'
-import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink } from '@/lib/supabase'
+import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink, EpicaFeature } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring } from '@/components/epicas/core'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta as waitMetaT } from '@/lib/waiting'
@@ -127,7 +127,7 @@ export default function TiempoClient() {
   const [planDay, setPlanDay] = useState(iso(new Date()))              // día que se planifica en el Planificador
   const [chainDrag, setChainDrag] = useState(true)                     // al mover un bloque, recorrer los siguientes (arrastre en cadena)
   const [planSel, setPlanSel] = useState<Set<string>>(new Set())       // bloques elegidos: al mover en cadena SOLO estos se recorren (vacío = todos los siguientes)
-  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[]>([])
+  const [epicasList, setEpicasList] = useState<{ id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[]; features: EpicaFeature[] }[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selTaskId, setSelTaskId] = useState<string | null>(null)
   const [waitPickId, setWaitPickId] = useState<string | null>(null)   // fila "en espera" con el selector de "qué esperas" abierto
@@ -289,15 +289,16 @@ export default function TiempoClient() {
   const [comentariosReady, setComentariosReady] = useState(true)
   const estMinReadyRef = useRef(true)   // true si la columna est_min existe (para escribir tu estimado desde aquí)
   const waitingReadyRef = useRef(true)  // true si la columna waiting_for existe (para guardar "qué esperas")
+  const featuresReadyRef = useRef(true) // true si epicas.features + tareas.feature_id existen (Features)
   const refreshTasks = useCallback(() => {
     setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
-      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady); estMinReadyRef.current = !!j.estMinReady; waitingReadyRef.current = !!j.waitingReady
+      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady); estMinReadyRef.current = !!j.estMinReady; waitingReadyRef.current = !!j.waitingReady; featuresReadyRef.current = !!j.featuresReady
       const out: TodayTask[] = []
-      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[] }[] = []
+      const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[]; features: EpicaFeature[] }[] = []
       for (const e of j.data as Epica[]) {
-        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [], links: e.links || [] })
+        if (!e.archived) epList.push({ id: e.id, name: e.name, color: e.color || '#b4653a', kpis: e.kpis || [], routines: e.routines || [], links: e.links || [], features: e.features || [] })
         // Guardamos TODAS (incl. Terminadas) para poder reabrir sin perder datos; la lista
         // del día ya las oculta por estado (useMemo `tasks`).
         for (const t of e.tasks || []) {
@@ -1454,6 +1455,21 @@ export default function TiempoClient() {
     })
     setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, kpis } : e))
     fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kpis }) }).catch(() => {})
+  }
+  // Igual que linkObjetivo, pero para un objetivo DEL FEATURE al que pertenece la tarea (no de la épica).
+  const linkFeatureObjetivo = (epicaId: string, featureId: string, taskId: string, milestoneId: string | null) => {
+    const ep = epicasList.find(e => e.id === epicaId); if (!ep) return
+    const features = (ep.features || []).map(f => {
+      if (f.id !== featureId) return f
+      const kpis = (f.kpis || []).map(k => {
+        const ids = (k.taskIds || []).filter(id => id !== taskId)
+        if (k.id === milestoneId) ids.push(taskId)
+        return { ...k, taskIds: ids }
+      })
+      return { ...f, kpis }
+    })
+    setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, features } : e))
+    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ features }) }).catch(() => {})
   }
   // Rutinas diarias: marcar hecha el día visible (weeks[lunes][idx]) y persistir a la épica.
   const markRoutineDone = (epicaId: string, rIdx: number) => {
@@ -3171,7 +3187,7 @@ export default function TiempoClient() {
           </div>
         )
       })()}
-      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} featuresReady={featuresReadyRef.current} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onLinkFeatureObjetivo={linkFeatureObjetivo} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onPause={applyPauseToHist} onClearPause={clearHistPause} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -5178,18 +5194,20 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, waitingReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onClose }: {
+function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, waitingReady, featuresReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onLinkFeatureObjetivo, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
-  epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[] }[]
+  epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[]; features?: EpicaFeature[] }[]
   resumenReady: boolean
   remindReady: boolean
   comentariosReady: boolean
   waitingReady: boolean
+  featuresReady: boolean
   nextPlanOrder: (day: string) => number
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
   onLinkObjetivo: (epicaId: string, taskId: string, milestoneId: string | null) => void
+  onLinkFeatureObjetivo: (epicaId: string, featureId: string, taskId: string, milestoneId: string | null) => void
   onClose: () => void
 }) {
   const creating = !!info.creating
@@ -5220,6 +5238,10 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const box = (on: boolean, c: string, bg: string): CSSProperties => ({ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '9px 6px', borderRadius: 10, cursor: 'pointer', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${c}` : '1px solid rgba(15,35,64,0.14)', background: on ? bg : '#fff', color: on ? c : 'rgba(20,35,61,0.55)' })
   const objetivos = (epicas.find(e => e.id === epId)?.kpis) || []
   const linkedId = objetivos.find(k => (k.taskIds || []).includes(t.id!))?.id || ''
+  const features = (epicas.find(e => e.id === epId)?.features) || []
+  const feat = features.find(f => f.id === t.featureId)
+  const featKpis = feat?.kpis || []
+  const linkedFeatureObjId = featKpis.find(k => (k.taskIds || []).includes(t.id!))?.id || ''
   const addSubQuick = () => { const v = newSub.trim(); if (!v) return; setT(p => ({ ...p, subtasks: [...(p.subtasks || []), { id: uid(), t: v, done: false }] })); setNewSub('') }
   const setLog = (fn: (a: EpicaProgressEntry[]) => EpicaProgressEntry[]) => setT(p => ({ ...p, progressLog: fn(p.progressLog || []) }))
   // La nota "⏱ Xh Ym trabajado" la pone Tiempo automáticamente; para editar la nota real la tratamos
@@ -5342,6 +5364,18 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
               {!waitingReady && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-11-waiting-for.sql para guardar qué esperas.</span>}
             </div>
           )}
+
+          {features.length > 0 && (<><NLbl>Feature</NLbl>
+            <select value={t.featureId || ''} onChange={e => { if (featuresReady) setT(p => ({ ...p, featureId: e.target.value || undefined })) }} style={{ ...nf, width: '100%', fontWeight: 600, color: t.featureId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>
+              <option value="">— Ninguno —</option>
+              {features.map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+            </select></>)}
+
+          {feat && featKpis.length > 0 && (<><NLbl>Contribuye a (del feature)</NLbl>
+            <select value={linkedFeatureObjId} onChange={e => onLinkFeatureObjetivo(epId, feat.id, t.id!, e.target.value || null)} style={{ ...nf, width: '100%', fontWeight: 600, color: linkedFeatureObjId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>
+              <option value="">— Ningún objetivo —</option>
+              {featKpis.map(o => <option key={o.id} value={o.id}>{o.t}</option>)}
+            </select></>)}
 
           {objetivos.length > 0 && (<><NLbl>Contribuye a</NLbl>
             <select value={linkedId} onChange={e => onLinkObjetivo(epId, t.id!, e.target.value || null)} style={{ ...nf, width: '100%', fontWeight: 600, color: linkedId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>

@@ -48,6 +48,7 @@ export type EpicaRoutine = {
   weeks?: Record<string, boolean[]>      // progreso por semana: lunesISO -> 7 booleanos (L…D)
   estMin?: number                        // estimado de minutos que le dedicas al día (opcional; se guarda en el jsonb de rutinas, sin migración)
 }
+export type EpicaFeature = { id: string; t: string; color?: string; kpis?: EpicaMilestone[] }
 export type EpicaTaskLink = { label: string; url: string }
 export type EpicaSubtask = {
   id?: string            // identidad estable (para reordenar sin que se recorran los índices)
@@ -95,6 +96,7 @@ export type EpicaTask = {
   remindAt?: string                    // ISO datetime: recordatorio (con la app abierta dispara notificación y se limpia)
   comentarios?: EpicaTaskComment[]     // comentarios rápidos (sin abrir el editor)
   waitingFor?: string                  // "En espera / Por revisar": qué esperas ('email'|'respuesta'|'comentario'|'otro' o texto). Vacío/ausente = no está en espera
+  featureId?: string                   // Feature al que pertenece dentro de su épica (opcional: puede no tener)
   repeat?: EpicaRepeat                 // si existe, al completarla se reprograma en vez de terminarse
   repeatUntil?: string                 // 'YYYY-MM-DD' opcional: fin de la serie
   repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)
@@ -118,5 +120,6 @@ export type Epica = {
   routines: EpicaRoutine[]
   tasks: EpicaTask[]
   links: EpicaLink[]
+  features?: EpicaFeature[]   // Features dentro de la épica (Épica → Feature → Tarea). Requiere sql/epicas-12-features.sql
   week_budget?: number | null   // meta de horas/semana (presupuesto de tiempo). Requiere sql/epicas-08-week-budget.sql
 }

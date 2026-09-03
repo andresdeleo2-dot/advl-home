@@ -9,7 +9,7 @@ import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
 import BreakButton from '@/components/BreakButton'
 import Link from 'next/link'
-import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan } from '@/lib/supabase'
+import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan, EpicaFeature } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
 import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
@@ -100,6 +100,9 @@ import {
   weekendISO,
 } from './epicas/core'
 
+// Paleta para el color auto-asignado de un Feature nuevo (misma paleta que las épicas semilla).
+const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '#B07A56']
+
 export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[] }) {
   const [epics, setEpics] = useState<Epica[]>(initialEpics.map(normalize))
   const [loading, setLoading] = useState(false)
@@ -143,6 +146,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'>('todas')
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
+  const [epicFeatureFilter, setEpicFeatureFilter] = useState<string>('todas')  // filtro por Feature dentro de la épica
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
@@ -227,6 +231,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const epicListRef = useRef<HTMLDivElement>(null)
   const [editInline, setEditInline] = useState(false)              // editar la épica dentro del panel, no en modal
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
+  const [featOpenId, setFeatOpenId] = useState<string | null>(null)  // qué Feature está expandido en el editor de épica (acordeón)
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
   const [subSort, setSubSort] = useState<'manual' | 'prioridad' | 'dificultad' | 'dia'>('manual') // orden de subtareas
@@ -275,6 +280,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const dayPlansReady = useRef(false)    // true si la columna day_plans existe (sesiones por día)
   const waitingReady = useRef(false)     // true si la columna waiting_for existe ("qué esperas" de las tareas en espera)
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
+  const featuresReady = useRef(false)    // true si epicas.features + tareas.feature_id existen (Features dentro de la épica)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
@@ -306,6 +312,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       dayPlansReady.current = !!j.dayPlansReady
       waitingReady.current = !!j.waitingReady
       weekBudgetReady.current = !!j.weekBudgetReady
+      featuresReady.current = !!j.featuresReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -2197,6 +2204,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     patchEpic(e.id, { kpis: kpis.map(m => (m.taskIds?.length ? m : { ...m, taskIds: undefined })) })
   }
+  /** Liga (o quita) una tarea a un Feature de su propia épica. A diferencia de los objetivos,
+   *  el vínculo vive en la TAREA (featureId): una tarea pertenece a lo más a un Feature. */
+  const setTaskFeature = (e: Epica, ti: number, featureId: string | null) => {
+    const tasks = clone(e.tasks)
+    const t = tasks[ti]; if (!t) return
+    if (featureId) { if (featuresReady.current) t.featureId = featureId }
+    else if (featuresReady.current || 'featureId' in t) t.featureId = ''   // '' → se manda null y limpia la columna
+    patchEpic(e.id, { tasks })
+    if (featureId && !featuresReady.current) showToast('Corre sql/epicas-12-features.sql para guardar el Feature', true)
+  }
+  /** Liga (o desliga) una tarea a un objetivo DEL FEATURE al que pertenece (no de la épica). */
+  const setTaskFeatureMilestone = (e: Epica, featureId: string, taskId: string, milestoneId: string | null) => {
+    const features = clone(e.features || [])
+    const fi = features.findIndex(f => f.id === featureId); if (fi < 0) return
+    const kpis = (features[fi].kpis || []).map(m => ({ ...m, taskIds: (m.taskIds || []).filter(id => id !== taskId) }))
+    if (milestoneId) {
+      const m = kpis.find(x => x.id === milestoneId)
+      if (m) m.taskIds = [...(m.taskIds || []), taskId]
+    }
+    features[fi] = { ...features[fi], kpis: kpis.map(m => (m.taskIds?.length ? m : { ...m, taskIds: undefined })) }
+    patchEpic(e.id, { features })
+  }
 
   const toggleArchive = (e: Epica) => {
     patchEpic(e.id, { archived: !e.archived })
@@ -2324,6 +2353,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Prioridad, dificultad y día del plan editados desde el modal
     if (taskDraft.priority) t.priority = taskDraft.priority; else delete t.priority
     if (taskDraft.difficulty) t.difficulty = taskDraft.difficulty; else delete t.difficulty
+    // Feature: igual que waitingFor, '' (no delete) para que si lo quitas SÍ se limpie la columna.
+    if (featuresReady.current) t.featureId = taskDraft.featureId || ''
+    else if ('featureId' in t) t.featureId = ''
     const newPlan = (taskDraft.plan || '').trim()
     if (newPlan) {
       if (orig.plan !== newPlan || t.planOrder == null) t.planOrder = maxPlanOrderFor(newPlan) + 1000  // al final de ese día
@@ -2359,6 +2391,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Épica destino: puede diferir de la de origen si la cambiaste en el editor.
     const target = epics.find(x => x.id === taskEditTarget) || e
     const moved = curIdx != null && target.id !== e.id
+    // Si se movió de épica, el Feature (si tenía) es de la ÉPICA VIEJA — no existe en la nueva.
+    if (moved && t.featureId && !(target.features || []).some(f => f.id === t.featureId)) t.featureId = ''
 
     if (curIdx == null) {
       const tasks = clone(target.tasks); tasks.push(t)
@@ -2558,10 +2592,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicObjFilter === 'sin') return !objOfTask(t.id)
     return (featured.kpis.find(m => m.id === epicObjFilter)?.taskIds || []).includes(t.id || '')
   }
-  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && inScope(t)
+  const passEpicFeature = (t: (typeof indexed)[number]) => {
+    if (epicFeatureFilter === 'todas') return true
+    if (epicFeatureFilter === 'sin') return !t.featureId
+    return t.featureId === epicFeatureFilter
+  }
+  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && passEpicFeature(t) && inScope(t)
   // Objetivos que aún tienen tareas bajo el filtro de chip activo (cascada)
   const objOptions = featured.kpis.filter(m => indexed.some(t => t.status !== ARCHIVED && (m.taskIds || []).includes(t.id || '') && passEpicChip(t)))
   const hasSinObj = indexed.some(t => t.status !== ARCHIVED && !objOfTask(t.id) && passEpicChip(t))
+  // Features que aún tienen tareas bajo el filtro de chip activo (cascada)
+  const featureOptions = (featured.features || []).filter(f => indexed.some(t => t.status !== ARCHIVED && t.featureId === f.id && passEpicChip(t)))
+  const hasSinFeature = indexed.some(t => t.status !== ARCHIVED && !t.featureId && passEpicChip(t))
   const filteredGroups = taskGroups.map(g => ({ ...g, items: g.items.filter(passEpicFilter) })).filter(g => g.items.length > 0)
   const filteredActive = indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && passEpicFilter(t))
   const epicSortCmp = (a: (typeof indexed)[number], b: (typeof indexed)[number]) => {
@@ -2622,6 +2664,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </select>
         <div {...clickable(() => setTaskView({ eId: featured.id, tid: t.id! }), `Ver tarea: ${t.t}`)} title="Ver tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
+          {t.featureId && (() => {
+            const feat = (featured.features || []).find(f => f.id === t.featureId)
+            return feat ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}>
+                <span style={{ height: 6, width: 6, borderRadius: 99, background: feat.color || '#5B6B86', flexShrink: 0 }} />{feat.t}
+              </span>
+            ) : null
+          })()}
           {(subs.length > 0 || typeof t.progress === 'number') && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
               {subs.length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: subsDone === subs.length ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {subsDone}/{subs.length} · {Math.round((subsDone / subs.length) * 100)}%</span>}
@@ -6165,6 +6215,57 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!editing) return null
     const d = editing
     const isEdit = editMode === 'edit'
+    // Formulario de un KPI/objetivo (actual/inicio/meta/unidad/fecha/auto/cumplido). Reusado tanto
+    // por los Objetivos de la Épica como por los de cada Feature — mismo tipo, un solo formulario.
+    const renderKpisEditor = (kpis: EpicaMilestone[], onChange: (next: EpicaMilestone[]) => void) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+        {kpis.map((k, i) => {
+          const set = (patch: Partial<EpicaMilestone>) => onChange(kpis.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+          const num = (v: string) => (v.trim() === '' ? undefined : Number(v))
+          return (
+            <div key={k.id || i} style={{ border: '1px solid rgba(15,35,64,0.10)', borderRadius: 11, padding: '10px 11px', background: '#fff' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input value={k.t} onChange={e => set({ t: e.target.value })} placeholder="Llegar a 80 kg" style={inpSmall} />
+                <button aria-label="Eliminar objetivo" onClick={() => onChange(kpis.filter((_, j) => j !== i))} style={delBtn}>✕</button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
+                  Actual
+                  <input type="number" value={k.auto ? '' : (k.current ?? '')} disabled={!!k.auto} onChange={e => set({ current: num(e.target.value) })}
+                    placeholder={k.auto ? 'auto' : '85'} style={{ ...inpNarrow, flex: '0 0 70px', width: 70, opacity: k.auto ? .5 : 1 }} />
+                </label>
+                {k.lowerIsBetter && !k.auto && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }} title="Valor de partida: desde dónde empezaste (para medir el avance)">
+                    Inicio
+                    <input type="number" value={k.start ?? ''} onChange={e => set({ start: num(e.target.value) })} placeholder="85" style={{ ...inpNarrow, flex: '0 0 66px', width: 66 }} />
+                  </label>
+                )}
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
+                  Meta
+                  <input type="number" value={k.target ?? ''} onChange={e => set({ target: num(e.target.value) })} placeholder="80" style={{ ...inpNarrow, flex: '0 0 70px', width: 70 }} />
+                </label>
+                <input value={k.unit || ''} onChange={e => set({ unit: e.target.value || undefined })} placeholder="kg" style={{ ...inpNarrow, flex: '0 0 62px', width: 62 }} />
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
+                  Para
+                  <input type="date" value={k.due || ''} onChange={e => set({ due: e.target.value || undefined })} style={dateInp} />
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="El avance se calcula con las tareas cerradas">
+                  <input type="checkbox" checked={k.auto === 'tareas'} onChange={e => set({ auto: e.target.checked ? 'tareas' : undefined })} /> Medir con tareas cerradas
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Para metas que bajan: peso, deuda, gastos…">
+                  <input type="checkbox" checked={!!k.lowerIsBetter} onChange={e => set({ lowerIsBetter: e.target.checked || undefined, ...(e.target.checked && k.start == null && k.current != null ? { start: k.current } : {}) })} /> Menos es mejor
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: '#2E6E6E', cursor: 'pointer', fontWeight: 600 }}>
+                  <input type="checkbox" checked={!!k.done} onChange={e => set({ done: e.target.checked || undefined, doneAt: e.target.checked ? todayISO() : undefined })} /> Cumplido
+                </label>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
     // OJO: nada de definir un componente aquí adentro. Antes envolvíamos en un
     // <Shell> declarado en el render y su identidad cambiaba en cada tecla, así
     // que React remontaba TODO el editor y el input perdía el foco (se "trababa").
@@ -6229,53 +6330,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => patchDraft(x => ({ ...x, kpis: [...x.kpis, { id: uid(), t: '' }] }))} style={addBtn}>+ Objetivo</button>
               </div>
               <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 6 }}>Qué quieres lograr y cómo se mide. Se resalta solo al alcanzar la meta.</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-                {d.kpis.map((k, i) => {
-                  const set = (patch: Partial<EpicaMilestone>) => patchDraft(x => { x.kpis[i] = { ...x.kpis[i], ...patch }; return x })
-                  const num = (v: string) => (v.trim() === '' ? undefined : Number(v))
-                  return (
-                    <div key={k.id || i} style={{ border: '1px solid rgba(15,35,64,0.10)', borderRadius: 11, padding: '10px 11px', background: '#fff' }}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <input value={k.t} onChange={e => set({ t: e.target.value })} placeholder="Llegar a 80 kg" style={inpSmall} />
-                        <button aria-label="Eliminar objetivo" onClick={() => patchDraft(x => ({ ...x, kpis: x.kpis.filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
-                          Actual
-                          <input type="number" value={k.auto ? '' : (k.current ?? '')} disabled={!!k.auto} onChange={e => set({ current: num(e.target.value) })}
-                            placeholder={k.auto ? 'auto' : '85'} style={{ ...inpNarrow, flex: '0 0 70px', width: 70, opacity: k.auto ? .5 : 1 }} />
-                        </label>
-                        {k.lowerIsBetter && !k.auto && (
-                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }} title="Valor de partida: desde dónde empezaste (para medir el avance)">
-                            Inicio
-                            <input type="number" value={k.start ?? ''} onChange={e => set({ start: num(e.target.value) })} placeholder="85" style={{ ...inpNarrow, flex: '0 0 66px', width: 66 }} />
-                          </label>
-                        )}
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
-                          Meta
-                          <input type="number" value={k.target ?? ''} onChange={e => set({ target: num(e.target.value) })} placeholder="80" style={{ ...inpNarrow, flex: '0 0 70px', width: 70 }} />
-                        </label>
-                        <input value={k.unit || ''} onChange={e => set({ unit: e.target.value || undefined })} placeholder="kg" style={{ ...inpNarrow, flex: '0 0 62px', width: 62 }} />
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>
-                          Para
-                          <input type="date" value={k.due || ''} onChange={e => set({ due: e.target.value || undefined })} style={dateInp} />
-                        </label>
-                      </div>
-                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="El avance se calcula con las tareas cerradas de esta épica">
-                          <input type="checkbox" checked={k.auto === 'tareas'} onChange={e => set({ auto: e.target.checked ? 'tareas' : undefined })} /> Medir con tareas cerradas
-                        </label>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.6)', cursor: 'pointer' }} title="Para metas que bajan: peso, deuda, gastos…">
-                          <input type="checkbox" checked={!!k.lowerIsBetter} onChange={e => set({ lowerIsBetter: e.target.checked || undefined, ...(e.target.checked && k.start == null && k.current != null ? { start: k.current } : {}) })} /> Menos es mejor
-                        </label>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: '#2E6E6E', cursor: 'pointer', fontWeight: 600 }}>
-                          <input type="checkbox" checked={!!k.done} onChange={e => set({ done: e.target.checked || undefined, doneAt: e.target.checked ? todayISO() : undefined })} /> Cumplido
-                        </label>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+              {renderKpisEditor(d.kpis, next => patchDraft(x => ({ ...x, kpis: next })))}
             </div>
 
             {/* Rutinas */}
@@ -6293,6 +6348,59 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <button aria-label="Eliminar rutina" onClick={() => patchDraft(x => ({ ...x, routines: x.routines.filter((_, j) => j !== i) }))} style={delBtn}>✕</button>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* Features (Épica → Feature → Tarea): agrupan tareas grandes; cada uno puede tener sus propios objetivos */}
+            <div style={cardEd}>
+              <div style={secHead}>
+                <div><label style={{ ...lbl, marginTop: 0 }}>Features</label><div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: 3 }}>Agrupa tareas grandes dentro de esta épica. Cada uno puede tener sus propios objetivos.</div></div>
+                <button onClick={() => {
+                  const next: EpicaFeature = { id: uid(), t: '', color: FEATURE_COLORS[(d.features || []).length % FEATURE_COLORS.length] }
+                  patchDraft(x => ({ ...x, features: [...(x.features || []), next] }))
+                  setFeatOpenId(next.id)
+                }} style={addBtn}>+ Feature</button>
+              </div>
+              {!featuresReady.current && <div style={{ fontSize: 10.5, color: 'rgba(176,82,46,0.9)', marginTop: 6 }}>Corre sql/epicas-12-features.sql en Supabase para guardar Features.</div>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                {(d.features || []).length === 0 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>Sin Features aún.</div>}
+                {(d.features || []).map((f, fi) => {
+                  const open = featOpenId === f.id
+                  const taskN = d.tasks.filter(t => t.featureId === f.id).length
+                  const kpiN = (f.kpis || []).length
+                  const setFeat = (patch: Partial<EpicaFeature>) => patchDraft(x => ({ ...x, features: (x.features || []).map((y, j) => (j === fi ? { ...y, ...patch } : y)) }))
+                  return (
+                    <div key={f.id} style={{ border: '1px solid rgba(15,35,64,0.10)', borderRadius: 11, background: '#fff', overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '9px 10px' }}>
+                        <span style={{ flexShrink: 0, height: 10, width: 10, borderRadius: 99, background: f.color || '#5B6B86' }} />
+                        <input value={f.t} onChange={e => setFeat({ t: e.target.value })} placeholder="Nombre del feature" style={inpSmall} />
+                        <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>{taskN} {taskN === 1 ? 'tarea' : 'tareas'} · {kpiN} KPIs</span>
+                        <button onClick={() => setFeatOpenId(open ? null : f.id)} aria-expanded={open} title={open ? 'Ocultar objetivos' : 'Ver/editar objetivos'} style={{ flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 8, height: 28, width: 28, color: 'rgba(20,35,61,0.5)' }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}><path d="m6 9 6 6 6-6" /></svg>
+                        </button>
+                        <button aria-label="Eliminar feature" title="Las tareas que tenía quedan sin Feature (no se borran)" onClick={() => {
+                          patchDraft(x => ({
+                            ...x,
+                            features: (x.features || []).filter((_, j) => j !== fi),
+                            tasks: x.tasks.map(t => (t.featureId === f.id ? { ...t, featureId: '' } : t)),
+                          }))
+                          if (open) setFeatOpenId(null)
+                        }} style={delBtn}>✕</button>
+                      </div>
+                      {open && (
+                        <div style={{ padding: '2px 10px 12px', borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                            <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)' }}>Objetivos del feature</span>
+                            <button onClick={() => setFeat({ kpis: [...(f.kpis || []), { id: uid(), t: '' }] })} style={addBtn}>+ Objetivo</button>
+                          </div>
+                          {(f.kpis || []).length === 0
+                            ? <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)', marginTop: 6 }}>Sin objetivos aún.</div>
+                            : renderKpisEditor(f.kpis || [], next => setFeat({ kpis: next }))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -6518,6 +6626,53 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   )}
                 </div>
+
+                {/* Feature al que pertenece dentro de esta épica */}
+                {(ep.features || []).length > 0 && (() => {
+                  const feat = (ep.features || []).find(f => f.id === t.featureId)
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={eb}>Feature</div>
+                      <select value={t.featureId || ''} onChange={ev => setTaskFeature(ep, i, ev.target.value || null)}
+                        style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: feat ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                        <option value="">— Ninguno —</option>
+                        {ep.features!.map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+                      </select>
+                      {!featuresReady.current && <div style={{ fontSize: 9.5, color: 'rgba(176,82,46,0.9)', marginTop: 4 }}>Corre sql/epicas-12-features.sql para guardar el Feature.</div>}
+                    </div>
+                  )
+                })()}
+
+                {/* Objetivo DEL FEATURE al que contribuye (si la tarea pertenece a uno con sus propios KPIs) */}
+                {(() => {
+                  const feat = (ep.features || []).find(f => f.id === t.featureId)
+                  if (!feat || !(feat.kpis || []).length) return null
+                  const actualF = (feat.kpis || []).find(m => (m.taskIds || []).includes(t.id || ''))
+                  const featEpica = { ...ep, tasks: ep.tasks.filter(x => x.featureId === feat.id) }
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={eb}>Contribuye a (del feature)</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <select value={actualF?.id || ''} onChange={ev => setTaskFeatureMilestone(ep, feat.id, t.id!, ev.target.value || null)}
+                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: actualF ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                          <option value="">— Ningún objetivo —</option>
+                          {feat.kpis!.map(m => <option key={m.id} value={m.id}>{m.t}</option>)}
+                        </select>
+                        {actualF && (() => {
+                          const mp = milestoneProgress(actualF, featEpica); const hecho = milestoneDone(actualF, featEpica)
+                          return mp.hasMeta ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: hecho ? '#2E6E6E' : '#A87A2C' }}>
+                              <span style={{ width: 54, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden', display: 'inline-block' }}>
+                                <span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : (feat.color || ep.color) }} />
+                              </span>
+                              {mp.cur}/{mp.target}{hecho ? ' ✦' : ''}
+                            </span>
+                          ) : null
+                        })()}
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Objetivo al que contribuye */}
                 {(ep.kpis || []).length > 0 && (() => {
@@ -7462,6 +7617,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               )}
 
+              {(featured.features || []).length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 9, marginBottom: 18 }}>
+                  {(featured.features || []).map(f => {
+                    const featTasks = featured.tasks.filter(t => t.featureId === f.id)
+                    const featEpica = { ...featured, tasks: featTasks }
+                    const doneN = featTasks.filter(t => t.status === 'Terminada').length
+                    const measurable = (f.kpis || []).find(k => milestoneProgress(k, featEpica).hasMeta)
+                    const mp = measurable ? milestoneProgress(measurable, featEpica) : null
+                    const hecho = measurable ? milestoneDone(measurable, featEpica) : false
+                    const on = epicFeatureFilter === f.id
+                    const fc = f.color || '#5B6B86'
+                    return (
+                      <button key={f.id} type="button" onClick={() => setEpicFeatureFilter(on ? 'todas' : f.id)} title="Filtrar las tareas de abajo por este Feature"
+                        style={{ textAlign: 'left', cursor: 'pointer', borderRadius: 12, padding: '10px 12px', background: on ? hexA(fc, 0.1) : 'rgba(15,35,64,0.02)', border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.08)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                          <span style={{ height: 8, width: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />
+                          <span style={{ font: '700 11.5px var(--font-ui)', color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
+                        </div>
+                        {mp?.hasMeta && (
+                          <div style={{ height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden', marginBottom: 6 }}>
+                            <div style={{ width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : fc }} />
+                          </div>
+                        )}
+                        <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{doneN}/{featTasks.length} {featTasks.length === 1 ? 'tarea' : 'tareas'}{mp?.hasMeta ? ` · ${Math.round(mp.pct * 100)}%` : ''}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+
               {fStateCounts.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
                   {fStateCounts.map(({ s, n }) => {
@@ -7591,6 +7776,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       <option value="todas">Todo objetivo</option>
                       {objOptions.map(m => <option key={m.id} value={m.id}>🎯 {m.t}</option>)}
                       {hasSinObj && <option value="sin">Sin objetivo</option>}
+                    </select>
+                  )}
+                  {/* Filtro por Feature — mismo patrón cascada que Objetivo */}
+                  {(featureOptions.length > 0 || (epicFeatureFilter !== 'todas')) && (
+                    <select value={featureOptions.some(f => f.id === epicFeatureFilter) || epicFeatureFilter === 'sin' ? epicFeatureFilter : 'todas'} onChange={e => setEpicFeatureFilter(e.target.value)}
+                      title="Filtrar por Feature" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: epicFeatureFilter !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 180 }}>
+                      <option value="todas">Todo feature</option>
+                      {featureOptions.map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+                      {hasSinFeature && <option value="sin">Sin feature</option>}
                     </select>
                   )}
                 </div>
@@ -8351,6 +8545,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     return <button key={dd} onClick={() => setTaskDraft(d => ({ ...d, difficulty: d.difficulty === dd ? undefined : dd }))} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '9px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${dsy.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? dsy.bg : '#fff' }}><DifDots d={dd} /><span style={{ font: '700 10px var(--font-ui)', color: on ? dsy.c : 'rgba(20,35,61,0.5)' }}>{dsy.label}</span></button>
                   })}
                 </div>
+
+                {(target?.features || []).length > 0 && (
+                  <>
+                    <label style={lbl}>Feature</label>
+                    <select value={(target?.features || []).some(f => f.id === taskDraft.featureId) ? taskDraft.featureId : ''} onChange={e => setTaskDraft(d => ({ ...d, featureId: e.target.value || undefined }))}
+                      style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '9px 10px', fontSize: 13, fontWeight: 600, color: taskDraft.featureId ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', width: '100%' }}>
+                      <option value="">— Ninguno —</option>
+                      {(target?.features || []).map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+                    </select>
+                  </>
+                )}
 
                 <label style={lbl}>Fecha de entrega</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

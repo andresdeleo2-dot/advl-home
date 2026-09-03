@@ -11,11 +11,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // escriben por /api/tareas/sync. epicas.tasks queda intacta como respaldo.
     const allowed = [
       'name', 'color', 'description', 'status', 'categoria', 'archived',
-      'source_table', 'source_sync', 'epic_order', 'kpis', 'routines', 'links', 'week_budget',
+      'source_table', 'source_sync', 'epic_order', 'kpis', 'routines', 'links', 'week_budget', 'features',
     ]
     // Estas columnas jsonb DEBEN ser arrays: un valor no-array rompería normalize() (.map) en
     // el cliente y dejaría /epicas con error permanente. Se rechaza el write en ese caso.
-    const arrayCols = ['kpis', 'routines', 'links']
+    const arrayCols = ['kpis', 'routines', 'links', 'features']
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
     for (const key of allowed) {
       if (!(key in body)) continue

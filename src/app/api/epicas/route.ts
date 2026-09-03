@@ -50,16 +50,21 @@ export async function GET() {
     const { error } = await supabase.from('tareas').select(col).limit(1)
     return !error
   }
-  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady] = await Promise.all([
-    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'),
+  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, featureIdReady] = await Promise.all([
+    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'), colReady('feature_id'),
   ])
   // Gate del presupuesto (columna en la tabla EPICAS, no tareas): con épicas basta la primera fila;
   // sin épicas se prueba la columna directo.
   const weekBudgetReady = (data || []).length
     ? ('week_budget' in ((data || [])[0] as object))
     : !(await supabase.from('epicas').select('week_budget').limit(1)).error
+  // Features: dos columnas (epicas.features + tareas.feature_id), un solo SQL → un solo flag.
+  const epicasFeaturesReady = (data || []).length
+    ? ('features' in ((data || [])[0] as object))
+    : !(await supabase.from('epicas').select('features').limit(1)).error
+  const featuresReady = featureIdReady && epicasFeaturesReady
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady, featuresReady })
 }
 
 export async function POST(req: Request) {

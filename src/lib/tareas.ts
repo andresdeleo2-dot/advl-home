@@ -36,6 +36,7 @@ export type TareaRow = {
   comentarios?: unknown[] | null
   waiting_for?: string | null
   updated_at?: string | null
+  feature_id?: string | null
 }
 
 /** Fila → tarea de la UI. Los nulos vuelven a ser `undefined` (o '' donde el
@@ -72,6 +73,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.comentarios?.length) t.comentarios = r.comentarios as EpicaTask['comentarios']
   if (r.waiting_for) t.waitingFor = r.waiting_for
   if (r.updated_at) t.updatedAt = r.updated_at
+  if (r.feature_id) t.featureId = r.feature_id
   return t
 }
 
@@ -105,6 +107,10 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     // Viaja sólo si la tarea tiene la propiedad (permite LIMPIAR con null); el cliente sólo la fija
     // cuando la columna existe (gate waitingReady) → seguro sin migrar.
     ...('waitingFor' in t ? { waiting_for: (t.waitingFor || null) } : {}),
+    // feature_id: a qué Feature de la épica pertenece. Viaja sólo si la tarea tiene la propiedad
+    // (permite LIMPIAR con null); el cliente sólo la fija cuando la columna existe (gate
+    // featuresReady) → seguro sin migrar.
+    ...('featureId' in t ? { feature_id: (t.featureId || null) } : {}),
     id: t.id,
     epica_id: epicaId,
     titulo: t.t || '',

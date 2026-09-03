@@ -171,6 +171,7 @@ export function normalize(e: Epica): Epica {
       return nt
     }),
     links: e.links || [],
+    features: (e.features || []).map(f => (f.id ? f : { ...f, id: uid() })),
   }
 }
 
