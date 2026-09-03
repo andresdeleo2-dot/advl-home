@@ -10,7 +10,10 @@ import {
   type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink, EpicaFeature } from '@/lib/supabase'
-import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring } from '@/components/epicas/core'
+import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring, hexA } from '@/components/epicas/core'
+
+// Paleta para el color auto-asignado de un Feature nuevo (misma paleta que EpicasDashboard).
+const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '#B07A56']
 import { sanitizeHtml } from '@/lib/sanitize'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta as waitMetaT } from '@/lib/waiting'
 import { isAutoNote, fmtLogDate } from '@/lib/tareas'
@@ -1470,6 +1473,17 @@ export default function TiempoClient() {
     })
     setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, features } : e))
     fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ features }) }).catch(() => {})
+  }
+  // Crea un Feature al vuelo (desde el selector de una tarea, sin salir a editar la épica) y
+  // devuelve su id para asignarlo de una vez.
+  const createFeatureQuick = (epicaId: string, name: string): string | null => {
+    const n = name.trim(); if (!n) return null
+    const ep = epicasList.find(e => e.id === epicaId); if (!ep) return null
+    const nf: EpicaFeature = { id: uid(), t: n, color: FEATURE_COLORS[(ep.features || []).length % FEATURE_COLORS.length] }
+    const features = [...(ep.features || []), nf]
+    setEpicasList(prev => prev.map(e => e.id === epicaId ? { ...e, features } : e))
+    fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ features }) }).catch(() => {})
+    return nf.id
   }
   // Rutinas diarias: marcar hecha el día visible (weeks[lunes][idx]) y persistir a la épica.
   const markRoutineDone = (epicaId: string, rIdx: number) => {
@@ -3187,7 +3201,7 @@ export default function TiempoClient() {
           </div>
         )
       })()}
-      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} featuresReady={featuresReadyRef.current} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onLinkFeatureObjetivo={linkFeatureObjetivo} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} featuresReady={featuresReadyRef.current} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onLinkFeatureObjetivo={linkFeatureObjetivo} onCreateFeature={createFeatureQuick} onClose={() => setEditTask(null)} />}
       {histIdx !== null && data.history[histIdx] && <HistoryEditor row={data.history[histIdx]} idx={histIdx} onSave={saveHist} onDelete={delHist} onReopen={reopenTask} onSyncDone={syncHistDone} onResume={resumeActivity} onPause={applyPauseToHist} onClearPause={clearHistPause} onClose={() => setHistIdx(null)} />}
 
       {/* Popup: el costo de empezar ahora */}
@@ -5194,7 +5208,7 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, waitingReady, featuresReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onLinkFeatureObjetivo, onClose }: {
+function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, waitingReady, featuresReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onLinkFeatureObjetivo, onCreateFeature, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[]; features?: EpicaFeature[] }[]
   resumenReady: boolean
@@ -5208,6 +5222,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   onCreate: (epicaId: string, t: EpicaTask) => void; onStart: (info: { epicaId: string; task: EpicaTask }, dur: number) => void
   onLinkObjetivo: (epicaId: string, taskId: string, milestoneId: string | null) => void
   onLinkFeatureObjetivo: (epicaId: string, featureId: string, taskId: string, milestoneId: string | null) => void
+  onCreateFeature: (epicaId: string, name: string) => string | null
   onClose: () => void
 }) {
   const creating = !!info.creating
@@ -5219,6 +5234,8 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   const [newSub, setNewSub] = useState('')
   const [bitDate, setBitDate] = useState(iso(new Date()))
   const [bitNote, setBitNote] = useState('')
+  const [featQuickAdd, setFeatQuickAdd] = useState(false)   // input de "+ Nuevo feature" abierto
+  const [featQuickName, setFeatQuickName] = useState('')
   const [epLinksOpen, setEpLinksOpen] = useState(true)   // dropdown "Enlaces de {épica}" (abierto por defecto para que se vean)
   const [subPop, setSubPop] = useState<number | null>(null)  // subtarea abierta (editar nota/links/%)
   const [logPop, setLogPop] = useState<number | null>(null)  // día de bitácora abierto (editar %/nota en popup); guarda el índice ORIGINAL en progressLog
@@ -5365,11 +5382,33 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
             </div>
           )}
 
-          {features.length > 0 && (<><NLbl>Feature</NLbl>
-            <select value={t.featureId || ''} onChange={e => { if (featuresReady) setT(p => ({ ...p, featureId: e.target.value || undefined })) }} style={{ ...nf, width: '100%', fontWeight: 600, color: t.featureId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>
-              <option value="">— Ninguno —</option>
-              {features.map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
-            </select></>)}
+          <NLbl>Feature</NLbl>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+            {features.map(f => {
+              const on = t.featureId === f.id
+              const fc = f.color || '#5B6B86'
+              return (
+                <button key={f.id} type="button" onClick={() => setT(p => ({ ...p, featureId: on ? undefined : f.id }))}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderRadius: 99, padding: '7px 12px', fontSize: 12, fontWeight: 700, border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.14)', background: on ? hexA(fc, 0.12) : '#fff', color: on ? fc : 'rgba(20,35,61,0.6)' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />{f.t}
+                </button>
+              )
+            })}
+            {featQuickAdd ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <input autoFocus value={featQuickName} onChange={e => setFeatQuickName(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { const id = onCreateFeature(epId, featQuickName); if (id) setT(p => ({ ...p, featureId: id })); setFeatQuickAdd(false); setFeatQuickName('') }
+                    if (e.key === 'Escape') { setFeatQuickAdd(false); setFeatQuickName('') }
+                  }}
+                  placeholder="Nombre del feature" style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 140 }} />
+                <button type="button" title="Crear" onClick={() => { const id = onCreateFeature(epId, featQuickName); if (id) setT(p => ({ ...p, featureId: id })); setFeatQuickAdd(false); setFeatQuickName('') }} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+                <button type="button" title="Cancelar" onClick={() => { setFeatQuickAdd(false); setFeatQuickName('') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
+              </span>
+            ) : (
+              <button type="button" onClick={() => { setFeatQuickAdd(true); setFeatQuickName('') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '7px 12px', fontSize: 12, fontWeight: 700, border: '1px dashed rgba(15,35,64,0.28)', background: '#fff', color: 'rgba(20,35,61,0.55)' }}>+ Nuevo</button>
+            )}
+          </div>
 
           {feat && featKpis.length > 0 && (<><NLbl>Contribuye a (del feature)</NLbl>
             <select value={linkedFeatureObjId} onChange={e => onLinkFeatureObjetivo(epId, feat.id, t.id!, e.target.value || null)} style={{ ...nf, width: '100%', fontWeight: 600, color: linkedFeatureObjId ? '#16365F' : 'rgba(20,35,61,0.5)' }}>

@@ -157,6 +157,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [enfSort, setEnfSort] = useState<SortSpec>({ key: 'manual', dir: 'asc' })
   const [backlogDone, setBacklogDone] = useState(false)
   const [backlogFEpica, setBacklogFEpica] = useState<string>('todas')
+  const [backlogFFeature, setBacklogFFeature] = useState<string>('todas')  // sólo tiene sentido con backlogFEpica ≠ 'todas'
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
   const [backlogFPrio, setBacklogFPrio] = useState<string>('todas')
   const [backlogQ, setBacklogQ] = useState('')                 // búsqueda de texto en el backlog
@@ -212,6 +213,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [tlOffset, setTlOffset] = useState(0)                      // desplazamiento en px de la barra arrastrada
   const tlDragRef = useRef<{ key: string; e: Epica; i: number; x: number; moved: boolean } | null>(null)
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (vista semana)
+  const [enfFFeature, setEnfFFeature] = useState<string>('todas')   // filtro por Feature en el Enfoque · Detalle (sólo con una épica elegida)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
@@ -232,6 +234,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [editInline, setEditInline] = useState(false)              // editar la épica dentro del panel, no en modal
   const [edTasksOpen, setEdTasksOpen] = useState(false)            // lista de tareas del editor de épica (plegada)
   const [featOpenId, setFeatOpenId] = useState<string | null>(null)  // qué Feature está expandido en el editor de épica (acordeón)
+  const [featQuickAdd, setFeatQuickAdd] = useState(false)    // input de "+ Nuevo feature" abierto, en el selector de una tarea
+  const [featQuickName, setFeatQuickName] = useState('')
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
   const [subSort, setSubSort] = useState<'manual' | 'prioridad' | 'dificultad' | 'dia'>('manual') // orden de subtareas
@@ -2225,6 +2229,71 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     features[fi] = { ...features[fi], kpis: kpis.map(m => (m.taskIds?.length ? m : { ...m, taskIds: undefined })) }
     patchEpic(e.id, { features })
+  }
+  /** Crea un Feature al vuelo (desde el selector de una tarea, sin salir a editar la épica)
+   *  y lo asigna de una vez con `onPick`. Compartido por el editor completo y el peek. */
+  const commitQuickFeature = (epicaId: string, onPick: (featureId: string) => void) => {
+    const name = featQuickName.trim()
+    setFeatQuickAdd(false); setFeatQuickName('')
+    if (!name) return
+    const e = epics.find(x => x.id === epicaId); if (!e) return
+    const nf: EpicaFeature = { id: uid(), t: name, color: FEATURE_COLORS[(e.features || []).length % FEATURE_COLORS.length] }
+    patchEpic(e.id, { features: [...(e.features || []), nf] })
+    onPick(nf.id)
+  }
+  /** Chips para elegir el Feature de una tarea — misma prominencia que Prioridad/Dificultad,
+   *  siempre visible (aunque no haya Features aún) con "+ Nuevo" para crear uno sin salir. */
+  const renderFeatureChips = (epicaId: string, current: string | undefined, onPick: (featureId: string | null) => void) => {
+    const feats = epics.find(x => x.id === epicaId)?.features || []
+    return (
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {feats.map(f => {
+          const on = current === f.id
+          const fc = f.color || '#5B6B86'
+          return (
+            <button key={f.id} type="button" onClick={() => onPick(on ? null : f.id)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderRadius: 99, padding: '7px 12px', fontSize: 12, fontWeight: 700, border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.14)', background: on ? hexA(fc, 0.12) : '#fff', color: on ? fc : 'rgba(20,35,61,0.6)' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />{f.t}
+            </button>
+          )
+        })}
+        {featQuickAdd ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <input autoFocus value={featQuickName} onChange={ev => setFeatQuickName(ev.target.value)}
+              onClick={ev => ev.stopPropagation()}
+              onKeyDown={ev => { if (ev.key === 'Enter') commitQuickFeature(epicaId, onPick); if (ev.key === 'Escape') { setFeatQuickAdd(false); setFeatQuickName('') } }}
+              placeholder="Nombre del feature" style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 140 }} />
+            <button type="button" onClick={() => commitQuickFeature(epicaId, onPick)} title="Crear" style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+            <button type="button" onClick={() => { setFeatQuickAdd(false); setFeatQuickName('') }} title="Cancelar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
+          </span>
+        ) : (
+          <button type="button" onClick={() => { setFeatQuickAdd(true); setFeatQuickName('') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '7px 12px', fontSize: 12, fontWeight: 700, border: '1px dashed rgba(15,35,64,0.28)', background: '#fff', color: 'rgba(20,35,61,0.55)' }}>+ Nuevo</button>
+        )}
+        {!featuresReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-12-features.sql en Supabase para guardarlo.</span>}
+      </div>
+    )
+  }
+  /** Chips para FILTRAR por Feature (Backlog/Enfoque) — a diferencia de renderFeatureChips (que
+   *  asigna), sólo tiene sentido acotado a UNA épica (los Features viven dentro de una). */
+  const renderFeatureFilterChips = (epicaId: string, value: string, onChange: (v: string) => void) => {
+    const feats = activeEpics.find(e => e.id === epicaId)?.features || []
+    if (feats.length === 0) return null
+    const chip = (on: boolean): CSSProperties => ({ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' })
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+        <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>Feature</span>
+        <button onClick={() => onChange('todas')} style={chip(value === 'todas')}>Todos</button>
+        {feats.map(f => {
+          const on = value === f.id; const fc = f.color || '#5B6B86'
+          return (
+            <button key={f.id} onClick={() => onChange(on ? 'todas' : f.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.12)', background: on ? hexA(fc, 0.12) : '#fff', color: on ? fc : 'rgba(20,35,61,0.6)' }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: fc, flexShrink: 0 }} />{f.t}
+            </button>
+          )
+        })}
+        <button onClick={() => onChange(value === 'sin' ? 'todas' : 'sin')} style={chip(value === 'sin')}>Sin feature</button>
+      </div>
+    )
   }
 
   const toggleArchive = (e: Epica) => {
@@ -5097,8 +5166,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             // Épicas con tareas EN ese día/rango+filtros: si filtras a un día, sólo salen las de ese día.
             const enfEpics = activeEpics.filter(e => (e.tasks || []).some(matchDR))
             const effEnf = enfEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
+            // Sólo tiene sentido con UNA épica elegida (los Features viven dentro de ella); si cambias
+            // de épica y el que tenías elegido no es de ésta, se cae solo a 'todas' (mismo truco que effEnf).
+            const effEnfFeature = effEnf === 'todas' ? 'todas'
+              : (enfFFeature === 'sin' || (activeEpics.find(e => e.id === effEnf)?.features || []).some(f => f.id === enfFFeature)) ? enfFFeature : 'todas'
             const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
-              .filter(x => (effEnf === 'todas' || x.e.id === effEnf) && matchDR(x.t))
+              .filter(x => (effEnf === 'todas' || x.e.id === effEnf) && matchDR(x.t)
+                && (effEnfFeature === 'todas' || (effEnfFeature === 'sin' ? !x.t.featureId : x.t.featureId === effEnfFeature)))
             const rangeChips = (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 8px' }}>
@@ -5122,7 +5196,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) }) : renderCalendarPanel(enfRows)}</>
+            return <>{renderBoardFilters(enfEpics, effEnf)}{effEnf !== 'todas' && renderFeatureFilterChips(effEnf, effEnfFeature, setEnfFFeature)}{rangeChips}{detalle ? renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) }) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
@@ -5780,6 +5854,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       // y el filtro de estado se ignora porque las columnas SON los estados.
       if (!backlogDone && !isBoard && t.status === 'Terminada') return
       if (backlogFEpica !== 'todas' && e.id !== backlogFEpica) return
+      if (backlogFEpica !== 'todas' && backlogFFeature === 'sin' && t.featureId) return
+      if (backlogFEpica !== 'todas' && backlogFFeature !== 'todas' && backlogFFeature !== 'sin' && t.featureId !== backlogFFeature) return
       if (!isBoard && backlogFStatus !== 'todas' && t.status !== backlogFStatus) return
       if (backlogFPrio !== 'todas' && (t.priority || '') !== backlogFPrio) return
       if (bq && !(norm(t.t).includes(bq) || norm(e.name).includes(bq)
@@ -5975,7 +6051,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <input type="checkbox" checked={backlogDone} onChange={e => setBacklogDone(e.target.checked)} /> Terminadas
               </label>
               {(backlogFEpica !== 'todas' || backlogFStatus !== 'todas' || backlogFPrio !== 'todas') && (
-                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFStatus('todas'); setBacklogFPrio('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>Limpiar filtros</button>
+                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFFeature('todas'); setBacklogFStatus('todas'); setBacklogFPrio('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>Limpiar filtros</button>
               )}
               {/* La edición tipo hoja de cálculo sólo aplica a la tabla */}
               {!isBoard && (
@@ -5992,11 +6068,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {/* Chips de épica: filtran el backlog por épica (una a la vez) */}
             {activeEpics.length > 1 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
-                <button onClick={() => setBacklogFEpica('todas')} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: backlogFEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: backlogFEpica === 'todas' ? '#10233F' : '#fff', color: backlogFEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
+                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFFeature('todas') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: backlogFEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: backlogFEpica === 'todas' ? '#10233F' : '#fff', color: backlogFEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
                 {activeEpics.map(ep => {
                   const on = backlogFEpica === ep.id
                   return (
-                    <button key={ep.id} onClick={() => setBacklogFEpica(on ? 'todas' : ep.id)} title={`Sólo ${ep.name}`}
+                    <button key={ep.id} onClick={() => { setBacklogFEpica(on ? 'todas' : ep.id); setBacklogFFeature('todas') }} title={`Sólo ${ep.name}`}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
                         border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
                         background: on ? hexA(ep.color, 0.12) : '#fff',
@@ -6007,6 +6083,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 })}
               </div>
             )}
+            {backlogFEpica !== 'todas' && renderFeatureFilterChips(backlogFEpica, backlogFFeature, setBacklogFFeature)}
 
             {/* Filtros por estado de trabajo de hoy — también en el backlog */}
             <div style={{ padding: '0 17px 6px' }}>{renderWorkFilters(today)}</div>
@@ -6628,20 +6705,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
 
                 {/* Feature al que pertenece dentro de esta épica */}
-                {(ep.features || []).length > 0 && (() => {
-                  const feat = (ep.features || []).find(f => f.id === t.featureId)
-                  return (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={eb}>Feature</div>
-                      <select value={t.featureId || ''} onChange={ev => setTaskFeature(ep, i, ev.target.value || null)}
-                        style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: feat ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
-                        <option value="">— Ninguno —</option>
-                        {ep.features!.map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
-                      </select>
-                      {!featuresReady.current && <div style={{ fontSize: 9.5, color: 'rgba(176,82,46,0.9)', marginTop: 4 }}>Corre sql/epicas-12-features.sql para guardar el Feature.</div>}
-                    </div>
-                  )
-                })()}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Feature</div>
+                  {renderFeatureChips(ep.id, t.featureId, id => setTaskFeature(ep, i, id))}
+                </div>
 
                 {/* Objetivo DEL FEATURE al que contribuye (si la tarea pertenece a uno con sus propios KPIs) */}
                 {(() => {
@@ -8546,14 +8613,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   })}
                 </div>
 
-                {(target?.features || []).length > 0 && (
+                {target && (
                   <>
                     <label style={lbl}>Feature</label>
-                    <select value={(target?.features || []).some(f => f.id === taskDraft.featureId) ? taskDraft.featureId : ''} onChange={e => setTaskDraft(d => ({ ...d, featureId: e.target.value || undefined }))}
-                      style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '9px 10px', fontSize: 13, fontWeight: 600, color: taskDraft.featureId ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', width: '100%' }}>
-                      <option value="">— Ninguno —</option>
-                      {(target?.features || []).map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
-                    </select>
+                    {renderFeatureChips(target.id, taskDraft.featureId, id => setTaskDraft(d => ({ ...d, featureId: id || undefined })))}
                   </>
                 )}
 

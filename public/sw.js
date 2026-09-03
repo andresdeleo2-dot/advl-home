@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v34-features-en-epicas */
+/* BUILD-MARKER: v35-features-chips-y-filtro */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */
