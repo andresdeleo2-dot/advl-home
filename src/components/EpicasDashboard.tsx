@@ -2539,12 +2539,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     d.links = (d.links || []).filter(l => (l.l || '').trim() || (l.url || '').trim())
     d.links.forEach(l => { if (!l.type) l.type = 'Otro' })
     if (!d.links.some(l => l.primary) && d.links.length) d.links[0].primary = true
+    d.features = (d.features || [])
+      .map(f => ({ ...f, t: (f.t || '').trim(), kpis: (f.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim()) }))
+      .filter(f => f.t)
 
     const payload = {
       name: d.name, color: d.color, description: sanitizeHtml(d.description) || null, status: d.status,
       categoria: (d.categoria || '').trim() || null, archived: !!d.archived,
       source_table: d.source_table || null, source_sync: d.source_sync || null, epic_order: d.epic_order,
-      kpis: d.kpis, routines: d.routines, tasks: d.tasks, links: d.links,
+      kpis: d.kpis, routines: d.routines, tasks: d.tasks, links: d.links, features: d.features,
     }
 
     if (editMode === 'new') {
