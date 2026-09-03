@@ -8,6 +8,7 @@ import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAY
 import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
 import BreakButton from '@/components/BreakButton'
+import PushReminders from '@/components/PushReminders'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan, EpicaFeature } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
@@ -23,7 +24,10 @@ import {
   DAYNAMES,
   DAYS,
   DEFAULT_PREFS,
+  calcCalibration,
   DIF_WEIGHT,
+  effCalFactor,
+  WEEK_EST_MIN,
   Dif,
   DifDots,
   EPIC_STATUSES,
@@ -884,20 +888,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Derivados de filtros (activas / archivadas / categoría) ─ */
   const activeEpics = useMemo(() => epics.filter(e => !e.archived), [epics])
-  // CALIBRACIÓN de estimados: sobre tareas TERMINADAS con dificultad y tiempo real (bitácora), saca
-  // un factor real/estimado por dificultad. Factor >1 = sueles tardar más de lo estimado.
-  const calibration = useMemo(() => {
-    const acc: Record<string, { real: number; est: number; n: number }> = { facil: { real: 0, est: 0, n: 0 }, media: { real: 0, est: 0, n: 0 }, dificil: { real: 0, est: 0, n: 0 } }
-    for (const e of activeEpics) for (const t of e.tasks || []) {
-      const dif = t.difficulty; if (!dif || t.status !== 'Terminada') continue
-      const real = (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
-      if (real <= 0) continue
-      acc[dif].real += real; acc[dif].est += WEEK_EST_MIN(dif); acc[dif].n++
-    }
-    const factor = (d: string) => acc[d].est > 0 ? acc[d].real / acc[d].est : 0
-    const totalN = acc.facil.n + acc.media.n + acc.dificil.n
-    return { factor, n: (d: string) => acc[d].n, totalN }
-  }, [activeEpics])
+  // CALIBRACIÓN de estimados — lógica compartida con Tiempo (components/epicas/core.tsx), así los
+  // dos leen el mismo factor real/estimado por dificultad en vez de que sólo Épicas lo calcule.
+  const calibration = useMemo(() => calcCalibration(activeEpics.flatMap(e => e.tasks || [])), [activeEpics])
   // Entradas del DIARIO: todas las notas de avance + comentarios de todas las tareas, cronológico.
   const diaryEntries = useMemo(() => {
     type D = { at: string; day: string; kind: 'nota' | 'comentario'; text: string; eId: string; eName: string; color: string; tid: string; tName: string }
@@ -909,17 +902,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     return out.sort((a, b) => b.at.localeCompare(a.at))
   }, [activeEpics])
-  // OBJETIVOS EN RIESGO: reúne los KPIs medibles de todas las épicas y los ordena por riesgo
+  // OBJETIVOS EN RIESGO: reúne los KPIs medibles de todas las épicas Y de sus Features (antes sólo
+  // entraban los de la épica — los de Feature quedaban fuera del radar) y los ordena por riesgo
   // (vencidos primero, luego por cercanía de fecha y menor avance). Deja fuera los ya cumplidos.
   const objetivosAll = useMemo(() => {
-    const out: { e: Epica; k: EpicaMilestone; pct: number; cur: number; target: number; hasMeta: boolean; days: number | null; risk: number }[] = []
-    for (const e of activeEpics) for (const k of e.kpis || []) {
-      if (milestoneDone(k, e)) continue
-      const mp = milestoneProgress(k, e)
+    const out: { e: Epica; k: EpicaMilestone; f?: EpicaFeature; pct: number; cur: number; target: number; hasMeta: boolean; days: number | null; risk: number }[] = []
+    const add = (e: Epica, k: EpicaMilestone, scope: Epica, f?: EpicaFeature) => {
+      if (milestoneDone(k, scope)) return
+      const mp = milestoneProgress(k, scope)
       const days = k.due ? daysUntil(k.due) : null
       // Riesgo: vencido y sin cumplir = 0 (peor); si no, "días para vencer − colchón por avance".
       const risk = (days != null && days < 0) ? -1000 + days : (days == null ? 900 - mp.pct * 200 : days + (1 - mp.pct) * -30)
-      out.push({ e, k, pct: mp.pct, cur: mp.cur, target: mp.target, hasMeta: mp.hasMeta, days, risk })
+      out.push({ e, k, f, pct: mp.pct, cur: mp.cur, target: mp.target, hasMeta: mp.hasMeta, days, risk })
+    }
+    for (const e of activeEpics) {
+      for (const k of e.kpis || []) add(e, k, e)
+      for (const f of e.features || []) {
+        const featScope = { ...e, tasks: e.tasks.filter(t => t.featureId === f.id) }
+        for (const k of f.kpis || []) add(e, k, featScope, f)
+      }
     }
     return out.sort((a, b) => a.risk - b.risk)
   }, [activeEpics])
@@ -5128,7 +5129,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {!board && planPend.length > 0 && (() => {
                 const load = planPend.reduce((n, x) => n + taskWeight(x.t), 0)
                 // Horas estimadas del día (por dificultad), AJUSTADAS con tu calibración si hay datos.
-                const calMin = planPend.reduce((n, x) => { const base = estMinForDay(x.t, viewDate); if (!base) return n; const d = difForDay(x.t, viewDate); const dp = dayPlanFor(x.t, viewDate); const custom = (typeof x.t.estMin === 'number' && x.t.estMin > 0) || (dp && typeof dp.estMin === 'number' && dp.estMin > 0); const f = (!custom && d && calibration.totalN >= 3 && calibration.factor(d) > 0) ? calibration.factor(d) : 1; return n + base * f }, 0)
+                const calMin = planPend.reduce((n, x) => { const base = estMinForDay(x.t, viewDate); if (!base) return n; const d = difForDay(x.t, viewDate); const dp = dayPlanFor(x.t, viewDate); const custom = (typeof x.t.estMin === 'number' && x.t.estMin > 0) || (dp && typeof dp.estMin === 'number' && dp.estMin > 0); const f = custom ? 1 : effCalFactor(calibration, d); return n + base * f }, 0)
                 const asH = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${Math.round(m)}m`
                 const pctLoad = dayCapacity > 0 ? load / dayCapacity : 0
                 const c = pctLoad > 1 ? '#B0522E' : pctLoad > 0.85 ? '#A87A2C' : '#2E6E6E'
@@ -7013,6 +7014,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         style={{ border: '1px solid rgba(122,111,176,0.4)', borderRadius: 9, padding: '8px 10px', fontSize: 13, fontWeight: 600, color: t.remindAt ? '#7A6FB0' : 'rgba(20,35,61,0.4)', background: t.remindAt ? 'rgba(122,111,176,0.08)' : '#fff', outline: 'none' }} />
                       {t.remindAt && <button onClick={() => setTaskRemind(ep, i, '')} title="Quitar recordatorio" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 14 }}>✕</button>}
                     </div>
+                    {/* Sin esto, el recordatorio sólo suena con la pestaña abierta — antes no había
+                        forma de saber (ni de activarlo) desde aquí mismo. */}
+                    {t.remindAt && <div style={{ marginTop: 6 }}><PushReminders /></div>}
                   </div>
                 </div>
 
@@ -8822,7 +8826,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
                           <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${o.pct * 100}%`, height: '100%', background: o.e.color }} /></span>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)', whiteSpace: 'nowrap' }}>{o.hasMeta ? `${o.cur}/${o.target}` : `${Math.round(o.pct * 100)}%`}</span>
-                          <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.4)' }}>{o.e.name}</span>
+                          <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.4)' }}>{o.e.name}{o.f ? ` · ${o.f.t}` : ''}</span>
                         </div>
                       </div>
                     </div>
@@ -9542,6 +9546,7 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
             </span>
             <WidgetsDropdown />
             <SpecialsDropdown />
+            <Link href="/peso" className="band-glass band-glass-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}><span style={{ fontSize: 13, lineHeight: 1 }}>⚖️</span> Peso</Link>
             <SectionNav current="epicas" />
             <button onClick={onNew} style={{ ...goldBtn, display: 'flex', alignItems: 'center', gap: 6, padding: '9px 15px', fontSize: 12 }}>
               <span style={{ fontSize: 16, lineHeight: 1, marginTop: -1 }}>+</span> <span className="ep-hide-xs">Nueva</span> épica
@@ -9553,10 +9558,7 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
   )
 }
 
-// Minutos estimados de una tarea por su dificultad (para el resumen/carga de la semana).
-// Estimación de tiempo SÓLO a partir de la dificultad (fácil 45m · media 2h · difícil 4h).
-// Sin dificultad = 0: no hay base para estimar, así que esas tareas no inventan horas.
-const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 45 : d === 'media' ? 120 : d === 'dificil' ? 240 : 0
+// WEEK_EST_MIN ahora vive en components/epicas/core.tsx (compartido con Tiempo).
 // Estimado EFECTIVO de una tarea en minutos: tu estimado propio (estMin) si lo pusiste; si no,
 // el default por dificultad. Es lo que alimenta la carga estimada del día ("~Xh") para planear.
 const estMinOf = (t: { estMin?: number; difficulty?: string }): number => (typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : WEEK_EST_MIN(t.difficulty)

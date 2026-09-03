@@ -371,6 +371,31 @@ export function difStyle(d: Dif | undefined) {
 export const DIF_WEIGHT: Record<string, number> = { facil: 1, media: 2, dificil: 3 }
 export const taskWeight = (t: EpicaTask) => DIF_WEIGHT[t.difficulty || 'media'] ?? 2
 
+/** Minutos estimados de una tarea SÓLO por su dificultad (sin estimado propio) — fácil 45m ·
+ *  media 2h · difícil 4h. Un solo default compartido por Épicas y Tiempo (antes cada archivo
+ *  tenía el suyo y no coincidían: Tiempo usaba 30/60/120). */
+export const WEEK_EST_MIN = (d?: string) => d === 'facil' ? 45 : d === 'media' ? 120 : d === 'dificil' ? 240 : 0
+
+/** CALIBRACIÓN de estimados: sobre tareas TERMINADAS con dificultad y tiempo real (bitácora),
+ *  saca un factor real/estimado por dificultad. Factor >1 = sueles tardar más de lo estimado.
+ *  Compartida por Épicas y Tiempo: la misma bitácora que llena Tiempo alimenta el factor, así
+ *  que los dos deben leer el mismo número (antes sólo Épicas lo calculaba y usaba). */
+export function calcCalibration(tasks: EpicaTask[]): { factor: (d: string) => number; n: (d: string) => number; totalN: number } {
+  const acc: Record<string, { real: number; est: number; n: number }> = { facil: { real: 0, est: 0, n: 0 }, media: { real: 0, est: 0, n: 0 }, dificil: { real: 0, est: 0, n: 0 } }
+  for (const t of tasks) {
+    const dif = t.difficulty; if (!dif || t.status !== 'Terminada') continue
+    const real = (t.progressLog || []).reduce((s, l) => s + (typeof (l as { min?: number }).min === 'number' ? (l as { min?: number }).min! : 0), 0)
+    if (real <= 0) continue
+    acc[dif].real += real; acc[dif].est += WEEK_EST_MIN(dif); acc[dif].n++
+  }
+  const factor = (d: string) => acc[d].est > 0 ? acc[d].real / acc[d].est : 0
+  const totalN = acc.facil.n + acc.media.n + acc.dificil.n
+  return { factor, n: (d: string) => acc[d].n, totalN }
+}
+/** El factor sólo si hay suficiente muestra (≥3) y es válido — mismo criterio en Épicas y Tiempo. */
+export const effCalFactor = (cal: { factor: (d: string) => number; totalN: number }, d?: string): number =>
+  (d && cal.totalN >= 3 && cal.factor(d) > 0) ? cal.factor(d) : 1
+
 /** Días distintos en que se trabajó la tarea (según la bitácora de avance).
  *  Sirve para distinguir lo que se resuelve en un día de lo que se arrastra. */
 export const diasTrabajados = (t: EpicaTask) => new Set((t.progressLog || []).map(l => l.d)).size

@@ -4,13 +4,14 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import FavoritosStrip from '@/components/FavoritosStrip'
+import PushReminders from '@/components/PushReminders'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel,
   type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink, EpicaFeature } from '@/lib/supabase'
-import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring, hexA } from '@/components/epicas/core'
+import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring, hexA, calcCalibration, effCalFactor } from '@/components/epicas/core'
 
 // Paleta para el color auto-asignado de un Feature nuevo (misma paleta que EpicasDashboard).
 const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '#B07A56']
@@ -79,16 +80,18 @@ type Meeting = { id: string; name: string; start: number; dur: number; date: str
 
 const durByDiff = (t?: EpicaTask) => t?.difficulty === 'facil' ? 30 : t?.difficulty === 'dificil' ? 120 : 60
 // Duración inicial al arrastrar una tarea al calendario: TU estimado propio (estMin) si lo pusiste;
-// si no, el default por dificultad; si tampoco, 15 min. Así "1h de estimado" cae como bloque de 1h.
-const estDurOf = (t?: EpicaTask) => (t && typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : (t?.difficulty ? durByDiff(t) : 15)
+// si no, el default por dificultad (ajustado por `calFactor`, tu calibración real-vs-estimado —
+// mismo factor que ya usa Épicas, ver core.tsx); si tampoco, 15 min.
+const estDurOf = (t?: EpicaTask, calFactor = 1) => (t && typeof t.estMin === 'number' && t.estMin > 0) ? t.estMin : (t?.difficulty ? Math.round(durByDiff(t) * calFactor) : 15)
 // ── Sesiones por día (dayPlans) desde Tiempo ──
 const dayPlansOfT = (t?: EpicaTask) => (t && Array.isArray(t.dayPlans)) ? t.dayPlans : []
 // ¿La tarea está agendada ese día? (su plan es ese día O tiene un "Día de trabajo" ese día).
 const taskOnDay = (t: EpicaTask, day: string) => t.plan === day || dayPlansOfT(t).some(d => d.day === day)
 // ¿Marcaste ese "Día de trabajo" como hecho (◐)? Entonces no sale "por agendar" ese día.
 const dayPlanDoneT = (t: EpicaTask, day: string) => !!dayPlansOfT(t).find(d => d.day === day)?.done
-// Duración al arrastrar en un día concreto: el estimado de ESE día (dayPlan) si existe; si no, el general.
-const estDurForDay = (t: EpicaTask | undefined, day: string) => { const dp = dayPlansOfT(t).find(d => d.day === day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; if (dp?.difficulty && !(t && typeof t.estMin === 'number' && t.estMin > 0)) return durByDiff({ difficulty: dp.difficulty } as EpicaTask); return estDurOf(t) }
+// Duración al arrastrar en un día concreto: el estimado de ESE día (dayPlan) si existe; si no, el
+// general (ambos ajustables por `calFactor`, opcional — ver estDurOf).
+const estDurForDay = (t: EpicaTask | undefined, day: string, calFactor = 1) => { const dp = dayPlansOfT(t).find(d => d.day === day); if (dp && typeof dp.estMin === 'number' && dp.estMin > 0) return dp.estMin; if (dp?.difficulty && !(t && typeof t.estMin === 'number' && t.estMin > 0)) return Math.round(durByDiff({ difficulty: dp.difficulty } as EpicaTask) * calFactor); return estDurOf(t, calFactor) }
 const isDateStr = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
 // Al marcar terminada, la fecha de término es la fecha en que se IBA A HACER (plan) si existe;
 // si no, el día que se pasa (hoy/día visto). Así "terminó" queda en la fecha que decía "hacer".
@@ -1055,12 +1058,15 @@ export default function TiempoClient() {
       dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false, taskId: x.h.taskId,
     })), [data.history, taskDay])
   const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
-  // Horas PLANEADAS a trabajar ese día = estimación (por dificultad) de las tareas planeadas para el día.
-  // Sirve para el "planeado vs real" (real = dayWorkedMin).
+  // CALIBRACIÓN de estimados (real-vs-estimado por dificultad) — misma lógica y misma bitácora que
+  // ya usa Épicas (core.tsx): antes sólo Épicas la calculaba y Tiempo estimaba a ciegas.
+  const calibration = useMemo(() => calcCalibration((allTasks || []).map(t => t.task)), [allTasks])
+  // Horas PLANEADAS a trabajar ese día = estimación (por dificultad, calibrada) de las tareas
+  // planeadas para el día. Sirve para el "planeado vs real" (real = dayWorkedMin).
   const plannedDay = useMemo(() => {
     const list = (allTasks || []).filter(t => t.task.status !== 'Archivada' && (taskOnDay(t.task, taskDay) || recurringDueToday(t.task, taskDay)))
-    return { min: list.reduce((s, t) => s + estDurForDay(t.task, taskDay), 0), count: list.length }
-  }, [allTasks, taskDay])
+    return { min: list.reduce((s, t) => s + estDurForDay(t.task, taskDay, effCalFactor(calibration, t.task.difficulty)), 0), count: list.length }
+  }, [allTasks, taskDay, calibration])
   const dayLabel = isTodayView ? 'hoy' : longDayOf(taskDay)
   // Comentario libre por día (mismo almacén que Épicas, para que se vea en ambos lados).
   useEffect(() => { try { const raw = localStorage.getItem('epicas.dayNotes.v1'); if (raw) setDayNotesT(JSON.parse(raw)) } catch {} }, [])
@@ -2581,7 +2587,7 @@ export default function TiempoClient() {
                 const sched = (data.scheduled || []).filter(s => (s.date || iso(new Date())) === day).reduce((a, s) => a + s.dur, 0)
                 const mtgs = meetings.filter(m => m.date === day)
                 const meet = mtgs.reduce((a, m) => a + m.dur, 0)
-                const taskMin = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, day) || recurringDueToday(t.task, day)) && !dayPlanDoneT(t.task, day)).reduce((a, t) => a + estDurForDay(t.task, day), 0)
+                const taskMin = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, day) || recurringDueToday(t.task, day)) && !dayPlanDoneT(t.task, day)).reduce((a, t) => a + estDurForDay(t.task, day, effCalFactor(calibration, t.task.difficulty)), 0)
                 const nTasks = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, day) || recurringDueToday(t.task, day)) && !dayPlanDoneT(t.task, day)).length
                 const planned = sched + meet + taskMin
                 return { ...d, meetN: mtgs.length, planned, nPlan: nTasks }
@@ -5497,6 +5503,8 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
             {t.plan && <button onClick={() => setT(p => ({ ...p, plan: '' }))} title="Quitar la fecha (queda sin día)" style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 9px', fontSize: 11, fontWeight: 700, border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E' }}>Sin fecha</button>}
           </div>
           <label style={{ display: 'flex', flexDirection: 'column' }}><NLbl>Recordarme 🔔</NLbl><input type="datetime-local" disabled={!remindReady} title={remindReady ? undefined : 'Corre sql/epicas-06-remind.sql en Supabase para usar recordatorios'} defaultValue={isoToLocalInput(t.remindAt)} onChange={e => setT({ ...t, remindAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })} style={{ ...nf, width: '100%', opacity: remindReady ? 1 : 0.5 }} /></label>
+          {/* Sin esto, el recordatorio sólo suena con la pestaña abierta. */}
+          {t.remindAt && <div style={{ marginTop: -6 }}><PushReminders /></div>}
 
           <NLbl>Repetición</NLbl>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>

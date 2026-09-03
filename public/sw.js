@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v40-feature-cascada-y-edicion-rapida */
+/* BUILD-MARKER: v41-calibracion-riesgo-peso-push */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */

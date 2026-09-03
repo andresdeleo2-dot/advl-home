@@ -46,6 +46,7 @@ export default function SiteHeader({
             </span>
             <WidgetsDropdown />
             <SpecialsDropdown />
+            <Link href="/peso" className="band-glass band-glass-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}><span style={{ fontSize: 13, lineHeight: 1 }}>⚖️</span> Peso</Link>
             {extra}
             <Link href={backHref} className="band-glass" style={{ borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{backLabel}</Link>
           </div>
