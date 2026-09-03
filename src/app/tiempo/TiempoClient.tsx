@@ -3980,8 +3980,25 @@ function HistorialView({ history, meta, onLogSleep, onOpenTask }: { history: App
       epicaFilter !== 'all' ? (epicaFilter === '__free__' ? 'libre' : (meta.epica[epicaFilter]?.name || 'épica')) : null,
       diffFilter !== 'all' ? DIFF_META[diffFilter]?.label : null,
     ].filter(Boolean).join(' · ')
-    return { label, isCurrent, total, areaStats, epicaStats, activities, dominant, activeDays, nDays: days.length, streak, maxAct, maxEp, areaOpts, epicaOpts, diffOpts, hasTaskActivity, filtered, filterLabel }
+    return { label, isCurrent, total, areaStats, epicaStats, activities, dominant, activeDays, nDays: days.length, days, streak, maxAct, maxEp, areaOpts, epicaOpts, diffOpts, hasTaskActivity, filtered, filterLabel }
   }, [history, mode, anchor, areaFilter, epicaFilter, diffFilter, meta, diffOf, today])
+
+  // Sueño (noche anterior) vs. cuánto trabajaste al día siguiente — mismo historial que ya se
+  // registra, nunca se habían cruzado. Compara el promedio de trabajo en días con sueño arriba vs.
+  // abajo de tu propio promedio del periodo (no un umbral inventado).
+  const sleepPerf = useMemo(() => {
+    const rows = D.days.map(d => {
+      const prev = addDaysISO(d, -1)
+      const sleepMin = history.filter(h => h.date === prev && h.area === 'sueno').reduce((s, h) => s + h.dur, 0)
+      const workMin = history.filter(h => h.date === d && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
+      return { d, sleepMin, workMin }
+    }).filter(r => r.sleepMin > 0)
+    if (rows.length < 3) return null
+    const avgS = rows.reduce((s, r) => s + r.sleepMin, 0) / rows.length
+    const avgWork = (arr: typeof rows) => arr.length ? arr.reduce((s, r) => s + r.workMin, 0) / arr.length : 0
+    const low = rows.filter(r => r.sleepMin < avgS), high = rows.filter(r => r.sleepMin >= avgS)
+    return { avgS, lowWork: avgWork(low), highWork: avgWork(high), lowN: low.length, highN: high.length }
+  }, [D.days, history])
 
   const move = (dir: 1 | -1) => {
     const [ay, am] = anchor.split('-').map(Number)
@@ -4114,6 +4131,22 @@ function HistorialView({ history, meta, onLogSleep, onOpenTask }: { history: App
             <span style={{ ...LBL }}>registrar cuánto dormiste</span>
             <SleepLogger onLog={onLogSleep} />
           </div>
+          {sleepPerf && (
+            <div style={{ borderTop: '1px solid #eee6da', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span style={{ ...LBL }}>sueño vs. cuánto trabajaste al día siguiente</span>
+              <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, color: '#8a4b28' }}>{hm(Math.round(sleepPerf.highWork))}</span>
+                  <span style={{ fontSize: 11.5, color: '#a49b90' }}>tras dormir bien ({sleepPerf.highN}d)</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ fontFamily: SERIF, fontSize: 26, lineHeight: 1, color: '#a49b90' }}>{hm(Math.round(sleepPerf.lowWork))}</span>
+                  <span style={{ fontSize: 11.5, color: '#a49b90' }}>tras dormir poco ({sleepPerf.lowN}d)</span>
+                </div>
+              </div>
+              <span style={{ fontSize: 12, color: '#6b645b' }}>{sleepPerf.highWork > sleepPerf.lowWork ? `Duermes bien → trabajas ~${hm(Math.round(sleepPerf.highWork - sleepPerf.lowWork))} más al día siguiente.` : 'Con tus datos hasta ahora no se nota una diferencia clara.'}</span>
+            </div>
+          )}
         </div>
         </div>
 

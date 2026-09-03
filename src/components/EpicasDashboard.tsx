@@ -935,8 +935,29 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (inWk(t.plan) && t.status !== 'Terminada') committed.push({ e, t, i })
       if (inWk(t.doneAt) || (t.repeatDone || []).some(d => inWk(d))) closed.push({ e, t })
     }))
-    return { mon, committed, closedN: closed.length }
+    return { mon, sun, committed, closed, closedN: closed.length }
   }, [activeEpics, today])
+  // Recap de la semana en texto plano, para copiar y pegar donde quieras.
+  const buildWeekRecap = (staleEps: Epica[]) => {
+    const lines = [`📅 Semana del ${fmtDue(weekSummary.mon)} al ${fmtDue(weekSummary.sun)}`, '']
+    lines.push(`✓ Cerradas (${weekSummary.closed.length})`)
+    if (weekSummary.closed.length) weekSummary.closed.forEach(({ e, t }) => lines.push(`- ${t.t} · ${e.name}`))
+    else lines.push('- (ninguna)')
+    lines.push('', `↻ Comprometidas sin cerrar (${weekSummary.committed.length})`)
+    if (weekSummary.committed.length) weekSummary.committed.forEach(({ e, t }) => lines.push(`- ${t.t} · ${e.name}`))
+    else lines.push('- (ninguna)')
+    if (staleEps.length) {
+      lines.push('', '⚠ Frentes desatendidos')
+      staleEps.forEach(e => { const d = daysSinceISO(epicLastActivity(e)); lines.push(`- ${e.name}${d == null ? '' : ` · ${d}d sin actividad`}`) })
+    }
+    return lines.join('\n')
+  }
+  const copyWeekRecap = (staleEps: Epica[]) => {
+    navigator.clipboard?.writeText(buildWeekRecap(staleEps)).then(
+      () => showToast('Recap copiado — pégalo donde quieras'),
+      () => showToast('No se pudo copiar', true),
+    )
+  }
   // TRIAGE: tareas activas SIN plan y SIN vencimiento (se pudren sin fecha). Más viejas primero.
   const sinFechaTasks = useMemo(() => {
     const out: { e: Epica; t: EpicaTask; i: number }[] = []
@@ -8867,6 +8888,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {pend > 0
                   ? <button onClick={moveWeekPendingToNext} style={{ ...goldBtn, width: '100%', marginTop: 18, padding: '12px' }}>Mover {pend} a la próxima semana →</button>
                   : <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo comprometido ✦</div>}
+                <button onClick={() => copyWeekRecap(staleEps)} style={{ cursor: 'pointer', width: '100%', marginTop: 8, padding: '10px', borderRadius: 11, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.65)', fontSize: 12.5, fontWeight: 700 }}>📋 Copiar recap de la semana</button>
               </div>
             </div>
           </div>
