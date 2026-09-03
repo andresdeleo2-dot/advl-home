@@ -6295,6 +6295,43 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (!editing) return null
     const d = editing
     const isEdit = editMode === 'edit'
+    // Crea un Feature dentro del BORRADOR local (no escribe al servidor todavía — se guarda junto
+    // con todo lo demás al picar "Guardar"). Para la lista de Tareas de este mismo editor.
+    const addFeatureToDraft = (name: string): string | null => {
+      const nm = name.trim(); if (!nm) return null
+      const nf: EpicaFeature = { id: uid(), t: nm, color: FEATURE_COLORS[(d.features || []).length % FEATURE_COLORS.length] }
+      patchDraft(x => ({ ...x, features: [...(x.features || []), nf] }))
+      return nf.id
+    }
+    // Chips de Feature para una tarea de la lista compacta — lee `d.features` (el borrador, no lo ya
+    // guardado) para que un Feature que acabas de crear en la tarjeta de arriba aparezca de inmediato.
+    const renderFeatureChipsDraft = (current: string | undefined, onPick: (featureId: string | null) => void) => (
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {(d.features || []).map(f => {
+          const on = current === f.id; const fc = f.color || '#5B6B86'
+          return (
+            <button key={f.id} type="button" onClick={() => onPick(on ? null : f.id)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '5px 10px', fontSize: 11, fontWeight: 700, border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.14)', background: on ? hexA(fc, 0.12) : '#fff', color: on ? fc : 'rgba(20,35,61,0.6)' }}>
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: fc, flexShrink: 0 }} />{f.t}
+            </button>
+          )
+        })}
+        {featQuickAdd ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={ev => ev.stopPropagation()}>
+            <input autoFocus value={featQuickName} onChange={ev => setFeatQuickName(ev.target.value)}
+              onKeyDown={ev => {
+                if (ev.key === 'Enter') { const id = addFeatureToDraft(featQuickName); setFeatQuickAdd(false); setFeatQuickName(''); if (id) onPick(id) }
+                if (ev.key === 'Escape') { setFeatQuickAdd(false); setFeatQuickName('') }
+              }}
+              placeholder="Nombre" style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '5px 9px', fontSize: 11, outline: 'none', width: 110 }} />
+            <button type="button" title="Crear" onClick={() => { const id = addFeatureToDraft(featQuickName); setFeatQuickAdd(false); setFeatQuickName(''); if (id) onPick(id) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '5px 8px', fontSize: 11, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+            <button type="button" title="Cancelar" onClick={() => { setFeatQuickAdd(false); setFeatQuickName('') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 12 }}>✕</button>
+          </span>
+        ) : (
+          <button type="button" onClick={ev => { ev.stopPropagation(); setFeatQuickAdd(true); setFeatQuickName('') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 10px', fontSize: 11, fontWeight: 700, border: '1px dashed rgba(15,35,64,0.28)', background: '#fff', color: 'rgba(20,35,61,0.55)' }}>+ Nuevo</button>
+        )}
+      </div>
+    )
     // Formulario de un KPI/objetivo (actual/inicio/meta/unidad/fecha/auto/cumplido). Reusado tanto
     // por los Objetivos de la Épica como por los de cada Feature — mismo tipo, un solo formulario.
     const renderKpisEditor = (kpis: EpicaMilestone[], onChange: (next: EpicaMilestone[]) => void) => (
@@ -6536,6 +6573,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>Entrega</span>
                               <input type="date" value={t.due} onChange={e => patchDraft(x => { x.tasks[i].due = e.target.value; return x })} style={dateInp} />
                             </div>
+                            {renderFeatureChipsDraft(t.featureId, id => patchDraft(x => { x.tasks[i].featureId = id || undefined; return x }))}
                             <RichText value={t.note || ''} onChange={v => patchDraft(x => { x.tasks[i].note = v; return x })} placeholder="Nota (negritas, cursiva, viñetas)…" />
                           </div>
                         )}
@@ -6684,30 +6722,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
-                {/* Cuerpo en dos columnas (como el detalle de Tiempo); se colapsa a una en pantallas angostas */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: '0 26px', alignItems: 'start' }}>
-                <div style={{ minWidth: 0 }}>
-                {/* Estado (editable) */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={eb}>Estado</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => { const wasW = t.status === 'Esperando', willW = s === 'Esperando'; setTaskStatus(ep, i, s); if (t.id && wasW !== willW) { markWaitSince(t.id, willW, todayISO()); setWaitSince(readWaitSince()) } }} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
-                  </div>
-                  {/* Al elegir "Esperando": QUÉ esperas (email/respuesta/…), igual que en las otras vistas. */}
-                  {t.status === 'Esperando' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
-                      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 ¿Qué esperas?</span>
-                      {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
-                        <button key={val} onClick={() => setTaskWaiting(ep, i, val)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
-                      )})}
-                      <button onClick={() => setTaskWaiting(ep, i, null)} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
-                      <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Aparece en la bandeja &quot;En espera · Por revisar&quot; con su &quot;hace N días&quot;.</span>
-                      {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
-                    </div>
-                  )}
-                </div>
-
-                {/* Feature al que pertenece dentro de esta épica */}
+                {/* Feature — justo debajo de la épica (que ya se elige arriba, en el encabezado),
+                    para que Épica→Feature se sienta una sola decisión. */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={eb}>Feature</div>
                   {renderFeatureChips(ep.id, t.featureId, id => setTaskFeature(ep, i, id))}
@@ -6743,6 +6759,29 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     </div>
                   )
                 })()}
+
+                {/* Cuerpo en dos columnas (como el detalle de Tiempo); se colapsa a una en pantallas angostas */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: '0 26px', alignItems: 'start' }}>
+                <div style={{ minWidth: 0 }}>
+                {/* Estado (editable) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Estado</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {PICK_STATUSES.map(s => { const on = t.status === s; const st2 = taskStyle(s); return <button key={s} onClick={() => { const wasW = t.status === 'Esperando', willW = s === 'Esperando'; setTaskStatus(ep, i, s); if (t.id && wasW !== willW) { markWaitSince(t.id, willW, todayISO()); setWaitSince(readWaitSince()) } }} style={{ cursor: 'pointer', borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 700, border: on ? `1px solid ${st2.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? st2.bg : '#fff', color: on ? st2.c : 'rgba(20,35,61,0.55)' }}>{st2.label}</button> })}
+                  </div>
+                  {/* Al elegir "Esperando": QUÉ esperas (email/respuesta/…), igual que en las otras vistas. */}
+                  {t.status === 'Esperando' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 ¿Qué esperas?</span>
+                      {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
+                        <button key={val} onClick={() => setTaskWaiting(ep, i, val)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
+                      )})}
+                      <button onClick={() => setTaskWaiting(ep, i, null)} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
+                      <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Aparece en la bandeja &quot;En espera · Por revisar&quot; con su &quot;hace N días&quot;.</span>
+                      {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+                    </div>
+                  )}
+                </div>
 
                 {/* Objetivo al que contribuye */}
                 {(ep.kpis || []).length > 0 && (() => {
@@ -8446,6 +8485,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
                 <div className="ep-modal-body" style={{ padding: '14px 26px 8px', overflowY: 'auto', flex: 1 }}>
 
+                {/* Feature — justo debajo de la épica (arriba), para que Épica→Feature se sienta
+                    una sola decisión: cambia la épica de arriba y esto muestra SUS features. */}
+                {target && (
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={lbl}>Feature</label>
+                    {renderFeatureChips(target.id, taskDraft.featureId, id => setTaskDraft(d => ({ ...d, featureId: id || undefined })))}
+                  </div>
+                )}
+
                 {/* ENLACES DE LA ÉPICA — mismo bloque plegable que el peek y Tiempo (paridad de editores).
                     Usa `target` (no `ep`): si cambias la épica arriba, muestra los links de la nueva. */}
                 {(() => {
@@ -8615,13 +8663,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     return <button key={dd} onClick={() => setTaskDraft(d => ({ ...d, difficulty: d.difficulty === dd ? undefined : dd }))} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '9px 0', borderRadius: 9, cursor: 'pointer', border: on ? `1px solid ${dsy.c}` : '1px solid rgba(15,35,64,0.12)', background: on ? dsy.bg : '#fff' }}><DifDots d={dd} /><span style={{ font: '700 10px var(--font-ui)', color: on ? dsy.c : 'rgba(20,35,61,0.5)' }}>{dsy.label}</span></button>
                   })}
                 </div>
-
-                {target && (
-                  <>
-                    <label style={lbl}>Feature</label>
-                    {renderFeatureChips(target.id, taskDraft.featureId, id => setTaskDraft(d => ({ ...d, featureId: id || undefined })))}
-                  </>
-                )}
 
                 <label style={lbl}>Fecha de entrega</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
