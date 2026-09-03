@@ -3076,6 +3076,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
             </button>
+            {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
             <span style={{ padding: '2px 8px', borderRadius: 99, font: '700 10.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}` }}>{t.due ? fmtDue(t.due) : 'sin fecha'}</span>
             {t.difficulty && (() => { const ds = difStyle(t.difficulty); return (
               <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} title={`Dificultad: ${ds.label} · clic para cambiar`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, font: '700 10px var(--font-ui)', color: ds.c, background: ds.bg, border: `1px solid ${ds.border}`, cursor: 'pointer' }}><DifDots d={t.difficulty} size={10} />{ds.label}</button>
@@ -3386,6 +3387,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16365F', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.t}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                      {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
                       {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dueTone(t.due, false).c }}>{fmtDue(t.due)}</span>}
                       {t.difficulty && <DifDots d={t.difficulty} size={9} />}
                     </div>
@@ -3501,6 +3503,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 6, paddingLeft: 25 }}>
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                          {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
                           {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 6px' }}>{fmtDue(t.due)}</span>}
                           {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 9.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻</span>}
                           {/* Dificultad editable en la tarjeta: clic cicla sin fácil → media → difícil */}
@@ -4003,6 +4006,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 6, paddingLeft: 25 }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                                {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
                                 {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 6px' }}>{fmtDue(t.due)}</span>}
                                 {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 9.5px var(--font-ui)', color: REPEAT_TONE.c }}>↻</span>}
                                 <button onClick={ev => { ev.stopPropagation(); cycleDifficulty(e, i) }} onPointerDown={ev => ev.stopPropagation()}
@@ -5814,6 +5818,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}>
                           <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}
                         </span>
+                        {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
                         {t.due && <span style={{ font: '700 10px var(--font-ui)', color: dt.c, background: dt.bg, border: `1px solid ${dt.border}`, borderRadius: 99, padding: '1px 7px' }}>{fmtDue(t.due)}</span>}
                         {t.plan && <span title={`Planeada para ${fmtDue(t.plan)}`} style={{ font: '700 10px var(--font-ui)', color: '#2E5A9E', background: 'rgba(46,90,158,0.08)', border: '1px solid rgba(46,90,158,0.28)', borderRadius: 99, padding: '1px 7px' }}>◷ {fmtDue(t.plan)}</span>}
                         {t.repeat && <span title={`Se repite ${repeatLabel(t.repeat)}`} style={{ font: '700 10px var(--font-ui)', color: REPEAT_TONE.c, background: REPEAT_TONE.bg, border: `1px solid ${REPEAT_TONE.border}`, borderRadius: 99, padding: '1px 7px' }}>↻ {repeatLabel(t.repeat)}</span>}
@@ -5952,6 +5957,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <div style={{ fontSize: 12.5, fontWeight: 600, color: tdone ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: tdone ? 'line-through' : 'none', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.t}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+              {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
               {t.due && <span style={{ font: '700 9.5px var(--font-ui)', color: dt.c }}>{fmtDue(t.due)}</span>}
               {t.difficulty && <DifDots d={t.difficulty} size={9} />}
             </div>
@@ -6140,7 +6146,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <div key={k} onClick={ev => { if ((ev.target as HTMLElement).closest('input,button,a')) return; setTaskView({ eId: e.id, tid: t.id! }) }}
                           className="glass glass-hover" style={{ position: 'relative', borderRadius: 14, padding: '13px 14px', cursor: 'pointer', borderLeft: `3px solid ${done ? '#2E6E6E' : ps.accent}`, background: sel ? 'rgba(194,147,58,0.06)' : undefined }}>
                           <input type="checkbox" checked={sel} onClick={ev => ev.stopPropagation()} onChange={() => toggleOne(k)} title="Seleccionar" style={{ position: 'absolute', top: 12, right: 12, cursor: 'pointer' }} />
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.55)', marginBottom: 6 }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}</span>
+                            {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
+                          </div>
                           <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.25, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', marginBottom: 9, paddingRight: 20 }}>{t.t}</div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <span style={{ font: '700 10px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '2px 8px' }}>{ts.label}</span>
@@ -6189,7 +6198,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <td style={{ padding: '6px 8px' }}><input type="date" value={t.due} onChange={ev => setTaskDue(e, i, ev.target.value)} style={{ ...editInp, cursor: 'pointer' }} /></td>
                         </>) : (<>
                           <td style={{ padding: '9px 10px', fontSize: 12.5, fontWeight: 600, color: t.status === 'Terminada' ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</td>
-                          <td style={{ padding: '9px 10px' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.7)', whiteSpace: 'nowrap' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</span></td>
+                          <td style={{ padding: '9px 10px' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.7)', whiteSpace: 'nowrap' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</span>
+                            {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <div style={{ marginTop: 2, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86', whiteSpace: 'nowrap' }}>· {feat.t}</div> : null })()}
+                          </td>
                           <td style={{ padding: '9px 10px' }}><span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: ts.bg, color: ts.c, whiteSpace: 'nowrap' }}>{ts.label}</span></td>
                           <td style={{ padding: '9px 10px' }}>{t.priority ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><PrioBars p={t.priority} size={12} /><span style={{ fontSize: 11, fontWeight: 600, color: ps.c }}>{ps.label}</span></span> : <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>—</span>}</td>
                           <td style={{ padding: '9px 10px' }}>{typeof t.progress === 'number' ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 44, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden', display: 'inline-block' }}><span style={{ display: 'block', width: `${t.progress}%`, height: '100%', background: e.color }} /></span><span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{t.progress}%</span></span> : <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>—</span>}</td>
@@ -7366,6 +7378,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+                    {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
                     <span style={{ font: '700 9px var(--font-ui)', color: ts.c, background: ts.bg, borderRadius: 99, padding: '1px 7px' }}>{ts.label}</span>
                     {t.plan && <span style={{ font: '700 9px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
                     {taskDays(t).length > 1 && <span title={`En ${taskDays(t).length} días`} style={{ font: '700 9px var(--font-ui)', color: '#7A6FB0' }}>🗓{taskDays(t).length}</span>}
@@ -7409,6 +7422,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <div style={{ fontSize: 12.5, fontWeight: 600, color: done ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: done ? 'line-through' : 'none', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(20,35,61,0.55)' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: e.color }} />{e.name}</span>
+            {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: feat.color || '#5B6B86' }} />{feat.t}</span> : null })()}
             {showDay && t.plan && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E5A9E' }}>📅 {fmtDue(t.plan)}</span>}
             {t.difficulty && <DifDots d={t.difficulty} size={9} />}
           </div>

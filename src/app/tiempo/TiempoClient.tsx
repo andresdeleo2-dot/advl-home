@@ -2404,7 +2404,7 @@ export default function TiempoClient() {
                       )
                     })()}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
-                    <TaskPicker tasks={workTasks} rank={manualRank} stale={staleByTask} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={workTasks} epicas={epicasList} rank={manualRank} stale={staleByTask} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     {/* "🔔 Por revisar · en espera": tareas que esperas (no se trabajan, solo se checan). */}
                     {waitTasks.length > 0 && (
                       <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -5004,7 +5004,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, rank, stale, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; rank?: Record<string, number>; stale?: Record<string, number>; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, epicas, rank, stale, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; epicas: { id: string; features?: EpicaFeature[] }[]; rank?: Record<string, number>; stale?: Record<string, number>; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -5092,6 +5092,7 @@ function TaskPicker({ tasks, rank, stale, selId, draggable, mitIds, onToggleMit,
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: draggable ? 28 : 20 }}>
               <Tag c={t.color} bg={t.color + '22'}>{t.epicaName}</Tag>
+              {(() => { const feat = (epicas.find(e => e.id === t.epicaId)?.features || []).find(f => f.id === t.task.featureId); return feat ? <Tag c={feat.color || '#5B6B86'} bg={(feat.color || '#5B6B86') + '22'}>{feat.t}</Tag> : null })()}
               <Tag c={ts.c} bg={ts.bg}>{ts.label}</Tag>
               {t.recurring && <Tag c="#7A6FB0" bg="rgba(122,111,176,0.14)">diaria</Tag>}
               {stale?.[t.task.id!] != null && <span title={`La empezaste pero llevas ${stale[t.task.id!]} días sin avanzarla`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: '#8a3c2a', background: '#f6e3dd', border: '1px solid #e8cabf', borderRadius: 999, padding: '2px 8px' }}>⏳ {stale[t.task.id!]}d sin avanzar</span>}
