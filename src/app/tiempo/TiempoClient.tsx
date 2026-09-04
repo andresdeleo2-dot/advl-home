@@ -2014,6 +2014,7 @@ export default function TiempoClient() {
           <PlanDia
             day={planDay}
             today={today}
+            epicas={epicasList}
             onPickDay={setPlanDay}
             tasks={planTasks}
             routines={planRoutines}
@@ -4315,8 +4316,9 @@ type PlanDrag =
   | { kind: 'resize'; id: string; start: number; curDur: number; x: number; y: number }
   | { kind: 'wresize'; idx: number; start: number; curDur: number; x: number; y: number }
   | { kind: 'session'; grab: number; start0: number; curMin: number; moved: boolean; x: number; y: number }
-function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onBreak, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onOpenRoutine, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince }: {
+function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, onEditWorked, blocks, meetings, now, session, onSessionStart, allOpenTasks, onGeneral, onBreak, onStartRoutine, onAddDone, onOpenMeeting, onAdd, onSetEstMin, onRippleMove, onClone, chainDrag, onToggleChain, selBlocks, onToggleSel, onClearSel, onAddFree, onPatch, onRemove, onStart, onResume, onEdit, onStartTask, onOpenTask, onOpenRoutine, onNewTask, onWaiting, onFollowUp, waitingReady, waitSince, epicas }: {
   day: string; today: string; onPickDay: (d: string) => void
+  epicas: { id: string; features?: EpicaFeature[] }[]
   tasks: TodayTask[] | null; routines: PlanRoutine[]; scheduled: ScheduledBlock[]; worked: (HistoryRow & { _idx: number })[]; blocks: Block[]; meetings: Meeting[]; now: number
   onEditWorked: (idx: number, patch: Partial<HistoryRow>) => void
   onAdd: (t: TodayTask, start: number, dur?: number) => void
@@ -4352,6 +4354,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   waitSince: Record<string, string>
 }) {
   const [epFilter, setEpFilter] = useState<string | null>(null)
+  const [featFilter, setFeatFilter] = useState<string | null>(null)   // featureId | '__none__' | null(=todos); sólo aplica con epFilter puesto (un feature es de UNA épica)
+  const pickEpFilter = (id: string | null) => { setEpFilter(id); setFeatFilter(null) }
   const [waitPick, setWaitPick] = useState<string | null>(null)   // fila en espera con el selector abierto
   const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en la rejilla → registrar algo ya hecho
   // Editor de hora (lápiz) de cualquier tarjeta del calendario: agendada, hecha o la sesión en curso.
@@ -4433,8 +4437,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   const schedIds = new Set(scheduled.map(s => s.taskId).filter(Boolean))
   // Épicas presentes en las tareas por agendar (para el filtro).
   const planEpicas = [...new Map((tasks || []).filter(t => !schedIds.has(t.task.id)).map(t => [t.epicaId, { id: t.epicaId, name: t.epicaName, color: t.color }])).values()]
+  // Features de la épica filtrada (para el sub-filtro en cascada). Un feature es de UNA épica, así
+  // que sólo tiene sentido ofrecerlo una vez que ya elegiste esa épica arriba.
+  const planFeatures = epFilter ? (epicas.find(e => e.id === epFilter)?.features || []) : []
+  const matchFeat = (t: TodayTask) => !featFilter || (featFilter === '__none__' ? !t.task.featureId : t.task.featureId === featFilter)
   // Mismo orden que en Épicas: por planOrder (el acomodo manual del Día), no el orden crudo de llegada.
-  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id) && (!epFilter || t.epicaId === epFilter))
+  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id) && (!epFilter || t.epicaId === epFilter) && matchFeat(t))
     .sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))
   // Las "en espera" (estado 'Esperando') NO se agendan: se separan de "por agendar" a su propia lista.
   const pendWork = pending.filter(t => t.task.status !== 'Esperando')
@@ -4442,7 +4450,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   // día: ni que estén agendadas (bloque en el planner) ni que su plan sea otro día o ninguno. Por
   // eso sale de `allOpenTasks` (SIN filtrar por `taskDay`) y no de `tasks`, que sólo trae las de
   // hoy — si no, una en espera sin agendar para hoy desaparecía de aquí aunque sí saliera en Épicas.
-  const pendWait = (allOpenTasks || []).filter(t => t.task.status === 'Esperando' && (!epFilter || t.epicaId === epFilter))
+  const pendWait = (allOpenTasks || []).filter(t => t.task.status === 'Esperando' && (!epFilter || t.epicaId === epFilter) && matchFeat(t))
   const colorFor = (s: ScheduledBlock) => (tasks || []).find(t => t.task.id === s.taskId)?.color || AREAS[s.area]?.color || '#8b8379'
   const hours: number[] = []; for (let h = gridStart; h <= gridEnd; h += 60) hours.push(h)
   const gridH = (gridEnd - gridStart) * PXM
@@ -4794,16 +4802,29 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           <button onClick={() => onNewTask(epFilter || undefined)} style={{ alignSelf: 'flex-start', border: '1px dashed #ccc2b2', borderRadius: 999, padding: '8px 14px', fontSize: 13, color: '#8a4b28', cursor: 'pointer', background: 'transparent' }}>+ Nueva tarea{epFilter ? ` en ${planEpicas.find(e => e.id === epFilter)?.name || ''}` : ''}</button>
           {planEpicas.length > 1 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              <button onClick={() => setEpFilter(null)} style={{ border: `1px solid ${!epFilter ? '#b4653a' : '#e7dfd2'}`, background: !epFilter ? '#f5ece2' : '#faf7f1', color: !epFilter ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer' }}>Todas</button>
+              <button onClick={() => pickEpFilter(null)} style={{ border: `1px solid ${!epFilter ? '#b4653a' : '#e7dfd2'}`, background: !epFilter ? '#f5ece2' : '#faf7f1', color: !epFilter ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer' }}>Todas</button>
               {planEpicas.map(e => { const on = epFilter === e.id; return (
-                <button key={e.id} onClick={() => setEpFilter(on ? null : e.id)} title={e.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${on ? '#b4653a' : '#e7dfd2'}`, background: on ? '#f5ece2' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer', maxWidth: 130 }}>
+                <button key={e.id} onClick={() => pickEpFilter(on ? null : e.id)} title={e.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${on ? '#b4653a' : '#e7dfd2'}`, background: on ? '#f5ece2' : '#faf7f1', color: on ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '3px 10px', fontSize: 11.5, cursor: 'pointer', maxWidth: 130 }}>
                   <span style={{ width: 7, height: 7, borderRadius: 999, background: e.color, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
                 </button>
               ) })}
             </div>
           )}
+          {/* Sub-filtro por feature, en cascada: sólo aparece con una épica elegida arriba */}
+          {epFilter && planFeatures.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', paddingLeft: 4 }}>
+              <span style={{ fontSize: 10, color: '#c2b9ab' }}>↳</span>
+              <button onClick={() => setFeatFilter(null)} style={{ border: `1px solid ${!featFilter ? '#c2933a' : '#e7dfd2'}`, background: !featFilter ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: !featFilter ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Todas</button>
+              {planFeatures.map(f => { const on = featFilter === f.id; const fc = f.color || '#5B6B86'; return (
+                <button key={f.id} onClick={() => setFeatFilter(on ? null : f.id)} title={f.t} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: on ? `1.5px solid ${fc}` : '1px solid #e7dfd2', background: on ? hexA(fc, 0.14) : '#faf7f1', color: on ? fc : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', maxWidth: 130 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 999, background: fc, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
+                </button>
+              ) })}
+              <button onClick={() => setFeatFilter(featFilter === '__none__' ? null : '__none__')} style={{ border: `1px solid ${featFilter === '__none__' ? '#c2933a' : '#e7dfd2'}`, background: featFilter === '__none__' ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: featFilter === '__none__' ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Sin feature</button>
+            </div>
+          )}
           {pendWork.length ? pendWork.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurForDay(t.task, day), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
-            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? 'Sin tareas por agendar en esa épica.' : pendWait.length ? 'Nada por agendar — solo tienes cosas en espera arriba.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
+            <span style={{ fontSize: 13, color: '#a49b90', lineHeight: 1.5 }}>{epFilter ? `Sin tareas por agendar en ese filtro${featFilter ? ' (épica + feature)' : ''}.` : pendWait.length ? 'Nada por agendar — solo tienes cosas en espera arriba.' : 'No hay tareas planeadas para este día. Crea una con "+ Nueva tarea", cámbiala en Épicas, o arrastra una rutina de abajo.'}</span>
           )}
           {/* "En espera · por revisar" se muestra ARRIBA (recordatorio), justo debajo de "empezar algo ahora". */}
           {routines.length > 0 && (

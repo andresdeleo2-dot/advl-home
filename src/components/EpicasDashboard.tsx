@@ -6219,6 +6219,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )}
             {backlogFEpica !== 'todas' && renderFeatureFilterChips(backlogFEpica, backlogFFeature, setBacklogFFeature)}
+            {/* Con "Todas" las épicas a la vista, un feature es de UNA épica — no tiene sentido una
+                fila de chips (colisionarían nombres/colores de épicas distintas). En vez de eso, un
+                selector agrupado por épica: elegirlo aquí es un atajo que te mete a esa épica +
+                feature de una vez (mismo resultado que picar el chip de la épica y luego el del
+                feature, sin tener que adivinar en cuál épica vive). */}
+            {backlogFEpica === 'todas' && (() => {
+              const withFeats = activeEpics.filter(e => (e.features || []).length > 0)
+              if (!withFeats.length) return null
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+                  <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>Feature</span>
+                  <select value="" onChange={ev => {
+                    const id = ev.target.value; if (!id) return
+                    const ep = withFeats.find(e => (e.features || []).some(f => f.id === id))
+                    if (ep) { setBacklogFEpica(ep.id); setBacklogFFeature(id) }
+                  }} style={filterSel} title="Ir directo a un feature (de cualquier épica)">
+                    <option value="">Ver por feature…</option>
+                    {withFeats.map(ep => (
+                      <optgroup key={ep.id} label={ep.name}>
+                        {(ep.features || []).map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+              )
+            })()}
 
             {/* Filtros por estado de trabajo de hoy — también en el backlog */}
             <div style={{ padding: '0 17px 6px' }}>{renderWorkFilters(today)}</div>

@@ -140,6 +140,7 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const [kind, setKind] = useState<'query' | 'feed'>('query')
   const [valueIn, setValueIn] = useState('')
   const [instrIn, setInstrIn] = useState('')
+  const [editIdx, setEditIdx] = useState<number | null>(null)   // índice del tema en edición (null = formulario en modo "agregar")
 
   useEffect(() => {
     fetch('/api/news/config').then(r => r.json()).then(j => setTracks(j.tracks || [])).catch(() => setErr('No se pudieron cargar los temas'))
@@ -155,12 +156,21 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     } catch { setErr('No se pudo guardar'); setSaving(false) }
   }
 
-  const remove = (i: number) => { if (!tracks) return; save(tracks.filter((_, j) => j !== i)) }
-  const add = () => {
+  const resetForm = () => { setEditIdx(null); setNewTopicMode(false); setTopicIn(''); setLabelIn(''); setKind('query'); setValueIn(''); setInstrIn('') }
+  // Los índices se recorren al borrar: si estabas editando uno, mejor cerrar el formulario que
+  // arriesgar guardar sobre el tema equivocado.
+  const remove = (i: number) => { if (!tracks) return; resetForm(); save(tracks.filter((_, j) => j !== i)) }
+  const startEdit = (i: number) => {
+    const t = tracks?.[i]; if (!t) return
+    setEditIdx(i); setNewTopicMode(false)
+    setTopicIn(t.topic); setLabelIn(t.label); setKind(t.query ? 'query' : 'feed'); setValueIn(t.query || t.feedUrl || ''); setInstrIn(t.instructions || '')
+  }
+  const submit = () => {
     const topic = topicIn.trim(), label = labelIn.trim(), value = valueIn.trim(), instructions = instrIn.trim()
     if (!topic || !label || !value || !tracks) return
     const t: NewsTrack = { topic, label, ...(kind === 'query' ? { query: value } : { feedUrl: value }), ...(instructions ? { instructions } : {}) }
-    save([...tracks, t]).then(() => { setTopicIn(''); setLabelIn(''); setValueIn(''); setInstrIn('') })
+    const next = editIdx != null ? tracks.map((x, j) => (j === editIdx ? t : x)) : [...tracks, t]
+    save(next).then(resetForm)
   }
 
   const topics = tracks ? [...new Set(tracks.map(t => t.topic))] : []
@@ -183,11 +193,13 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
                   <div style={{ font: '700 10px/1 var(--font-ui, system-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 6 }}>{TOPIC_ICON[tp] || '📰'} {tp}</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     {tracks.map((t, i) => t.topic === tp && (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 9, background: 'rgba(15,35,64,0.03)' }}>
+                      <div key={i} role="button" tabIndex={0} onClick={() => startEdit(i)} onKeyDown={ev => { if (ev.key === 'Enter') startEdit(i) }} title="Editar este tema"
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 9, cursor: 'pointer',
+                          border: editIdx === i ? '1px solid #C2933A' : '1px solid transparent', background: editIdx === i ? 'rgba(194,147,58,0.10)' : 'rgba(15,35,64,0.03)' }}>
                         <span style={{ fontSize: 12.5, fontWeight: 600, color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.label}</span>
                         {t.instructions && <span title={t.instructions} style={{ fontSize: 11, flexShrink: 0 }}>📝</span>}
                         <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{t.query ? '🔍 búsqueda' : '📡 rss'}</span>
-                        <button aria-label="Quitar" title="Quitar" onClick={() => remove(i)} disabled={saving} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(176,82,46,0.75)', fontSize: 13 }}>✕</button>
+                        <button aria-label="Quitar" title="Quitar" onClick={ev => { ev.stopPropagation(); remove(i) }} disabled={saving} style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(176,82,46,0.75)', fontSize: 13 }}>✕</button>
                       </div>
                     ))}
                   </div>
@@ -198,7 +210,10 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
           )}
 
           <div style={{ borderTop: '1px solid rgba(15,35,64,0.08)', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ font: '700 10px/1 var(--font-ui, system-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Agregar tema</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ font: '700 10px/1 var(--font-ui, system-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: editIdx != null ? '#A87A2C' : 'rgba(15,35,64,0.5)' }}>{editIdx != null ? '✎ Editando tema' : 'Agregar tema'}</span>
+              {editIdx != null && <button onClick={resetForm} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 11, fontWeight: 700, textDecoration: 'underline' }}>Cancelar</button>}
+            </div>
             {newTopicMode || topics.length === 0 ? (
               <div style={{ display: 'flex', gap: 6 }}>
                 <input autoFocus value={topicIn} onChange={e => setTopicIn(e.target.value)} placeholder="Nombre de la nueva categoría (ej. Deportes)" style={{ ...nf, flex: 1 }} />
@@ -219,7 +234,7 @@ function NewsSettings({ onClose, onSaved }: { onClose: () => void; onSaved: () =
             <input value={valueIn} onChange={e => setValueIn(e.target.value)} placeholder={kind === 'query' ? 'Qué buscar (ej. Nintendo Switch 3)' : 'URL del feed RSS (https://…)'} style={{ ...nf, fontFamily: kind === 'feed' ? 'ui-monospace,SFMono-Regular,Menlo,monospace' : 'inherit' }} />
             <textarea value={instrIn} onChange={e => setInstrIn(e.target.value)} rows={2} placeholder="¿Algo específico que quieras que se enfoque en el resumen? (opcional — ej. 'solo fecha de lanzamiento y precio')" style={{ ...nf, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4 }} />
             {err && <div style={{ fontSize: 12, color: '#B0522E' }}>{err}</div>}
-            <button onClick={add} disabled={saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()} style={{ cursor: saving ? 'default' : 'pointer', borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 700, border: 'none', background: (saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()) ? 'rgba(15,35,64,0.08)' : 'linear-gradient(135deg,#E7C56B,#C2933A)', color: (saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()) ? 'rgba(20,35,61,0.4)' : '#1B1305' }}>{saving ? 'Guardando…' : '+ Agregar tema'}</button>
+            <button onClick={submit} disabled={saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()} style={{ cursor: saving ? 'default' : 'pointer', borderRadius: 10, padding: 11, fontSize: 13.5, fontWeight: 700, border: 'none', background: (saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()) ? 'rgba(15,35,64,0.08)' : 'linear-gradient(135deg,#E7C56B,#C2933A)', color: (saving || !topicIn.trim() || !labelIn.trim() || !valueIn.trim()) ? 'rgba(20,35,61,0.4)' : '#1B1305' }}>{saving ? 'Guardando…' : editIdx != null ? '✓ Guardar cambios' : '+ Agregar tema'}</button>
           </div>
         </div>
       </div>
