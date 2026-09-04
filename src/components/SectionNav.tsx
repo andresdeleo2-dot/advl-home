@@ -20,8 +20,8 @@ export default function SectionNav({ current }: { current: 'accesos' | 'panel' |
     { id: 'panel', label: 'Panel', href: '/panel' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
     { id: 'epicas', label: 'Épicas', href: '/epicas' },
-    { id: 'ideas', label: 'Ideas', href: '/ideas' },
     { id: 'accesos', label: 'Accesos', href: '/' },
+    { id: 'ideas', label: 'Ideas', href: '/ideas' },
   ] as const
   return (
     <nav className="section-nav" aria-label="Secciones" style={{ display: 'inline-flex', gap: 2, background: 'rgba(10,20,38,0.28)', border: '1px solid rgba(255,255,255,0.14)', padding: 3, borderRadius: 999, boxShadow: 'inset 0 1px 2px rgba(0,0,0,.18)' }}>
