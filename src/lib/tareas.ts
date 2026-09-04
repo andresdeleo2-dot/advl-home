@@ -36,6 +36,7 @@ export type TareaRow = {
   comentarios?: unknown[] | null
   waiting_for?: string | null
   waiting_task_id?: string | null
+  waiting_since?: string | null
   updated_at?: string | null
   feature_id?: string | null
   persona_id?: string | null
@@ -76,6 +77,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.comentarios?.length) t.comentarios = r.comentarios as EpicaTask['comentarios']
   if (r.waiting_for) t.waitingFor = r.waiting_for
   if (r.waiting_task_id) t.waitingTaskId = r.waiting_task_id
+  if (r.waiting_since) t.waitingSince = r.waiting_since
   if (r.updated_at) t.updatedAt = r.updated_at
   if (r.feature_id) t.featureId = r.feature_id
   if (r.persona_id) t.personaId = r.persona_id

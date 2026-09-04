@@ -23,8 +23,11 @@ export function markWaitSince(taskId: string, on: boolean, todayIso: string) {
 }
 
 // Días transcurridos desde que se marcó "en espera" (0 = hoy). null si no hay registro.
-export function waitAgeDays(since: Record<string, string>, taskId: string, todayIso: string): number | null {
-  const d = since[taskId]; if (!d) return null
+// `sinceIso` acepta tanto 'YYYY-MM-DD' (localStorage) como un datetime completo (espejo de
+// servidor, waitingSince): sólo se usa la parte de fecha, para que el cálculo por días sea igual.
+export function waitAgeDays(sinceIso: string | null | undefined, todayIso: string): number | null {
+  if (!sinceIso) return null
+  const d = sinceIso.slice(0, 10)
   const n = Math.floor((new Date(todayIso + 'T00:00:00').getTime() - new Date(d + 'T00:00:00').getTime()) / 86400000)
   return n >= 0 ? n : 0
 }

@@ -2436,7 +2436,7 @@ export default function TiempoClient() {
                         {waitTasks.map(tt => {
                           const wm = waitMetaT(tt.task.waitingFor)
                           const open = waitPickId === tt.task.id
-                          const age = tt.task.id ? waitAgeDays(waitSince, tt.task.id, iso(new Date())) : null
+                          const age = waitAgeDays(tt.task.waitingSince || (tt.task.id ? waitSince[tt.task.id] : undefined), iso(new Date()))
                           const nudge = age != null && age >= WAIT_NUDGE_DAYS
                           const ageLbl = waitAgeLabel(age)
                           return (
@@ -4762,7 +4762,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
               {pendWait.map(tt => {
                 const wm = waitMetaT(tt.task.waitingFor)
                 const open = waitPick === tt.task.id
-                const age = tt.task.id ? waitAgeDays(waitSince, tt.task.id, today) : null
+                const age = waitAgeDays(tt.task.waitingSince || (tt.task.id ? waitSince[tt.task.id] : undefined), today)
                 const nudge = age != null && age >= WAIT_NUDGE_DAYS   // ya llevas mucho esperando
                 const ageLbl = waitAgeLabel(age)
                 return (
