@@ -16,7 +16,7 @@ import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, compl
 // Paleta para el color auto-asignado de un Feature nuevo (misma paleta que EpicasDashboard).
 const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '#B07A56']
 import { sanitizeHtml } from '@/lib/sanitize'
-import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta as waitMetaT } from '@/lib/waiting'
+import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS_SIMPLE, waitMeta as waitMetaT } from '@/lib/waiting'
 import { isAutoNote, fmtLogDate } from '@/lib/tareas'
 import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
@@ -2443,7 +2443,7 @@ export default function TiempoClient() {
                               {open && (
                                 <div style={{ position: 'absolute', top: 'calc(100% - 2px)', right: 8, zIndex: 30, display: 'flex', flexWrap: 'wrap', gap: 5, width: 212, padding: 9, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 12, boxShadow: '0 18px 34px -18px rgba(28,26,23,0.5)' }}>
                                   <span style={{ flexBasis: '100%', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#a49b90' }}>¿Qué esperas?</span>
-                                  {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = tt.task.waitingFor === val; return (
+                                  {WAIT_REASONS_SIMPLE.map(([val, ic, lbl]) => { const sel = tt.task.waitingFor === val; return (
                                     <button key={val} onClick={() => { setWaitingT(tt, val); setWaitPickId(null) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', fontSize: 12, fontWeight: 600, border: sel ? 'none' : '1px solid #e2d9cb', background: sel ? '#c2933a' : '#fff', color: sel ? '#fff' : '#1c1a17' }}>{ic} {lbl}</button>
                                   )})}
                                   <button onClick={() => { setWaitingT(tt, null); setWaitPickId(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', fontSize: 12, fontWeight: 700, border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
@@ -4728,7 +4728,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
                     {open && (
                       <div style={{ position: 'absolute', top: 'calc(100% - 2px)', right: 6, zIndex: 30, display: 'flex', flexWrap: 'wrap', gap: 5, width: 210, padding: 9, background: '#fff', border: '1px solid #e2d9cb', borderRadius: 12, boxShadow: '0 18px 34px -18px rgba(28,26,23,0.5)' }}>
                         <span style={{ flexBasis: '100%', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#a49b90' }}>¿Qué esperas?</span>
-                        {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = tt.task.waitingFor === val; return (
+                        {WAIT_REASONS_SIMPLE.map(([val, ic, lbl]) => { const sel = tt.task.waitingFor === val; return (
                           <button key={val} onClick={() => { onWaiting(tt, val); setWaitPick(null) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', fontSize: 12, fontWeight: 600, border: sel ? 'none' : '1px solid #e2d9cb', background: sel ? '#c2933a' : '#fff', color: sel ? '#fff' : '#1c1a17' }}>{ic} {lbl}</button>
                         )})}
                         <button onClick={() => { onWaiting(tt, null); setWaitPick(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', fontSize: 12, fontWeight: 700, border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
@@ -5448,7 +5448,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
           {t.status === 'Esperando' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
               <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#a87a2c' }}>🔔 ¿Qué esperas?</span>
-              {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
+              {WAIT_REASONS_SIMPLE.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
                 <button key={val} onClick={() => { if (waitingReady) setT(p => ({ ...p, waitingFor: val })) }} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 700, border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#c2933a' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
               )})}
               <button onClick={() => { if (t.id) markWaitSince(t.id, false, iso(new Date())); setT(p => ({ ...p, status: p.plan === iso(new Date()) ? 'En curso' : 'Por hacer', ...(waitingReady ? { waitingFor: '' } : {}) })) }} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', fontSize: 11.5, fontWeight: 800, border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>

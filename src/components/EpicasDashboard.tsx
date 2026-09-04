@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { createPortal } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask, isAutoNote, fmtLogDate } from '@/lib/tareas'
-import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, waitMeta } from '@/lib/waiting'
+import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, WAIT_REASONS_SIMPLE, waitMeta } from '@/lib/waiting'
 import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
 import BreakButton from '@/components/BreakButton'
@@ -250,6 +250,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [orderSeq, setOrderSeq] = useState<string[]>([])                // keys en el orden tocado (1,2,3…) mientras dura el modo
   const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el selector de tiempo (chip ⏱) abierto
   const [waitEditKey, setWaitEditKey] = useState<string | null>(null)   // fila con el selector de "en espera / qué esperas" abierto
+  const [waitTaskPickerKey, setWaitTaskPickerKey] = useState<string | null>(null)  // dentro de ese popover: eligiendo DE QUÉ TAREA depende
   const [featureEditKey, setFeatureEditKey] = useState<string | null>(null)   // fila con el selector de Feature abierto (cambiarlo sin abrir la tarea)
   const [waitSince, setWaitSince] = useState<Record<string, string>>({}) // taskId → fecha en que se marcó "en espera" (para "llevas N días esperando")
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
@@ -288,6 +289,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const estMinReady = useRef(false)      // true si la columna est_min existe (estimado propio de horas por tarea)
   const dayPlansReady = useRef(false)    // true si la columna day_plans existe (sesiones por día)
   const waitingReady = useRef(false)     // true si la columna waiting_for existe ("qué esperas" de las tareas en espera)
+  const waitingTaskReady = useRef(false) // true si la columna waiting_task_id existe (esperar a OTRA tarea, no sólo texto)
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const featuresReady = useRef(false)    // true si epicas.features + tareas.feature_id existen (Features dentro de la épica)
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
@@ -320,6 +322,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       estMinReady.current = !!j.estMinReady
       dayPlansReady.current = !!j.dayPlansReady
       waitingReady.current = !!j.waitingReady
+      waitingTaskReady.current = !!j.waitingTaskReady
       weekBudgetReady.current = !!j.weekBudgetReady
       featuresReady.current = !!j.featuresReady
       {
@@ -1080,6 +1083,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const i = (e.tasks || []).findIndex(t => t.id === tid)
     return i < 0 ? null : { e, t: e.tasks[i], i }
   }
+  /** Busca una tarea por su id SOLO (sin saber de qué épica es) — para resolver dependencias
+   *  ("esperas a" apunta sólo al id de la tarea, no a su épica). */
+  const findTaskById = (tid?: string) => {
+    if (!tid) return null
+    for (const e of activeEpics) { const i = (e.tasks || []).findIndex(t => t.id === tid); if (i >= 0) return { e, t: e.tasks[i], i } }
+    return null
+  }
   /** Igual, pero contra el ref (para handlers async fuera del render). */
   const findTaskRef = (eId: string, tid: string) => {
     const e = epicsRef.current.find(x => x.id === eId)
@@ -1819,16 +1829,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /** "En espera / Por revisar": marca una tarea como algo que ESPERAS (no que trabajas). La MARCA
    *  vive en el estado 'Esperando' (sin migrar); `reason` (email/respuesta/…) es el DETALLE y sólo se
    *  guarda si existe la columna waiting_for. `reason=null` la quita (vuelve a trabajable). */
-  const setTaskWaiting = (e: Epica, ti: number, reason: string | null) => {
+  const setTaskWaiting = (e: Epica, ti: number, reason: string | null, waitingTaskId?: string | null) => {
     const tasks = clone(e.tasks)
     const t = tasks[ti]; if (!t || t.status === 'Terminada') return
     if (reason) {
       if (t.status !== 'Esperando') { if (t.planStatusPrev == null) t.planStatusPrev = t.status; t.status = 'Esperando' }
       if (waitingReady.current) t.waitingFor = reason
+      // Dependencia real (waitingTaskId): sólo se conserva si el motivo sigue siendo 'tarea'; al
+      // cambiar a cualquier otro motivo se limpia sola (no dejar una referencia colgada).
+      if (reason === 'tarea' && waitingTaskId) { if (waitingTaskReady.current) t.waitingTaskId = waitingTaskId }
+      else if (waitingTaskReady.current || 'waitingTaskId' in t) t.waitingTaskId = ''
     } else {
       if (t.status === 'Esperando') t.status = (t.plan === todayISO() ? 'En curso' : (t.planStatusPrev && t.planStatusPrev !== 'Esperando' ? t.planStatusPrev : 'Por hacer'))
       delete t.planStatusPrev
       if (waitingReady.current || 'waitingFor' in t) t.waitingFor = ''   // '' → se manda null y limpia la columna
+      if (waitingTaskReady.current || 'waitingTaskId' in t) t.waitingTaskId = ''
     }
     patchEpic(e.id, { tasks })
     if (t.id) { markWaitSince(t.id, !!reason, todayISO()); setWaitSince(readWaitSince()) }   // "esperando desde" para el seguimiento
@@ -3037,24 +3052,43 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const waiting = t.status === 'Esperando'
     const wm = waitMeta(t.waitingFor)
     const open = waitEditKey === key
+    const picking = waitTaskPickerKey === key
+    // Dependencia real: "esperas" puede apuntar a OTRA tarea en vez de sólo texto — se resuelve
+    // aquí para poder mostrar su nombre y, sobre todo, avisar cuando YA se terminó.
+    const dep = t.waitingFor === 'tarea' ? findTaskById(t.waitingTaskId) : null
+    const depDone = !!dep && dep.t.status === 'Terminada'
     return (
       <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }} onClick={ev => ev.stopPropagation()}>
-        <button onClick={ev => { ev.stopPropagation(); setWaitEditKey(open ? null : key) }} onPointerDown={ev => ev.stopPropagation()}
-          title={waiting ? `En espera${t.waitingFor ? ` · esperas ${wm.label.toLowerCase()}` : ''} · toca para cambiar o quitar` : 'Marcar: no la trabajas, la revisas (esperas algo: email, respuesta, comentario…)'}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '800 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 9px',
-            border: `1px ${waiting ? 'solid rgba(168,122,44,0.6)' : 'dashed rgba(15,35,64,0.3)'}`,
-            background: open ? 'rgba(194,147,58,0.22)' : waiting ? 'rgba(194,147,58,0.16)' : 'rgba(15,35,64,0.03)', color: waiting ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>
-          {waiting ? `${wm.icon} ${wm.label}` : '🔔 En espera'}
+        <button onClick={ev => { ev.stopPropagation(); setWaitTaskPickerKey(null); setWaitEditKey(open ? null : key) }} onPointerDown={ev => ev.stopPropagation()}
+          title={depDone ? `Ya terminaste "${dep!.t.t}" — la tarea de la que dependías` : waiting ? `En espera${t.waitingFor ? ` · esperas ${wm.label.toLowerCase()}${dep ? `: ${dep.t.t}` : ''}` : ''} · toca para cambiar o quitar` : 'Marcar: no la trabajas, la revisas (esperas algo: email, respuesta, otra tarea…)'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '800 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 9px', maxWidth: 220,
+            border: `1px ${depDone ? 'solid rgba(46,110,110,0.55)' : waiting ? 'solid rgba(168,122,44,0.6)' : 'dashed rgba(15,35,64,0.3)'}`,
+            background: open ? 'rgba(194,147,58,0.22)' : depDone ? 'rgba(46,110,110,0.14)' : waiting ? 'rgba(194,147,58,0.16)' : 'rgba(15,35,64,0.03)', color: depDone ? '#2E6E6E' : waiting ? '#A87A2C' : 'rgba(20,35,61,0.6)' }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{depDone ? `✓ ${dep!.t.t} listo` : waiting ? (dep ? `${wm.icon} ${dep.t.t}` : `${wm.icon} ${wm.label}`) : '🔔 En espera'}</span>
         </button>
         {open && (
-          <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 5px)', ...(align === 'right' ? { right: 0 } : { left: 0 }), zIndex: 40, display: 'flex', flexWrap: 'wrap', gap: 5, width: 208, padding: 9, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
-            <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>¿Qué esperas?</span>
-            {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = waiting && t.waitingFor === val; return (
-              <button key={val} onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, val); setWaitEditKey(null) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#16365F' }}>{ic} {lbl}</button>
-            )})}
-            {waiting && <button onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, null); setWaitEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>}
-            {waiting && <button onClick={ev => { ev.stopPropagation(); followUpWaiting(e, i) }} title="Ya llevas mucho esperando: tráela a hoy para moverte (mandar recordatorio, insistir…)" style={{ flexBasis: '100%', cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: '1px solid rgba(168,122,44,0.5)', background: 'rgba(194,147,58,0.12)', color: '#8a5a1a' }}>📌 Dar seguimiento · traer a hoy</button>}
-            {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+          <div onClick={ev => ev.stopPropagation()} style={{ position: 'absolute', top: 'calc(100% + 5px)', ...(align === 'right' ? { right: 0 } : { left: 0 }), zIndex: 40, display: 'flex', flexWrap: 'wrap', gap: 5, width: picking ? 240 : 208, padding: 9, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
+            {picking ? (<>
+              <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>¿De qué tarea depende?</span>
+              <select autoFocus defaultValue={t.waitingTaskId || ''} onChange={ev => { const id = ev.target.value; if (id) { setTaskWaiting(e, i, 'tarea', id); setWaitEditKey(null); setWaitTaskPickerKey(null) } }}
+                style={{ flexBasis: '100%', cursor: 'pointer', border: '1px solid rgba(15,35,64,0.16)', borderRadius: 8, padding: '7px 8px', fontSize: 12.5, color: '#16365F', outline: 'none' }}>
+                <option value="">— Elige una tarea —</option>
+                {activeEpics.map(ep => {
+                  const opts = (ep.tasks || []).filter(x => x.id && x.id !== t.id && x.status !== ARCHIVED)
+                  return opts.length ? <optgroup key={ep.id} label={ep.name}>{opts.map(x => <option key={x.id} value={x.id}>{x.t}{x.status === 'Terminada' ? ' ✓ terminada' : ''}</option>)}</optgroup> : null
+                })}
+              </select>
+              <button onClick={ev => { ev.stopPropagation(); setWaitTaskPickerKey(null) }} style={{ flexBasis: '100%', cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11px var(--font-ui)', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)' }}>← otro motivo</button>
+              {!waitingTaskReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-13-waiting-task.sql para guardar la dependencia.</span>}
+            </>) : (<>
+              <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>¿Qué esperas?</span>
+              {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = waiting && t.waitingFor === val; return (
+                <button key={val} onClick={ev => { ev.stopPropagation(); if (val === 'tarea') setWaitTaskPickerKey(key); else { setTaskWaiting(e, i, val); setWaitEditKey(null) } }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#16365F' }}>{ic} {lbl}</button>
+              )})}
+              {waiting && <button onClick={ev => { ev.stopPropagation(); setTaskWaiting(e, i, null); setWaitEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>}
+              {waiting && <button onClick={ev => { ev.stopPropagation(); followUpWaiting(e, i) }} title="Ya llevas mucho esperando: tráela a hoy para moverte (mandar recordatorio, insistir…)" style={{ flexBasis: '100%', cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: '1px solid rgba(168,122,44,0.5)', background: 'rgba(194,147,58,0.12)', color: '#8a5a1a' }}>📌 Dar seguimiento · traer a hoy</button>}
+              {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
+            </>)}
           </div>
         )}
       </span>
@@ -6834,9 +6868,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   {t.status === 'Esperando' && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 9, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
                       <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 ¿Qué esperas?</span>
-                      {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
+                      {WAIT_REASONS_SIMPLE.map(([val, ic, lbl]) => { const sel = t.waitingFor === val; return (
                         <button key={val} onClick={() => setTaskWaiting(ep, i, val)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
                       )})}
+                      {t.waitingFor === 'tarea' && (() => { const dep = findTaskById(t.waitingTaskId); return dep ? <span style={{ flexBasis: '100%', fontSize: 11, color: dep.t.status === 'Terminada' ? '#2E6E6E' : '#8a5a1a', fontWeight: 700 }}>🔗 {dep.t.status === 'Terminada' ? `${dep.t.t} ya está lista ✓` : `esperas: ${dep.t.t}`} <span style={{ fontWeight: 500, color: 'rgba(20,35,61,0.5)' }}>· cambia la tarea desde la lista, no aquí</span></span> : null })()}
                       <button onClick={() => setTaskWaiting(ep, i, null)} title="La quitas de espera y vuelve a trabajable" style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 11px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Ya llegó · quitar espera</button>
                       <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Aparece en la bandeja &quot;En espera · Por revisar&quot; con su &quot;hace N días&quot;.</span>
                       {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
@@ -7719,16 +7754,40 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const pct = goalH > 0 ? Math.min(100, (invH / goalH) * 100) : 0
                 const over = goalH > 0 && invH > goalH
                 const hmm = (m: number) => m >= 60 ? `${Math.round(m / 60 * 10) / 10}h` : `${m}m`
+                // Tendencia: últimas 8 semanas de tiempo REAL invertido (histórico, de la bitácora).
+                // La meta sólo se conoce HOY — se dibuja como referencia constante, no "la meta de
+                // entonces" (eso no se guarda; no hay de dónde sacarlo).
+                const weekMons = Array.from({ length: 8 }, (_, i) => mondayISO(addDays(today, -7 * (7 - i))))
+                const trend = weekMons.map(mon => {
+                  const sun = addDays(mon, 6)
+                  const min = (featured.tasks || []).reduce((s, t) => s + (t.progressLog || []).reduce((a, l) => a + ((l.d >= mon && l.d <= sun && typeof (l as { min?: number }).min === 'number') ? (l as { min?: number }).min! : 0), 0), 0)
+                  return { mon, h: min / 60 }
+                })
+                const maxH = Math.max(goalH, ...trend.map(w => w.h), 1)
+                const hasTrend = trend.some(w => w.h > 0)
                 return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '0 0 20px', padding: '11px 14px', borderRadius: 13, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)', maxWidth: 440 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 160 }}>
-                      <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Esta semana</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: over ? '#B0522E' : '#16365F' }}>{hmm(invMin)}{goalH > 0 ? <span style={{ color: 'rgba(20,35,61,0.5)', fontWeight: 600 }}> de {goalH}h</span> : ''}</span>
-                      {goalH > 0 && <span style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.1)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${Math.max(3, pct)}%`, height: '100%', background: over ? '#B0522E' : featured.color }} /></span>}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, margin: '0 0 20px', padding: '11px 14px', borderRadius: 13, background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)', maxWidth: 440 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 160 }}>
+                        <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>Esta semana</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: over ? '#B0522E' : '#16365F' }}>{hmm(invMin)}{goalH > 0 ? <span style={{ color: 'rgba(20,35,61,0.5)', fontWeight: 600 }}> de {goalH}h</span> : ''}</span>
+                        {goalH > 0 && <span style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.1)', overflow: 'hidden' }}><span style={{ display: 'block', width: `${Math.max(3, pct)}%`, height: '100%', background: over ? '#B0522E' : featured.color }} /></span>}
+                      </div>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>Meta h/sem
+                        <input type="number" min={0} max={80} value={goalH || ''} placeholder="—" onChange={ev => setEpicBudget(featured.id, Math.max(0, Number(ev.target.value) || 0))} style={{ width: 56, border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontWeight: 700, color: '#16365F', outline: 'none' }} />
+                      </label>
                     </div>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}>Meta h/sem
-                      <input type="number" min={0} max={80} value={goalH || ''} placeholder="—" onChange={ev => setEpicBudget(featured.id, Math.max(0, Number(ev.target.value) || 0))} style={{ width: 56, border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontWeight: 700, color: '#16365F', outline: 'none' }} />
-                    </label>
+                    {hasTrend && (
+                      <div style={{ borderTop: '1px solid rgba(15,35,64,0.08)', paddingTop: 9 }}>
+                        <span style={{ font: '700 9px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>últimas 8 semanas</span>
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, marginTop: 6, height: 40, position: 'relative' }}>
+                          {goalH > 0 && <div title={`meta actual: ${goalH}h/sem`} style={{ position: 'absolute', left: 0, right: 0, bottom: `${Math.min(100, (goalH / maxH) * 100)}%`, borderTop: '1px dashed rgba(20,35,61,0.3)' }} />}
+                          {trend.map((w, i) => (
+                            <div key={w.mon} title={`semana del ${fmtDue(w.mon)} · ${hmm(Math.round(w.h * 60))}`} style={{ flex: 1, height: `${Math.max(2, (w.h / maxH) * 100)}%`, borderRadius: '3px 3px 0 0', background: i === trend.length - 1 ? featured.color : hexA(featured.color, 0.35) }} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })()}
@@ -8631,9 +8690,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {taskDraft.status === 'Esperando' && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 8, padding: '9px 11px', borderRadius: 10, border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.07)' }}>
                     <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase', color: '#A87A2C' }}>🔔 ¿Qué esperas?</span>
-                    {WAIT_REASONS.map(([val, ic, lbl]) => { const sel = taskDraft.waitingFor === val; return (
+                    {WAIT_REASONS_SIMPLE.map(([val, ic, lbl]) => { const sel = taskDraft.waitingFor === val; return (
                       <button key={val} onClick={() => setTaskDraft(d => ({ ...d, waitingFor: val }))} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(168,122,44,0.4)', background: sel ? '#C2933A' : '#fff', color: sel ? '#fff' : '#8a5a1a' }}>{ic} {lbl}</button>
                     )})}
+                    {taskDraft.waitingFor === 'tarea' && (() => { const dep = findTaskById(taskDraft.waitingTaskId); return dep ? <span style={{ flexBasis: '100%', fontSize: 11, color: dep.t.status === 'Terminada' ? '#2E6E6E' : '#8a5a1a', fontWeight: 700 }}>🔗 {dep.t.status === 'Terminada' ? `${dep.t.t} ya está lista ✓` : `esperas: ${dep.t.t}`} <span style={{ fontWeight: 500, color: 'rgba(20,35,61,0.5)' }}>· cambia la tarea desde la lista, no aquí</span></span> : null })()}
                     <span style={{ flexBasis: '100%', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>No la trabajas: sólo checas si ya llegó. Aparece en la bandeja &quot;En espera · Por revisar&quot;.</span>
                     {!waitingReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Para guardar QUÉ esperas corre sql/epicas-11-waiting-for.sql (la marca ya funciona).</span>}
                   </div>

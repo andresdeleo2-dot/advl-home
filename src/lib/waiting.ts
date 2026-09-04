@@ -33,7 +33,11 @@ export function waitAgeLabel(age: number | null): string | null {
 }
 
 // "En espera / Por revisar": qué esperas de la tarea. [valor, icono, etiqueta].
-export const WAIT_REASONS: [string, string, string][] = [['email', '📩', 'Email'], ['respuesta', '💬', 'Respuesta'], ['comentario', '🗨️', 'Comentario'], ['llamada', '📞', 'Llamada'], ['otro', '⏳', 'Otro']]
+export const WAIT_REASONS: [string, string, string][] = [['email', '📩', 'Email'], ['respuesta', '💬', 'Respuesta'], ['comentario', '🗨️', 'Comentario'], ['llamada', '📞', 'Llamada'], ['tarea', '🔗', 'Otra tarea'], ['otro', '⏳', 'Otro']]
+// 'tarea' necesita elegir DE QUÉ tarea depende (no es un motivo de un solo clic) — sólo el chip
+// compartido rowWaitChip (EpicasDashboard.tsx) sabe abrir ese selector. Los demás editores usan
+// esta lista recortada para no dejar "tarea" a medias (sin ninguna tarea ligada).
+export const WAIT_REASONS_SIMPLE = WAIT_REASONS.filter(([v]) => v !== 'tarea')
 
 export function waitMeta(reason?: string): { icon: string; label: string } {
   const m = WAIT_REASONS.find(x => x[0] === reason)
