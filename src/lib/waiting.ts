@@ -17,6 +17,9 @@ export function markWaitSince(taskId: string, on: boolean, todayIso: string) {
   const m = readWaitSince()
   if (on) { if (m[taskId]) return; m[taskId] = todayIso } else { if (!(taskId in m)) return; delete m[taskId] }
   try { localStorage.setItem(WAIT_SINCE_KEY, JSON.stringify(m)) } catch { /* storage lleno/bloqueado */ }
+  // Espejo en servidor (fire-and-forget): para que el cron de push avise de esperas viejas aunque
+  // la app esté cerrada — localStorage sólo lo ve mientras la tienes abierta en ESE dispositivo.
+  fetch('/api/tareas/wait-since', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId, since: on ? todayIso : null }) }).catch(() => {})
 }
 
 // Días transcurridos desde que se marcó "en espera" (0 = hoy). null si no hay registro.
