@@ -1878,9 +1878,9 @@ export default function TiempoClient() {
     if (planPastGuard()) return
     save({ scheduled: [...(data.scheduled || []), { id: uid(), name: t.task.t || 'Tarea', area: 'trabajo', start, dur, date: planDay, epicaId: t.epicaId, taskId: t.task.id }] })
   }
-  const planAddFree = (name: string, start: number, dur = 15) => {
+  const planAddFree = (name: string, start: number, dur = 15, area: Area = 'trabajo') => {
     if (planPastGuard()) return
-    save({ scheduled: [...(data.scheduled || []), { id: uid(), name: name || 'Actividad', area: 'trabajo', start, dur, date: planDay }] })
+    save({ scheduled: [...(data.scheduled || []), { id: uid(), name: name || 'Actividad', area, start, dur, date: planDay }] })
   }
   // Registrar en el Planificador una actividad YA HECHA (doble clic en la rejilla): entra al historial
   // del día planificado y, si viene de una tarea, suma su tiempo a la bitácora de Épicas (ligado por logId).
@@ -4330,7 +4330,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   selBlocks: Set<string>
   onToggleSel: (id: string) => void
   onClearSel: () => void
-  onAddFree: (name: string, start: number, dur?: number) => void
+  onAddFree: (name: string, start: number, dur?: number, area?: Area) => void
   onPatch: (id: string, patch: Partial<ScheduledBlock>) => void
   onRemove: (id: string) => void
   onStart: (s: ScheduledBlock) => void
@@ -4357,7 +4357,8 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   const [featFilter, setFeatFilter] = useState<string | null>(null)   // featureId | '__none__' | null(=todos); sólo aplica con epFilter puesto (un feature es de UNA épica)
   const pickEpFilter = (id: string | null) => { setEpFilter(id); setFeatFilter(null) }
   const [waitPick, setWaitPick] = useState<string | null>(null)   // fila en espera con el selector abierto
-  const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en la rejilla → registrar algo ya hecho
+  const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en el carril "hecho" (izquierda) → registrar algo ya hecho
+  const [planEventAt, setPlanEventAt] = useState<number | null>(null)   // doble clic en el carril "plan" (derecha) → planear un evento (junta, cita, personal…)
   // Editor de hora (lápiz) de cualquier tarjeta del calendario: agendada, hecha o la sesión en curso.
   const [timeEdit, setTimeEdit] = useState<{ target: 'sched' | 'worked' | 'session'; ref: string; start: number; dur: number; live: boolean; name: string } | null>(null)
   // Barra de acciones flotante para tarjetas CORTAS (donde los botones no caben): aparece al pasar
@@ -4486,7 +4487,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
     <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.1 }}>Planificador</span>
-        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea o rutina a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). <b>Doble clic</b> en una hora registra algo que <b>ya hiciste</b>. Lo que ya hiciste sale a la izquierda (clic para abrir o ↻ volver a empezar).{(selTask || selFree) ? ' — Toca una hora en el calendario para colocarla.' : ''}</span>
+        <span style={{ fontSize: 14, color: '#6b645b', lineHeight: 1.5, maxWidth: 640 }}>Arrastra una tarea o rutina a la hora en que la vas a hacer. Estira su borde inferior para fijar cuánto durará (por defecto 15 min). <b>Doble clic</b> a la <b>izquierda</b> registra algo que <b>ya hiciste</b>; doble clic a la <b>derecha</b> <b>planea un evento</b> (junta, cita, personal…) a esa hora.{(selTask || selFree) ? ' — Toca una hora en el calendario para colocarla.' : ''}</span>
         {/* Selector de día de la semana */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => onPickDay(addDaysISO(week[0], -7))} title="Semana anterior" style={weekNav}>‹</button>
@@ -4564,8 +4565,14 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         <div className="t-card" style={{ ...card(0), padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
           <div ref={gridRef}
             onPointerDown={e => { setActBar(null); if (selTask) { const t = (tasks || []).find(x => x.task.id === selTask); if (t) { onAdd(t, yToMin(e.clientY)); setSelTask(null) } } else if (selFree) { const rm = routines.find(x => x.name === selFree)?.estMin; onAddFree(selFree, yToMin(e.clientY), (rm && rm > 0) ? rm : undefined); setSelFree(null) } }}
-            onDoubleClick={e => { if (!selTask && !selFree) setDoneAt(yToMin(e.clientY)) }}
-            title="Doble clic en una hora para registrar algo que ya hiciste"
+            onDoubleClick={e => {
+              if (selTask || selFree) return
+              const r = e.currentTarget.getBoundingClientRect()
+              const min = yToMin(e.clientY)
+              if (e.clientX - r.left < r.width / 2) setDoneAt(min)   // carril izquierdo (hecho)
+              else setPlanEventAt(min)                                // carril derecho (plan): planear un evento
+            }}
+            title="Doble clic: izquierda registra algo que ya hiciste · derecha planea un evento (junta, cita, personal…)"
             style={{ position: 'relative', height: gridH, marginLeft: 52, borderLeft: '1px solid #eee6da', cursor: (selTask || selFree) ? 'copy' : 'default' }}>
             {/* Líneas de hora */}
             {hours.map(h => (
@@ -4866,6 +4873,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
         <div style={{ position: 'fixed', left: hover.x + 14, top: hover.y + 14, zIndex: 98, background: '#1c1a17', color: '#faf7f1', fontSize: 12, fontWeight: 500, padding: '6px 10px', borderRadius: 8, pointerEvents: 'none', maxWidth: 280, boxShadow: '0 4px 14px rgba(0,0,0,.25)' }}>{hover.txt}</div>
       )}
       {doneAt !== null && <PlanAddDone tasks={allOpenTasks} defaultStart={doneAt} onConfirm={p => { onAddDone(p); setDoneAt(null) }} onClose={() => setDoneAt(null)} />}
+      {planEventAt !== null && <PlanAddEvent defaultStart={planEventAt} onConfirm={p => { onAddFree(p.name, p.start, p.dur, p.area); setPlanEventAt(null) }} onClose={() => setPlanEventAt(null)} />}
       {timeEdit && <PlanTimeEdit edit={timeEdit} nowMin={Math.round(now)} onSave={(start, dur) => {
         if (timeEdit.target === 'sched') onPatch(timeEdit.ref, { start, dur })
         else if (timeEdit.target === 'worked') onEditWorked(Number(timeEdit.ref), { start, dur })
@@ -4980,6 +4988,58 @@ function PlanAddDone({ tasks, defaultStart, onConfirm, onClose }: {
         </div>
         <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
           <button disabled={!canSave} onClick={save} style={{ flex: 1, textAlign: 'center', background: canSave ? '#1c1a17' : '#c9c0b3', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: canSave ? 'pointer' : 'default' }}>✓ Registrar como hecho</button>
+          <button onClick={onClose} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '14px 18px', fontSize: 14, cursor: 'pointer' }}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+/** Planear un evento AD-HOC (junta, cita, personal…) a una hora — doble clic en el carril "plan"
+ *  (derecha) de la rejilla. No es una tarea de Épicas (para eso ya existe arrastrar + ScheduleModal):
+ *  sólo nombre + tipo (área) + hora + duración, y queda en el plan como cualquier bloque agendado
+ *  (se puede mover, redimensionar, comenzar, etc. igual que uno ligado a una tarea). */
+function PlanAddEvent({ defaultStart, onConfirm, onClose }: {
+  defaultStart: number
+  onConfirm: (p: { name: string; area: Area; start: number; dur: number }) => void
+  onClose: () => void
+}) {
+  const [name, setName] = useState('')
+  const [area, setArea] = useState<Area>('trabajo')
+  const [startStr, setStartStr] = useState(clock(defaultStart))
+  const [dur, setDur] = useState(30)
+  const areaOpts = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno')
+  const canSave = name.trim().length > 0
+  const save = () => {
+    if (!canSave) return
+    const start = parse(startStr), d = Math.max(5, Math.min(600, dur || 5))
+    onConfirm({ name: name.trim(), area, start, dur: d })
+  }
+  const field: CSSProperties = { background: '#faf7f1', border: '1px solid #e2d9cb', borderRadius: 12, padding: '10px 12px', fontSize: 14, fontVariantNumeric: 'tabular-nums' }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.34)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 95 }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={{ width: 'min(420px,100%)', maxHeight: '90vh', overflowY: 'auto', background: '#faf7f1', border: '1px solid #e7dfd2', borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={LBL}>planear un evento · a las {clock(parse(startStr))}</span>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, color: '#a49b90', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && canSave) save() }} placeholder="¿Qué es? (ej. Junta con Fer, Cita doctor, Personal…)" style={field} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={LBL}>tipo</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {areaOpts.map(k => { const on = area === k; const c = AREAS[k].color; return (
+              <button key={k} onClick={() => setArea(k)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', border: on ? `1.5px solid ${c}` : '1px solid #e2d9cb', background: on ? `${c}22` : '#faf7f1', color: on ? c : '#6b645b', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: c, flexShrink: 0 }} />{AREAS[k].label}
+              </button>
+            )})}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><span style={LBL}>a las</span><input type="time" value={startStr} onChange={e => setStartStr(e.target.value)} style={field} /></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><span style={LBL}>dura</span><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><input type="number" min={5} max={600} step={5} value={dur} onChange={e => setDur(Math.max(5, Math.min(600, Number(e.target.value) || 5)))} style={{ ...field, width: 78 }} /><span style={{ fontSize: 13, color: '#a49b90' }}>min</span></div></div>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{[15, 30, 45, 60, 90].map(p => <button key={p} onClick={() => setDur(p)} style={{ border: `1px solid ${dur === p ? '#c2933a' : '#e2d9cb'}`, background: dur === p ? 'rgba(194,147,58,.12)' : '#faf7f1', color: dur === p ? '#8a4b28' : '#6b645b', borderRadius: 999, padding: '5px 11px', fontSize: 12, cursor: 'pointer' }}>{hm(p)}</button>)}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+          <button disabled={!canSave} onClick={save} style={{ flex: 1, textAlign: 'center', background: canSave ? '#1c1a17' : '#c9c0b3', color: '#faf7f1', border: 'none', borderRadius: 999, padding: 14, fontSize: 15, fontWeight: 500, cursor: canSave ? 'pointer' : 'default' }}>📌 Agendar</button>
           <button onClick={onClose} style={{ border: '1px solid #ddd4c6', background: 'transparent', borderRadius: 999, padding: '14px 18px', fontSize: 14, cursor: 'pointer' }}>Cancelar</button>
         </div>
       </div>
