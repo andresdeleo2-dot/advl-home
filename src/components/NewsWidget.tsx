@@ -26,8 +26,10 @@ export default function NewsWidget() {
   const [items, setItems] = useState<NewsItem[] | null>(null)
   const [err, setErr] = useState('')
   const [topic, setTopic] = useState<string | null>(null)
+  const [label, setLabel] = useState<string | null>(null)   // subtema dentro del topic (ej. "Microsoft" en "Finanzas y economía")
   const [openIdx, setOpenIdx] = useState<number | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const pickTopic = (tp: string | null) => { setTopic(tp); setLabel(null) }   // cambiar de topic resetea el subtema (ya no aplicaría)
 
   const load = () => {
     setItems(null); setErr('')
@@ -48,19 +50,36 @@ export default function NewsWidget() {
   if (items === null) return <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{header}<div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.45)' }}>Cargando…</div>{settingsOpen && <NewsSettings onClose={() => setSettingsOpen(false)} onSaved={load} />}</div>
 
   const topics = [...new Set(items.map(x => x.topic))]
-  const shown = topic ? items.filter(x => x.topic === topic) : items
+  // Subtemas: sólo tiene sentido elegir uno cuando ya filtraste por topic (si no, "Microsoft" de
+  // Finanzas y "México" de Política saldrían mezclados en la misma fila sin agrupar).
+  const topicItems = topic ? items.filter(x => x.topic === topic) : items
+  const labels = topic ? [...new Set(topicItems.map(x => x.label))] : []
+  const shown = label ? topicItems.filter(x => x.label === label) : topicItems
   const openItem = openIdx != null ? shown[openIdx] : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <button onClick={() => setTopic(null)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: !topic ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: !topic ? '#10233F' : '#fff', color: !topic ? '#fff' : 'rgba(20,35,61,0.6)' }}>Todas</button>
+        <button onClick={() => pickTopic(null)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: !topic ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: !topic ? '#10233F' : '#fff', color: !topic ? '#fff' : 'rgba(20,35,61,0.6)' }}>Todas</button>
         {topics.map(tp => {
           const on = topic === tp
-          return <button key={tp} onClick={() => setTopic(on ? null : tp)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{TOPIC_ICON[tp] || '📰'} {tp}</button>
+          return <button key={tp} onClick={() => pickTopic(on ? null : tp)} style={{ cursor: 'pointer', borderRadius: 99, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{TOPIC_ICON[tp] || '📰'} {tp}</button>
         })}
         <button onClick={() => setSettingsOpen(true)} title="Agregar o quitar temas" style={{ marginLeft: 'auto', cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>⚙️ Temas</button>
       </div>
+
+      {/* Subtemas del topic activo (ej. dentro de "Finanzas y economía": Microsoft, Mercado Libre…) —
+          cascada: las opciones dependen del topic elegido arriba, y filtran más las noticias. */}
+      {topic && labels.length > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', paddingLeft: 4 }}>
+          <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.35)' }}>↳</span>
+          <button onClick={() => setLabel(null)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: !label ? '1px solid #A87A2C' : '1px solid rgba(15,35,64,0.12)', background: !label ? 'rgba(194,147,58,0.14)' : '#fff', color: !label ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>Todas</button>
+          {labels.map(lb => {
+            const on = label === lb
+            return <button key={lb} onClick={() => setLabel(on ? null : lb)} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: on ? '1px solid #A87A2C' : '1px solid rgba(15,35,64,0.12)', background: on ? 'rgba(194,147,58,0.14)' : '#fff', color: on ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{lb}</button>
+          })}
+        </div>
+      )}
 
       {items.length === 0
         ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.45)' }}>Sin noticias por ahora.</div>
