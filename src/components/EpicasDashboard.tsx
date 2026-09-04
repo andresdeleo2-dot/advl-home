@@ -9,6 +9,7 @@ import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
 import BreakButton from '@/components/BreakButton'
 import PushReminders from '@/components/PushReminders'
+import CommandPalette from '@/components/CommandPalette'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan, EpicaFeature } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
@@ -298,6 +299,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
   useEffect(() => { epicsRef.current = epics }, [epics])
+  // Deep-link ?e=<epicaId>&t=<taskId> (usado por Panel y la búsqueda ⌘K): abre esa tarea al llegar.
+  // Antes el link existía (Panel ya lo mandaba) pero esta página nunca lo leía — no hacía nada.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const p = new URLSearchParams(window.location.search)
+    const eId = p.get('e'), tid = p.get('t')
+    if (eId && tid) {
+      setTaskView({ eId, tid })
+      setFeaturedId(eId)
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+  }, [])
   useEffect(() => { setWaitSince(readWaitSince()) }, [])   // carga "esperando desde" tras montar (evita desajuste de hidratación)
   // Persiste un avance pendiente si el componente se desmonta a media edición
   useEffect(() => () => {
@@ -9628,6 +9641,7 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
             </span>
             <WidgetsDropdown />
             <SpecialsDropdown />
+            <CommandPalette />
             <Link href="/peso" className="band-glass band-glass-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}><span style={{ fontSize: 13, lineHeight: 1 }}>⚖️</span> Peso</Link>
             <SectionNav current="epicas" />
             <button onClick={onNew} style={{ ...goldBtn, display: 'flex', alignItems: 'center', gap: 6, padding: '9px 15px', fontSize: 12 }}>

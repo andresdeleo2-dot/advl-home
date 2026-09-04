@@ -7,6 +7,7 @@ import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
 import BirthdayCelebration from './BirthdayCelebration'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
+import CommandPalette from './CommandPalette'
 
 /* Header de marca compartido (banda navy con logo, relojes/clima, Widgets y Especiales).
    Igual al de /epicas para mantener consistencia entre secciones. */
@@ -46,6 +47,7 @@ export default function SiteHeader({
             </span>
             <WidgetsDropdown />
             <SpecialsDropdown />
+            <CommandPalette />
             <Link href="/peso" className="band-glass band-glass-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}><span style={{ fontSize: 13, lineHeight: 1 }}>⚖️</span> Peso</Link>
             {extra}
             <Link href={backHref} className="band-glass" style={{ borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{backLabel}</Link>
