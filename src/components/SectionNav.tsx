@@ -3,22 +3,24 @@
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
-/* Conmutador consistente entre las 3 secciones (Accesos / Épicas / Tiempo), presente en
-   los tres headers (banda navy). El actual va resaltado en oro; los demás navegan rápido
-   (Next prefetch) con hover. Íconos para lectura de un vistazo. */
+/* Conmutador consistente entre las secciones (Panel / Tiempo / Épicas / Ideas / Accesos),
+   presente en todos los headers (banda navy). El actual va resaltado en oro; los demás
+   navegan rápido (Next prefetch) con hover. Íconos para lectura de un vistazo. */
 
 const ICONS: Record<string, ReactNode> = {
   accesos: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>),
   panel: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>),
   epicas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4" /><path d="M4 4h13l-2.5 4L17 12H4" /></svg>),
   tiempo: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 1.8" /></svg>),
+  ideas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6M10 21h4" /><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.46 1.6 1.4 1.6 2.2h4c0-.8 1-1.74 1.6-2.2A6 6 0 0 0 12 3Z" /></svg>),
 }
 
-export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' }) {
+export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' | 'ideas' }) {
   const items = [
     { id: 'panel', label: 'Panel', href: '/panel' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
     { id: 'epicas', label: 'Épicas', href: '/epicas' },
+    { id: 'ideas', label: 'Ideas', href: '/ideas' },
     { id: 'accesos', label: 'Accesos', href: '/' },
   ] as const
   return (
