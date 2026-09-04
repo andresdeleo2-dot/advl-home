@@ -38,6 +38,8 @@ export type TareaRow = {
   waiting_task_id?: string | null
   updated_at?: string | null
   feature_id?: string | null
+  persona_id?: string | null
+  persona_nombre?: string | null
 }
 
 /** Fila → tarea de la UI. Los nulos vuelven a ser `undefined` (o '' donde el
@@ -76,6 +78,8 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.waiting_task_id) t.waitingTaskId = r.waiting_task_id
   if (r.updated_at) t.updatedAt = r.updated_at
   if (r.feature_id) t.featureId = r.feature_id
+  if (r.persona_id) t.personaId = r.persona_id
+  if (r.persona_nombre) t.personaNombre = r.persona_nombre
   return t
 }
 
@@ -111,6 +115,9 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     ...('waitingFor' in t ? { waiting_for: (t.waitingFor || null) } : {}),
     // waiting_task_id: de qué tarea depende (si waitingFor === 'tarea'). Mismo gate que waitingFor.
     ...('waitingTaskId' in t ? { waiting_task_id: (t.waitingTaskId || null) } : {}),
+    // persona_id/nombre: a qué persona de "Mi Vida" está ligada la tarea (mismo Supabase).
+    ...('personaId' in t ? { persona_id: (t.personaId || null) } : {}),
+    ...('personaNombre' in t ? { persona_nombre: (t.personaNombre || null) } : {}),
     // feature_id: a qué Feature de la épica pertenece. Viaja sólo si la tarea tiene la propiedad
     // (permite LIMPIAR con null); el cliente sólo la fija cuando la columna existe (gate
     // featuresReady) → seguro sin migrar.

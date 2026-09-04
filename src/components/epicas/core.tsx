@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import type { Epica, EpicaTask, EpicaRoutine, EpicaProgressEntry, EpicaRepeat, EpicaMilestone } from '@/lib/supabase'
+import { catLabel } from '@/lib/persona-card'
 
 /* Núcleo de /epicas: constantes de marca, utilidades de fecha, estilos por estado
    y piezas de presentación sin estado. Se extrajo de EpicasDashboard para que ese
@@ -598,6 +599,43 @@ export function Donut({ segments, size = 116, thickness = 16, centerTop, centerB
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/* ─── Persona ligada (archivo "Mi Vida", mismo Supabase) ────── */
+export type PersonaOpt = { id: string; nombre: string; categoria: string | null }
+/** Selector de persona + botón para abrir su ficha completa. Compartido por Épicas y Tiempo
+ *  (mismo criterio que WAIT_REASONS_SIMPLE: una sola pieza, dos dueños). Sin estado propio: todo
+ *  llega por props para poder vivir en cualquiera de los dos árboles de componentes. */
+export function PersonaPicker({ personas, personaId, personaNombre, ready, loading, onPick, onOpenFicha }: {
+  personas: PersonaOpt[]
+  personaId?: string
+  personaNombre?: string
+  ready: boolean
+  loading?: boolean
+  onPick: (id: string | null, nombre?: string) => void
+  onOpenFicha: (id: string) => void
+}) {
+  const cats = Array.from(new Set(personas.map(p => p.categoria || 'otros'))).sort((a, b) => catLabel(a).localeCompare(catLabel(b)))
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <select value={personaId || ''} onChange={ev => { const id = ev.target.value; onPick(id || null, personas.find(p => p.id === id)?.nombre) }}
+        style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: personaId ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+        <option value="">— Ninguna —</option>
+        {cats.map(cat => (
+          <optgroup key={cat} label={catLabel(cat)}>
+            {personas.filter(p => (p.categoria || 'otros') === cat).map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </optgroup>
+        ))}
+      </select>
+      {personaId && (
+        <button type="button" onClick={() => onOpenFicha(personaId)} disabled={loading}
+          style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(15,35,64,0.14)', borderRadius: 99, padding: '5px 11px', font: '700 11.5px var(--font-ui)', background: '#fff', color: '#16365F' }}>
+          👤 {loading ? 'Abriendo…' : `Ver ficha de ${personaNombre || 'esta persona'}`}
+        </button>
+      )}
+      {personaId && !ready && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-15-tarea-persona.sql para guardarlo.</span>}
     </div>
   )
 }

@@ -98,6 +98,8 @@ export type EpicaTask = {
   waitingFor?: string                  // "En espera / Por revisar": qué esperas ('email'|'respuesta'|'comentario'|'otro'|'tarea' o texto). Vacío/ausente = no está en espera
   waitingTaskId?: string               // si waitingFor === 'tarea': el id de la tarea de la que depende (dependencia real, no sólo texto)
   featureId?: string                   // Feature al que pertenece dentro de su épica (opcional: puede no tener)
+  personaId?: string                   // ligada a una persona del archivo "Mi Vida" (mismo Supabase, tabla personas) — ej. "regalo para mamá"
+  personaNombre?: string               // nombre de esa persona AL LIGARLA (denormalizado, para mostrar el chip sin otro fetch)
   repeat?: EpicaRepeat                 // si existe, al completarla se reprograma en vez de terminarse
   repeatUntil?: string                 // 'YYYY-MM-DD' opcional: fin de la serie
   repeatDone?: string[]                // días en que se cumplió el ciclo (historial, se recortan los últimos 60)

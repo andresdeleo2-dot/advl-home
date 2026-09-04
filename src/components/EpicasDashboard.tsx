@@ -10,6 +10,8 @@ import TaskLinks from '@/components/TaskLinks'
 import BreakButton from '@/components/BreakButton'
 import PushReminders from '@/components/PushReminders'
 import CommandPalette from '@/components/CommandPalette'
+import PersonaExpediente from '@/components/PersonaExpediente'
+import type { Persona, Vida } from '@/lib/persona-card'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan, EpicaFeature } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
@@ -42,6 +44,8 @@ import {
   Prio,
   PrioBars,
   ProgressRing,
+  PersonaOpt,
+  PersonaPicker,
   REPEAT_TONE,
   SWATCHES,
   TASK_STATUSES,
@@ -293,6 +297,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const waitingTaskReady = useRef(false) // true si la columna waiting_task_id existe (esperar a OTRA tarea, no sólo texto)
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const featuresReady = useRef(false)    // true si epicas.features + tareas.feature_id existen (Features dentro de la épica)
+  const personaReady = useRef(false)     // true si la columna persona_id existe (tarea ligada a una persona de "Mi Vida")
+  const [personas, setPersonas] = useState<PersonaOpt[]>([])
+  const [personaDetail, setPersonaDetail] = useState<{ persona: Persona; recuerdos: Vida[] } | null>(null)  // ficha completa (popup), como en /panel
+  const [personaLoading, setPersonaLoading] = useState<string | null>(null)
+  const openPersona = async (id: string) => {
+    setPersonaLoading(id)
+    try { const j = await fetch(`/api/persona/${id}`).then(r => r.json()); if (j?.ok) setPersonaDetail({ persona: j.persona, recuerdos: j.recuerdos || [] }) } catch { /* noop */ }
+    setPersonaLoading(null)
+  }
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
@@ -312,6 +325,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
   }, [])
   useEffect(() => { setWaitSince(readWaitSince()) }, [])   // carga "esperando desde" tras montar (evita desajuste de hidratación)
+  // Lista ligera de personas de "Mi Vida" (para ligar una tarea) — se pide una sola vez al montar
+  useEffect(() => {
+    fetch('/api/personas').then(r => r.json()).then(j => { if (j?.ok && Array.isArray(j.data)) setPersonas(j.data) }).catch(() => {})
+  }, [])
   // Persiste un avance pendiente si el componente se desmonta a media edición
   useEffect(() => () => {
     if (progressTimer.current) clearTimeout(progressTimer.current)
@@ -338,6 +355,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       waitingTaskReady.current = !!j.waitingTaskReady
       weekBudgetReady.current = !!j.weekBudgetReady
       featuresReady.current = !!j.featuresReady
+      personaReady.current = !!j.personaReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -2272,6 +2290,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(e.id, { tasks })
     if (featureId && !featuresReady.current) showToast('Corre sql/epicas-12-features.sql para guardar el Feature', true)
   }
+  /** Liga (o desliga) una tarea a una persona del archivo "Mi Vida" (mismo Supabase). */
+  const setTaskPersona = (e: Epica, ti: number, personaId: string | null, personaNombre?: string) => {
+    const tasks = clone(e.tasks)
+    const t = tasks[ti]; if (!t) return
+    if (personaId) { if (personaReady.current) { t.personaId = personaId; t.personaNombre = personaNombre || '' } }
+    else if (personaReady.current || 'personaId' in t) { t.personaId = ''; t.personaNombre = '' }
+    patchEpic(e.id, { tasks })
+    if (personaId && !personaReady.current) showToast('Corre sql/epicas-15-tarea-persona.sql para guardar la persona', true)
+  }
   /** Liga (o desliga) una tarea a un objetivo DEL FEATURE al que pertenece (no de la épica). */
   const setTaskFeatureMilestone = (e: Epica, featureId: string, taskId: string, milestoneId: string | null) => {
     const features = clone(e.features || [])
@@ -2479,6 +2506,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Feature: igual que waitingFor, '' (no delete) para que si lo quitas SÍ se limpie la columna.
     if (featuresReady.current) t.featureId = taskDraft.featureId || ''
     else if ('featureId' in t) t.featureId = ''
+    // Persona: mismo patrón — '' (no delete) para que si la quitas SÍ se limpie la columna.
+    if (personaReady.current) { t.personaId = taskDraft.personaId || ''; t.personaNombre = taskDraft.personaId ? (taskDraft.personaNombre || '') : '' }
+    else if ('personaId' in t) { t.personaId = ''; t.personaNombre = '' }
     const newPlan = (taskDraft.plan || '').trim()
     if (newPlan) {
       if (orig.plan !== newPlan || t.planOrder == null) t.planOrder = maxPlanOrderFor(newPlan) + 1000  // al final de ese día
@@ -6868,6 +6898,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
+                {/* Persona — liga la tarea a alguien del archivo "Mi Vida" (mismo Supabase), ej. "Comprar regalo" → Mamá */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Persona</div>
+                  <PersonaPicker personas={personas} personaId={t.personaId} personaNombre={t.personaNombre} ready={personaReady.current}
+                    loading={personaLoading === t.personaId} onPick={(id, nombre) => setTaskPersona(ep, i, id, nombre)} onOpenFicha={openPersona} />
+                </div>
+
                 {/* Cuerpo en dos columnas (como el detalle de Tiempo); se colapsa a una en pantallas angostas */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: '0 26px', alignItems: 'start' }}>
                 <div style={{ minWidth: 0 }}>
@@ -8592,6 +8629,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
       {taskView && renderTaskDetail(taskView, { onClose: () => setTaskView(null) })}
 
+      {/* Ficha de persona (ida y vuelta: tarea → persona, y aquí de vuelta persona → sus tareas ligadas) */}
+      {personaLoading && !personaDetail && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ color: '#F3EFE6', font: '700 13px var(--font-ui)' }}>Cargando ficha…</div>
+        </div>
+      )}
+      {personaDetail && (
+        <div onClick={() => setPersonaDetail(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(10,22,42,0.6)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '20px 14px', overflow: 'auto' }}>
+          <div onClick={ev => ev.stopPropagation()} style={{ width: '100%', maxWidth: 960 }}>
+            {(() => {
+              const linked = activeEpics.flatMap(e => (e.tasks || []).filter(x => x.personaId === personaDetail.persona.id).map(x => ({ e, x })))
+              if (!linked.length) return null
+              return (
+                <div style={{ marginBottom: 12, padding: '12px 16px', borderRadius: 12, background: '#fff', border: '1px solid rgba(15,35,64,0.12)' }}>
+                  <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 8 }}>Tareas ligadas · {linked.length}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {linked.map(({ e, x }) => (
+                      <button key={x.id} onClick={() => { setPersonaDetail(null); setTaskView({ eId: e.id, tid: x.id! }) }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', textAlign: 'left', border: 'none', background: 'rgba(15,35,64,0.03)', borderRadius: 8, padding: '7px 10px' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 99, background: e.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: '#16365F', textDecoration: x.status === 'Terminada' ? 'line-through' : 'none', opacity: x.status === 'Terminada' ? 0.6 : 1 }}>{x.t}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{e.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+            <PersonaExpediente persona={personaDetail.persona} recuerdos={personaDetail.recuerdos} onClose={() => setPersonaDetail(null)} />
+          </div>
+        </div>
+      )}
+
       {taskEdit && (() => {
         const ep = epics.find(e => e.id === taskEdit.epicId)        // épica de origen
         const target = epics.find(e => e.id === taskEditTarget) || ep // épica destino (editable)
@@ -8648,6 +8718,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     {renderFeatureChips(target.id, taskDraft.featureId, id => setTaskDraft(d => ({ ...d, featureId: id || undefined })))}
                   </div>
                 )}
+
+                {/* Persona — liga la tarea a alguien del archivo "Mi Vida" (mismo Supabase) */}
+                <div style={{ marginBottom: 16 }}>
+                  <label style={lbl}>Persona</label>
+                  <PersonaPicker personas={personas} personaId={taskDraft.personaId} personaNombre={taskDraft.personaNombre} ready={personaReady.current}
+                    loading={personaLoading === taskDraft.personaId} onOpenFicha={openPersona}
+                    onPick={(id, nombre) => setTaskDraft(d => ({ ...d, personaId: id || undefined, personaNombre: id ? nombre : undefined }))} />
+                </div>
 
                 {/* ENLACES DE LA ÉPICA — mismo bloque plegable que el peek y Tiempo (paridad de editores).
                     Usa `target` (no `ep`): si cambias la épica arriba, muestra los links de la nueva. */}

@@ -50,8 +50,8 @@ export async function GET() {
     const { error } = await supabase.from('tareas').select(col).limit(1)
     return !error
   }
-  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, featureIdReady, waitingTaskReady] = await Promise.all([
-    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'), colReady('feature_id'), colReady('waiting_task_id'),
+  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, featureIdReady, waitingTaskReady, personaReady] = await Promise.all([
+    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'), colReady('feature_id'), colReady('waiting_task_id'), colReady('persona_id'),
   ])
   // Gate del presupuesto (columna en la tabla EPICAS, no tareas): con épicas basta la primera fila;
   // sin épicas se prueba la columna directo.
@@ -64,7 +64,7 @@ export async function GET() {
     : !(await supabase.from('epicas').select('features').limit(1)).error
   const featuresReady = featureIdReady && epicasFeaturesReady
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady, featuresReady, waitingTaskReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady, featuresReady, waitingTaskReady, personaReady })
 }
 
 export async function POST(req: Request) {
