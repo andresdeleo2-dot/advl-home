@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v51-seccion-ideas */
+/* BUILD-MARKER: v52-ideas-robusto */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */
