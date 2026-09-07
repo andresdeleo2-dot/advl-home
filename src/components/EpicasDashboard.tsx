@@ -158,6 +158,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'>('todas')
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
   const [epicFeatureFilter, setEpicFeatureFilter] = useState<string>('todas')  // filtro por Feature dentro de la épica
+  const [epicIniciativaFilter, setEpicIniciativaFilter] = useState<string>('todas')  // filtro por Iniciativa, un nivel más de cascada (sólo con epicFeatureFilter concreto)
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
@@ -226,7 +227,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const tlDragRef = useRef<{ key: string; e: Epica; i: number; x: number; moved: boolean } | null>(null)
   const [weekEpica, setWeekEpica] = useState<string>('todas')       // filtro por épica (semana/3sem/calendario/timeline/resumen/detalle/agenda)
   const [weekFeature, setWeekFeature] = useState<string>('todas')   // filtro por Feature en esas mismas vistas (sólo con una épica elegida vía weekEpica)
+  const [weekIniciativa, setWeekIniciativa] = useState<string>('todas')   // filtro por Iniciativa, un nivel más de cascada (sólo con weekFeature concreto)
   const [dayFeature, setDayFeature] = useState<string>('todas')     // filtro por Feature en el Enfoque · Día (sólo con una épica elegida vía dayEpica)
+  const [dayIniciativa, setDayIniciativa] = useState<string>('todas')   // filtro por Iniciativa, un nivel más de cascada (sólo con dayFeature concreto)
   const [weekDif, setWeekDif] = useState<'todas' | Dif>('todas')    // filtro por dificultad (vista semana)
   const [routinesOpen, setRoutinesOpen] = useState(true)           // rutinas de la semana plegables
   const [boardHideDone, setBoardHideDone] = useState(false)        // ocultar tareas completadas en semana/sprint
@@ -804,7 +807,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
   // El filtro por objetivo pertenece a una épica: al cambiar de destacada, se limpia
-  useEffect(() => { setEpicObjFilter('todas') }, [featuredId])   // el filtro por día es GLOBAL: NO se limpia al cambiar de épica
+  useEffect(() => { setEpicObjFilter('todas'); setEpicFeatureFilter('todas'); setEpicIniciativaFilter('todas') }, [featuredId])   // el filtro por día es GLOBAL: NO se limpia al cambiar de épica
 
   // Objetivos que se cumplen solos (los medidos con tareas) quedan sellados con
   // su fecha, para poder celebrarlos en el resumen de la semana.
@@ -2465,15 +2468,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
 
   /** Filtro de Iniciativa: un nivel más de cascada, DENTRO de un Feature ya elegido (sin Feature
-   *  no hay Iniciativa que ofrecer). Sólo tiene fila propia (Backlog); no hace falta variante
-   *  inline todavía — nada más la usa por ahora. */
-  const renderIniciativaFilterChips = (epicaId: string, featureId: string, value: string, onChange: (v: string) => void) => {
+   *  no hay Iniciativa que ofrecer). Mismo molde inner/row/inline que Feature arriba. */
+  const iniciativaFilterChipsInner = (epicaId: string, featureId: string, value: string, onChange: (v: string) => void) => {
     if (featureId === 'todas' || featureId === 'sin') return null
     const inis = (activeEpics.find(e => e.id === epicaId)?.features || []).find(f => f.id === featureId)?.iniciativas || []
     if (inis.length === 0) return null
     const chip = (on: boolean): CSSProperties => ({ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' })
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+      <>
         <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>Iniciativa</span>
         <button onClick={() => onChange('todas')} style={chip(value === 'todas')}>Todas</button>
         {inis.map(ini => {
@@ -2481,7 +2483,30 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           return <button key={ini.id} onClick={() => onChange(on ? 'todas' : ini.id)} style={chip(on)}>{ini.nombre}</button>
         })}
         <button onClick={() => onChange(value === 'sin' ? 'todas' : 'sin')} style={chip(value === 'sin')}>Sin iniciativa</button>
+      </>
+    )
+  }
+  /** Fila propia (con su propio padding) — para vistas donde el filtro de Iniciativa vive solo en
+   *  su línea (Backlog). */
+  const renderIniciativaFilterChips = (epicaId: string, featureId: string, value: string, onChange: (v: string) => void) => {
+    const inner = iniciativaFilterChipsInner(epicaId, featureId, value, onChange)
+    if (!inner) return null
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+        {inner}
       </div>
+    )
+  }
+  /** Continuación INLINE — para vistas donde el filtro de Iniciativa debe sumarse a una fila de
+   *  filtros que ya está abierta (Semana/Ajuste/3sem/Calendario/Timeline/Resumen/Enfoque de hoy,
+   *  vía renderEpicaChips), sin padding propio ni forzar salto de línea. */
+  const renderIniciativaFilterChipsInline = (epicaId: string, featureId: string, value: string, onChange: (v: string) => void) => {
+    const inner = iniciativaFilterChipsInner(epicaId, featureId, value, onChange)
+    if (!inner) return null
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {inner}
+      </span>
     )
   }
 
@@ -2954,7 +2979,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicFeatureFilter === 'sin') return !t.featureId
     return t.featureId === epicFeatureFilter
   }
-  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && passEpicFeature(t) && inScope(t)
+  const passEpicIniciativa = (t: (typeof indexed)[number]) => {
+    if (epicIniciativaFilter === 'todas') return true
+    if (epicIniciativaFilter === 'sin') return !t.iniciativaId
+    return t.iniciativaId === epicIniciativaFilter
+  }
+  const passEpicFilter = (t: (typeof indexed)[number]) => passEpicChip(t) && passEpicObj(t) && passEpicFeature(t) && passEpicIniciativa(t) && inScope(t)
   // Objetivos que aún tienen tareas bajo el filtro de chip activo (cascada)
   const objOptions = featured.kpis.filter(m => indexed.some(t => t.status !== ARCHIVED && (m.taskIds || []).includes(t.id || '') && passEpicChip(t)))
   const hasSinObj = indexed.some(t => t.status !== ARCHIVED && !objOfTask(t.id) && passEpicChip(t))
@@ -3558,6 +3588,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     </>
   )
 
+  /** Coincide con el filtro de Iniciativa compartido (weekIniciativa) — se combina con
+   *  matchWeekFeat/matchHorFeat (o el chequeo inline equivalente) en cada vista de Semana/
+   *  Ajuste/3sem/Calendario/Timeline/Resumen/Enfoque de hoy. */
+  const matchWeekIni = (t: EpicaTask) => weekIniciativa === 'todas' || (weekIniciativa === 'sin' ? !t.iniciativaId : t.iniciativaId === weekIniciativa)
+
   /** Chips de épica (color por épica) para filtrar cualquier vista de tablero por
    *  épica. Comparten el estado weekEpica; sólo listan las épicas presentes en esa
    *  vista (cascada: si la épica activa no está, `eff` cae a 'todas'). */
@@ -3565,11 +3600,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicsForView.length <= 1) return null
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <button onClick={() => { setWeekEpica('todas'); setWeekFeature('todas') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: eff === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: eff === 'todas' ? '#10233F' : '#fff', color: eff === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
+        <button onClick={() => { setWeekEpica('todas'); setWeekFeature('todas'); setWeekIniciativa('todas') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: eff === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: eff === 'todas' ? '#10233F' : '#fff', color: eff === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
         {epicsForView.map(ep => {
           const on = eff === ep.id
           return (
-            <button key={ep.id} onClick={() => { setWeekEpica(on ? 'todas' : ep.id); setWeekFeature('todas') }} title={`Sólo ${ep.name}`}
+            <button key={ep.id} onClick={() => { setWeekEpica(on ? 'todas' : ep.id); setWeekFeature('todas'); setWeekIniciativa('todas') }} title={`Sólo ${ep.name}`}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
                 border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
                 background: on ? hexA(ep.color, 0.12) : '#fff',
@@ -3580,7 +3615,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         })}
         {/* Sub-filtro por Feature, en cascada: sólo con una épica elegida arriba (los Features viven
             dentro de ella). Mismo estado (weekFeature) para todas las vistas que usan este componente. */}
-        {eff !== 'todas' && renderFeatureFilterChipsInline(eff, weekFeature, setWeekFeature)}
+        {eff !== 'todas' && renderFeatureFilterChipsInline(eff, weekFeature, v => { setWeekFeature(v); setWeekIniciativa('todas') })}
+        {/* Sub-sub-filtro por Iniciativa, un nivel más de cascada (sólo con un Feature concreto). */}
+        {eff !== 'todas' && renderIniciativaFilterChipsInline(eff, weekFeature, weekIniciativa, setWeekIniciativa)}
       </span>
     )
   }
@@ -3596,7 +3633,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // "todas" (sin resetear el estado: al volver a una semana con esa épica, se reactiva).
     const effWeekEpica = weekEpics.some(e => e.id === weekEpica) ? weekEpica : 'todas'
     // Feature (sólo aplica con una épica elegida arriba — los Features viven dentro de ella).
-    const matchWeekFeat = (t: EpicaTask) => effWeekEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)
+    const matchWeekFeat = (t: EpicaTask) => (effWeekEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)) && matchWeekIni(t)
     // Tareas planeadas de la semana, agrupadas por día. Las de días pasados sin terminar
     // se muestran en su día (quedaron ahí), para no perderlas de vista.
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
@@ -3968,7 +4005,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : planFilter === 'multidia' ? isMultiDay(t)
       : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
-    const matchWeekFeat = (t: EpicaTask) => effWeekEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)
+    const matchWeekFeat = (t: EpicaTask) => (effWeekEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)) && matchWeekIni(t)
     const matchF = (e: Epica, t: EpicaTask) => (effWeekEpica === 'todas' || e.id === effWeekEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t) && matchWeekFeat(t)
     const byDay = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
     days.forEach(d => byDay.set(d, []))
@@ -3978,7 +4015,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const byDayTotal = new Map<string, { e: Epica; t: EpicaTask }[]>()
     days.forEach(d => byDayTotal.set(d, []))
     activeEpics.forEach(e => (e.tasks || []).forEach(t => { if (t.status !== ARCHIVED && t.status !== 'Esperando') taskDays(t).forEach(d => { if (byDayTotal.has(d)) byDayTotal.get(d)!.push({ e, t }) }) }))
-    const filtering = effWeekEpica !== 'todas' || weekFeature !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas' || workFilter !== ''
+    const filtering = effWeekEpica !== 'todas' || weekFeature !== 'todas' || weekIniciativa !== 'todas' || weekDif !== 'todas' || planFilter !== 'todas' || workFilter !== ''
     const cmp = (a: { t: EpicaTask }, b: { t: EpicaTask }) => ((a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)) || ((a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && x.t.status !== 'Esperando' && matchF(x.e, x.t))
     const all = [...byDay.values()].flat().filter(x => x.t.status !== 'Esperando')
@@ -4148,7 +4185,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : planFilter === 'multidia' ? isMultiDay(t)
       : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
-    const matchHorFeat = (t: EpicaTask) => effEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)
+    const matchHorFeat = (t: EpicaTask) => (effEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)) && matchWeekIni(t)
     const matchF = (e: Epica, t: EpicaTask) => (effEpica === 'todas' || e.id === effEpica) && (weekDif === 'todas' || (t.difficulty || '') === weekDif) && passF(t) && matchHorFeat(t)
     const sinDia = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i }))).filter(x => taskDays(x.t).length === 0 && x.t.status !== ARCHIVED && x.t.status !== 'Terminada' && x.t.status !== 'Esperando' && matchF(x.e, x.t))
     const firstWeekDays = Array.from({ length: 7 }, (_, k) => addDays(weekMondays[0], k))
@@ -4222,7 +4259,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       : planFilter === 'multidia' ? isMultiDay(t)
       : planFilter === 'arrastre' ? isCarried(t)
       : true) && passWork(t, today)
-    const matchHorFeat = (t: EpicaTask) => effEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)
+    const matchHorFeat = (t: EpicaTask) => (effEpica === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !t.featureId : t.featureId === weekFeature)) && matchWeekIni(t)
     type Row = { e: Epica; t: EpicaTask; i: number }
     const cmp = (a: Row, b: Row) => {
       const df = (a.t.status === 'Terminada' ? 1 : 0) - (b.t.status === 'Terminada' ? 1 : 0)
@@ -4632,6 +4669,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (boardHideDone && t.status === 'Terminada') return
       if (!passPlanFilter(t)) return
       if (effEpica !== 'todas' && weekFeature !== 'todas' && (weekFeature === 'sin' ? t.featureId : t.featureId !== weekFeature)) return
+      if (effEpica !== 'todas' && weekFeature !== 'todas' && !matchWeekIni(t)) return
       byDay.get(t.plan)!.push({ e, t, i })
     }))
     const CAP = 4
@@ -4708,6 +4746,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // (el estado crudo) aquí evita una referencia circular; en la práctica es equivalente,
         // porque weekFeature sólo tiene un valor real cuando ya había una épica válida elegida.
         if (weekEpica !== 'todas' && weekFeature !== 'todas' && (weekFeature === 'sin' ? t.featureId : t.featureId !== weekFeature)) return false
+        if (weekEpica !== 'todas' && weekFeature !== 'todas' && !matchWeekIni(t)) return false
         return inMonth(t.plan) || inMonth(t.due)
       })
       return { e, items }
@@ -4796,6 +4835,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       ;(e.tasks || []).forEach((t, i) => {
         if (t.status === ARCHIVED) return
         if (effResEpica !== 'todas' && weekFeature !== 'todas' && (weekFeature === 'sin' ? t.featureId : t.featureId !== weekFeature)) return
+        if (effResEpica !== 'todas' && weekFeature !== 'todas' && !matchWeekIni(t)) return
         all.push({ e, t, i })
       })
     })
@@ -5540,7 +5580,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             // no hace falta uno propio de esta vista.
             const enfRows = activeEpics.flatMap(e => (e.tasks || []).map((t, i) => ({ e, t, i })))
               .filter(x => (effEnf === 'todas' || x.e.id === effEnf) && matchDR(x.t)
-                && (effEnf === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !x.t.featureId : x.t.featureId === weekFeature)))
+                && (effEnf === 'todas' || weekFeature === 'todas' || (weekFeature === 'sin' ? !x.t.featureId : x.t.featureId === weekFeature))
+                && (effEnf === 'todas' || weekFeature === 'todas' || matchWeekIni(x.t)))
             const rangeChips = (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 8px' }}>
@@ -5761,7 +5802,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const effDayEpica = dayEpics.some(e => e.id === dayEpica) ? dayEpica : 'todas'
                 const passE = (ep: Epica) => effDayEpica === 'todas' || ep.id === effDayEpica
                 // Feature (sólo aplica con una épica elegida arriba — los Features viven dentro de ella).
-                const passFeat = (t: EpicaTask) => effDayEpica === 'todas' || dayFeature === 'todas' || (dayFeature === 'sin' ? !t.featureId : t.featureId === dayFeature)
+                const passFeat = (t: EpicaTask) => (effDayEpica === 'todas' || dayFeature === 'todas' || (dayFeature === 'sin' ? !t.featureId : t.featureId === dayFeature))
+                  && (dayIniciativa === 'todas' || (dayIniciativa === 'sin' ? !t.iniciativaId : t.iniciativaId === dayIniciativa))
                 const filtered = planPend.filter(x => passF(x.t) && passE(x.e) && passWork(x.t, viewDate) && passFeat(x.t))
                 const cmp = (a: typeof planPend[number], b: typeof planPend[number]) => {
                   if (planSort === 'prioridad') return (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) || ((daysUntil(a.t.due) ?? 1e9) - (daysUntil(b.t.due) ?? 1e9))
@@ -5804,7 +5846,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         {dayEpics.length > 1 && dayEpics.map(ep => {
                           const on = effDayEpica === ep.id
                           return (
-                            <button key={ep.id} onClick={() => { setDayEpica(on ? 'todas' : ep.id); setDayFeature('todas') }} title={`Sólo ${ep.name}`}
+                            <button key={ep.id} onClick={() => { setDayEpica(on ? 'todas' : ep.id); setDayFeature('todas'); setDayIniciativa('todas') }} title={`Sólo ${ep.name}`}
                               style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
                                 border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
                                 background: on ? hexA(ep.color, 0.12) : '#fff',
@@ -5814,8 +5856,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           )
                         })}
                         {/* Sub-filtro por Feature, en cascada: sólo con una épica elegida arriba */}
-                        {effDayEpica !== 'todas' && renderFeatureFilterChipsInline(effDayEpica, dayFeature, setDayFeature)}
-                        {(effDayEpica !== 'todas' || dayFeature !== 'todas') && <button onClick={() => { setDayEpica('todas'); setDayFeature('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>}
+                        {effDayEpica !== 'todas' && renderFeatureFilterChipsInline(effDayEpica, dayFeature, v => { setDayFeature(v); setDayIniciativa('todas') })}
+                        {/* Sub-sub-filtro por Iniciativa, un nivel más de cascada */}
+                        {effDayEpica !== 'todas' && renderIniciativaFilterChipsInline(effDayEpica, dayFeature, dayIniciativa, setDayIniciativa)}
+                        {(effDayEpica !== 'todas' || dayFeature !== 'todas' || dayIniciativa !== 'todas') && <button onClick={() => { setDayEpica('todas'); setDayFeature('todas'); setDayIniciativa('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11, fontWeight: 700 }}>Limpiar</button>}
                         <span style={{ flex: 1 }} />
                         {table && <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{dayTableEdit ? 'Edita las celdas · las fechas abren calendario' : 'Clic en fila = ver/editar · flechas = mover · encabezado = ordenar'}</span>}
                         {table && <button onClick={() => setDayTableEdit(v => !v)} title="Editar la tabla como hoja de cálculo" style={{ cursor: 'pointer', borderRadius: 9, padding: '5px 12px', fontSize: 11.5, fontWeight: 700, border: dayTableEdit ? 'none' : '1px solid rgba(15,35,64,0.14)', ...(dayTableEdit ? { background: '#10233F', color: '#fff' } : { background: '#fff', color: 'rgba(20,35,61,0.65)' }) }}>{dayTableEdit ? '✓ Listo' : '✎ Editar tabla'}</button>}
@@ -8343,9 +8387,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const fc = f.color || '#5B6B86'
                     const inis = f.iniciativas || []
                     const iniOpen = iniOpenFeatureId === f.id
+                    const pickFeature = () => { setEpicFeatureFilter(on ? 'todas' : f.id); setEpicIniciativaFilter('todas') }
                     return (
                       <div key={f.id} style={{ borderRadius: 12, background: on ? hexA(fc, 0.1) : 'rgba(15,35,64,0.02)', border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden' }}>
-                        <button type="button" onClick={() => setEpicFeatureFilter(on ? 'todas' : f.id)} title="Filtrar las tareas de abajo por este Feature"
+                        <button type="button" onClick={pickFeature} title="Filtrar las tareas de abajo por este Feature"
                           style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '10px 12px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                             <span style={{ height: 8, width: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />
@@ -8400,7 +8445,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const doneN = sinTasks.filter(t => t.status === 'Terminada').length
                     const on = epicFeatureFilter === 'sin'
                     return (
-                      <button type="button" onClick={() => setEpicFeatureFilter(on ? 'todas' : 'sin')} title="Filtrar las tareas de abajo sin Feature asignado"
+                      <button type="button" onClick={() => { setEpicFeatureFilter(on ? 'todas' : 'sin'); setEpicIniciativaFilter('todas') }} title="Filtrar las tareas de abajo sin Feature asignado"
                         style={{ textAlign: 'left', cursor: 'pointer', borderRadius: 12, padding: '10px 12px', background: on ? 'rgba(15,35,64,0.08)' : 'rgba(15,35,64,0.02)', border: on ? '1.5px solid rgba(15,35,64,0.35)' : '1px dashed rgba(15,35,64,0.2)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                           <span style={{ height: 8, width: 8, borderRadius: 99, border: '1.5px solid rgba(20,35,61,0.35)', flexShrink: 0 }} />
@@ -8410,6 +8455,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                       </button>
                     )
                   })()}
+                </div>
+              )}
+              {/* Sub-filtro por Iniciativa, en cascada: sólo con un Feature concreto elegido arriba */}
+              {epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', marginBottom: 18 }}>
+                  {renderIniciativaFilterChipsInline(featured.id, epicFeatureFilter, epicIniciativaFilter, setEpicIniciativaFilter)}
                 </div>
               )}
 
@@ -8546,13 +8597,26 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )}
                   {/* Filtro por Feature — mismo patrón cascada que Objetivo */}
                   {(featureOptions.length > 0 || (epicFeatureFilter !== 'todas')) && (
-                    <select value={featureOptions.some(f => f.id === epicFeatureFilter) || epicFeatureFilter === 'sin' ? epicFeatureFilter : 'todas'} onChange={e => setEpicFeatureFilter(e.target.value)}
+                    <select value={featureOptions.some(f => f.id === epicFeatureFilter) || epicFeatureFilter === 'sin' ? epicFeatureFilter : 'todas'} onChange={e => { setEpicFeatureFilter(e.target.value); setEpicIniciativaFilter('todas') }}
                       title="Filtrar por Feature" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: epicFeatureFilter !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 180 }}>
                       <option value="todas">Todo feature</option>
                       {featureOptions.map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
                       {hasSinFeature && <option value="sin">Sin feature</option>}
                     </select>
                   )}
+                  {/* Filtro por Iniciativa — un nivel más de cascada, sólo con un Feature concreto elegido */}
+                  {epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' && (() => {
+                    const inis = (featured.features || []).find(f => f.id === epicFeatureFilter)?.iniciativas || []
+                    if (!inis.length) return null
+                    return (
+                      <select value={epicIniciativaFilter} onChange={e => setEpicIniciativaFilter(e.target.value)}
+                        title="Filtrar por Iniciativa" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 600, color: epicIniciativaFilter !== 'todas' ? '#10233F' : 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 180 }}>
+                        <option value="todas">Toda iniciativa</option>
+                        {inis.map(ini => <option key={ini.id} value={ini.id}>{ini.nombre}</option>)}
+                        <option value="sin">Sin iniciativa</option>
+                      </select>
+                    )
+                  })()}
                 </div>
               )}
 

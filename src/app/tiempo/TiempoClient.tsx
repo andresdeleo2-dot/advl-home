@@ -4362,7 +4362,9 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
 }) {
   const [epFilter, setEpFilter] = useState<string | null>(null)
   const [featFilter, setFeatFilter] = useState<string | null>(null)   // featureId | '__none__' | null(=todos); sólo aplica con epFilter puesto (un feature es de UNA épica)
-  const pickEpFilter = (id: string | null) => { setEpFilter(id); setFeatFilter(null) }
+  const [iniciativaFilter, setIniciativaFilter] = useState<string | null>(null)   // iniciativaId | '__none__' | null(=todas); sólo aplica con un featFilter concreto puesto
+  const pickEpFilter = (id: string | null) => { setEpFilter(id); setFeatFilter(null); setIniciativaFilter(null) }
+  const pickFeatFilter = (v: string | null) => { setFeatFilter(v); setIniciativaFilter(null) }
   const [waitPick, setWaitPick] = useState<string | null>(null)   // fila en espera con el selector abierto
   const [doneAt, setDoneAt] = useState<number | null>(null)   // doble clic en el carril "hecho" (izquierda) → registrar algo ya hecho
   const [planEventAt, setPlanEventAt] = useState<number | null>(null)   // doble clic en el carril "plan" (derecha) → planear un evento (junta, cita, personal…)
@@ -4449,8 +4451,12 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   // que sólo tiene sentido ofrecerlo una vez que ya elegiste esa épica arriba.
   const planFeatures = epFilter ? (epicas.find(e => e.id === epFilter)?.features || []) : []
   const matchFeat = (t: TodayTask) => !featFilter || (featFilter === '__none__' ? !t.task.featureId : t.task.featureId === featFilter)
+  // Iniciativas del feature filtrado (cascada de un nivel más). Sólo tiene sentido con un feature
+  // concreto ya elegido (no con 'todas' ni '__none__').
+  const planIniciativas = (featFilter && featFilter !== '__none__') ? (planFeatures.find(f => f.id === featFilter)?.iniciativas || []) : []
+  const matchIniciativa = (t: TodayTask) => !iniciativaFilter || (iniciativaFilter === '__none__' ? !t.task.iniciativaId : t.task.iniciativaId === iniciativaFilter)
   // Mismo orden que en Épicas: por planOrder (el acomodo manual del Día), no el orden crudo de llegada.
-  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id) && (!epFilter || t.epicaId === epFilter) && matchFeat(t))
+  const pending = (tasks || []).filter(t => !schedIds.has(t.task.id) && (!epFilter || t.epicaId === epFilter) && matchFeat(t) && matchIniciativa(t))
     .sort((a, b) => (a.task.planOrder ?? 1e9) - (b.task.planOrder ?? 1e9))
   // Las "en espera" (estado 'Esperando') NO se agendan: se separan de "por agendar" a su propia lista.
   const pendWork = pending.filter(t => t.task.status !== 'Esperando')
@@ -4458,7 +4464,7 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
   // día: ni que estén agendadas (bloque en el planner) ni que su plan sea otro día o ninguno. Por
   // eso sale de `allOpenTasks` (SIN filtrar por `taskDay`) y no de `tasks`, que sólo trae las de
   // hoy — si no, una en espera sin agendar para hoy desaparecía de aquí aunque sí saliera en Épicas.
-  const pendWait = (allOpenTasks || []).filter(t => t.task.status === 'Esperando' && (!epFilter || t.epicaId === epFilter) && matchFeat(t))
+  const pendWait = (allOpenTasks || []).filter(t => t.task.status === 'Esperando' && (!epFilter || t.epicaId === epFilter) && matchFeat(t) && matchIniciativa(t))
   const colorFor = (s: ScheduledBlock) => (tasks || []).find(t => t.task.id === s.taskId)?.color || AREAS[s.area]?.color || '#8b8379'
   const hours: number[] = []; for (let h = gridStart; h <= gridEnd; h += 60) hours.push(h)
   const gridH = (gridEnd - gridStart) * PXM
@@ -4828,13 +4834,24 @@ function PlanDia({ day, today, onPickDay, tasks, routines, scheduled, worked, on
           {epFilter && planFeatures.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', paddingLeft: 4 }}>
               <span style={{ fontSize: 10, color: '#c2b9ab' }}>↳</span>
-              <button onClick={() => setFeatFilter(null)} style={{ border: `1px solid ${!featFilter ? '#c2933a' : '#e7dfd2'}`, background: !featFilter ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: !featFilter ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Todas</button>
+              <button onClick={() => pickFeatFilter(null)} style={{ border: `1px solid ${!featFilter ? '#c2933a' : '#e7dfd2'}`, background: !featFilter ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: !featFilter ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Todas</button>
               {planFeatures.map(f => { const on = featFilter === f.id; const fc = f.color || '#5B6B86'; return (
-                <button key={f.id} onClick={() => setFeatFilter(on ? null : f.id)} title={f.t} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: on ? `1.5px solid ${fc}` : '1px solid #e7dfd2', background: on ? hexA(fc, 0.14) : '#faf7f1', color: on ? fc : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', maxWidth: 130 }}>
+                <button key={f.id} onClick={() => pickFeatFilter(on ? null : f.id)} title={f.t} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: on ? `1.5px solid ${fc}` : '1px solid #e7dfd2', background: on ? hexA(fc, 0.14) : '#faf7f1', color: on ? fc : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', maxWidth: 130 }}>
                   <span style={{ width: 6, height: 6, borderRadius: 999, background: fc, flexShrink: 0 }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
                 </button>
               ) })}
-              <button onClick={() => setFeatFilter(featFilter === '__none__' ? null : '__none__')} style={{ border: `1px solid ${featFilter === '__none__' ? '#c2933a' : '#e7dfd2'}`, background: featFilter === '__none__' ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: featFilter === '__none__' ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Sin feature</button>
+              <button onClick={() => pickFeatFilter(featFilter === '__none__' ? null : '__none__')} style={{ border: `1px solid ${featFilter === '__none__' ? '#c2933a' : '#e7dfd2'}`, background: featFilter === '__none__' ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: featFilter === '__none__' ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Sin feature</button>
+            </div>
+          )}
+          {/* Sub-sub-filtro por iniciativa, un nivel más de cascada: sólo con un feature concreto elegido */}
+          {featFilter && featFilter !== '__none__' && planIniciativas.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', paddingLeft: 15 }}>
+              <span style={{ fontSize: 10, color: '#c2b9ab' }}>↳</span>
+              <button onClick={() => setIniciativaFilter(null)} style={{ border: `1px solid ${!iniciativaFilter ? '#c2933a' : '#e7dfd2'}`, background: !iniciativaFilter ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: !iniciativaFilter ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Todas</button>
+              {planIniciativas.map(ini => { const on = iniciativaFilter === ini.id; return (
+                <button key={ini.id} onClick={() => setIniciativaFilter(on ? null : ini.id)} title={ini.nombre} style={{ border: on ? '1.5px solid #c2933a' : '1px solid #e7dfd2', background: on ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: on ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ini.nombre}</button>
+              ) })}
+              <button onClick={() => setIniciativaFilter(iniciativaFilter === '__none__' ? null : '__none__')} style={{ border: `1px solid ${iniciativaFilter === '__none__' ? '#c2933a' : '#e7dfd2'}`, background: iniciativaFilter === '__none__' ? 'rgba(194,147,58,0.14)' : '#faf7f1', color: iniciativaFilter === '__none__' ? '#a87a2c' : '#6b645b', borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Sin iniciativa</button>
             </div>
           )}
           {pendWork.length ? pendWork.map(t => chip(t, e => setDrag({ kind: 'new', task: t, dur: estDurForDay(t.task, day), moved: false, curMin: null, x: e.clientX, y: e.clientY }))) : (
