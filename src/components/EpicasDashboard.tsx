@@ -253,6 +253,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [iniOpenFeatureId, setIniOpenFeatureId] = useState<string | null>(null)  // qué tarjeta de Feature muestra sus Iniciativas, en la página de la épica destacada
   const [featQuickAdd, setFeatQuickAdd] = useState(false)    // input de "+ Nuevo feature" abierto, en el selector de una tarea
   const [featQuickName, setFeatQuickName] = useState('')
+  const [epicTab, setEpicTab] = useState<'tareas' | 'objetivos'>('tareas')   // pestaña de la épica destacada — NO se limpia al cambiar de épica (es un modo de vista, no un filtro de datos)
+  const [quickObjOwner, setQuickObjOwner] = useState<string | null>(null)   // 'epica' o un featureId: de quién es el "+ Objetivo" con el input abierto
+  const [quickObjName, setQuickObjName] = useState('')
+  const [quickIniFeature, setQuickIniFeature] = useState<string | null>(null)   // featureId con el "+ Iniciativa" abierto
+  const [quickIniName, setQuickIniName] = useState('')
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
   const [subSort, setSubSort] = useState<'manual' | 'prioridad' | 'dificultad' | 'dia'>('manual') // orden de subtareas
@@ -2294,15 +2299,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo guardar el objetivo', true) })
       .catch(() => showToast('No se pudo guardar el objetivo', true))
   }
-  const setMilestoneCurrent = (e: Epica, mIdx: number, value: number) => {
-    const m = e.kpis[mIdx]; if (!m) return
+  /** Cambia el valor actual de CUALQUIER objetivo (de la épica o de un Feature — `scopeEpica` sólo
+   *  importa para milestoneDone/Progress si se mide "con tareas cerradas"). Reemplaza a la vieja
+   *  setMilestoneCurrent (que sólo indexaba e.kpis, no servía para objetivos de Feature). */
+  const setObjetivoCurrent = (scopeEpica: Epica, m: EpicaMilestone, value: number) => {
     const current = Number.isFinite(value) ? value : undefined
-    const antes = milestoneDone(m, e)
-    const ahora = milestoneDone({ ...m, current }, e)
+    const antes = milestoneDone(m, scopeEpica)
+    const ahora = milestoneDone({ ...m, current }, scopeEpica)
     const patch: Partial<EpicaMilestone> = { current }
     if (ahora && !antes) { patch.done = true; patch.doneAt = todayISO() }
     if (!ahora && antes && m.done && m.doneAt) { patch.done = false; patch.doneAt = undefined }
-    patchObjetivo(e.id, m.id, patch)
+    patchObjetivo(scopeEpica.id, m.id, patch)
     if (ahora && !antes) showToast(`✦ Objetivo cumplido: ${m.t}`)
   }
   /** Liga (o desliga) una tarea a un objetivo. El vínculo vive en el objetivo,
@@ -2386,6 +2393,206 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       .catch(() => showToast('No se pudo crear el feature', true))
     onPick(nf.id)
   }
+  /** Crea un objetivo (métrica, por defecto — se puede pasar a hito con el toggle de la tarjeta)
+   *  directo desde la vista "Objetivos" de la épica destacada, sin abrir el editor completo. Mismo
+   *  criterio optimista + fire-and-forget que commitQuickFeature. */
+  const commitQuickObjetivo = (epicaId: string, featureId: string | null, name: string) => {
+    const t = name.trim()
+    if (!t) return
+    const nk: EpicaMilestone = { id: uid(), t, tipo: 'metrica' }
+    setEpics(list => list.map(e => {
+      if (e.id !== epicaId) return e
+      if (!featureId) return { ...e, kpis: [...(e.kpis || []), nk] }
+      return { ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, kpis: [...(f.kpis || []), nk] } : f)) }
+    }))
+    fetch('/api/objetivos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: nk.id, epicaId: featureId ? undefined : epicaId, featureId: featureId || undefined, t, tipo: 'metrica' }) })
+      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo crear el objetivo', true) })
+      .catch(() => showToast('No se pudo crear el objetivo', true))
+  }
+  /** Elimina un objetivo (de la épica o de cualquiera de sus features — se busca en ambos lados). */
+  const deleteObjetivo = (epicaId: string, objetivoId: string) => {
+    setEpics(list => list.map(e => (e.id !== epicaId ? e : {
+      ...e,
+      kpis: (e.kpis || []).filter(k => k.id !== objetivoId),
+      features: (e.features || []).map(f => ({ ...f, kpis: (f.kpis || []).filter(k => k.id !== objetivoId) })),
+    })))
+    fetch(`/api/objetivos/${objetivoId}`, { method: 'DELETE' })
+      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo eliminar el objetivo', true) })
+      .catch(() => showToast('No se pudo eliminar el objetivo', true))
+  }
+  /** Crea una Iniciativa dentro de un Feature directo desde "Objetivos", sin el editor completo. */
+  const commitQuickIniciativa = (epicaId: string, featureId: string, name: string) => {
+    const nombre = name.trim()
+    if (!nombre) return
+    const ni: Iniciativa = { id: uid(), featureId, epicaId, nombre, estado: 'pendiente' }
+    setEpics(list => list.map(e => (e.id !== epicaId ? e : {
+      ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, iniciativas: [...(f.iniciativas || []), ni] } : f)),
+    })))
+    fetch('/api/iniciativas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: ni.id, featureId, epicaId, nombre }) })
+      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo crear la iniciativa', true) })
+      .catch(() => showToast('No se pudo crear la iniciativa', true))
+  }
+  /** Actualiza UNA Iniciativa por su id — mismo patrón optimista que patchObjetivo. */
+  const patchIniciativa = (epicaId: string, featureId: string, iniciativaId: string, patch: Partial<Iniciativa>) => {
+    setEpics(list => list.map(e => (e.id !== epicaId ? e : {
+      ...e, features: (e.features || []).map(f => (f.id !== featureId ? f : { ...f, iniciativas: (f.iniciativas || []).map(i => (i.id === iniciativaId ? { ...i, ...patch } : i)) })),
+    })))
+    fetch(`/api/iniciativas/${iniciativaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo guardar la iniciativa', true) })
+      .catch(() => showToast('No se pudo guardar la iniciativa', true))
+  }
+  const deleteIniciativa = (epicaId: string, featureId: string, iniciativaId: string) => {
+    setEpics(list => list.map(e => (e.id !== epicaId ? e : {
+      ...e, features: (e.features || []).map(f => (f.id !== featureId ? f : { ...f, iniciativas: (f.iniciativas || []).filter(i => i.id !== iniciativaId) })),
+    })))
+    fetch(`/api/iniciativas/${iniciativaId}`, { method: 'DELETE' })
+      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo eliminar la iniciativa', true) })
+      .catch(() => showToast('No se pudo eliminar la iniciativa', true))
+  }
+  /** Tarjeta de UN objetivo — métrica o hito — para la vista "Objetivos" (y para la tarjeta de KPIs
+   *  de la épica destacada, que reusa esta misma tarjeta). `scopeEpica` es `featured` para un
+   *  objetivo de la épica, o `{...featured, tasks: featTasks}` para uno de un Feature — sólo afecta
+   *  qué tareas cuentan si el objetivo se mide "con tareas cerradas". `accent` es el color de la
+   *  barra de avance (el de la épica o el del Feature). Instant-save: cada cambio pega directo. */
+  const renderObjetivoCard = (k: EpicaMilestone, scopeEpica: Epica, accent: string, onSetCurrent: (v: number) => void, onPatch: (patch: Partial<EpicaMilestone>) => void, onDelete: () => void) => {
+    const esHito = k.tipo === 'hito'
+    const unitLabel = k.unit === 'otro' ? (k.unitLabel || '') : (k.unit || '')
+    if (esHito) {
+      const st = k.hitoEstado || 'pendiente'
+      const vencido = st !== 'logrado' && !!k.due && k.due < today
+      const c = st === 'logrado' ? '#2E6E6E' : vencido ? '#B0522E' : '#A87A2C'
+      return (
+        <div key={k.id} style={{ borderRadius: 12, padding: '11px 13px', background: st === 'logrado' ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.02)', border: st === 'logrado' ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.08)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+            <button onClick={() => onPatch({ tipo: 'metrica' })} title="Cambiar a métrica" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 13 }}>◆</button>
+            <span style={{ font: '700 11.5px var(--font-ui)', color: st === 'logrado' ? '#2E6E6E' : '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
+            <button onClick={onDelete} aria-label="Eliminar objetivo" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+          </div>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
+            {(['pendiente', 'en_curso', 'logrado'] as const).map(s => {
+              const on = st === s
+              return (
+                <button key={s} onClick={() => onPatch(s === 'logrado' ? { hitoEstado: 'logrado', fechaLogrado: todayISO(), done: true, doneAt: todayISO() } : { hitoEstado: s, fechaLogrado: undefined, done: undefined, doneAt: undefined })}
+                  style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 10.5, fontWeight: 700, border: on ? `1px solid ${c}` : '1px solid rgba(15,35,64,0.12)', background: on ? hexA(c, 0.12) : '#fff', color: on ? c : 'rgba(20,35,61,0.55)' }}>
+                  {s === 'pendiente' ? 'Pendiente' : s === 'en_curso' ? 'En curso' : '✓ Logrado'}
+                </button>
+              )
+            })}
+          </div>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>
+            {st === 'logrado' ? `Logrado${k.fechaLogrado ? ' · ' + fmtDue(k.fechaLogrado) : ''}` : k.due ? `${vencido ? 'Vencido · ' : 'Para '}${fmtDue(k.due)}` : 'Sin fecha'}
+          </span>
+        </div>
+      )
+    }
+    const { cur, target, pct, hasMeta } = milestoneProgress(k, scopeEpica)
+    const hecho = milestoneDone(k, scopeEpica)
+    const vencido = !hecho && !!k.due && k.due < today
+    const c = hecho ? '#2E6E6E' : vencido ? '#B0522E' : '#A87A2C'
+    return (
+      <div key={k.id} title={k.auto ? 'Se mide con las tareas cerradas' : undefined}
+        style={{ borderRadius: 12, padding: '11px 13px', background: hecho ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.02)', border: hecho ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.08)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+          <button onClick={() => onPatch({ tipo: 'hito' })} title="Cambiar a hito" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 12 }}>▤</button>
+          <span style={{ font: '700 11.5px var(--font-ui)', color: hecho ? '#2E6E6E' : '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
+          {hecho && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.16)', borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap' }}>✦ Cumplido</span>}
+          {!hecho && k.auto && <span style={{ font: '700 9px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>auto</span>}
+          <button onClick={onDelete} aria-label="Eliminar objetivo" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+        </div>
+        {hasMeta ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+              {k.auto ? (
+                <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
+              ) : (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <button onClick={() => onSetCurrent((k.current ?? 0) - 1)} aria-label="Bajar avance" title="−1"
+                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>−</button>
+                  <input type="number" defaultValue={cur} key={`${k.id}-${cur}`}
+                    onBlur={ev => { const v = Number(ev.target.value); if (v !== cur) onSetCurrent(v) }}
+                    onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                    aria-label={`Avance de ${k.t}`}
+                    className="serif" style={{ width: 62, textAlign: 'center', fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F', border: '1px solid transparent', borderRadius: 7, padding: '2px 4px', background: 'transparent', outline: 'none' }} />
+                  <button onClick={() => onSetCurrent((k.current ?? 0) + 1)} aria-label="Subir avance" title="+1"
+                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>+</button>
+                </span>
+              )}
+              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>/ {target}{unitLabel ? ' ' + unitLabel : ''}</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ font: '800 11px var(--font-ui)', color: c }}>{Math.round(pct * 100)}%</span>
+            </div>
+            <div style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+              <div style={{ width: `${pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : accent, transition: 'width .4s' }} />
+            </div>
+          </>
+        ) : (
+          <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur || '—'}{unitLabel ? <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}> {unitLabel}</span> : null}</div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+          {k.due && <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</span>}
+          <button onClick={() => setMilestonePick({ eId: scopeEpica.id, mId: k.id })}
+            title="Elegir qué tareas cuentan para este objetivo"
+            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, fontSize: 10.5, fontWeight: 700, color: (k.taskIds?.length ?? 0) > 0 ? 'rgba(20,35,61,0.55)' : '#A87A2C', textDecoration: 'underline' }}>
+            🔗 {(k.taskIds?.length ?? 0) > 0 ? `${k.taskIds!.length} tareas` : 'Ligar tareas'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+  /** Fila de UNA Iniciativa, editable al vuelo (nombre/estado/fechas/responsable), con su barra de
+   *  avance calculada de sus propias tareas (% terminadas) — sin tocar la base de datos: es la
+   *  métrica de una Iniciativa hoy. Para la vista "Objetivos". */
+  const renderIniciativaRowEditable = (ini: Iniciativa, epicaId: string, featureId: string, accent: string) => {
+    const iniTasks = featured.tasks.filter(t => t.iniciativaId === ini.id)
+    const doneIni = iniTasks.filter(t => t.status === 'Terminada').length
+    const pct = iniTasks.length ? doneIni / iniTasks.length : 0
+    return (
+      <div key={ini.id} style={{ border: '1px solid rgba(15,35,64,0.10)', borderRadius: 10, padding: '9px 11px', background: '#fff' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input defaultValue={ini.nombre} key={`${ini.id}-${ini.nombre}`} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== ini.nombre) patchIniciativa(epicaId, featureId, ini.id, { nombre: v }) }}
+            style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 12.5, fontWeight: 700, color: '#16365F', background: 'transparent', outline: 'none' }} />
+          <button onClick={() => deleteIniciativa(epicaId, featureId, ini.id)} aria-label="Eliminar iniciativa" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
+          {INICIATIVA_ESTADOS.map(([st, lbl]) => (
+            <button key={st} onClick={() => patchIniciativa(epicaId, featureId, ini.id, { estado: st })} style={tipoChip(ini.estado === st)}>{lbl}</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 7 }}>
+          <input type="date" defaultValue={ini.fechaInicio || ''} key={`${ini.id}-fi-${ini.fechaInicio}`}
+            onChange={ev => patchIniciativa(epicaId, featureId, ini.id, { fechaInicio: ev.target.value || undefined })} style={dateInp} title="Desde" />
+          <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.4)' }}>→</span>
+          <input type="date" defaultValue={ini.fechaFinObjetivo || ''} key={`${ini.id}-ff-${ini.fechaFinObjetivo}`}
+            onChange={ev => patchIniciativa(epicaId, featureId, ini.id, { fechaFinObjetivo: ev.target.value || undefined })} style={dateInp} title="Para" />
+          <input defaultValue={ini.responsable || ''} key={`${ini.id}-resp-${ini.responsable}`} placeholder="Responsable"
+            onBlur={ev => { const v = ev.target.value.trim(); if (v !== (ini.responsable || '')) patchIniciativa(epicaId, featureId, ini.id, { responsable: v || undefined }) }}
+            style={{ ...inpNarrow, flex: '1 1 100px' }} />
+        </div>
+        {iniTasks.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7 }}>
+            <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+              <span style={{ display: 'block', width: `${pct * 100}%`, height: '100%', background: accent }} />
+            </span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{doneIni}/{iniTasks.length} tareas</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+  /** Fila "+ Objetivo" / "+ Iniciativa": mismo patrón de quick-add que Feature (nombre, Enter/✓ crea). */
+  const renderQuickAddRow = (placeholder: string, active: boolean, name: string, setName: (v: string) => void, onOpen: () => void, onCommit: () => void, onCancel: () => void) => (
+    active ? (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <input autoFocus value={name} onChange={ev => setName(ev.target.value)}
+          onKeyDown={ev => { if (ev.key === 'Enter') onCommit(); if (ev.key === 'Escape') onCancel() }}
+          placeholder={placeholder} style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 160 }} />
+        <button type="button" title="Crear" onClick={onCommit} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+        <button type="button" title="Cancelar" onClick={onCancel} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
+      </span>
+    ) : (
+      <button type="button" onClick={onOpen} style={addBtn}>{placeholder}</button>
+    )
+  )
   /** Chips para elegir el Feature de una tarea — misma prominencia que Prioridad/Dificultad,
    *  siempre visible (aunque no haya Features aún) con "+ Nuevo" para crear uno sin salir. */
   const renderFeatureChips = (epicaId: string, current: string | undefined, onPick: (featureId: string | null) => void) => {
@@ -2914,6 +3121,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const dateInp: CSSProperties = { border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, color: '#14233D', background: '#fff', outline: 'none' }
   const delBtn: CSSProperties = { flexShrink: 0, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 8, height: 32, width: 32, color: 'rgba(20,35,61,0.5)', fontSize: 13 }
   const addBtn: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '6px 11px', fontSize: 12, fontWeight: 700 }
+  const UNIT_OPTS: [ObjetivoUnit, string][] = [
+    ['pesos', 'MXN $'], ['usd', 'USD $'], ['dias', 'días'], ['meses', 'meses'], ['porcentaje', '%'],
+    ['unidades', 'unidades'], ['kg', 'kg'], ['horas', 'horas'], ['otro', 'otro…'],
+  ]
+  const tipoChip = (on: boolean): CSSProperties => ({ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' })
+  const INICIATIVA_ESTADOS: [Iniciativa['estado'], string][] = [
+    ['pendiente', 'Pendiente'], ['en_curso', 'En curso'], ['bloqueada', 'Bloqueada'], ['cerrada', 'Cerrada'], ['cancelada', 'Cancelada'],
+  ]
   const cardEd: CSSProperties = { background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 14, padding: '14px 15px', marginTop: 16 }
   const secHead: CSSProperties = { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }
 
@@ -6804,14 +7019,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
     // Formulario de un KPI/objetivo (actual/inicio/meta/unidad/fecha/auto/cumplido). Reusado tanto
     // por los Objetivos de la Épica como por los de cada Feature — mismo tipo, un solo formulario.
-    const UNIT_OPTS: [ObjetivoUnit, string][] = [
-      ['pesos', 'MXN $'], ['usd', 'USD $'], ['dias', 'días'], ['meses', 'meses'], ['porcentaje', '%'],
-      ['unidades', 'unidades'], ['kg', 'kg'], ['horas', 'horas'], ['otro', 'otro…'],
-    ]
-    const tipoChip = (on: boolean): CSSProperties => ({ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' })
-    const INICIATIVA_ESTADOS: [Iniciativa['estado'], string][] = [
-      ['pendiente', 'Pendiente'], ['en_curso', 'En curso'], ['bloqueada', 'Bloqueada'], ['cerrada', 'Cerrada'], ['cancelada', 'Cancelada'],
-    ]
     const renderKpisEditor = (kpis: EpicaMilestone[], onChange: (next: EpicaMilestone[]) => void) => (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
         {kpis.map((k, i) => {
@@ -8315,64 +8522,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               })()}
 
               {featured.kpis.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 11, marginBottom: 22 }}>
-                  {featured.kpis.map((k, i) => {
-                    const { cur, target, pct, hasMeta } = milestoneProgress(k, featured)
-                    const hecho = milestoneDone(k, featured)
-                    const vencido = !hecho && k.due && k.due < today
-                    const c = hecho ? '#2E6E6E' : vencido ? '#B0522E' : '#A87A2C'
-                    return (
-                      <div key={k.id || i} title={k.auto ? 'Se mide con las tareas cerradas de la épica' : undefined}
-                        style={{ borderRadius: 12, padding: '11px 13px', background: hecho ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.02)', border: hecho ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.08)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
-                          <span style={{ font: '700 11.5px var(--font-ui)', color: hecho ? '#2E6E6E' : '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
-                          {hecho && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.16)', borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap' }}>✦ Cumplido</span>}
-                          {!hecho && k.auto && <span style={{ font: '700 9px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>auto</span>}
-                        </div>
-                        {hasMeta ? (
-                          <>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-                              {/* Avance editable al vuelo (los medidos con tareas se calculan solos) */}
-                              {k.auto ? (
-                                <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
-                              ) : (
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                                  <button onClick={() => setMilestoneCurrent(featured, i, (k.current ?? 0) - 1)} aria-label="Bajar avance" title="−1"
-                                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>−</button>
-                                  <input type="number" defaultValue={cur} key={`${k.id}-${cur}`}
-                                    onBlur={ev => { const v = Number(ev.target.value); if (v !== cur) setMilestoneCurrent(featured, i, v) }}
-                                    onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
-                                    aria-label={`Avance de ${k.t}`}
-                                    className="serif" style={{ width: 62, textAlign: 'center', fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F', border: '1px solid transparent', borderRadius: 7, padding: '2px 4px', background: 'transparent', outline: 'none' }} />
-                                  <button onClick={() => setMilestoneCurrent(featured, i, (k.current ?? 0) + 1)} aria-label="Subir avance" title="+1"
-                                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>+</button>
-                                </span>
-                              )}
-                              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>/ {target}{k.unit ? ' ' + k.unit : ''}</span>
-                              <span style={{ flex: 1 }} />
-                              <span style={{ font: '800 11px var(--font-ui)', color: c }}>{Math.round(pct * 100)}%</span>
-                            </div>
-                            <div style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
-                              <div style={{ width: `${pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : featured.color, transition: 'width .4s' }} />
-                            </div>
-                          </>
-                        ) : (
-                          <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur || '—'}{k.unit ? <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}> {k.unit}</span> : null}</div>
-                        )}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-                          {k.due && <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</span>}
-                          <button onClick={() => setMilestonePick({ eId: featured.id, mId: k.id })}
-                            title="Elegir qué tareas cuentan para este objetivo"
-                            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, fontSize: 10.5, fontWeight: 700, color: (k.taskIds?.length ?? 0) > 0 ? 'rgba(20,35,61,0.55)' : '#A87A2C', textDecoration: 'underline' }}>
-                            🔗 {(k.taskIds?.length ?? 0) > 0 ? `${k.taskIds!.length} tareas` : 'Ligar tareas'}
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 11, marginBottom: 12 }}>
+                  {featured.kpis.map(k => renderObjetivoCard(k, featured, featured.color,
+                    v => setObjetivoCurrent(featured, k, v),
+                    patch => patchObjetivo(featured.id, k.id, patch),
+                    () => deleteObjetivo(featured.id, k.id)))}
                 </div>
               )}
+              <div style={{ marginBottom: 22 }}>
+                {renderQuickAddRow('+ Objetivo de la épica', quickObjOwner === 'epica', quickObjName, setQuickObjName,
+                  () => { setQuickObjOwner('epica'); setQuickObjName('') },
+                  () => { commitQuickObjetivo(featured.id, null, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
+                  () => { setQuickObjOwner(null); setQuickObjName('') })}
+              </div>
 
+              <div role="group" aria-label="Vista de la épica" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', marginBottom: 14 }}>
+                {([['tareas', 'Tareas'], ['objetivos', 'Objetivos']] as const).map(([v, label]) => {
+                  const on = epicTab === v
+                  return <button key={v} aria-pressed={on} onClick={() => setEpicTab(v)} style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '6px 14px', font: '700 12px var(--font-ui)', background: on ? '#10233F' : 'transparent', color: on ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{label}</button>
+                })}
+              </div>
+
+              {epicTab === 'tareas' && (<>
               {(featureOptions.length > 0 || hasSinFeature) && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 9, marginBottom: 18 }}>
                   {/* Sólo Features con tareas bajo el chip de estado activo (cascada, igual que el filtro de abajo) */}
@@ -8461,6 +8632,54 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', marginBottom: 18 }}>
                   {renderIniciativaFilterChipsInline(featured.id, epicFeatureFilter, epicIniciativaFilter, setEpicIniciativaFilter)}
+                </div>
+              )}
+              </>)}
+
+              {epicTab === 'objetivos' && (
+                <div style={{ marginBottom: 18 }}>
+                  {(featured.features || []).length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.55)', padding: '4px 0 14px' }}>Todavía no hay Features en esta épica. Créalos desde &quot;Editar&quot; — ahí puedes agregarles Objetivos e Iniciativas, o hazlo aquí mismo en cuanto exista el primero.</div>
+                  ) : (featured.features || []).map(f => {
+                    const featTasks = featured.tasks.filter(t => t.featureId === f.id)
+                    const featEpica: Epica = { ...featured, tasks: featTasks }
+                    const doneN = featTasks.filter(t => t.status === 'Terminada').length
+                    const fc = f.color || '#5B6B86'
+                    return (
+                      <div key={f.id} style={{ marginBottom: 20, border: '1px solid rgba(15,35,64,0.08)', borderRadius: 14, padding: 14, background: 'rgba(15,35,64,0.015)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                          <span style={{ width: 10, height: 10, borderRadius: 99, background: fc, flexShrink: 0 }} />
+                          <span style={{ font: '700 13px var(--font-ui)', color: '#16365F' }}>{f.t}</span>
+                          {featTasks.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>· {doneN}/{featTasks.length} tareas</span>}
+                        </div>
+
+                        <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', marginBottom: 8 }}>Objetivos</div>
+                        {(f.kpis || []).length > 0 && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 10 }}>
+                            {(f.kpis || []).map(k => renderObjetivoCard(k, featEpica, fc,
+                              v => setObjetivoCurrent(featEpica, k, v),
+                              patch => patchObjetivo(featured.id, k.id, patch),
+                              () => deleteObjetivo(featured.id, k.id)))}
+                          </div>
+                        )}
+                        {renderQuickAddRow('+ Objetivo', quickObjOwner === f.id, quickObjName, setQuickObjName,
+                          () => { setQuickObjOwner(f.id); setQuickObjName('') },
+                          () => { commitQuickObjetivo(featured.id, f.id, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
+                          () => { setQuickObjOwner(null); setQuickObjName('') })}
+
+                        <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', margin: '16px 0 8px' }}>Iniciativas</div>
+                        {(f.iniciativas || []).length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                            {(f.iniciativas || []).map(ini => renderIniciativaRowEditable(ini, featured.id, f.id, fc))}
+                          </div>
+                        )}
+                        {renderQuickAddRow('+ Iniciativa', quickIniFeature === f.id, quickIniName, setQuickIniName,
+                          () => { setQuickIniFeature(f.id); setQuickIniName('') },
+                          () => { commitQuickIniciativa(featured.id, f.id, quickIniName); setQuickIniFeature(null); setQuickIniName('') },
+                          () => { setQuickIniFeature(null); setQuickIniName('') })}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
 

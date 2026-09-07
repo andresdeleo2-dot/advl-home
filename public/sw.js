@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v59-iniciativa-filters */
+/* BUILD-MARKER: v60-objetivos-tab */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */
