@@ -13,15 +13,17 @@ const ICONS: Record<string, ReactNode> = {
   epicas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4" /><path d="M4 4h13l-2.5 4L17 12H4" /></svg>),
   tiempo: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 1.8" /></svg>),
   ideas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6M10 21h4" /><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.46 1.6 1.4 1.6 2.2h4c0-.8 1-1.74 1.6-2.2A6 6 0 0 0 12 3Z" /></svg>),
+  roadmap: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11h5l2-3 4 6 2-3h5" /><circle cx="20" cy="5" r="2" /><circle cx="4" cy="19" r="2" /></svg>),
 }
 
-export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' | 'ideas' }) {
+export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' | 'ideas' | 'roadmap' }) {
   const items = [
     { id: 'panel', label: 'Panel', href: '/panel' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
     { id: 'epicas', label: 'Épicas', href: '/epicas' },
     { id: 'accesos', label: 'Accesos', href: '/' },
     { id: 'ideas', label: 'Ideas', href: '/ideas' },
+    { id: 'roadmap', label: 'Roadmap', href: '/roadmap' },
   ] as const
   return (
     <nav className="section-nav" aria-label="Secciones" style={{ display: 'inline-flex', gap: 2, background: 'rgba(10,20,38,0.28)', border: '1px solid rgba(255,255,255,0.14)', padding: 3, borderRadius: 999, boxShadow: 'inset 0 1px 2px rgba(0,0,0,.18)' }}>
