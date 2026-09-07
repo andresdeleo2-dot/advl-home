@@ -28,19 +28,24 @@ export type Item = {
 /** Objetivo medible de una épica (reemplaza a los KPIs de texto libre).
  *  Se guarda en la columna `kpis` (jsonb) por compatibilidad; el nombre de la
  *  columna es lo único que quedó del modelo anterior. */
+export type ObjetivoUnit = 'pesos' | 'usd' | 'dias' | 'meses' | 'porcentaje' | 'unidades' | 'kg' | 'horas' | 'otro'
 export type EpicaMilestone = {
   id: string
   t: string                 // qué se quiere lograr
-  target?: number           // meta
-  current?: number          // valor actual (manual, o calculado si auto = 'tareas')
-  unit?: string             // kg, %, MXN, tareas…
+  tipo?: 'metrica' | 'hito' // ausente = 'metrica' (compat con objetivos ya en memoria/sin migrar). Requiere sql/epicas-19-objetivos.sql
+  target?: number           // meta (sólo métrica)
+  current?: number          // valor actual (manual, o calculado si auto = 'tareas') (sólo métrica)
+  unit?: ObjetivoUnit       // lista cerrada; 'otro' + unitLabel para lo que no encaje
+  unitLabel?: string        // etiqueta libre cuando unit === 'otro'
   due?: string              // 'YYYY-MM-DD' fecha objetivo
   done?: boolean            // marcado a mano
   doneAt?: string
-  auto?: 'tareas'           // el avance se calcula con las tareas cerradas de la épica
-  lowerIsBetter?: boolean   // para metas que bajan (peso, deuda…)
+  auto?: 'tareas'           // el avance se calcula con las tareas cerradas de la épica (sólo métrica)
+  lowerIsBetter?: boolean   // para metas que bajan (peso, deuda…) (sólo métrica)
   start?: number            // valor de PARTIDA (baseline) para medir el avance de metas que bajan
   taskIds?: string[]        // tareas que cuentan para este objetivo (los "key results")
+  hitoEstado?: 'pendiente' | 'en_curso' | 'logrado'   // sólo si tipo === 'hito'
+  fechaLogrado?: string                                // 'YYYY-MM-DD'; sólo si tipo === 'hito'
 }
 export type EpicaRoutine = {
   t: string
@@ -48,7 +53,26 @@ export type EpicaRoutine = {
   weeks?: Record<string, boolean[]>      // progreso por semana: lunesISO -> 7 booleanos (L…D)
   estMin?: number                        // estimado de minutos que le dedicas al día (opcional; se guarda en el jsonb de rutinas, sin migración)
 }
-export type EpicaFeature = { id: string; t: string; color?: string; kpis?: EpicaMilestone[]; roadmapStart?: string; roadmapEnd?: string }   // roadmapStart/End: 'YYYY-MM-DD', para /roadmap — viven en el jsonb, sin migración
+export type EpicaFeature = {
+  id: string; t: string; color?: string; kpis?: EpicaMilestone[]
+  roadmapStart?: string; roadmapEnd?: string   // 'YYYY-MM-DD', para /roadmap — nombre de cliente sin cambios aunque la columna real se llame distinto
+  estado?: string        // 'en_curso'|'en_riesgo'|'al_dia'|'en_pausa'|'cerrado'; ausente = 'en_curso'. Requiere sql/epicas-18-features.sql
+  orden?: number
+  iniciativas?: Iniciativa[]   // Iniciativas dentro de este Feature. Requiere sql/epicas-20-iniciativas.sql
+}
+export type Iniciativa = {
+  id: string
+  featureId: string
+  epicaId: string
+  nombre: string
+  descripcion?: string | null
+  estado: 'pendiente' | 'en_curso' | 'bloqueada' | 'cerrada' | 'cancelada'
+  fechaInicio?: string | null
+  fechaFinObjetivo?: string | null
+  responsable?: string | null
+  orden?: number
+  bloqueadaPor?: string | null   // id de otra Iniciativa que hay que cerrar antes
+}
 export type EpicaTaskLink = { label: string; url: string }
 export type EpicaSubtask = {
   id?: string            // identidad estable (para reordenar sin que se recorran los índices)
@@ -100,6 +124,8 @@ export type EpicaTask = {
   waitingSince?: string                // ISO datetime: espejo en servidor de "esperando desde" (fuente: localStorage vía markWaitSince). Sólo LECTURA aquí — la escribe /api/tareas/wait-since, no el sync normal de la tarea. Requiere sql/epicas-14-waiting-since.sql
   blockedByTaskId?: string             // "Depende de": tarea que hay que terminar antes, EN CUALQUIER estado (no exige 'Esperando', a diferencia de waitingTaskId). Requiere sql/epicas-16-blocked-by.sql
   featureId?: string                   // Feature al que pertenece dentro de su épica (opcional: puede no tener)
+  iniciativaId?: string                // Iniciativa a la que pertenece dentro de su Feature (opcional). Requiere sql/epicas-21-tarea-iniciativa.sql
+  responsable?: string                 // texto libre: yo, abogado, contador, nombre de la persona…
   personaId?: string                   // ligada a una persona del archivo "Mi Vida" (mismo Supabase, tabla personas) — ej. "regalo para mamá"
   personaNombre?: string               // nombre de esa persona AL LIGARLA (denormalizado, para mostrar el chip sin otro fetch)
   repeat?: EpicaRepeat                 // si existe, al completarla se reprograma en vez de terminarse

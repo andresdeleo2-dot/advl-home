@@ -49,11 +49,16 @@ export default function RoadmapClient() {
     else setErr(r?.error || 'No se pudo guardar')
   }
   const saveFeatureDates = async (epicaId: string, featureId: string) => {
-    const e = (epicas || []).find(x => x.id === epicaId); if (!e) return
-    const features = (e.features || []).map(f => f.id === featureId ? { ...f, roadmapStart: editStart || undefined, roadmapEnd: editEnd || undefined } : f)
-    const r = await fetch(`/api/epicas/${epicaId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ features }) }).then(x => x.json()).catch(() => null)
-    if (r?.ok) { setEpicas(prev => (prev || []).map(x => x.id === epicaId ? { ...x, features } : x)); setEditKey(null) }
-    else setErr(r?.error || 'No se pudo guardar')
+    // Features vive en su propia tabla desde sql/epicas-18-features.sql: se actualiza esa UNA
+    // fila (antes se mandaba el arreglo `features` completo de la épica).
+    const body = { roadmapStart: editStart || null, roadmapEnd: editEnd || null }
+    const r = await fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null)
+    if (r?.ok) {
+      setEpicas(prev => (prev || []).map(x => x.id !== epicaId ? x : {
+        ...x, features: (x.features || []).map(f => f.id === featureId ? { ...f, roadmapStart: body.roadmapStart || undefined, roadmapEnd: body.roadmapEnd || undefined } : f),
+      }))
+      setEditKey(null)
+    } else setErr(r?.error || 'No se pudo guardar')
   }
 
   const active = (epicas || []).filter(e => !e.archived).sort((a, b) => a.epic_order - b.epic_order)

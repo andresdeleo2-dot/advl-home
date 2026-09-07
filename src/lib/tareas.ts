@@ -42,6 +42,8 @@ export type TareaRow = {
   persona_id?: string | null
   persona_nombre?: string | null
   blocked_by_task_id?: string | null
+  iniciativa_id?: string | null
+  responsable?: string | null
 }
 
 /** Fila → tarea de la UI. Los nulos vuelven a ser `undefined` (o '' donde el
@@ -84,6 +86,8 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.persona_id) t.personaId = r.persona_id
   if (r.persona_nombre) t.personaNombre = r.persona_nombre
   if (r.blocked_by_task_id) t.blockedByTaskId = r.blocked_by_task_id
+  if (r.iniciativa_id) t.iniciativaId = r.iniciativa_id
+  if (r.responsable) t.responsable = r.responsable
   return t
 }
 
@@ -121,6 +125,9 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     ...('waitingTaskId' in t ? { waiting_task_id: (t.waitingTaskId || null) } : {}),
     // blocked_by_task_id: "Depende de" real, EN CUALQUIER estado (no exige 'Esperando').
     ...('blockedByTaskId' in t ? { blocked_by_task_id: (t.blockedByTaskId || null) } : {}),
+    // iniciativa_id/responsable: mismo patrón — '' (no delete) para poder limpiar la columna.
+    ...('iniciativaId' in t ? { iniciativa_id: (t.iniciativaId || null) } : {}),
+    ...('responsable' in t ? { responsable: (t.responsable || null) } : {}),
     // persona_id/nombre: a qué persona de "Mi Vida" está ligada la tarea (mismo Supabase).
     ...('personaId' in t ? { persona_id: (t.personaId || null) } : {}),
     ...('personaNombre' in t ? { persona_nombre: (t.personaNombre || null) } : {}),

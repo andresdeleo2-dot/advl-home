@@ -9,14 +9,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const body = await req.json()
     // 'tasks' ya NO se acepta aquí: las tareas viven en la tabla `tareas` y se
     // escriben por /api/tareas/sync. epicas.tasks queda intacta como respaldo.
+    // 'kpis'/'features' TAMPOCO — desde sql/epicas-18/19-*.sql viven en sus propias tablas
+    // (features/objetivos) y se escriben por /api/features y /api/objetivos, fila por fila. Un
+    // PATCH viejo que todavía mande kpis/features aquí simplemente los ignora (no truena) — las
+    // columnas jsonb de epicas quedan intactas como respaldo, sin uso.
     const allowed = [
       'name', 'color', 'description', 'status', 'categoria', 'archived',
-      'source_table', 'source_sync', 'epic_order', 'kpis', 'routines', 'links', 'week_budget', 'features',
+      'source_table', 'source_sync', 'epic_order', 'routines', 'links', 'week_budget',
       'roadmap_start', 'roadmap_end',
     ]
     // Estas columnas jsonb DEBEN ser arrays: un valor no-array rompería normalize() (.map) en
     // el cliente y dejaría /epicas con error permanente. Se rechaza el write en ese caso.
-    const arrayCols = ['kpis', 'routines', 'links', 'features']
+    const arrayCols = ['routines', 'links']
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
     for (const key of allowed) {
       if (!(key in body)) continue

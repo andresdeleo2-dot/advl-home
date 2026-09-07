@@ -38,6 +38,16 @@ export function taskStyle(s: string) {
   }
   return m[s] || m['Por hacer']
 }
+export function iniciativaStyle(s: string) {
+  const m: Record<string, { c: string; bg: string; label: string }> = {
+    'pendiente': { c: 'rgba(20,35,61,0.55)', bg: 'rgba(15,35,64,0.06)', label: 'Pendiente' },
+    'en_curso': { c: '#2E5A9E', bg: 'rgba(46,90,158,0.12)', label: 'En curso' },
+    'bloqueada': { c: '#B0522E', bg: 'rgba(176,90,60,0.15)', label: 'Bloqueada' },
+    'cerrada': { c: '#2E6E6E', bg: 'rgba(62,142,142,0.14)', label: 'Cerrada' },
+    'cancelada': { c: 'rgba(20,35,61,0.4)', bg: 'rgba(20,35,61,0.07)', label: 'Cancelada' },
+  }
+  return m[s] || m['pendiente']
+}
 export function typeColor(t: string) {
   const m: Record<string, string> = { Dashboard: '#C2933A', Supabase: '#3E8E8E', Excel: '#5B6B86', Drive: '#2E5A9E', Otro: '#7A6FB0' }
   return m[t] || '#7A6FB0'
