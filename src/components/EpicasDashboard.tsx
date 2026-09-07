@@ -169,6 +169,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [backlogDone, setBacklogDone] = useState(false)
   const [backlogFEpica, setBacklogFEpica] = useState<string>('todas')
   const [backlogFFeature, setBacklogFFeature] = useState<string>('todas')  // sólo tiene sentido con backlogFEpica ≠ 'todas'
+  const [backlogFIniciativa, setBacklogFIniciativa] = useState<string>('todas')  // sólo tiene sentido con backlogFFeature ≠ 'todas'/'sin'
   const [backlogFStatus, setBacklogFStatus] = useState<string>('todas')
   const [backlogFPrio, setBacklogFPrio] = useState<string>('todas')
   const [backlogQ, setBacklogQ] = useState('')                 // búsqueda de texto en el backlog
@@ -2023,7 +2024,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const toE = epicsRef.current.find(e => e.id === toEId); if (!toE) return
     const task = fromE.tasks[i]; if (!task) return
     const fromTasks = clone(fromE.tasks).filter((_, idx) => idx !== i)
-    const toTasks = clone(toE.tasks); toTasks.push(clone(task))
+    // El Feature/Iniciativa (si tenía) es de la ÉPICA VIEJA — no existe en la nueva (mismo criterio que saveTask()).
+    const moved = clone(task)
+    if (moved.featureId) moved.featureId = ''
+    if (moved.iniciativaId) moved.iniciativaId = ''
+    const toTasks = clone(toE.tasks); toTasks.push(moved)
     patchEpic(fromE.id, { tasks: fromTasks })
     patchEpic(toE.id, { tasks: toTasks })
     setBacklogSel(new Set())
@@ -2456,6 +2461,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         {inner}
       </span>
+    )
+  }
+
+  /** Filtro de Iniciativa: un nivel más de cascada, DENTRO de un Feature ya elegido (sin Feature
+   *  no hay Iniciativa que ofrecer). Sólo tiene fila propia (Backlog); no hace falta variante
+   *  inline todavía — nada más la usa por ahora. */
+  const renderIniciativaFilterChips = (epicaId: string, featureId: string, value: string, onChange: (v: string) => void) => {
+    if (featureId === 'todas' || featureId === 'sin') return null
+    const inis = (activeEpics.find(e => e.id === epicaId)?.features || []).find(f => f.id === featureId)?.iniciativas || []
+    if (inis.length === 0) return null
+    const chip = (on: boolean): CSSProperties => ({ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.55)' })
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+        <span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)' }}>Iniciativa</span>
+        <button onClick={() => onChange('todas')} style={chip(value === 'todas')}>Todas</button>
+        {inis.map(ini => {
+          const on = value === ini.id
+          return <button key={ini.id} onClick={() => onChange(on ? 'todas' : ini.id)} style={chip(on)}>{ini.nombre}</button>
+        })}
+        <button onClick={() => onChange(value === 'sin' ? 'todas' : 'sin')} style={chip(value === 'sin')}>Sin iniciativa</button>
+      </div>
     )
   }
 
@@ -6203,6 +6229,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (backlogFEpica !== 'todas' && e.id !== backlogFEpica) return
       if (backlogFEpica !== 'todas' && backlogFFeature === 'sin' && t.featureId) return
       if (backlogFEpica !== 'todas' && backlogFFeature !== 'todas' && backlogFFeature !== 'sin' && t.featureId !== backlogFFeature) return
+      // Iniciativa: sólo tiene sentido con un Feature concreto ya elegido (cascada).
+      if (backlogFFeature !== 'todas' && backlogFFeature !== 'sin' && backlogFIniciativa === 'sin' && t.iniciativaId) return
+      if (backlogFFeature !== 'todas' && backlogFFeature !== 'sin' && backlogFIniciativa !== 'todas' && backlogFIniciativa !== 'sin' && t.iniciativaId !== backlogFIniciativa) return
       if (!isBoard && backlogFStatus !== 'todas' && t.status !== backlogFStatus) return
       if (backlogFPrio !== 'todas' && (t.priority || '') !== backlogFPrio) return
       if (bq && !(norm(t.t).includes(bq) || norm(e.name).includes(bq)
@@ -6399,7 +6428,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <input type="checkbox" checked={backlogDone} onChange={e => setBacklogDone(e.target.checked)} /> Terminadas
               </label>
               {(backlogFEpica !== 'todas' || backlogFStatus !== 'todas' || backlogFPrio !== 'todas') && (
-                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFFeature('todas'); setBacklogFStatus('todas'); setBacklogFPrio('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>Limpiar filtros</button>
+                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFFeature('todas'); setBacklogFIniciativa('todas'); setBacklogFStatus('todas'); setBacklogFPrio('todas') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>Limpiar filtros</button>
               )}
               {/* La edición tipo hoja de cálculo sólo aplica a la tabla */}
               {!isBoard && (
@@ -6416,11 +6445,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {/* Chips de épica: filtran el backlog por épica (una a la vez) */}
             {activeEpics.length > 1 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
-                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFFeature('todas') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: backlogFEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: backlogFEpica === 'todas' ? '#10233F' : '#fff', color: backlogFEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
+                <button onClick={() => { setBacklogFEpica('todas'); setBacklogFFeature('todas'); setBacklogFIniciativa('todas') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, border: backlogFEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: backlogFEpica === 'todas' ? '#10233F' : '#fff', color: backlogFEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
                 {activeEpics.map(ep => {
                   const on = backlogFEpica === ep.id
                   return (
-                    <button key={ep.id} onClick={() => { setBacklogFEpica(on ? 'todas' : ep.id); setBacklogFFeature('todas') }} title={`Sólo ${ep.name}`}
+                    <button key={ep.id} onClick={() => { setBacklogFEpica(on ? 'todas' : ep.id); setBacklogFFeature('todas'); setBacklogFIniciativa('todas') }} title={`Sólo ${ep.name}`}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, transition: 'background .12s, border-color .12s',
                         border: on ? `1.5px solid ${ep.color}` : '1px solid rgba(15,35,64,0.12)',
                         background: on ? hexA(ep.color, 0.12) : '#fff',
@@ -6431,7 +6460,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 })}
               </div>
             )}
-            {backlogFEpica !== 'todas' && renderFeatureFilterChips(backlogFEpica, backlogFFeature, setBacklogFFeature)}
+            {backlogFEpica !== 'todas' && renderFeatureFilterChips(backlogFEpica, backlogFFeature, v => { setBacklogFFeature(v); setBacklogFIniciativa('todas') })}
+            {backlogFEpica !== 'todas' && renderIniciativaFilterChips(backlogFEpica, backlogFFeature, backlogFIniciativa, setBacklogFIniciativa)}
             {/* Con "Todas" las épicas a la vista, un feature es de UNA épica — no tiene sentido una
                 fila de chips (colisionarían nombres/colores de épicas distintas). En vez de eso, un
                 selector agrupado por épica: elegirlo aquí es un atajo que te mete a esa épica +
@@ -6446,7 +6476,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <select value="" onChange={ev => {
                     const id = ev.target.value; if (!id) return
                     const ep = withFeats.find(e => (e.features || []).some(f => f.id === id))
-                    if (ep) { setBacklogFEpica(ep.id); setBacklogFFeature(id) }
+                    if (ep) { setBacklogFEpica(ep.id); setBacklogFFeature(id); setBacklogFIniciativa('todas') }
                   }} style={filterSel} title="Ir directo a un feature (de cualquier épica)">
                     <option value="">Ver por feature…</option>
                     {withFeats.map(ep => (
@@ -6555,7 +6585,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         <td onClick={ev => ev.stopPropagation()} style={{ padding: '9px 0 9px 12px' }}><input type="checkbox" checked={sel} onChange={() => toggleOne(k)} style={{ cursor: 'pointer' }} /></td>
                         {backlogEdit ? (<>
                           <td style={{ padding: '6px 8px', minWidth: 200 }}>{(() => { const act = editCell?.key === k && editCell.field === 'title'; return <input value={act ? editCell!.val : t.t} onFocus={() => setEditCell({ key: k, field: 'title', val: t.t })} onChange={ev => setEditCell({ key: k, field: 'title', val: ev.target.value })} onBlur={() => { if (act) setTaskTitle(e, i, editCell!.val); setEditCell(null) }} style={editInp} /> })()}</td>
-                          <td style={{ padding: '6px 8px' }}><select value={e.id} onChange={ev => moveTaskToEpica(e, i, ev.target.value)} title="Mover a otra épica" style={{ ...editInp, cursor: 'pointer' }}>{activeEpics.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></td>
+                          <td style={{ padding: '6px 8px', minWidth: 170 }}>
+                            <select value={e.id} onChange={ev => moveTaskToEpica(e, i, ev.target.value)} title="Mover a otra épica" style={{ ...editInp, cursor: 'pointer' }}>{activeEpics.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+                            {(e.features || []).length > 0 && (
+                              <select value={t.featureId || ''} onChange={ev => setTaskFeature(e, i, ev.target.value || null)} title="Feature" style={{ ...editInp, cursor: 'pointer', marginTop: 3 }}>
+                                <option value="">— Sin feature —</option>
+                                {(e.features || []).map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+                              </select>
+                            )}
+                            {t.featureId && (() => {
+                              const inis = (e.features || []).find(f => f.id === t.featureId)?.iniciativas || []
+                              if (!inis.length) return null
+                              return (
+                                <select value={t.iniciativaId || ''} onChange={ev => setTaskIniciativa(e, i, ev.target.value || null)} title="Iniciativa" style={{ ...editInp, cursor: 'pointer', marginTop: 3 }}>
+                                  <option value="">— Sin iniciativa —</option>
+                                  {inis.map(ini => <option key={ini.id} value={ini.id}>{ini.nombre}</option>)}
+                                </select>
+                              )
+                            })()}
+                          </td>
                           <td style={{ padding: '6px 8px' }}><select value={t.status} onChange={ev => setTaskStatus(e, i, ev.target.value)} style={{ ...editInp, cursor: 'pointer' }}>{PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</select></td>
                           <td style={{ padding: '6px 8px' }}><select value={t.priority || ''} onChange={ev => setPriorityVal(e, i, ev.target.value)} style={{ ...editInp, cursor: 'pointer' }}><option value="">—</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option></select></td>
                           <td style={{ padding: '6px 8px' }}>{(() => { const act = editCell?.key === k && editCell.field === 'progress'; return <input type="number" min={0} max={100} step={5} value={act ? editCell!.val : String(t.progress ?? 0)} onFocus={() => setEditCell({ key: k, field: 'progress', val: String(t.progress ?? 0) })} onChange={ev => setEditCell({ key: k, field: 'progress', val: ev.target.value })} onBlur={() => { if (act) setTaskProgress(e, i, Math.max(0, Math.min(100, Number(editCell!.val) || 0))); setEditCell(null) }} style={{ ...editInp, width: 66 }} /> })()}</td>
@@ -6566,6 +6614,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <td style={{ padding: '9px 10px' }}>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.7)', whiteSpace: 'nowrap' }}><span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}</span>
                             {t.featureId && (() => { const feat = (e.features || []).find(f => f.id === t.featureId); return feat ? <div style={{ marginTop: 2, fontSize: 10, fontWeight: 700, color: feat.color || '#5B6B86', whiteSpace: 'nowrap' }}>· {feat.t}</div> : null })()}
+                            {t.iniciativaId && (() => { const ini = (e.features || []).find(f => f.id === t.featureId)?.iniciativas?.find(x => x.id === t.iniciativaId); return ini ? <div style={{ marginTop: 1, fontSize: 9.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>↳ {ini.nombre}</div> : null })()}
                           </td>
                           <td style={{ padding: '9px 10px' }}><span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: ts.bg, color: ts.c, whiteSpace: 'nowrap' }}>{ts.label}</span></td>
                           <td style={{ padding: '9px 10px' }}>{t.priority ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><PrioBars p={t.priority} size={12} /><span style={{ fontSize: 11, fontWeight: 600, color: ps.c }}>{ps.label}</span></span> : <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)' }}>—</span>}</td>
