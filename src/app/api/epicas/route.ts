@@ -50,8 +50,8 @@ export async function GET() {
     const { error } = await supabase.from('tareas').select(col).limit(1)
     return !error
   }
-  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, featureIdReady, waitingTaskReady, personaReady] = await Promise.all([
-    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'), colReady('feature_id'), colReady('waiting_task_id'), colReady('persona_id'),
+  const [planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, featureIdReady, waitingTaskReady, personaReady, blockedByReady] = await Promise.all([
+    colReady('plan_hist'), colReady('orden'), colReady('remind_at'), colReady('comentarios'), colReady('resumen'), colReady('est_min'), colReady('day_plans'), colReady('waiting_for'), colReady('feature_id'), colReady('waiting_task_id'), colReady('persona_id'), colReady('blocked_by_task_id'),
   ])
   // Gate del presupuesto (columna en la tabla EPICAS, no tareas): con épicas basta la primera fila;
   // sin épicas se prueba la columna directo.
@@ -63,8 +63,12 @@ export async function GET() {
     ? ('features' in ((data || [])[0] as object))
     : !(await supabase.from('epicas').select('features').limit(1)).error
   const featuresReady = featureIdReady && epicasFeaturesReady
+  // Roadmap: roadmap_start/roadmap_end (columnas en EPICAS), mismo patrón que weekBudgetReady.
+  const roadmapReady = (data || []).length
+    ? ('roadmap_start' in ((data || [])[0] as object))
+    : !(await supabase.from('epicas').select('roadmap_start').limit(1)).error
 
-  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady, featuresReady, waitingTaskReady, personaReady })
+  return NextResponse.json({ ok: true, data: withTasks, planHistReady, ordenReady, remindReady, comentariosReady, resumenReady, estMinReady, dayPlansReady, waitingReady, weekBudgetReady, featuresReady, waitingTaskReady, personaReady, blockedByReady, roadmapReady })
 }
 
 export async function POST(req: Request) {

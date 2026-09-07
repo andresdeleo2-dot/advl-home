@@ -300,6 +300,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const weekBudgetReady = useRef(false)  // true si la columna week_budget existe (presupuesto semanal por épica)
   const featuresReady = useRef(false)    // true si epicas.features + tareas.feature_id existen (Features dentro de la épica)
   const personaReady = useRef(false)     // true si la columna persona_id existe (tarea ligada a una persona de "Mi Vida")
+  const blockedByReady = useRef(false)   // true si la columna blocked_by_task_id existe ("Depende de", en cualquier estado)
   const [personas, setPersonas] = useState<PersonaOpt[]>([])
   const [personaDetail, setPersonaDetail] = useState<{ persona: Persona; recuerdos: Vida[] } | null>(null)  // ficha completa (popup), como en /panel
   const [personaLoading, setPersonaLoading] = useState<string | null>(null)
@@ -358,6 +359,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       weekBudgetReady.current = !!j.weekBudgetReady
       featuresReady.current = !!j.featuresReady
       personaReady.current = !!j.personaReady
+      blockedByReady.current = !!j.blockedByReady
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize)
@@ -2302,6 +2304,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     patchEpic(e.id, { tasks })
     if (personaId && !personaReady.current) showToast('Corre sql/epicas-15-tarea-persona.sql para guardar la persona', true)
   }
+  /** "Depende de": tarea que hay que terminar antes, en CUALQUIER estado (no exige 'Esperando' —
+   *  eso ya existe por separado vía waitingTaskId). Sirve para secuenciar tu propio trabajo. */
+  const setTaskBlockedBy = (e: Epica, ti: number, blockedByTaskId: string | null) => {
+    const tasks = clone(e.tasks)
+    const t = tasks[ti]; if (!t) return
+    if (blockedByTaskId) { if (blockedByReady.current) t.blockedByTaskId = blockedByTaskId }
+    else if (blockedByReady.current || 'blockedByTaskId' in t) t.blockedByTaskId = ''
+    patchEpic(e.id, { tasks })
+    if (blockedByTaskId && !blockedByReady.current) showToast('Corre sql/epicas-16-blocked-by.sql para guardar la dependencia', true)
+  }
   /** Liga (o desliga) una tarea a un objetivo DEL FEATURE al que pertenece (no de la épica). */
   const setTaskFeatureMilestone = (e: Epica, featureId: string, taskId: string, milestoneId: string | null) => {
     const features = clone(e.features || [])
@@ -2538,6 +2550,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Persona: mismo patrón — '' (no delete) para que si la quitas SÍ se limpie la columna.
     if (personaReady.current) { t.personaId = taskDraft.personaId || ''; t.personaNombre = taskDraft.personaId ? (taskDraft.personaNombre || '') : '' }
     else if ('personaId' in t) { t.personaId = ''; t.personaNombre = '' }
+    // Depende de: mismo patrón.
+    if (blockedByReady.current) t.blockedByTaskId = taskDraft.blockedByTaskId || ''
+    else if ('blockedByTaskId' in t) t.blockedByTaskId = ''
     const newPlan = (taskDraft.plan || '').trim()
     if (newPlan) {
       if (orig.plan !== newPlan || t.planOrder == null) t.planOrder = maxPlanOrderFor(newPlan) + 1000  // al final de ese día
@@ -6998,6 +7013,34 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     loading={personaLoading === t.personaId} onPick={(id, nombre) => setTaskPersona(ep, i, id, nombre)} onOpenFicha={openPersona} />
                 </div>
 
+                {/* Depende de — secuenciar tu propio trabajo: primero termina esa, luego ésta. A
+                    diferencia de "¿Qué esperas?" (arriba), no exige marcar la tarea 'Esperando'. */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Depende de</div>
+                  {(() => {
+                    const dep = findTaskById(t.blockedByTaskId)
+                    const depDone = !!dep && dep.t.status === 'Terminada'
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <select value={t.blockedByTaskId || ''} onChange={ev => setTaskBlockedBy(ep, i, ev.target.value || null)}
+                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: t.blockedByTaskId ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                          <option value="">— Ninguna —</option>
+                          {activeEpics.map(otherEp => {
+                            const opts = (otherEp.tasks || []).filter(x => x.id && x.id !== t.id && x.status !== ARCHIVED)
+                            return opts.length ? <optgroup key={otherEp.id} label={otherEp.name}>{opts.map(x => <option key={x.id} value={x.id}>{x.t}{x.status === 'Terminada' ? ' ✓ terminada' : ''}</option>)}</optgroup> : null
+                          })}
+                        </select>
+                        {dep && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: depDone ? '#2E6E6E' : '#B0522E' }}>
+                            {depDone ? `✓ ${dep.t.t} lista — ya puedes empezar` : `🔗 primero: ${dep.t.t}`}
+                          </span>
+                        )}
+                        {t.blockedByTaskId && !blockedByReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-16-blocked-by.sql para guardarlo.</span>}
+                      </div>
+                    )
+                  })()}
+                </div>
+
                 {/* Cuerpo en dos columnas (como el detalle de Tiempo); se colapsa a una en pantallas angostas */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: '0 26px', alignItems: 'start' }}>
                 <div style={{ minWidth: 0 }}>
@@ -8829,6 +8872,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <PersonaPicker personas={personas} personaId={taskDraft.personaId} personaNombre={taskDraft.personaNombre} ready={personaReady.current}
                     loading={personaLoading === taskDraft.personaId} onOpenFicha={openPersona}
                     onPick={(id, nombre) => setTaskDraft(d => ({ ...d, personaId: id || undefined, personaNombre: id ? nombre : undefined }))} />
+                </div>
+
+                {/* Depende de — secuenciar tu propio trabajo, en cualquier estado */}
+                <div style={{ marginBottom: 16 }}>
+                  <label style={lbl}>Depende de</label>
+                  {(() => {
+                    const dep = findTaskById(taskDraft.blockedByTaskId)
+                    const depDone = !!dep && dep.t.status === 'Terminada'
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <select value={taskDraft.blockedByTaskId || ''} onChange={ev => setTaskDraft(d => ({ ...d, blockedByTaskId: ev.target.value || undefined }))}
+                          style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: taskDraft.blockedByTaskId ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                          <option value="">— Ninguna —</option>
+                          {activeEpics.map(otherEp => {
+                            const opts = (otherEp.tasks || []).filter(x => x.id && x.id !== taskDraft.id && x.status !== ARCHIVED)
+                            return opts.length ? <optgroup key={otherEp.id} label={otherEp.name}>{opts.map(x => <option key={x.id} value={x.id}>{x.t}{x.status === 'Terminada' ? ' ✓ terminada' : ''}</option>)}</optgroup> : null
+                          })}
+                        </select>
+                        {dep && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: depDone ? '#2E6E6E' : '#B0522E' }}>
+                            {depDone ? `✓ ${dep.t.t} lista — ya puedes empezar` : `🔗 primero: ${dep.t.t}`}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 {/* ENLACES DE LA ÉPICA — mismo bloque plegable que el peek y Tiempo (paridad de editores).

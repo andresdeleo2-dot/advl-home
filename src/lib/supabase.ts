@@ -48,7 +48,7 @@ export type EpicaRoutine = {
   weeks?: Record<string, boolean[]>      // progreso por semana: lunesISO -> 7 booleanos (L…D)
   estMin?: number                        // estimado de minutos que le dedicas al día (opcional; se guarda en el jsonb de rutinas, sin migración)
 }
-export type EpicaFeature = { id: string; t: string; color?: string; kpis?: EpicaMilestone[] }
+export type EpicaFeature = { id: string; t: string; color?: string; kpis?: EpicaMilestone[]; roadmapStart?: string; roadmapEnd?: string }   // roadmapStart/End: 'YYYY-MM-DD', para /roadmap — viven en el jsonb, sin migración
 export type EpicaTaskLink = { label: string; url: string }
 export type EpicaSubtask = {
   id?: string            // identidad estable (para reordenar sin que se recorran los índices)
@@ -98,6 +98,7 @@ export type EpicaTask = {
   waitingFor?: string                  // "En espera / Por revisar": qué esperas ('email'|'respuesta'|'comentario'|'otro'|'tarea' o texto). Vacío/ausente = no está en espera
   waitingTaskId?: string               // si waitingFor === 'tarea': el id de la tarea de la que depende (dependencia real, no sólo texto)
   waitingSince?: string                // ISO datetime: espejo en servidor de "esperando desde" (fuente: localStorage vía markWaitSince). Sólo LECTURA aquí — la escribe /api/tareas/wait-since, no el sync normal de la tarea. Requiere sql/epicas-14-waiting-since.sql
+  blockedByTaskId?: string             // "Depende de": tarea que hay que terminar antes, EN CUALQUIER estado (no exige 'Esperando', a diferencia de waitingTaskId). Requiere sql/epicas-16-blocked-by.sql
   featureId?: string                   // Feature al que pertenece dentro de su épica (opcional: puede no tener)
   personaId?: string                   // ligada a una persona del archivo "Mi Vida" (mismo Supabase, tabla personas) — ej. "regalo para mamá"
   personaNombre?: string               // nombre de esa persona AL LIGARLA (denormalizado, para mostrar el chip sin otro fetch)
@@ -126,4 +127,6 @@ export type Epica = {
   links: EpicaLink[]
   features?: EpicaFeature[]   // Features dentro de la épica (Épica → Feature → Tarea). Requiere sql/epicas-12-features.sql
   week_budget?: number | null   // meta de horas/semana (presupuesto de tiempo). Requiere sql/epicas-08-week-budget.sql
+  roadmap_start?: string | null   // 'YYYY-MM-DD' inicio objetivo, para /roadmap. Requiere sql/epicas-17-roadmap.sql
+  roadmap_end?: string | null     // 'YYYY-MM-DD' fin objetivo
 }

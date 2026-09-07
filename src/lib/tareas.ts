@@ -41,6 +41,7 @@ export type TareaRow = {
   feature_id?: string | null
   persona_id?: string | null
   persona_nombre?: string | null
+  blocked_by_task_id?: string | null
 }
 
 /** Fila → tarea de la UI. Los nulos vuelven a ser `undefined` (o '' donde el
@@ -82,6 +83,7 @@ export function rowToTask(r: TareaRow): EpicaTask {
   if (r.feature_id) t.featureId = r.feature_id
   if (r.persona_id) t.personaId = r.persona_id
   if (r.persona_nombre) t.personaNombre = r.persona_nombre
+  if (r.blocked_by_task_id) t.blockedByTaskId = r.blocked_by_task_id
   return t
 }
 
@@ -117,6 +119,8 @@ export function taskToRow(t: EpicaTask, epicaId: string): Record<string, unknown
     ...('waitingFor' in t ? { waiting_for: (t.waitingFor || null) } : {}),
     // waiting_task_id: de qué tarea depende (si waitingFor === 'tarea'). Mismo gate que waitingFor.
     ...('waitingTaskId' in t ? { waiting_task_id: (t.waitingTaskId || null) } : {}),
+    // blocked_by_task_id: "Depende de" real, EN CUALQUIER estado (no exige 'Esperando').
+    ...('blockedByTaskId' in t ? { blocked_by_task_id: (t.blockedByTaskId || null) } : {}),
     // persona_id/nombre: a qué persona de "Mi Vida" está ligada la tarea (mismo Supabase).
     ...('personaId' in t ? { persona_id: (t.personaId || null) } : {}),
     ...('personaNombre' in t ? { persona_nombre: (t.personaNombre || null) } : {}),

@@ -299,6 +299,7 @@ export default function TiempoClient() {
   const waitingReadyRef = useRef(true)  // true si la columna waiting_for existe (para guardar "qué esperas")
   const featuresReadyRef = useRef(true) // true si epicas.features + tareas.feature_id existen (Features)
   const personaReadyRef = useRef(true)  // true si la columna persona_id existe (tarea ligada a alguien de "Mi Vida")
+  const blockedByReadyRef = useRef(true)  // true si la columna blocked_by_task_id existe ("Depende de", en cualquier estado)
   const [personas, setPersonas] = useState<PersonaOpt[]>([])
   const [personaDetail, setPersonaDetail] = useState<{ persona: Persona; recuerdos: Vida[] } | null>(null)
   const [personaLoading, setPersonaLoading] = useState<string | null>(null)
@@ -314,7 +315,7 @@ export default function TiempoClient() {
     setRefreshing(true)
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok) { setTasksError(true); setAllTasks(a => a || []); return }
-      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady); estMinReadyRef.current = !!j.estMinReady; waitingReadyRef.current = !!j.waitingReady; featuresReadyRef.current = !!j.featuresReady; personaReadyRef.current = !!j.personaReady
+      setResumenReady(!!j.resumenReady); setRemindReady(!!j.remindReady); setComentariosReady(!!j.comentariosReady); estMinReadyRef.current = !!j.estMinReady; waitingReadyRef.current = !!j.waitingReady; featuresReadyRef.current = !!j.featuresReady; personaReadyRef.current = !!j.personaReady; blockedByReadyRef.current = !!j.blockedByReady
       const out: TodayTask[] = []
       const epList: { id: string; name: string; color: string; kpis: EpicaMilestone[]; routines: EpicaRoutine[]; links: EpicaLink[]; features: EpicaFeature[] }[] = []
       for (const e of j.data as Epica[]) {
@@ -3222,7 +3223,7 @@ export default function TiempoClient() {
           </div>
         )
       })()}
-      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} featuresReady={featuresReadyRef.current} personas={personas} personaReady={personaReadyRef.current} personaLoading={personaLoading} onOpenPersona={openPersona} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onLinkFeatureObjetivo={linkFeatureObjetivo} onCreateFeature={createFeatureQuick} onClose={() => setEditTask(null)} />}
+      {editTask && <TaskDetail key={editTask.task.id} info={editTask} epicas={epicasList} allTasks={allTasks} resumenReady={resumenReady} remindReady={remindReady} comentariosReady={comentariosReady} waitingReady={waitingReadyRef.current} featuresReady={featuresReadyRef.current} personas={personas} personaReady={personaReadyRef.current} personaLoading={personaLoading} onOpenPersona={openPersona} blockedByReady={blockedByReadyRef.current} nextPlanOrder={nextPlanOrderFor} onAutoSave={autoSaveTask} onUnplan={unplanTask} onCreate={createTask} onStart={startTask} onLinkObjetivo={linkObjetivo} onLinkFeatureObjetivo={linkFeatureObjetivo} onCreateFeature={createFeatureQuick} onClose={() => setEditTask(null)} />}
 
       {personaLoading && !personaDetail && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(10,22,42,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -5375,9 +5376,10 @@ function FilterBar({ epicas, filters, setFilters, sortBy, setSortBy }: { epicas:
 }
 
 /** Detalle de tarea: TODA la info con el formato de Épicas; edita lo principal aquí. */
-function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady, waitingReady, featuresReady, personas, personaReady, personaLoading, onOpenPersona, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onLinkFeatureObjetivo, onCreateFeature, onClose }: {
+function TaskDetail({ info, epicas, allTasks, resumenReady, remindReady, comentariosReady, waitingReady, featuresReady, personas, personaReady, personaLoading, onOpenPersona, blockedByReady, nextPlanOrder, onAutoSave, onUnplan, onCreate, onStart, onLinkObjetivo, onLinkFeatureObjetivo, onCreateFeature, onClose }: {
   info: { epicaId: string; epicaName: string; color: string; task: EpicaTask; creating?: boolean }
   epicas: { id: string; name: string; color: string; kpis: EpicaMilestone[]; links?: EpicaLink[]; features?: EpicaFeature[] }[]
+  allTasks: TodayTask[] | null
   resumenReady: boolean
   remindReady: boolean
   comentariosReady: boolean
@@ -5387,6 +5389,7 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
   personaReady: boolean
   personaLoading: string | null
   onOpenPersona: (id: string) => void
+  blockedByReady: boolean
   nextPlanOrder: (day: string) => number
   onAutoSave: (epicaId: string, t: EpicaTask) => void
   onUnplan: (epicaId: string, t: EpicaTask) => void
@@ -5567,6 +5570,35 @@ function TaskDetail({ info, epicas, resumenReady, remindReady, comentariosReady,
             <PersonaPicker personas={personas} personaId={t.personaId} personaNombre={t.personaNombre} ready={personaReady}
               loading={personaLoading === t.personaId} onOpenFicha={onOpenPersona}
               onPick={(id, nombre) => setT(p => ({ ...p, personaId: id || undefined, personaNombre: id ? nombre : undefined }))} />
+          </div>
+
+          {/* Depende de — secuenciar tu propio trabajo, en cualquier estado (no exige 'Esperando') */}
+          <NLbl>Depende de</NLbl>
+          <div style={{ marginBottom: 4 }}>
+            {(() => {
+              const dep = (allTasks || []).find(x => x.task.id === t.blockedByTaskId)
+              const depDone = !!dep && dep.task.status === 'Terminada'
+              const byEpica = new Map<string, TodayTask[]>()
+              for (const x of (allTasks || [])) {
+                if (!x.task.id || x.task.id === t.id || x.task.status === 'Archivada') continue
+                if (!byEpica.has(x.epicaId)) byEpica.set(x.epicaId, [])
+                byEpica.get(x.epicaId)!.push(x)
+              }
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <select value={t.blockedByTaskId || ''} onChange={e => setT(p => ({ ...p, blockedByTaskId: e.target.value || undefined }))} style={{ ...nf, cursor: 'pointer', color: t.blockedByTaskId ? '#1c1a17' : '#a49b90' }}>
+                    <option value="">— Ninguna —</option>
+                    {[...byEpica.entries()].map(([epId2, opts]) => (
+                      <optgroup key={epId2} label={opts[0].epicaName}>
+                        {opts.map(x => <option key={x.task.id} value={x.task.id}>{x.task.t}{x.task.status === 'Terminada' ? ' ✓ terminada' : ''}</option>)}
+                      </optgroup>
+                    ))}
+                  </select>
+                  {dep && <span style={{ fontSize: 11.5, fontWeight: 700, color: depDone ? '#4f6238' : '#8a3c2a' }}>{depDone ? `✓ ${dep.task.t} lista` : `🔗 primero: ${dep.task.t}`}</span>}
+                </div>
+              )
+            })()}
+            {t.blockedByTaskId && !blockedByReady && <div style={{ fontSize: 10.5, color: '#8a3c2a', marginTop: 4 }}>Corre sql/epicas-16-blocked-by.sql para guardarlo.</div>}
           </div>
 
           <div className="td-grid" style={{ marginTop: 6 }}>
