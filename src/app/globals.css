@@ -351,3 +351,80 @@ body {
 @media (max-width: 640px) {
   header.band > div { gap: 10px !important; row-gap: 10px !important; }
 }
+
+/* ============================================================
+   Roadmap (/roadmap) — tablero cuantizado por trimestres
+   ============================================================ */
+/* El tablero es su propia región de scroll: así el encabezado de columnas (sticky top) y el
+   rail de épicas (sticky left) se quedan fijos mientras se recorre. `contain` evita que un
+   pan horizontal en iOS dispare el gesto de "atrás" del navegador. */
+.rm-board { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+@media (min-width: 901px) {
+  .rm-board { max-height: calc(100vh - 170px); overflow-y: auto; }
+}
+.rm-board.rm-flat { max-height: none !important; overflow: visible !important; }
+/* Los botones de replaneo aparecen al apuntar la tarjeta; en táctil (sin hover) van siempre. */
+.rm-quick { opacity: 0; transition: opacity .15s ease; }
+.rm-card:hover .rm-quick, .rm-card:focus-within .rm-quick { opacity: 1; }
+@media (hover: none) { .rm-quick { opacity: 1 !important; } }
+.rm-board button:focus-visible, .rm-sheet button:focus-visible, .rm-board [role="button"]:focus-visible {
+  outline: 2px solid #C2933A; outline-offset: 2px; border-radius: 8px;
+}
+/* En celular el panel lateral se vuelve hoja inferior y respeta el área segura + la barra fija. */
+@media (max-width: 700px) {
+  .rm-sheet {
+    top: auto !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+    width: auto !important; max-height: 86vh; border-left: none !important;
+    border-top: 1px solid rgba(15,35,64,0.10); border-radius: 18px 18px 0 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom)) !important;
+  }
+}
+@media print {
+  .rm-noprint { display: none !important; }
+  .rm-board { max-height: none !important; overflow: visible !important; }
+  .rm-lane { break-inside: avoid; }
+  body { padding-bottom: 0 !important; background: #fff !important; }
+}
+
+/* ============================================================
+   Roadmap — correcciones (impresión, foco, área táctil, tablet)
+   Reglas NUEVAS: las de arriba se quedan como estaban.
+   ============================================================ */
+/* `overflow-x: auto` obliga a `overflow-y: auto`: el tablero YA es su propio scrollport vertical
+   en cualquier ancho, pero sólo tenía altura acotada desde 901px. Entre 701 y 900px (iPad
+   vertical, media pantalla) el scrollport nunca se desplazaba, así que la cabecera sticky jamás
+   se pegaba: se leían tarjetas sin saber a qué trimestre pertenecían. */
+@media (min-width: 701px) and (max-width: 900px) {
+  .rm-board { max-height: calc(100vh - 170px); overflow-y: auto; }
+}
+/* El ancho mínimo del tablero (rail + columnas ≈ 1110px en trimestre, 1586 en mes) es un estilo
+   inline, y sólo un !important puede bajarlo. Sin esto el modo plano (?print=1) desbordaba la
+   ventana: media pantalla en blanco con tarjetas flotando y scroll horizontal del documento. */
+.rm-board.rm-flat > div { min-width: 0 !important; }
+/* Los inputs y selects del tablero y del panel no tienen estilo de foco propio (la regla de
+   arriba sólo cubre `button`): tabular por el panel dejaba el cursor invisible justo en los
+   controles que escriben — incluido el select de dependencias, que cambia con ↓. */
+.rm-board input:focus-visible, .rm-board select:focus-visible,
+.rm-sheet input:focus-visible, .rm-sheet select:focus-visible {
+  outline: 2px solid #C2933A; outline-offset: 2px;
+}
+/* En táctil los botones de replaneo están siempre visibles y miden 22px: un pulgar corría las
+   fechas del feature sin querer. Aquí pasan a ~34px de alto. */
+@media (hover: none) {
+  .rm-quick > button { padding: 8px 12px !important; font-size: 12px !important; }
+}
+@media print {
+  /* El tablero es ancho por naturaleza: en vertical se perdían 2 de 4 trimestres (4 de 6 meses). */
+  @page { size: A4 landscape; margin: 10mm; }
+  /* Mismo ancho mínimo inline que en rm-flat: las columnas son minmax(0,1fr) y encogen solas. */
+  .rm-board > div { min-width: 0 !important; }
+  /* Chrome y Safari imprimen SIN fondos por omisión, y aquí el fondo es el código de estado:
+     sin esto desaparecían la marca HOY, las dos barras de la tarjeta, la cinta de la épica y el
+     velo de las columnas pasadas. */
+  .rm-board, .rm-board * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* Red de seguridad por si el usuario desmarca «Gráficos de fondo»: HOY en texto, no en relleno
+     (era blanco sobre blanco). */
+  .rm-hoy { background: #fff !important; color: #B0522E !important; }
+  /* El panel lateral es `position: fixed`: se imprimía encima de los carriles. */
+  .rm-sheet { display: none !important; }
+}
