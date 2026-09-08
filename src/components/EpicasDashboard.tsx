@@ -2778,7 +2778,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /** Fila de tarea de la vista Objetivos: TODO editable sin abrir el modal (título, estado,
    *  prioridad, dificultad, estimado, hacer, vence) más el chip de plazo. Escribe SIEMPRE contra
    *  `featured` y `t._i` — pasarle una épica con las tareas filtradas escribiría sobre otra tarea. */
-  const renderTaskRowRich = (t: (typeof indexed)[number], accent: string) => {
+  const renderTaskRowRich = (t: (typeof indexed)[number], accent: string, asignar?: 'feature' | 'iniciativa' | null) => {
     const ts = taskStyle(t.status)
     const done = t.status === 'Terminada'
     const dt = dueTone(t.due, done, today)
@@ -2786,16 +2786,36 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Si el modal está abierto sobre esta misma tarea, su guardado (que reconstruye campo a campo)
     // pisaría lo que se escriba aquí: se bloquea la fila mientras tanto.
     const bloqueada = taskEdit?.tid === t.id
+    // Colocar una tarea suelta no debería costar abrir su ficha: cuando la fila vive en una lista de
+    // "sin feature" o "sin iniciativa", debajo del título aparece el selector del nivel que le falta.
+    const inisDelFeature = (featured.features || []).find(f => f.id === t.featureId)?.iniciativas || []
+    const selUbic: CSSProperties = { cursor: 'pointer', border: '1px dashed rgba(194,147,58,0.55)', borderRadius: 7, padding: '2px 6px', font: '700 10.5px var(--font-ui)', color: '#A87A2C', background: 'rgba(194,147,58,0.07)', outline: 'none', maxWidth: '100%' }
     return (
       <div key={t.id ?? t._i} className="ep-obj-task" style={{
         display: 'grid', gridTemplateColumns: OBJ_TASK_COLS, alignItems: 'center', gap: 8,
         padding: '7px 8px', borderBottom: '1px solid rgba(15,35,64,0.06)', borderRadius: 8,
         opacity: done ? 0.6 : 1, background: bloqueada ? 'rgba(194,147,58,0.08)' : 'transparent',
       }}>
-        <input defaultValue={t.t} key={`task:${t.id}:t`} disabled={bloqueada} aria-label="Título de la tarea"
-          onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { (ev.target as HTMLInputElement).value = t.t; (ev.target as HTMLInputElement).blur() } }}
-          onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = t.t; return } if (v !== t.t) setTaskTitle(featured, t._i, v) }}
-          style={{ minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 13, fontWeight: 600, background: 'transparent', outline: 'none', color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }} />
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <input defaultValue={t.t} key={`task:${t.id}:t`} disabled={bloqueada} aria-label="Título de la tarea"
+            onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { (ev.target as HTMLInputElement).value = t.t; (ev.target as HTMLInputElement).blur() } }}
+            onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = t.t; return } if (v !== t.t) setTaskTitle(featured, t._i, v) }}
+            style={{ minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 13, fontWeight: 600, background: 'transparent', outline: 'none', color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }} />
+          {asignar === 'feature' && (featured.features || []).length > 0 && (
+            <select value={t.featureId || ''} disabled={bloqueada} aria-label="Asignar a un feature" title="Mover esta tarea a un Feature"
+              onChange={ev => setTaskFeature(featured, t._i, ev.target.value || null)} style={selUbic}>
+              <option value="">＋ Asignar feature…</option>
+              {(featured.features || []).map(f => <option key={f.id} value={f.id}>{f.t}</option>)}
+            </select>
+          )}
+          {asignar === 'iniciativa' && inisDelFeature.length > 0 && (
+            <select value={t.iniciativaId || ''} disabled={bloqueada} aria-label="Asignar a una iniciativa" title="Mover esta tarea a una Iniciativa de este Feature"
+              onChange={ev => setTaskIniciativa(featured, t._i, ev.target.value || null)} style={selUbic}>
+              <option value="">＋ Asignar iniciativa…</option>
+              {inisDelFeature.map(ini => <option key={ini.id} value={ini.id}>{ini.nombre}</option>)}
+            </select>
+          )}
+        </div>
         <select value={t.status} disabled={bloqueada} onChange={ev => setTaskStatus(featured, t._i, ev.target.value)} aria-label="Estado"
           style={{ cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none', minWidth: 0 }}>
           {PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
@@ -8968,16 +8988,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const cerradas = (rows: (typeof indexed)[number][]) => rows.filter(t => t.status === 'Terminada').length
 
                 /* Lista de tareas de un nodo + su línea de alta. El alta cuelga YA del
-                   feature/iniciativa donde estás parado: planear no debería costar un modal. */
+                   feature/iniciativa donde estás parado: planear no debería costar un modal.
+                   `asignar` sale del contexto: en la lista "sin feature" cada fila ofrece elegir
+                   feature, y en la de "sin iniciativa" ofrece elegir iniciativa. Donde la tarea ya
+                   está colocada no se ofrece nada: sería ruido en todas las filas. */
                 const listaTareas = (rows: (typeof indexed)[number][], accent: string, fId: string | null, iniId: string | null) => {
                   const vis = rows.filter(pasaFiltro)
+                  const asignar: 'feature' | 'iniciativa' | null = fId === null ? 'feature' : iniId === null ? 'iniciativa' : null
                   return (
                     // overflowX propio: la rejilla de tareas tiene un ancho mínimo real (~620px).
                     // Sin esto, en móvil empujaría el body entero y toda la página scrollearía de lado.
                     <div style={{ overflowX: 'auto' }}>
                       {vis.length === 0
                         ? <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.42)', padding: '8px 8px 2px' }}>{rows.length ? 'Ninguna tarea con ese filtro.' : 'Sin tareas todavía.'}</div>
-                        : vis.map(t => renderTaskRowRich(t, accent))}
+                        : vis.map(t => renderTaskRowRich(t, accent, asignar))}
                       {renderTaskQuickAdd(fId, iniId)}
                     </div>
                   )
