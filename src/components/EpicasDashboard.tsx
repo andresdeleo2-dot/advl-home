@@ -62,6 +62,10 @@ import {
   difStyle,
   doneCount,
   dueTone,
+  plazoLabel,
+  duracionLabel,
+  featureStyle,
+  type Plazo,
   fmtDue,
   getRoutineWeek,
   greeting,
@@ -258,6 +262,21 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [quickObjName, setQuickObjName] = useState('')
   const [quickIniFeature, setQuickIniFeature] = useState<string | null>(null)   // featureId con el "+ Iniciativa" abierto
   const [quickIniName, setQuickIniName] = useState('')
+  // Vista "Objetivos" a pantalla completa. objSel ES el filtro: elegir un Feature o una Iniciativa
+  // en la barra de arriba (o en el índice de la izquierda) enfoca la vista en ese nodo. NO se reusan
+  // epicFeatureFilter/epicIniciativaFilter: ésos alimentan la pestaña Tareas, que sigue montada detrás.
+  type ObjSel =
+    | { kind: 'epica' }
+    | { kind: 'feature'; fId: string }
+    | { kind: 'iniciativa'; fId: string; iniId: string }
+    | { kind: 'sinFeature' }
+  const [objSel, setObjSel] = useState<ObjSel>({ kind: 'epica' })
+  const [objDelConfirm, setObjDelConfirm] = useState<string | null>(null)   // id de objetivo/iniciativa en "¿Seguro? Sí/No"
+  const [objEdit, setObjEdit] = useState(true)      // filas de tarea con todos los campos a la vista
+  const [objTaskFilter, setObjTaskFilter] = useState<'abiertas' | 'todas' | 'hechas'>('abiertas')
+  const [objQuickTask, setObjQuickTask] = useState<string | null>(null)   // clave `${fId}:${iniId ?? ''}` de la línea de alta activa
+  const [objQuickTaskName, setObjQuickTaskName] = useState('')
+  const [objNewTipo, setObjNewTipo] = useState<'metrica' | 'hito'>('metrica')
   const [edTaskRow, setEdTaskRow] = useState<number | null>(null)  // fila de tarea expandida en el editor
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
   const [subSort, setSubSort] = useState<'manual' | 'prioridad' | 'dificultad' | 'dia'>('manual') // orden de subtareas
@@ -813,7 +832,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // dejan de tener sentido.
   useEffect(() => { setPlanSel(new Set()) }, [viewDate])
   // El filtro por objetivo pertenece a una épica: al cambiar de destacada, se limpia
-  useEffect(() => { setEpicObjFilter('todas'); setEpicFeatureFilter('todas'); setEpicIniciativaFilter('todas') }, [featuredId])   // el filtro por día es GLOBAL: NO se limpia al cambiar de épica
+  // Al cambiar de épica, los filtros que apuntan a ids de ESA épica quedarían colgando (un
+  // featureId que ya no existe deja el panel de revisión vacío sin explicar por qué). El filtro
+  // por día NO se limpia: ése es global a propósito.
+  useEffect(() => { setEpicObjFilter('todas'); setEpicFeatureFilter('todas'); setEpicIniciativaFilter('todas'); setObjSel({ kind: 'epica' }) }, [featuredId])
 
   // Objetivos que se cumplen solos (los medidos con tareas) quedan sellados con
   // su fecha, para poder celebrarlos en el resumen de la semana.
@@ -2397,18 +2419,42 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /** Crea un objetivo (métrica, por defecto — se puede pasar a hito con el toggle de la tarjeta)
    *  directo desde la vista "Objetivos" de la épica destacada, sin abrir el editor completo. Mismo
    *  criterio optimista + fire-and-forget que commitQuickFeature. */
-  const commitQuickObjetivo = (epicaId: string, featureId: string | null, name: string) => {
+  const commitQuickObjetivo = (epicaId: string, featureId: string | null, name: string, tipo: 'metrica' | 'hito' = 'metrica') => {
     const t = name.trim()
     if (!t) return
-    const nk: EpicaMilestone = { id: uid(), t, tipo: 'metrica' }
+    const nk: EpicaMilestone = { id: uid(), t, tipo, ...(tipo === 'hito' ? { hitoEstado: 'pendiente' as const } : {}) }
     setEpics(list => list.map(e => {
       if (e.id !== epicaId) return e
       if (!featureId) return { ...e, kpis: [...(e.kpis || []), nk] }
       return { ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, kpis: [...(f.kpis || []), nk] } : f)) }
     }))
-    fetch('/api/objetivos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: nk.id, epicaId: featureId ? undefined : epicaId, featureId: featureId || undefined, t, tipo: 'metrica' }) })
+    fetch('/api/objetivos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: nk.id, epicaId: featureId ? undefined : epicaId, featureId: featureId || undefined, t, tipo, hitoEstado: tipo === 'hito' ? 'pendiente' : undefined }) })
       .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo crear el objetivo', true) })
       .catch(() => showToast('No se pudo crear el objetivo', true))
+  }
+  /** Actualiza UN Feature (nombre, color, estado, fechas de roadmap) — no existía: hasta ahora los
+   *  features sólo se editaban desde el draft del editor de épica o se creaban con commitQuickFeature.
+   *  OJO: /api/features/[id] espera nombres de CLIENTE (roadmapStart/roadmapEnd), no los de la columna. */
+  const patchFeature = (epicaId: string, featureId: string, patch: Partial<EpicaFeature>) => {
+    setEpics(list => list.map(e => (e.id !== epicaId ? e : {
+      ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, ...patch } : f)),
+    })))
+    fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo guardar el feature', true) })
+      .catch(() => showToast('No se pudo guardar el feature', true))
+  }
+  /** Alta de tarea SIN abrir el modal, ya colgada de su Feature/Iniciativa. Va por patchEpic, que
+   *  diffea contra el estado previo y manda sólo el alta a /api/tareas/sync. Los campos gateados
+   *  se omiten (no se ponen en el objeto) para no mandar columnas que aún no existen. */
+  const addTaskInline = (featureId: string | null, iniciativaId: string | null, titulo: string) => {
+    const t = titulo.trim()
+    if (!t) return
+    const nt: EpicaTask = {
+      id: uid(), t, status: 'Por hacer', due: '', note: '', createdAt: todayISO(),
+      ...(featuresReady.current && featureId ? { featureId } : {}),
+      ...(iniciativaIdReady.current && iniciativaId ? { iniciativaId } : {}),
+    }
+    patchEpic(featured.id, { tasks: [...clone(featured.tasks), nt] })
   }
   /** Elimina un objetivo (de la épica o de cualquiera de sus features — se busca en ambos lados). */
   const deleteObjetivo = (epicaId: string, objetivoId: string) => {
@@ -2450,26 +2496,95 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo eliminar la iniciativa', true) })
       .catch(() => showToast('No se pudo eliminar la iniciativa', true))
   }
+  /* ─── Plazos y duraciones a la vista ────────────────────────────
+     Toda fecha de la app debe decir, al lado, CUÁNTO falta o CUÁNTO dura — en días,
+     semanas o meses según la magnitud. La regla vive en core (plazoLabel/duracionLabel);
+     aquí sólo se pinta. Se le pasa SIEMPRE el `today` del estado (tickea cada 30 s) para
+     que a medianoche el texto se recalcule solo y no dependa de la hora del servidor. */
+  /** Guarda contra el año a medio teclear. Editar el año de una fecha ya puesta pasa por estados
+   *  completos pero absurdos (0202-09-07) y, como aquí se guarda al instante, cada uno sería un
+   *  PATCH. Vacío sí pasa: es cómo se limpia una fecha. */
+  const fechaSensata = (v: string) => !v || +v.slice(0, 4) >= 2000
+  const renderPlazoChip = (p: Plazo, opts?: { corto?: boolean }) => {
+    if (p.tono === 'ninguno' && !p.dias) return null
+    return (
+      <span title={p.detalle} style={{
+        display: 'inline-flex', alignItems: 'center', flexShrink: 0, borderRadius: 99, padding: '2px 8px',
+        font: '700 10.5px var(--font-ui)', whiteSpace: 'nowrap', color: p.c, background: p.bg, border: `1px solid ${p.border}`,
+      }}>{opts?.corto ? p.corto : p.texto}</span>
+    )
+  }
+  /** Par de fechas inicio→fin con su duración en vivo y, si está en curso, la barra de
+   *  cuánto se lleva corrido. Una sola implementación para Feature, Iniciativa y Épica. */
+  const renderRangoFechas = (desde: string | undefined | null, hasta: string | undefined | null, onDesde: (v: string) => void, onHasta: (v: string) => void, accent: string) => {
+    const dur = duracionLabel(desde, hasta, today)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <input type="date" value={desde || ''} onChange={ev => { if (fechaSensata(ev.target.value)) onDesde(ev.target.value) }} title="Desde" style={dateInp} />
+          <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.35)' }}>→</span>
+          <input type="date" value={hasta || ''} onChange={ev => { if (fechaSensata(ev.target.value)) onHasta(ev.target.value) }} title="Para" style={dateInp} />
+          <span title={dur.detalle} style={{
+            display: 'inline-flex', alignItems: 'center', borderRadius: 99, padding: '2px 9px',
+            font: '700 10.5px var(--font-ui)', whiteSpace: 'nowrap', color: dur.c, background: dur.bg, border: `1px solid ${dur.border}`,
+          }}>⏱ {dur.texto}</span>
+          {dur.fase === 'enCurso' && dur.restante && renderPlazoChip(dur.restante)}
+        </div>
+        {dur.nota && <span style={{ fontSize: 10, color: '#B0522E' }}>⚠ {dur.nota}</span>}
+        {dur.fase === 'enCurso' && dur.avance != null && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ flex: 1, height: 4, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden', maxWidth: 220 }}>
+              <span style={{ display: 'block', width: `${dur.avance * 100}%`, height: '100%', background: accent }} />
+            </span>
+            <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>{dur.transcurrido}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   /** Tarjeta de UN objetivo — métrica o hito — para la vista "Objetivos" (y para la tarjeta de KPIs
    *  de la épica destacada, que reusa esta misma tarjeta). `scopeEpica` es `featured` para un
    *  objetivo de la épica, o `{...featured, tasks: featTasks}` para uno de un Feature — sólo afecta
    *  qué tareas cuentan si el objetivo se mide "con tareas cerradas". `accent` es el color de la
    *  barra de avance (el de la épica o el del Feature). Instant-save: cada cambio pega directo. */
-  const renderObjetivoCard = (k: EpicaMilestone, scopeEpica: Epica, accent: string, onSetCurrent: (v: number) => void, onPatch: (patch: Partial<EpicaMilestone>) => void, onDelete: () => void) => {
+  const renderObjetivoCard = (k: EpicaMilestone, scopeEpica: Epica, accent: string, onSetCurrent: (v: number) => void, onPatch: (patch: Partial<EpicaMilestone>) => void, onDelete: () => void, full = false) => {
     const esHito = k.tipo === 'hito'
     const unitLabel = k.unit === 'otro' ? (k.unitLabel || '') : (k.unit || '')
+    // Vacío ⇒ null explícito: /api/objetivos/[id] convierte a null cualquier cosa que no sea
+    // number, así que mandar el string crudo del input borraría el dato sin avisar.
+    const num = (v: string) => (v.trim() === '' ? undefined : Number(v))
+    const borrar = objDelConfirm === k.id
+      ? (
+        <span style={{ display: 'inline-flex', gap: 6, fontSize: 10.5, fontWeight: 700, flexShrink: 0 }}>
+          <button onClick={() => { onDelete(); setObjDelConfirm(null) }} style={{ border: 'none', background: 'transparent', color: '#B0522E', cursor: 'pointer', fontWeight: 800 }}>Sí</button>
+          <button onClick={() => setObjDelConfirm(null)} style={{ border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', cursor: 'pointer' }}>No</button>
+        </span>
+      )
+      : <button onClick={() => (full ? setObjDelConfirm(k.id) : onDelete())} aria-label="Eliminar objetivo" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+    // Título: NUNCA value+onChange — cada setEpics re-renderiza el componente entero y el input
+    // perdería el foco por tecla. Se siembra con defaultValue y se guarda en blur/Enter.
+    const titulo = full
+      ? (
+        <input defaultValue={k.t} key={`obj:${k.id}:t`} aria-label="Nombre del objetivo"
+          onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { (ev.target as HTMLInputElement).value = k.t; (ev.target as HTMLInputElement).blur() } }}
+          onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = k.t; return } if (v !== k.t) onPatch({ t: v }) }}
+          style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '3px 6px', font: '700 12.5px var(--font-ui)', color: '#16365F', background: 'transparent', outline: 'none' }} />
+      )
+      : <span style={{ font: '700 11.5px var(--font-ui)', color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
+
     if (esHito) {
       const st = k.hitoEstado || 'pendiente'
-      const vencido = st !== 'logrado' && !!k.due && k.due < today
-      const c = st === 'logrado' ? '#2E6E6E' : vencido ? '#B0522E' : '#A87A2C'
+      const pz = plazoLabel(k.due, today, { hecho: st === 'logrado' })
+      const c = st === 'logrado' ? '#2E6E6E' : pz.tono === 'vencido' ? '#B0522E' : '#A87A2C'
       return (
-        <div key={k.id} style={{ borderRadius: 12, padding: '11px 13px', background: st === 'logrado' ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.02)', border: st === 'logrado' ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.08)' }}>
+        <div key={k.id} style={{ borderRadius: 12, padding: full ? '13px 14px' : '11px 13px', background: st === 'logrado' ? 'rgba(62,142,142,0.08)' : full ? '#fff' : 'rgba(15,35,64,0.02)', border: st === 'logrado' ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.10)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
-            <button onClick={() => onPatch({ tipo: 'metrica' })} title="Cambiar a métrica" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 13 }}>◆</button>
-            <span style={{ font: '700 11.5px var(--font-ui)', color: st === 'logrado' ? '#2E6E6E' : '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
-            <button onClick={onDelete} aria-label="Eliminar objetivo" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+            <button onClick={() => onPatch({ tipo: 'metrica' })} title="Es un hito · cambiar a métrica" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 13, color: '#A87A2C' }}>◆</button>
+            {titulo}
+            {borrar}
           </div>
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 7 }}>
             {(['pendiente', 'en_curso', 'logrado'] as const).map(s => {
               const on = st === s
               return (
@@ -2480,63 +2595,118 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )
             })}
           </div>
-          <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>
-            {st === 'logrado' ? `Logrado${k.fechaLogrado ? ' · ' + fmtDue(k.fechaLogrado) : ''}` : k.due ? `${vencido ? 'Vencido · ' : 'Para '}${fmtDue(k.due)}` : 'Sin fecha'}
-          </span>
+          {full ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+              <span style={objEyebrow}>Para</span>
+              <input type="date" value={k.due || ''} onChange={ev => { if (fechaSensata(ev.target.value)) onPatch({ due: ev.target.value || undefined }) }} style={dateInp} />
+              {renderPlazoChip(pz)}
+              {st === 'logrado' && (
+                <>
+                  <span style={objEyebrow}>Logrado</span>
+                  <input type="date" value={k.fechaLogrado || ''} onChange={ev => { if (fechaSensata(ev.target.value)) onPatch({ fechaLogrado: ev.target.value || undefined }) }} style={dateInp} />
+                </>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>
+                {st === 'logrado' ? `Logrado${k.fechaLogrado ? ' · ' + fmtDue(k.fechaLogrado) : ''}` : k.due ? `Para ${fmtDue(k.due)}` : 'Sin fecha'}
+              </span>
+              {st !== 'logrado' && renderPlazoChip(pz)}
+            </div>
+          )}
         </div>
       )
     }
     const { cur, target, pct, hasMeta } = milestoneProgress(k, scopeEpica)
     const hecho = milestoneDone(k, scopeEpica)
-    const vencido = !hecho && !!k.due && k.due < today
-    const c = hecho ? '#2E6E6E' : vencido ? '#B0522E' : '#A87A2C'
+    const pz = plazoLabel(k.due, today, { hecho })
+    const c = hecho ? '#2E6E6E' : pz.tono === 'vencido' ? '#B0522E' : '#A87A2C'
     return (
       <div key={k.id} title={k.auto ? 'Se mide con las tareas cerradas' : undefined}
-        style={{ borderRadius: 12, padding: '11px 13px', background: hecho ? 'rgba(62,142,142,0.08)' : 'rgba(15,35,64,0.02)', border: hecho ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.08)' }}>
+        style={{ borderRadius: 12, padding: full ? '13px 14px' : '11px 13px', background: hecho ? 'rgba(62,142,142,0.08)' : full ? '#fff' : 'rgba(15,35,64,0.02)', border: hecho ? '1px solid rgba(62,142,142,0.38)' : '1px solid rgba(15,35,64,0.10)', ...(full ? { minHeight: 188 } : {}) }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
-          <button onClick={() => onPatch({ tipo: 'hito' })} title="Cambiar a hito" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 12 }}>▤</button>
-          <span style={{ font: '700 11.5px var(--font-ui)', color: hecho ? '#2E6E6E' : '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.t}</span>
+          <button onClick={() => onPatch({ tipo: 'hito' })} title="Es una métrica · cambiar a hito" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', fontSize: 12, color: '#A87A2C' }}>▤</button>
+          {titulo}
           {hecho && <span style={{ font: '700 9.5px var(--font-ui)', color: '#2E6E6E', background: 'rgba(62,142,142,0.16)', borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap' }}>✦ Cumplido</span>}
           {!hecho && k.auto && <span style={{ font: '700 9px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>auto</span>}
-          <button onClick={onDelete} aria-label="Eliminar objetivo" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+          {borrar}
         </div>
-        {hasMeta ? (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-              {k.auto ? (
-                <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
-              ) : (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <button onClick={() => onSetCurrent((k.current ?? 0) - 1)} aria-label="Bajar avance" title="−1"
-                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>−</button>
-                  <input type="number" defaultValue={cur} key={`${k.id}-${cur}`}
-                    onBlur={ev => { const v = Number(ev.target.value); if (v !== cur) onSetCurrent(v) }}
-                    onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
-                    aria-label={`Avance de ${k.t}`}
-                    className="serif" style={{ width: 62, textAlign: 'center', fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F', border: '1px solid transparent', borderRadius: 7, padding: '2px 4px', background: 'transparent', outline: 'none' }} />
-                  <button onClick={() => onSetCurrent((k.current ?? 0) + 1)} aria-label="Subir avance" title="+1"
-                    style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>+</button>
-                </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
+          {k.auto ? (
+            <span className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur}</span>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              <button onClick={() => onSetCurrent((k.current ?? 0) - 1)} aria-label="Bajar avance" title="−1"
+                style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>−</button>
+              <input type="number" defaultValue={cur} key={`${k.id}-${cur}`}
+                onBlur={ev => { const v = Number(ev.target.value); if (v !== cur) onSetCurrent(v) }}
+                onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                aria-label={`Avance de ${k.t}`}
+                className="serif" style={{ width: 62, textAlign: 'center', fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F', border: '1px solid transparent', borderRadius: 7, padding: '2px 4px', background: 'transparent', outline: 'none' }} />
+              <button onClick={() => onSetCurrent((k.current ?? 0) + 1)} aria-label="Subir avance" title="+1"
+                style={{ height: 22, width: 22, borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: 'rgba(20,35,61,0.6)', fontSize: 13, lineHeight: 1 }}>+</button>
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>/</span>
+          {full ? (
+            <>
+              <input type="number" placeholder="meta" defaultValue={k.target ?? ''} key={`obj:${k.id}:target`} aria-label="Meta"
+                onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                onBlur={ev => { const v = num(ev.target.value); if (v !== k.target) onPatch({ target: v }) }}
+                style={{ ...inpNarrow, flex: '0 0 66px', width: 66, fontSize: 12 }} />
+              <select value={k.unit || ''} aria-label="Unidad"
+                onChange={ev => onPatch({ unit: (ev.target.value || undefined) as ObjetivoUnit | undefined, unitLabel: ev.target.value === 'otro' ? k.unitLabel : undefined })}
+                style={{ ...dateInp, cursor: 'pointer', minWidth: 92 }}>
+                <option value="">unidad…</option>
+                {UNIT_OPTS.map(([u, l]) => <option key={u} value={u}>{l}</option>)}
+              </select>
+              {k.unit === 'otro' && (
+                <input placeholder="ej. clientes" defaultValue={k.unitLabel || ''} key={`obj:${k.id}:ul`} aria-label="Unidad libre"
+                  onBlur={ev => { const v = ev.target.value.trim(); if (v !== (k.unitLabel || '')) onPatch({ unitLabel: v || undefined }) }}
+                  style={{ ...inpNarrow, flex: '0 0 92px', width: 92, fontSize: 12 }} />
               )}
-              <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>/ {target}{unitLabel ? ' ' + unitLabel : ''}</span>
-              <span style={{ flex: 1 }} />
-              <span style={{ font: '800 11px var(--font-ui)', color: c }}>{Math.round(pct * 100)}%</span>
-            </div>
-            <div style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
-              <div style={{ width: `${pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : accent, transition: 'width .4s' }} />
-            </div>
-          </>
-        ) : (
-          <div className="serif" style={{ fontWeight: 600, fontSize: 24, lineHeight: 1, color: '#10233F' }}>{cur || '—'}{unitLabel ? <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}> {unitLabel}</span> : null}</div>
+            </>
+          ) : (
+            <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)' }}>{target}{unitLabel ? ' ' + unitLabel : ''}</span>
+          )}
+          <span style={{ flex: 1 }} />
+          <span style={{ font: '800 11px var(--font-ui)', color: c }}>{Math.round(pct * 100)}%</span>
+        </div>
+        {hasMeta && (
+          <div style={{ height: 6, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden', marginBottom: 7 }}>
+            <div style={{ width: `${pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : accent, transition: 'width .4s' }} />
+          </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-          {k.due && <span style={{ fontSize: 10.5, fontWeight: 600, color: vencido ? '#B0522E' : 'rgba(20,35,61,0.5)' }}>{hecho ? '✓ logrado' : vencido ? 'Vencido · ' : 'Para '}{!hecho && fmtDue(k.due)}</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 2, flexWrap: 'wrap' }}>
+          {full
+            ? <input type="date" value={k.due || ''} onChange={ev => { if (fechaSensata(ev.target.value)) onPatch({ due: ev.target.value || undefined }) }} aria-label="Fecha objetivo" style={dateInp} />
+            : (k.due && <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{hecho ? '✓ logrado' : 'Para ' + fmtDue(k.due)}</span>)}
+          {renderPlazoChip(pz)}
+          <span style={{ flex: 1 }} />
           <button onClick={() => setMilestonePick({ eId: scopeEpica.id, mId: k.id })}
             title="Elegir qué tareas cuentan para este objetivo"
             style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, fontSize: 10.5, fontWeight: 700, color: (k.taskIds?.length ?? 0) > 0 ? 'rgba(20,35,61,0.55)' : '#A87A2C', textDecoration: 'underline' }}>
             🔗 {(k.taskIds?.length ?? 0) > 0 ? `${k.taskIds!.length} tareas` : 'Ligar tareas'}
           </button>
         </div>
+        {full && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(15,35,64,0.06)' }}>
+            <button onClick={() => onPatch({ auto: k.auto ? undefined : 'tareas' })} style={tipoChip(!!k.auto)} title="El avance lo calculan las tareas cerradas ligadas a este objetivo">⟳ Con tareas</button>
+            {/* Sin `start`, milestoneProgress no sabe desde dónde bajas y la barra se queda clavada:
+                al encender "menos es mejor" se siembra con el valor actual, como en el editor completo. */}
+            <button onClick={() => onPatch(k.lowerIsBetter ? { lowerIsBetter: undefined } : { lowerIsBetter: true, start: k.start ?? k.current })} style={tipoChip(!!k.lowerIsBetter)} title="Para metas que bajan: peso, deuda, gastos…">↓ Menos es mejor</button>
+            <button onClick={() => onPatch(k.done ? { done: false, doneAt: undefined } : { done: true, doneAt: todayISO() })} style={tipoChip(!!k.done)}>✦ Cumplido</button>
+            {k.lowerIsBetter && !k.auto && (
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'rgba(20,35,61,0.55)' }} title="Valor de partida: desde dónde empezaste">
+                Inicio
+                <input type="number" defaultValue={k.start ?? ''} key={`obj:${k.id}:start`}
+                  onBlur={ev => { const v = num(ev.target.value); if (v !== k.start) onPatch({ start: v }) }}
+                  style={{ ...inpNarrow, flex: '0 0 58px', width: 58, fontSize: 12 }} />
+              </label>
+            )}
+          </div>
+        )}
       </div>
     )
   }
@@ -2544,39 +2714,135 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  avance calculada de sus propias tareas (% terminadas) — sin tocar la base de datos: es la
    *  métrica de una Iniciativa hoy. Para la vista "Objetivos". */
   const renderIniciativaRowEditable = (ini: Iniciativa, epicaId: string, featureId: string, accent: string) => {
-    const iniTasks = featured.tasks.filter(t => t.iniciativaId === ini.id)
+    const iniTasks = featured.tasks.filter(t => t.iniciativaId === ini.id && t.status !== ARCHIVED)
     const doneIni = iniTasks.filter(t => t.status === 'Terminada').length
     const pct = iniTasks.length ? doneIni / iniTasks.length : 0
+    const est = iniciativaStyle(ini.estado)
+    const P = (patch: Partial<Iniciativa>) => patchIniciativa(epicaId, featureId, ini.id, patch)
+    // "Bloqueada por" sólo puede apuntar a una hermana del mismo Feature (la FK es a iniciativas,
+    // y cruzar features haría un roadmap imposible de leer). Se resuelve el nombre aquí mismo.
+    const hermanas = ((featured.features || []).find(f => f.id === featureId)?.iniciativas || []).filter(i => i.id !== ini.id)
     return (
-      <div key={ini.id} style={{ border: '1px solid rgba(15,35,64,0.10)', borderRadius: 10, padding: '9px 11px', background: '#fff' }}>
+      <div key={ini.id} style={{ border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${accent}`, borderRadius: 10, padding: '10px 12px', background: '#fff' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input defaultValue={ini.nombre} key={`${ini.id}-${ini.nombre}`} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== ini.nombre) patchIniciativa(epicaId, featureId, ini.id, { nombre: v }) }}
-            style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 12.5, fontWeight: 700, color: '#16365F', background: 'transparent', outline: 'none' }} />
-          <button onClick={() => deleteIniciativa(epicaId, featureId, ini.id)} aria-label="Eliminar iniciativa" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+          {/* key SÓLO por id: si lleva el valor dentro, el eco del PATCH remonta el input y se come lo que estás tecleando */}
+          <input defaultValue={ini.nombre} key={ini.id} aria-label="Nombre de la iniciativa"
+            onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+            onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = ini.nombre; return } if (v !== ini.nombre) P({ nombre: v }) }}
+            style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 13, fontWeight: 700, color: '#16365F', background: 'transparent', outline: 'none' }} />
+          <span style={{ flexShrink: 0, font: '700 9.5px var(--font-ui)', padding: '2px 8px', borderRadius: 99, background: est.bg, color: est.c }}>{est.label}</span>
+          {iniTasks.length > 0 && <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{doneIni}/{iniTasks.length}</span>}
+          {objDelConfirm === ini.id ? (
+            <span style={{ display: 'inline-flex', gap: 6, fontSize: 10.5, fontWeight: 700, flexShrink: 0 }}>
+              <button onClick={() => { deleteIniciativa(epicaId, featureId, ini.id); setObjDelConfirm(null); if (objSel.kind === 'iniciativa' && objSel.iniId === ini.id) setObjSel({ kind: 'feature', fId: featureId }) }} style={{ border: 'none', background: 'transparent', color: '#B0522E', cursor: 'pointer', fontWeight: 800 }}>Sí</button>
+              <button onClick={() => setObjDelConfirm(null)} style={{ border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', cursor: 'pointer' }}>No</button>
+            </span>
+          ) : (
+            <button onClick={() => setObjDelConfirm(ini.id)} aria-label="Eliminar iniciativa" title="Eliminar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.3)', fontSize: 13, flexShrink: 0 }}>✕</button>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 }}>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 7 }}>
           {INICIATIVA_ESTADOS.map(([st, lbl]) => (
-            <button key={st} onClick={() => patchIniciativa(epicaId, featureId, ini.id, { estado: st })} style={tipoChip(ini.estado === st)}>{lbl}</button>
+            <button key={st} onClick={() => P({ estado: st })} style={tipoChip(ini.estado === st)}>{lbl}</button>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 7 }}>
-          <input type="date" defaultValue={ini.fechaInicio || ''} key={`${ini.id}-fi-${ini.fechaInicio}`}
-            onChange={ev => patchIniciativa(epicaId, featureId, ini.id, { fechaInicio: ev.target.value || undefined })} style={dateInp} title="Desde" />
-          <span style={{ fontSize: 10, color: 'rgba(20,35,61,0.4)' }}>→</span>
-          <input type="date" defaultValue={ini.fechaFinObjetivo || ''} key={`${ini.id}-ff-${ini.fechaFinObjetivo}`}
-            onChange={ev => patchIniciativa(epicaId, featureId, ini.id, { fechaFinObjetivo: ev.target.value || undefined })} style={dateInp} title="Para" />
-          <input defaultValue={ini.responsable || ''} key={`${ini.id}-resp-${ini.responsable}`} placeholder="Responsable"
-            onBlur={ev => { const v = ev.target.value.trim(); if (v !== (ini.responsable || '')) patchIniciativa(epicaId, featureId, ini.id, { responsable: v || undefined }) }}
-            style={{ ...inpNarrow, flex: '1 1 100px' }} />
+        <div style={{ marginTop: 8 }}>
+          {renderRangoFechas(ini.fechaInicio, ini.fechaFinObjetivo, v => P({ fechaInicio: v || undefined }), v => P({ fechaFinObjetivo: v || undefined }), accent)}
         </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+          <input defaultValue={ini.responsable || ''} key={`${ini.id}:resp`} placeholder="Responsable"
+            onBlur={ev => { const v = ev.target.value.trim(); if (v !== (ini.responsable || '')) P({ responsable: v || undefined }) }}
+            style={{ ...inpNarrow, flex: '0 0 130px', width: 130 }} />
+          {hermanas.length > 0 && (
+            <select value={ini.bloqueadaPor || ''} onChange={ev => P({ bloqueadaPor: ev.target.value || undefined })}
+              title="Esta iniciativa no puede avanzar hasta que cierre la otra" style={{ ...dateInp, cursor: 'pointer', maxWidth: 210 }}>
+              <option value="">Sin dependencia</option>
+              {hermanas.map(h => <option key={h.id} value={h.id}>Depende de: {h.nombre}</option>)}
+            </select>
+          )}
+        </div>
+        <textarea defaultValue={ini.descripcion || ''} key={`${ini.id}:desc`} rows={2} placeholder="Descripción — qué es y cómo se ve terminada"
+          onBlur={ev => { const v = ev.target.value.trim(); if (v !== (ini.descripcion || '')) P({ descripcion: v || undefined }) }}
+          style={{ ...inpSmall, width: '100%', boxSizing: 'border-box', marginTop: 8, resize: 'vertical', fontSize: 12, lineHeight: 1.45 }} />
         {iniTasks.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
             <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
               <span style={{ display: 'block', width: `${pct * 100}%`, height: '100%', background: accent }} />
             </span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{doneIni}/{iniTasks.length} tareas</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{doneIni}/{iniTasks.length} tareas · {Math.round(pct * 100)}%</span>
           </div>
         )}
+      </div>
+    )
+  }
+  /** Fila de tarea de la vista Objetivos: TODO editable sin abrir el modal (título, estado,
+   *  prioridad, dificultad, estimado, hacer, vence) más el chip de plazo. Escribe SIEMPRE contra
+   *  `featured` y `t._i` — pasarle una épica con las tareas filtradas escribiría sobre otra tarea. */
+  const renderTaskRowRich = (t: (typeof indexed)[number], accent: string) => {
+    const ts = taskStyle(t.status)
+    const done = t.status === 'Terminada'
+    const dt = dueTone(t.due, done, today)
+    const pz = plazoLabel(t.due || t.plan, today, { hecho: done, verbo: t.due ? 'vence' : 'inicia' })
+    // Si el modal está abierto sobre esta misma tarea, su guardado (que reconstruye campo a campo)
+    // pisaría lo que se escriba aquí: se bloquea la fila mientras tanto.
+    const bloqueada = taskEdit?.tid === t.id
+    return (
+      <div key={t.id ?? t._i} className="ep-obj-task" style={{
+        display: 'grid', gridTemplateColumns: OBJ_TASK_COLS, alignItems: 'center', gap: 8,
+        padding: '7px 8px', borderBottom: '1px solid rgba(15,35,64,0.06)', borderRadius: 8,
+        opacity: done ? 0.6 : 1, background: bloqueada ? 'rgba(194,147,58,0.08)' : 'transparent',
+      }}>
+        <input defaultValue={t.t} key={`task:${t.id}:t`} disabled={bloqueada} aria-label="Título de la tarea"
+          onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { (ev.target as HTMLInputElement).value = t.t; (ev.target as HTMLInputElement).blur() } }}
+          onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = t.t; return } if (v !== t.t) setTaskTitle(featured, t._i, v) }}
+          style={{ minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 13, fontWeight: 600, background: 'transparent', outline: 'none', color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }} />
+        <select value={t.status} disabled={bloqueada} onChange={ev => setTaskStatus(featured, t._i, ev.target.value)} aria-label="Estado"
+          style={{ cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none', minWidth: 0 }}>
+          {PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button onClick={() => setPriorityVal(featured, t._i, t.priority === 'alta' ? 'media' : t.priority === 'media' ? 'baja' : t.priority === 'baja' ? '' : 'alta')}
+          title={`Prioridad: ${prioStyle(t.priority).label} · clic para cambiar`} aria-label="Prioridad"
+          style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, display: 'flex', justifyContent: 'center' }}><PrioBars p={t.priority} /></button>
+        <button onClick={() => cycleDifficulty(featured, t._i)} title={`Dificultad: ${difStyle(t.difficulty).label} · clic para cambiar`} aria-label="Dificultad"
+          style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, display: 'flex', justifyContent: 'center' }}><DifDots d={t.difficulty} /></button>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }} title="Cuándo lo harás">
+          <span style={{ ...objEyebrow, fontSize: 8.5 }}>Hacer</span>
+          <input type="date" value={t.plan || ''} disabled={bloqueada} onChange={ev => setTaskPlan(featured, t._i, ev.target.value)}
+            style={{ minWidth: 0, width: '100%', border: '1px solid rgba(46,90,158,0.35)', borderRadius: 8, padding: '4px 5px', fontSize: 11, fontWeight: 600, color: t.plan ? '#2E5A9E' : 'rgba(20,35,61,0.4)', background: t.plan ? 'rgba(46,90,158,0.06)' : '#fff', outline: 'none' }} />
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }} title={t.due ? `Vence ${fmtDue(t.due)} · ${dt.label}` : 'Fecha de entrega'}>
+          <span style={{ ...objEyebrow, fontSize: 8.5 }}>Vence</span>
+          <input type="date" value={t.due} disabled={bloqueada} onChange={ev => setTaskDue(featured, t._i, ev.target.value)}
+            style={{ minWidth: 0, width: '100%', border: `1px solid ${dt.border}`, borderRadius: 8, padding: '4px 5px', fontSize: 11, fontWeight: 600, color: dt.c, background: dt.bg, outline: 'none' }} />
+        </label>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {renderPlazoChip(pz)}
+          {estMinReady.current && renderEstControl(`obj:${t.id}`, t.estMin, WEEK_EST_MIN(t.difficulty), m => setTaskEstMin(featured, t._i, m), true)}
+        </span>
+        <button onClick={() => setTaskView({ eId: featured.id, tid: t.id! })} title="Abrir la ficha completa" aria-label="Abrir tarea"
+          style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', fontSize: 14 }}>⤢</button>
+      </div>
+    )
+  }
+  /** Línea de alta permanente al pie de cada Iniciativa/Feature: Enter crea la tarea YA colgada
+   *  donde estás parado y CONSERVA el foco, para meter cinco seguidas sin tocar el ratón. */
+  const renderTaskQuickAdd = (fId: string | null, iniId: string | null) => {
+    const key = `${fId ?? ''}:${iniId ?? ''}`
+    const activo = objQuickTask === key
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 8px 2px' }}>
+        <span style={{ color: '#A87A2C', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>＋</span>
+        <input value={activo ? objQuickTaskName : ''} onFocus={() => { setObjQuickTask(key); setObjQuickTaskName('') }}
+          onChange={ev => setObjQuickTaskName(ev.target.value)}
+          onKeyDown={ev => {
+            if (ev.key === 'Escape') { setObjQuickTask(null); setObjQuickTaskName('') }
+            if (ev.key !== 'Enter') return
+            const v = objQuickTaskName.trim(); if (!v) return
+            addTaskInline(fId, iniId, v)
+            setObjQuickTaskName('')   // el foco se queda donde está: siguiente tarea sin tocar nada
+          }}
+          placeholder="Nueva tarea aquí… (Enter para crear)"
+          style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderBottom: '1px dashed rgba(194,147,58,0.5)', borderRadius: 0, padding: '5px 2px', fontSize: 12.5, fontWeight: 600, color: '#16365F', background: 'transparent', outline: 'none' }} />
       </div>
     )
   }
@@ -2594,22 +2860,48 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       <button type="button" onClick={onOpen} style={addBtn}>{placeholder}</button>
     )
   )
+  /** Alta de objetivo eligiendo YA si es métrica o hito (commitQuickObjetivo por defecto crea
+   *  métrica; obligar a crear y luego convertir era un paso de más al planear). */
+  const renderObjetivoQuickAdd = (featureId: string | null, label = '+ Objetivo') => {
+    const owner = featureId || 'epica'
+    const activo = quickObjOwner === owner
+    const crear = () => { commitQuickObjetivo(featured.id, featureId, quickObjName, objNewTipo); setQuickObjOwner(null); setQuickObjName('') }
+    if (!activo) return <button type="button" onClick={() => { setQuickObjOwner(owner); setQuickObjName('') }} style={addBtn}>{label}</button>
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+          {([['metrica', '▤ Métrica'], ['hito', '◆ Hito']] as const).map(([v, l]) => (
+            <button key={v} type="button" onClick={() => setObjNewTipo(v)}
+              style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '4px 9px', font: '700 10.5px var(--font-ui)', background: objNewTipo === v ? '#10233F' : 'transparent', color: objNewTipo === v ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{l}</button>
+          ))}
+        </span>
+        <input autoFocus value={quickObjName} onChange={ev => setQuickObjName(ev.target.value)}
+          onKeyDown={ev => { if (ev.key === 'Enter') crear(); if (ev.key === 'Escape') { setQuickObjOwner(null); setQuickObjName('') } }}
+          placeholder={objNewTipo === 'hito' ? 'Firmar el contrato' : 'Llegar a 80 kg'}
+          style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 190 }} />
+        <button type="button" onClick={crear} title="Crear" style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+        <button type="button" onClick={() => { setQuickObjOwner(null); setQuickObjName('') }} title="Cancelar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
+      </span>
+    )
+  }
   /** Objetivos de la ÉPICA (no de un Feature): la tarjeta de siempre + "+ Objetivo de la épica".
-   *  Compartida entre la vista normal (siempre visible) y la vista "Objetivos" a pantalla completa. */
-  const renderEpicaObjetivosSection = () => (
+   *  Compartida entre la vista normal (compacta) y la de "Objetivos" (full = todo editable). */
+  const renderEpicaObjetivosSection = (full = false) => (
     <>
       {featured.kpis.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 11, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fit,minmax(${full ? 260 : 210}px,1fr))`, gap: 11, marginBottom: 12 }}>
           {featured.kpis.map(k => renderObjetivoCard(k, featured, featured.color,
             v => setObjetivoCurrent(featured, k, v),
             patch => patchObjetivo(featured.id, k.id, patch),
-            () => deleteObjetivo(featured.id, k.id)))}
+            () => deleteObjetivo(featured.id, k.id), full))}
         </div>
       )}
-      {renderQuickAddRow('+ Objetivo de la épica', quickObjOwner === 'epica', quickObjName, setQuickObjName,
-        () => { setQuickObjOwner('epica'); setQuickObjName('') },
-        () => { commitQuickObjetivo(featured.id, null, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
-        () => { setQuickObjOwner(null); setQuickObjName('') })}
+      {full
+        ? renderObjetivoQuickAdd(null, '+ Objetivo de la épica')
+        : renderQuickAddRow('+ Objetivo de la épica', quickObjOwner === 'epica', quickObjName, setQuickObjName,
+          () => { setQuickObjOwner('epica'); setQuickObjName('') },
+          () => { commitQuickObjetivo(featured.id, null, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
+          () => { setQuickObjOwner(null); setQuickObjName('') })}
     </>
   )
   /** Chips para elegir el Feature de una tarea — misma prominencia que Prioridad/Dificultad,
@@ -3148,6 +3440,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const INICIATIVA_ESTADOS: [Iniciativa['estado'], string][] = [
     ['pendiente', 'Pendiente'], ['en_curso', 'En curso'], ['bloqueada', 'Bloqueada'], ['cerrada', 'Cerrada'], ['cancelada', 'Cancelada'],
   ]
+  // Etiquetita en mayúsculas que rotula un control suelto (Para, Desde, Responsable…)
+  const objEyebrow: CSSProperties = { font: '700 9px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', flexShrink: 0 }
+  // Rejilla compartida por TODAS las filas de tarea de la vista Objetivos: así las columnas
+  // (estado, prioridad, dificultad, fechas, plazo) quedan alineadas de arriba a abajo y se pueden
+  // recorrer con la vista al planear. En pantalla angosta se cae a una sola columna con wrap.
+  const OBJ_TASK_COLS = 'minmax(180px,1fr) 104px 30px 30px 122px 122px auto 26px'
+  const objChip = (on: boolean, c?: string): CSSProperties => ({
+    cursor: 'pointer', borderRadius: 99, padding: '4px 11px', fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
+    border: on ? `1.5px solid ${c || '#10233F'}` : '1px solid rgba(15,35,64,0.12)',
+    background: on ? (c ? hexA(c, 0.12) : '#10233F') : '#fff',
+    color: on ? (c || '#fff') : 'rgba(20,35,61,0.55)',
+  })
   const cardEd: CSSProperties = { background: '#FBFAF6', border: '1px solid rgba(15,35,64,0.08)', borderRadius: 14, padding: '14px 15px', marginTop: 16 }
   const secHead: CSSProperties = { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }
 
@@ -8644,95 +8948,367 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )}
               </>)}
 
-              {epicTab === 'objetivos' && (
-                <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: '#FBFAF6', overflowY: 'auto' }}>
-                  <div style={{ position: 'sticky', top: 0, zIndex: 2, background: '#FBFAF6', borderBottom: '1px solid rgba(15,35,64,0.08)', padding: '14px 28px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <span style={{ width: 12, height: 12, borderRadius: 99, background: featured.color, flexShrink: 0 }} />
-                    <h1 className="serif" style={{ fontWeight: 600, fontSize: 22, margin: 0, color: '#10233F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {featured.name} <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(20,35,61,0.5)' }}>· Objetivos</span>
-                    </h1>
-                    <button onClick={() => setEpicTab('tareas')} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '8px 16px', fontSize: 13, fontWeight: 700, color: '#16365F', flexShrink: 0 }}>✕ Cerrar</button>
-                  </div>
+              {/* ─── MESA DE REVISIÓN (pestaña "Objetivos", pantalla completa) ───────────────
+                  Filtrar aquí ES navegar: los chips de Feature/Iniciativa y el índice de la
+                  izquierda escriben el MISMO estado (objSel), y el panel derecho muestra sólo ese
+                  nodo. Nunca se tocan epicFeatureFilter/epicIniciativaFilter: ésos alimentan la
+                  pestaña Tareas, que sigue montada detrás. */}
+              {epicTab === 'objetivos' && (() => {
+                const feats = featured.features || []
+                const fSelId = objSel.kind === 'feature' || objSel.kind === 'iniciativa' ? objSel.fId : null
+                const fSel = fSelId ? feats.find(f => f.id === fSelId) || null : null
+                const iniSel = objSel.kind === 'iniciativa' && fSel ? (fSel.iniciativas || []).find(i => i.id === objSel.iniId) || null : null
+                const acc = fSel ? (fSel.color || '#5B6B86') : featured.color
+                const vivas = indexed.filter(t => t.status !== ARCHIVED)
+                const tareasFeature = (fId: string) => vivas.filter(t => t.featureId === fId)
+                const tareasIni = (iniId: string) => vivas.filter(t => t.iniciativaId === iniId)
+                const sinFeature = vivas.filter(t => !t.featureId)
+                const pasaFiltro = (t: (typeof indexed)[number]) =>
+                  objTaskFilter === 'todas' ? true : objTaskFilter === 'hechas' ? t.status === 'Terminada' : t.status !== 'Terminada'
+                const cerradas = (rows: (typeof indexed)[number][]) => rows.filter(t => t.status === 'Terminada').length
 
-                  <div style={{ maxWidth: 1140, margin: '0 auto', padding: '26px 28px 80px' }}>
-                    <div style={{ font: '700 11px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 10 }}>Objetivos de la épica</div>
-                    <div style={{ marginBottom: 34 }}>{renderEpicaObjetivosSection()}</div>
+                /* Lista de tareas de un nodo + su línea de alta. El alta cuelga YA del
+                   feature/iniciativa donde estás parado: planear no debería costar un modal. */
+                const listaTareas = (rows: (typeof indexed)[number][], accent: string, fId: string | null, iniId: string | null) => {
+                  const vis = rows.filter(pasaFiltro)
+                  return (
+                    // overflowX propio: la rejilla de tareas tiene un ancho mínimo real (~620px).
+                    // Sin esto, en móvil empujaría el body entero y toda la página scrollearía de lado.
+                    <div style={{ overflowX: 'auto' }}>
+                      {vis.length === 0
+                        ? <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.42)', padding: '8px 8px 2px' }}>{rows.length ? 'Ninguna tarea con ese filtro.' : 'Sin tareas todavía.'}</div>
+                        : vis.map(t => renderTaskRowRich(t, accent))}
+                      {renderTaskQuickAdd(fId, iniId)}
+                    </div>
+                  )
+                }
 
-                    {(featured.features || []).length === 0 ? (
-                      <div style={{ fontSize: 13, color: 'rgba(20,35,61,0.55)' }}>Todavía no hay Features en esta épica. Créalos desde &quot;Editar&quot;.</div>
-                    ) : (featured.features || []).map(f => {
+                const eyebrowSec: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }
+                const bloque: CSSProperties = { background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderRadius: 14, padding: '16px 18px', marginBottom: 16 }
+
+                /* ── Índice de la izquierda ── */
+                const railBtn = (on: boolean, nivel: number, color: string): CSSProperties => ({
+                  width: '100%', textAlign: 'left', cursor: 'pointer', borderRadius: 9,
+                  border: on ? `1px solid ${color}` : '1px solid transparent',
+                  background: on ? hexA(color, 0.10) : 'transparent',
+                  padding: nivel === 0 ? '9px 10px' : '7px 10px 7px 22px', marginBottom: 2,
+                  display: 'flex', alignItems: 'center', gap: 7,
+                })
+                const rail = (
+                  <nav aria-label="Índice de la épica" style={{ display: 'flex', flexDirection: 'column' }}>
+                    <button onClick={() => setObjSel({ kind: 'epica' })} style={railBtn(objSel.kind === 'epica', 0, featured.color)}>
+                      <span style={{ width: 9, height: 9, borderRadius: 99, background: featured.color, flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, font: '700 12.5px var(--font-ui)', color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Toda la épica</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{featured.kpis.length}</span>
+                    </button>
+                    {feats.map(f => {
                       const fc = f.color || '#5B6B86'
-                      const inis = f.iniciativas || []
-                      const featTasksAll = indexed.filter(t => t.featureId === f.id && t.status !== ARCHIVED)
-                      const looseTasks = featTasksAll.filter(t => !t.iniciativaId)
-                      const doneN = featTasksAll.filter(t => t.status === 'Terminada').length
-                      const featEpica: Epica = { ...featured, tasks: featTasksAll }
+                      const rows = tareasFeature(f.id)
+                      const hechas = cerradas(rows)
+                      const pct = rows.length ? hechas / rows.length : 0
+                      const abierto = fSelId === f.id
                       return (
-                        <div key={f.id} style={{ marginBottom: 36, paddingBottom: 28, borderBottom: '1px solid rgba(15,35,64,0.10)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                            <span style={{ width: 14, height: 14, borderRadius: 99, background: fc, flexShrink: 0 }} />
-                            <h2 className="serif" style={{ fontSize: 21, fontWeight: 600, margin: 0, color: '#16365F' }}>{f.t}</h2>
-                            {featTasksAll.length > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{doneN}/{featTasksAll.length} tareas</span>}
-                          </div>
+                        <Fragment key={f.id}>
+                          <button onClick={() => setObjSel({ kind: 'feature', fId: f.id })} style={railBtn(objSel.kind === 'feature' && objSel.fId === f.id, 0, fc)}>
+                            <span style={{ width: 9, height: 9, borderRadius: 99, background: fc, flexShrink: 0 }} />
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ display: 'block', font: '700 12.5px var(--font-ui)', color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
+                              {rows.length > 0 && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3 }}>
+                                  <span style={{ flex: 1, height: 3, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden' }}>
+                                    <span style={{ display: 'block', width: `${pct * 100}%`, height: '100%', background: fc }} />
+                                  </span>
+                                  <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{hechas}/{rows.length}</span>
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                          {abierto && (f.iniciativas || []).map(ini => {
+                            const ir = tareasIni(ini.id)
+                            const iest = iniciativaStyle(ini.estado)
+                            return (
+                              <button key={ini.id} onClick={() => setObjSel({ kind: 'iniciativa', fId: f.id, iniId: ini.id })} style={railBtn(objSel.kind === 'iniciativa' && objSel.iniId === ini.id, 1, fc)}>
+                                <span style={{ width: 6, height: 6, borderRadius: 99, background: iest.c, flexShrink: 0 }} />
+                                <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ini.nombre}</span>
+                                {ir.length > 0 && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{cerradas(ir)}/{ir.length}</span>}
+                              </button>
+                            )
+                          })}
+                        </Fragment>
+                      )
+                    })}
+                    {sinFeature.length > 0 && (
+                      <button onClick={() => setObjSel({ kind: 'sinFeature' })} style={railBtn(objSel.kind === 'sinFeature', 0, '#5B6B86')}>
+                        <span style={{ width: 9, height: 9, borderRadius: 99, border: '1.5px solid rgba(20,35,61,0.35)', flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, font: '700 12.5px var(--font-ui)', color: 'rgba(20,35,61,0.6)' }}>Sin feature</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{sinFeature.length}</span>
+                      </button>
+                    )}
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(15,35,64,0.08)' }}>
+                      {renderQuickAddRow('+ Feature', featQuickAdd, featQuickName, setFeatQuickName,
+                        () => { setFeatQuickAdd(true); setFeatQuickName('') },
+                        () => commitQuickFeature(featured.id, id => setObjSel({ kind: 'feature', fId: id })),
+                        () => { setFeatQuickAdd(false); setFeatQuickName('') })}
+                    </div>
+                  </nav>
+                )
 
-                          {(f.kpis || []).length > 0 && (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 8 }}>
-                              {(f.kpis || []).map(k => renderObjetivoCard(k, featEpica, fc,
-                                v => setObjetivoCurrent(featEpica, k, v),
-                                patch => patchObjetivo(featured.id, k.id, patch),
-                                () => deleteObjetivo(featured.id, k.id)))}
-                            </div>
-                          )}
-                          {renderQuickAddRow('+ Objetivo', quickObjOwner === f.id, quickObjName, setQuickObjName,
-                            () => { setQuickObjOwner(f.id); setQuickObjName('') },
-                            () => { commitQuickObjetivo(featured.id, f.id, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
-                            () => { setQuickObjOwner(null); setQuickObjName('') })}
+                /* ── Migas + encabezado del nodo ── */
+                const migas = (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 11.5, marginBottom: 10 }}>
+                    <button onClick={() => setObjSel({ kind: 'epica' })} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, color: 'rgba(20,35,61,0.55)', fontWeight: 700 }}>{featured.name}</button>
+                    {fSel && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span>
+                      <button onClick={() => setObjSel({ kind: 'feature', fId: fSel.id })} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, color: iniSel ? 'rgba(20,35,61,0.55)' : acc, fontWeight: 700 }}>{fSel.t}</button></>}
+                    {iniSel && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span><span style={{ color: acc, fontWeight: 700 }}>{iniSel.nombre}</span></>}
+                    {objSel.kind === 'sinFeature' && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span><span style={{ color: 'rgba(20,35,61,0.6)', fontWeight: 700 }}>Sin feature</span></>}
+                  </div>
+                )
 
-                          <div style={{ marginTop: 22, display: 'flex', flexDirection: 'column', gap: 18 }}>
-                            {inis.map(ini => {
-                              const iniTasks = featTasksAll.filter(t => t.iniciativaId === ini.id)
+                /* ── Detalle: qué se ve según el nodo elegido ── */
+                let detalle: ReactNode = null
+                if (objSel.kind === 'epica') {
+                  detalle = (
+                    <>
+                      <div style={bloque}>
+                        <div style={{ ...eyebrowSec, marginBottom: 12 }}>Objetivos de la épica</div>
+                        {renderEpicaObjetivosSection(true)}
+                      </div>
+                      <div style={bloque}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                          <span style={eyebrowSec}>Features</span>
+                          <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)' }}>toca uno para revisarlo a fondo</span>
+                        </div>
+                        {feats.length === 0 ? (
+                          <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)' }}>Todavía no hay Features. Crea el primero con “+ Feature” en el índice de la izquierda.</div>
+                        ) : (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 10 }}>
+                            {feats.map(f => {
+                              const fc = f.color || '#5B6B86'
+                              const rows = tareasFeature(f.id)
+                              const hechas = cerradas(rows)
+                              const pct = rows.length ? hechas / rows.length : 0
+                              const fst = featureStyle(f.estado)
+                              const dur = duracionLabel(f.roadmapStart, f.roadmapEnd, today)
+                              const nIni = (f.iniciativas || []).length
+                              const nObj = (f.kpis || []).length
                               return (
-                                <div key={ini.id}>
-                                  {renderIniciativaRowEditable(ini, featured.id, f.id, fc)}
-                                  <div style={{ marginLeft: 16, marginTop: 6, paddingLeft: 12, borderLeft: '2px solid rgba(15,35,64,0.08)' }}>
-                                    {iniTasks.length > 0
-                                      ? iniTasks.map(t => renderTaskRow(t))
-                                      : <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', padding: '6px 0' }}>Sin tareas aún.</div>}
-                                    <button onClick={() => openTaskEdit(featured.id, null, { featureId: f.id, iniciativaId: ini.id })}
-                                      style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700, padding: '6px 0 2px' }}>+ Tarea aquí</button>
+                                <button key={f.id} onClick={() => setObjSel({ kind: 'feature', fId: f.id })}
+                                  style={{ textAlign: 'left', cursor: 'pointer', borderRadius: 12, padding: '12px 13px', background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${fc}` }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+                                    <span style={{ flex: 1, minWidth: 0, font: '700 12.5px var(--font-ui)', color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
+                                    <span style={{ flexShrink: 0, font: '700 9px var(--font-ui)', padding: '2px 7px', borderRadius: 99, background: fst.bg, color: fst.c }}>{fst.label}</span>
                                   </div>
-                                </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+                                    <span style={{ flex: 1, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.08)', overflow: 'hidden' }}>
+                                      <span style={{ display: 'block', width: `${pct * 100}%`, height: '100%', background: fc }} />
+                                    </span>
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{hechas}/{rows.length}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 10.5, color: 'rgba(20,35,61,0.5)' }}>
+                                    <span>{nObj} {nObj === 1 ? 'objetivo' : 'objetivos'}</span>
+                                    <span>·</span>
+                                    <span>{nIni} {nIni === 1 ? 'iniciativa' : 'iniciativas'}</span>
+                                    {dur.fase !== 'vacio' && <span title={dur.detalle} style={{ marginLeft: 'auto', borderRadius: 99, padding: '1px 7px', font: '700 9.5px var(--font-ui)', color: dur.c, background: dur.bg, border: `1px solid ${dur.border}` }}>⏱ {dur.corto}</span>}
+                                  </div>
+                                </button>
                               )
                             })}
                           </div>
-                          {renderQuickAddRow('+ Iniciativa', quickIniFeature === f.id, quickIniName, setQuickIniName,
-                            () => { setQuickIniFeature(f.id); setQuickIniName('') },
-                            () => { commitQuickIniciativa(featured.id, f.id, quickIniName); setQuickIniFeature(null); setQuickIniName('') },
-                            () => { setQuickIniFeature(null); setQuickIniName('') })}
+                        )}
+                      </div>
+                    </>
+                  )
+                } else if (objSel.kind === 'sinFeature') {
+                  detalle = (
+                    <div style={bloque}>
+                      <div style={{ ...eyebrowSec, marginBottom: 4 }}>Tareas sin feature</div>
+                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)', marginBottom: 10 }}>Cuelgan directo de la épica. Asígnalas a un Feature desde la ficha de la tarea (⤢) cuando sepas dónde van.</div>
+                      {listaTareas(sinFeature, featured.color, null, null)}
+                    </div>
+                  )
+                } else if (fSel && !iniSel) {
+                  const rows = tareasFeature(fSel.id)
+                  const sueltas = rows.filter(t => !t.iniciativaId)
+                  const fst = featureStyle(fSel.estado)
+                  detalle = (
+                    <>
+                      <div style={bloque}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+                          <span style={{ width: 13, height: 13, borderRadius: 99, background: acc, flexShrink: 0 }} />
+                          <input defaultValue={fSel.t} key={`feat:${fSel.id}:t`} aria-label="Nombre del feature"
+                            onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
+                            onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = fSel.t; return } if (v !== fSel.t) patchFeature(featured.id, fSel.id, { t: v }) }}
+                            className="serif" style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 8, padding: '3px 7px', fontSize: 21, fontWeight: 600, color: '#16365F', background: 'transparent', outline: 'none' }} />
+                          <span style={{ flexShrink: 0, font: '700 10px var(--font-ui)', padding: '3px 9px', borderRadius: 99, background: fst.bg, color: fst.c }}>{fst.label}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+                          {(['en_curso', 'al_dia', 'en_riesgo', 'en_pausa', 'cerrado'] as const).map(st => (
+                            <button key={st} onClick={() => patchFeature(featured.id, fSel.id, { estado: st })} style={tipoChip((fSel.estado || 'en_curso') === st)}>{featureStyle(st).label}</button>
+                          ))}
+                        </div>
+                        {renderRangoFechas(fSel.roadmapStart, fSel.roadmapEnd,
+                          v => patchFeature(featured.id, fSel.id, { roadmapStart: v || undefined }),
+                          v => patchFeature(featured.id, fSel.id, { roadmapEnd: v || undefined }), acc)}
+                      </div>
 
-                          {looseTasks.length > 0 && (
-                            <div style={{ marginTop: 20 }}>
-                              <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', marginBottom: 6 }}>Tareas sin iniciativa</div>
-                              {looseTasks.map(t => renderTaskRow(t))}
+                      <div style={bloque}>
+                        <div style={{ ...eyebrowSec, marginBottom: 12 }}>Objetivos del feature</div>
+                        {(fSel.kpis || []).length > 0 && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 11, marginBottom: 12 }}>
+                            {(fSel.kpis || []).map(k => {
+                              const scope: Epica = { ...featured, tasks: rows }
+                              return renderObjetivoCard(k, scope, acc,
+                                v => setObjetivoCurrent(scope, k, v),
+                                patch => patchObjetivo(featured.id, k.id, patch),
+                                () => deleteObjetivo(featured.id, k.id), true)
+                            })}
+                          </div>
+                        )}
+                        {renderObjetivoQuickAdd(fSel.id)}
+                      </div>
+
+                      <div style={bloque}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                          <span style={eyebrowSec}>Iniciativas</span>
+                          <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)' }}>toca una en el índice para revisarla sola</span>
+                        </div>
+                        {(fSel.iniciativas || []).length === 0
+                          ? <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.5)', marginBottom: 10 }}>Sin iniciativas. Son los bloques de trabajo dentro del feature.</div>
+                          : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 12 }}>
+                              {(fSel.iniciativas || []).map(ini => {
+                                const ir = tareasIni(ini.id)
+                                return (
+                                  <div key={ini.id}>
+                                    {renderIniciativaRowEditable(ini, featured.id, fSel.id, acc)}
+                                    <div style={{ marginLeft: 14, marginTop: 6, paddingLeft: 12, borderLeft: `2px solid ${hexA(acc, 0.25)}` }}>
+                                      {listaTareas(ir, acc, fSel.id, ini.id)}
+                                    </div>
+                                  </div>
+                                )
+                              })}
                             </div>
                           )}
-                        </div>
-                      )
-                    })}
+                        {renderQuickAddRow('+ Iniciativa', quickIniFeature === fSel.id, quickIniName, setQuickIniName,
+                          () => { setQuickIniFeature(fSel.id); setQuickIniName('') },
+                          () => { commitQuickIniciativa(featured.id, fSel.id, quickIniName); setQuickIniFeature(null); setQuickIniName('') },
+                          () => { setQuickIniFeature(null); setQuickIniName('') })}
+                      </div>
 
-                    {(() => {
-                      const looseEpicTasks = indexed.filter(t => !t.featureId && t.status !== ARCHIVED)
-                      if (!looseEpicTasks.length) return null
-                      return (
-                        <div>
-                          <div style={{ font: '700 11px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 10 }}>Tareas sin Feature</div>
-                          {looseEpicTasks.map(t => renderTaskRow(t))}
+                      <div style={bloque}>
+                        <div style={{ ...eyebrowSec, marginBottom: 4 }}>Tareas del feature sin iniciativa</div>
+                        <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', marginBottom: 8 }}>Trabajo suelto: o se agrupa en una iniciativa, o se hace y ya.</div>
+                        {listaTareas(sueltas, acc, fSel.id, null)}
+                      </div>
+                    </>
+                  )
+                } else if (fSel && iniSel) {
+                  const ir = tareasIni(iniSel.id)
+                  const objsFeature = fSel.kpis || []
+                  detalle = (
+                    <>
+                      <div style={bloque}>
+                        {renderIniciativaRowEditable(iniSel, featured.id, fSel.id, acc)}
+                      </div>
+                      <div style={bloque}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                          <span style={eyebrowSec}>Tareas de la iniciativa</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{cerradas(ir)}/{ir.length}</span>
                         </div>
-                      )
-                    })()}
+                        {listaTareas(ir, acc, fSel.id, iniSel.id)}
+                      </div>
+                      {objsFeature.length > 0 && (
+                        <div style={bloque}>
+                          <div style={{ ...eyebrowSec, marginBottom: 4 }}>A qué le pega esta iniciativa</div>
+                          <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)', marginBottom: 10 }}>Objetivos del feature «{fSel.t}» — el marcador contra el que se mide todo esto.</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 10 }}>
+                            {objsFeature.map(k => {
+                              const scope: Epica = { ...featured, tasks: tareasFeature(fSel.id) }
+                              return renderObjetivoCard(k, scope, acc,
+                                v => setObjetivoCurrent(scope, k, v),
+                                patch => patchObjetivo(featured.id, k.id, patch),
+                                () => deleteObjetivo(featured.id, k.id))
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )
+                }
+
+                return (
+                  // Columna flex con cabecera fija y cuerpo scrolleable: así ni la cabecera ni el
+                  // índice necesitan adivinar un `top` de sticky (que se rompe en cuanto la
+                  // cabecera hace wrap en pantalla angosta).
+                  <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: '#FBFAF6', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ flexShrink: 0, background: '#FBFAF6' }}>
+                    <div style={{ borderBottom: '1px solid rgba(15,35,64,0.08)', padding: '13px 24px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <span style={{ width: 12, height: 12, borderRadius: 99, background: featured.color, flexShrink: 0 }} />
+                      <h1 className="serif" style={{ fontWeight: 600, fontSize: 21, margin: 0, color: '#10233F', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {featured.name} <span style={{ fontSize: 13.5, fontWeight: 500, color: 'rgba(20,35,61,0.5)' }}>· revisión</span>
+                      </h1>
+                      <span style={{ flex: 1 }} />
+                      <span role="group" aria-label="Qué tareas mostrar" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)' }}>
+                        {([['abiertas', 'Abiertas'], ['todas', 'Todas'], ['hechas', 'Hechas']] as const).map(([v, l]) => (
+                          <button key={v} aria-pressed={objTaskFilter === v} onClick={() => setObjTaskFilter(v)}
+                            style={{ cursor: 'pointer', border: 'none', borderRadius: 7, padding: '5px 11px', font: '700 11px var(--font-ui)', background: objTaskFilter === v ? '#10233F' : 'transparent', color: objTaskFilter === v ? '#F3EFE6' : 'rgba(20,35,61,0.55)' }}>{l}</button>
+                        ))}
+                      </span>
+                      <button onClick={() => setEpicTab('tareas')} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '8px 16px', fontSize: 13, fontWeight: 700, color: '#16365F', flexShrink: 0 }}>✕ Cerrar</button>
+                    </div>
+
+                    {/* Barra de filtros: Feature y, en cascada, Iniciativa. Elegir aquí enfoca la vista. */}
+                    <div style={{ padding: '9px 24px', background: fSel ? hexA(acc, 0.05) : '#FBFAF6', borderBottom: fSel ? `2px solid ${acc}` : '1px solid rgba(15,35,64,0.08)', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                      <span style={objEyebrow}>Feature</span>
+                      <button onClick={() => setObjSel({ kind: 'epica' })} style={objChip(objSel.kind === 'epica')}>Todos</button>
+                      {feats.map(f => {
+                        const fc = f.color || '#5B6B86'
+                        const on = fSelId === f.id
+                        const n = tareasFeature(f.id).length
+                        return (
+                          <button key={f.id} aria-pressed={on} onClick={() => setObjSel(on ? { kind: 'epica' } : { kind: 'feature', fId: f.id })}
+                            style={{ ...objChip(on, fc), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: 99, background: fc, flexShrink: 0 }} />{f.t}
+                            <span style={{ font: '800 9.5px var(--font-ui)', opacity: .7 }}>{n}</span>
+                          </button>
+                        )
+                      })}
+                      {sinFeature.length > 0 && <button onClick={() => setObjSel({ kind: 'sinFeature' })} style={objChip(objSel.kind === 'sinFeature')}>Sin feature</button>}
+                      {fSel && (fSel.iniciativas || []).length > 0 && (
+                        <>
+                          <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
+                          <span style={objEyebrow}>Iniciativa</span>
+                          <button onClick={() => setObjSel({ kind: 'feature', fId: fSel.id })} style={objChip(objSel.kind === 'feature')}>Todas</button>
+                          {(fSel.iniciativas || []).map(ini => {
+                            const on = objSel.kind === 'iniciativa' && objSel.iniId === ini.id
+                            const iest = iniciativaStyle(ini.estado)
+                            return (
+                              <button key={ini.id} aria-pressed={on} onClick={() => setObjSel(on ? { kind: 'feature', fId: fSel.id } : { kind: 'iniciativa', fId: fSel.id, iniId: ini.id })}
+                                style={{ ...objChip(on, iest.c), display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <span style={{ width: 6, height: 6, borderRadius: 99, background: iest.c, flexShrink: 0 }} />{ini.nombre}
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
+                    </div>
+
+                    </div>
+
+                    {/* Índice + detalle. flexWrap en vez de media query: en pantalla angosta el
+                        índice queda arriba y el detalle debajo, sin CSS extra. */}
+                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 18, maxWidth: 1440, width: '100%', margin: '0 auto', padding: '18px 24px 90px', boxSizing: 'border-box' }}>
+                      <aside style={{ flex: '0 0 260px', minWidth: 240, position: 'sticky', top: 0, maxHeight: 'calc(100vh - 190px)', overflowY: 'auto', background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderRadius: 14, padding: 10 }}>
+                        {rail}
+                      </aside>
+                      <section style={{ flex: '1 1 560px', minWidth: 320 }}>
+                        {migas}
+                        {detalle}
+                      </section>
+                    </div>
                   </div>
-                </div>
-              )}
+                )
+              })()}
 
               {fStateCounts.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>

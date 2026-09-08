@@ -186,6 +186,162 @@ export function normalize(e: Epica): Epica {
   }
 }
 
+/* ─── Plazos y duraciones ───────────────────────────────────────
+   UNA sola regla de unidades para toda la app (Épicas, Objetivos, Iniciativas,
+   Tareas y /roadmap): ≤13 días se dicen en días, 14-69 en semanas, 70-364 en
+   meses (a la media) y de ahí en años. Todo el redondeo vive en cantidadLabel:
+   si algún día hay que mover un corte, se mueve en un solo lugar. */
+const DIAS_ANIO = 365
+const DIAS_MES = 30.44
+
+/** 'YYYY-MM-DD' → Date local, o null. Valida de verdad: '2026-02-30' NO es Invalid
+ *  Date en todos los motores (hace roll-over a marzo), así que se comparan los
+ *  componentes. Tolera datetimes de Supabase ('2026-09-07T10:00:00Z') por el slice. */
+function isoDate(s?: string | null): Date | null {
+  const iso = (s || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  const d = new Date(iso + 'T00:00:00')   // hora LOCAL, como todo el proyecto: new Date(iso) sería UTC y daría off-by-one
+  if (isNaN(d.getTime())) return null
+  if (d.getFullYear() !== +iso.slice(0, 4) || d.getMonth() + 1 !== +iso.slice(5, 7) || d.getDate() !== +iso.slice(8, 10)) return null
+  return d
+}
+
+/** Días de `a` a `b` (EXCLUSIVO, como daysUntil). null si alguna fecha no sirve. */
+function diasEntreISO(a?: string | null, b?: string | null): number | null {
+  const da = isoDate(a), db = isoDate(b)
+  if (!da || !db) return null
+  return Math.round((db.getTime() - da.getTime()) / 86400000)
+}
+
+/** La magnitud sola, sin signo ni verbo: '12 días' · '3 semanas' · '~2 meses y medio' · '1 año 3 meses'. */
+function cantidadLabel(dias: number): { texto: string; corto: string; aprox: boolean } {
+  const d = Math.abs(dias)
+  if (d <= 13) return { texto: `${d} ${d === 1 ? 'día' : 'días'}`, corto: `${d}d`, aprox: false }
+  if (d <= 69) {
+    const w = Math.round(d / 7)
+    const aprox = d % 7 !== 0
+    return { texto: `${aprox ? '~' : ''}${w} ${w === 1 ? 'semana' : 'semanas'}`, corto: `${w}sem`, aprox }
+  }
+  if (d < DIAS_ANIO) {
+    const m = Math.round((d / DIAS_MES) * 2) / 2      // a la media: 2, 2.5, 3…
+    const ent = Math.floor(m)
+    const medio = m - ent >= 0.5
+    const texto = ent === 0 ? '~medio mes'
+      : medio ? `~${ent} ${ent === 1 ? 'mes' : 'meses'} y medio`
+      : `~${ent} ${ent === 1 ? 'mes' : 'meses'}`
+    return { texto, corto: `${m}m`, aprox: true }
+  }
+  const tm = Math.round(d / DIAS_MES)
+  const a = Math.floor(tm / 12), r = tm % 12
+  const anios = `${a} ${a === 1 ? 'año' : 'años'}`
+  const texto = r === 0 ? anios : r === 6 ? `${anios} y medio` : `${anios} ${r} ${r === 1 ? 'mes' : 'meses'}`
+  return { texto: `~${texto}`, corto: `${a}a${r ? ` ${r}m` : ''}`, aprox: true }
+}
+
+export type PlazoTono = 'hecho' | 'vencido' | 'urgente' | 'proximo' | 'normal' | 'lejano' | 'ninguno'
+export type Plazo = { dias: number | null; texto: string; detalle: string; corto: string; tono: PlazoTono; c: string; bg: string; border: string }
+
+/** UNA fecha → cuánto falta o cuánto lleva vencida, en la unidad que toque.
+ *  'hoy' · 'mañana' · 'faltan 12 días' · 'en ~3 semanas' · 'venció hace ~2 meses'.
+ *  El color se toma TAL CUAL de dueTone: cero semáforos nuevos que mantener.
+ *  `verbo`: 'vence' (default), 'inicia' ("empieza en…") o 'seco' (chips angostos). */
+export function plazoLabel(iso?: string | null, hoy?: string, opts?: { hecho?: boolean; verbo?: 'vence' | 'inicia' | 'seco' }): Plazo {
+  const hoyISO = (hoy || todayISO()).slice(0, 10)
+  const tgt = (iso || '').slice(0, 10)
+  const t = dueTone(tgt, !!opts?.hecho, hoyISO)
+  const base = { c: t.c, bg: t.bg, border: t.border }
+  const d = tgt ? diasEntreISO(hoyISO, tgt) : null
+  if (d == null) return { dias: null, texto: tgt ? 'fecha inválida' : 'sin fecha', detalle: tgt ? 'fecha inválida' : 'sin fecha', corto: '—', tono: 'ninguno', ...base }
+  const abs = Math.abs(d)
+  const detalle = `${abs} ${abs === 1 ? 'día' : 'días'}${d < 0 ? ' de retraso' : ''}`
+  if (opts?.hecho) return { dias: d, texto: 'logrado', detalle, corto: '✓', tono: 'hecho', ...base }
+  const q = cantidadLabel(d)
+  const verbo = opts?.verbo || 'vence'
+  let texto: string
+  if (d === 0) texto = 'hoy'
+  else if (d === 1) texto = verbo === 'inicia' ? 'empieza mañana' : 'mañana'
+  else if (d === -1) texto = verbo === 'inicia' ? 'empezó ayer' : verbo === 'seco' ? 'ayer' : 'venció ayer'
+  else if (d > 0) texto = verbo === 'inicia' ? `empieza en ${q.texto}` : verbo === 'seco' ? `en ${q.texto}` : d <= 13 ? `faltan ${q.texto}` : `en ${q.texto}`
+  else texto = verbo === 'inicia' ? `empezó hace ${q.texto}` : verbo === 'seco' ? `hace ${q.texto}` : `venció hace ${q.texto}`
+  const tono: PlazoTono = d < 0 ? 'vencido' : d <= 7 ? 'urgente' : d <= 21 ? 'proximo' : d <= 45 ? 'normal' : 'lejano'
+  return { dias: d, texto, detalle, corto: d === 0 ? 'hoy' : d > 0 ? q.corto : `−${q.corto}`, tono, ...base }
+}
+
+export type DurFase = 'porVenir' | 'enCurso' | 'terminado' | 'incompleto' | 'invertido' | 'vacio'
+export type Duracion = {
+  dias: number | null; texto: string; detalle: string; corto: string
+  fase: DurFase; nota: string; avance: number | null; transcurrido: string
+  restante: Plazo | null; c: string; bg: string; border: string
+}
+
+/** RANGO inicio→fin: cuánto dura, en qué fase va y cuánto le queda.
+ *  OJO: los días se cuentan INCLUSIVO (1 jul → 7 jul = 7 días), al revés que
+ *  daysUntil/diasEntreISO, porque para un plazo de trabajo el día de inicio cuenta.
+ *  NUNCA devuelve negativos: con guardado instantáneo, mientras tecleas el año la
+ *  fecha pasa por estados absurdos — ese caso es la fase 'invertido', no un −31. */
+export function duracionLabel(desde?: string | null, hasta?: string | null, hoy?: string): Duracion {
+  const hoyISO = (hoy || todayISO()).slice(0, 10)
+  const a = isoDate(desde) ? (desde || '').slice(0, 10) : ''
+  const b = isoDate(hasta) ? (hasta || '').slice(0, 10) : ''
+  const vacio = { dias: null, avance: null, transcurrido: '', restante: null }
+  const gris = { c: 'rgba(20,35,61,0.45)', bg: 'transparent', border: 'rgba(15,35,64,0.12)' }
+
+  if (!a && !b) return { ...vacio, texto: 'sin fechas', detalle: 'sin fechas', corto: '—', fase: 'vacio', nota: '', ...gris }
+
+  // Sólo inicio: lleva N abierta. Sólo fin: faltan N. Ambos son estados normales mientras se planea.
+  if (a && !b) {
+    const d = diasEntreISO(a, hoyISO) ?? 0
+    const q = cantidadLabel(d)
+    return {
+      ...vacio, dias: null, fase: 'incompleto', nota: 'sin fecha de fin', corto: '∞',
+      texto: d >= 0 ? `lleva ${q.texto}` : `empieza en ${q.texto}`,
+      detalle: `empezó el ${fmtDue(a)} · sin fecha de fin`,
+      restante: null, c: '#A87A2C', bg: 'rgba(194,147,58,0.10)', border: 'rgba(194,147,58,0.35)',
+    }
+  }
+  if (!a && b) {
+    const p = plazoLabel(b, hoyISO)
+    return { ...vacio, dias: null, fase: 'incompleto', nota: 'sin fecha de inicio', texto: p.texto, detalle: p.detalle, corto: p.corto, restante: p, c: p.c, bg: p.bg, border: p.border }
+  }
+
+  const bruto = diasEntreISO(a, b)
+  if (bruto == null) return { ...vacio, texto: 'revisa las fechas', detalle: 'fechas inválidas', corto: '!', fase: 'invertido', nota: '', c: '#B0522E', bg: 'rgba(176,82,46,0.10)', border: 'rgba(176,82,46,0.5)' }
+  if (bruto < 0) return {
+    ...vacio, texto: 'revisa las fechas', detalle: 'el rango está al revés', corto: '!', fase: 'invertido',
+    nota: `el fin (${fmtDue(b)}) cae antes del inicio (${fmtDue(a)})`,
+    c: '#B0522E', bg: 'rgba(176,82,46,0.10)', border: 'rgba(176,82,46,0.5)',
+  }
+
+  const dias = bruto + 1                       // inclusivo
+  const q = cantidadLabel(dias)
+  const restante = plazoLabel(b, hoyISO)
+  const desdeHoy = diasEntreISO(a, hoyISO) ?? 0
+  const fase: DurFase = desdeHoy < 0 ? 'porVenir' : (diasEntreISO(hoyISO, b) ?? 0) < 0 ? 'terminado' : 'enCurso'
+  const avance = Math.max(0, Math.min(1, bruto === 0 ? (fase === 'porVenir' ? 0 : 1) : desdeHoy / bruto))
+  const corridos = Math.max(0, Math.min(dias, desdeHoy + 1))
+  const tono = fase === 'porVenir' ? { c: '#2E5A9E', bg: 'rgba(46,90,158,0.08)', border: 'rgba(46,90,158,0.35)' }
+    : fase === 'terminado' ? { c: 'rgba(20,35,61,0.5)', bg: 'rgba(15,35,64,0.05)', border: 'rgba(15,35,64,0.12)' }
+    : { c: restante.c, bg: restante.bg, border: restante.border }
+  return {
+    dias, texto: q.texto, corto: q.corto, fase, nota: '', avance, restante, ...tono,
+    detalle: `${fmtDue(a)} → ${fmtDue(b)} · ${dias} ${dias === 1 ? 'día' : 'días'}`,
+    transcurrido: fase === 'enCurso' ? `llevas ${corridos} de ${dias} días (${Math.round(avance * 100)}%)` : '',
+  }
+}
+
+/** Estado de un Feature → color + etiqueta. Hermano de iniciativaStyle, para el
+ *  enum snake_case de features (que hasta ahora no tenía representación visual). */
+export function featureStyle(s?: string) {
+  const m: Record<string, { c: string; bg: string; label: string }> = {
+    'en_curso': { c: '#2E5A9E', bg: 'rgba(46,90,158,0.12)', label: 'En curso' },
+    'al_dia': { c: '#2E6E6E', bg: 'rgba(62,142,142,0.14)', label: 'Al día' },
+    'en_riesgo': { c: '#B0522E', bg: 'rgba(176,90,60,0.15)', label: 'En riesgo' },
+    'en_pausa': { c: '#5B6B86', bg: 'rgba(91,107,134,0.15)', label: 'En pausa' },
+    'cerrado': { c: 'rgba(20,35,61,0.5)', bg: 'rgba(20,35,61,0.07)', label: 'Cerrado' },
+  }
+  return m[s || 'en_curso'] || m['en_curso']
+}
+
 /** Días hasta una fecha YYYY-MM-DD (negativo = ya pasó, null = sin fecha). */
 export function daysUntil(s: string): number | null {
   if (!s) return null
@@ -195,10 +351,13 @@ export function daysUntil(s: string): number | null {
 }
 
 /** Color de una fecha de entrega según qué tan cerca está el vencimiento.
- *  Rangos finos para que un abanico de fechas se vea como un abanico de colores. */
-export function dueTone(due: string, done: boolean) {
+ *  Rangos finos para que un abanico de fechas se vea como un abanico de colores.
+ *  `hoy` opcional: cuando quien llama ya tiene su propio "hoy" (el estado que tickea
+ *  cada 30 s en Épicas), se pasa aquí para que el COLOR y el TEXTO del plazo no se
+ *  desfasen medio día entre sí; sin él se comporta exactamente como siempre. */
+export function dueTone(due: string, done: boolean, hoy?: string) {
   if (done) return { c: '#2E6E6E', border: 'rgba(62,142,142,0.35)', bg: '#fff', label: 'lista' }
-  const dl = daysUntil(due)
+  const dl = hoy ? diasEntreISO(hoy, due) : daysUntil(due)
   if (dl == null) return { c: 'rgba(20,35,61,0.5)', border: 'rgba(15,35,64,0.12)', bg: '#fff', label: 'sin fecha' }
   if (dl < 0)   return { c: '#B0522E', border: 'rgba(176,82,46,0.6)',  bg: 'rgba(176,82,46,0.10)', label: 'vencida' }
   if (dl <= 7)  return { c: '#C2410C', border: 'rgba(194,65,12,0.5)',  bg: 'rgba(194,65,12,0.08)',  label: 'esta semana' }
