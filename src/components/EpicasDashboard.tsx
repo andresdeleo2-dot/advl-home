@@ -265,10 +265,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Vista "Objetivos" a pantalla completa. objSel ES el filtro: elegir un Feature o una Iniciativa
   // en la barra de arriba (o en el índice de la izquierda) enfoca la vista en ese nodo. NO se reusan
   // epicFeatureFilter/epicIniciativaFilter: ésos alimentan la pestaña Tareas, que sigue montada detrás.
+  // "sinIniciativa" es una categoría de pleno derecho, igual que "sinFeature": el trabajo suelto
+  // dentro de un Feature tiene que poder revisarse solo, no quedar escondido al final de la lista.
   type ObjSel =
     | { kind: 'epica' }
     | { kind: 'feature'; fId: string }
     | { kind: 'iniciativa'; fId: string; iniId: string }
+    | { kind: 'sinIniciativa'; fId: string }
     | { kind: 'sinFeature' }
   const [objSel, setObjSel] = useState<ObjSel>({ kind: 'epica' })
   const [objDelConfirm, setObjDelConfirm] = useState<string | null>(null)   // id de objetivo/iniciativa en "¿Seguro? Sí/No"
@@ -8975,13 +8978,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   pestaña Tareas, que sigue montada detrás. */}
               {epicTab === 'objetivos' && (() => {
                 const feats = featured.features || []
-                const fSelId = objSel.kind === 'feature' || objSel.kind === 'iniciativa' ? objSel.fId : null
+                const fSelId = objSel.kind === 'feature' || objSel.kind === 'iniciativa' || objSel.kind === 'sinIniciativa' ? objSel.fId : null
                 const fSel = fSelId ? feats.find(f => f.id === fSelId) || null : null
                 const iniSel = objSel.kind === 'iniciativa' && fSel ? (fSel.iniciativas || []).find(i => i.id === objSel.iniId) || null : null
                 const acc = fSel ? (fSel.color || '#5B6B86') : featured.color
                 const vivas = indexed.filter(t => t.status !== ARCHIVED)
                 const tareasFeature = (fId: string) => vivas.filter(t => t.featureId === fId)
                 const tareasIni = (iniId: string) => vivas.filter(t => t.iniciativaId === iniId)
+                const sueltasDe = (fId: string) => tareasFeature(fId).filter(t => !t.iniciativaId)
                 const sinFeature = vivas.filter(t => !t.featureId)
                 const pasaFiltro = (t: (typeof indexed)[number]) =>
                   objTaskFilter === 'todas' ? true : objTaskFilter === 'hechas' ? t.status === 'Terminada' : t.status !== 'Terminada'
@@ -9058,6 +9062,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               </button>
                             )
                           })}
+                          {/* El trabajo suelto del feature es su propia categoría: existe en cuanto
+                              hay algo dentro, y desde ahí cada tarea se puede colocar en una iniciativa. */}
+                          {abierto && sueltasDe(f.id).length > 0 && (
+                            <button onClick={() => setObjSel({ kind: 'sinIniciativa', fId: f.id })} style={railBtn(objSel.kind === 'sinIniciativa' && objSel.fId === f.id, 1, fc)}>
+                              <span style={{ width: 6, height: 6, borderRadius: 99, border: '1.5px solid rgba(20,35,61,0.32)', flexShrink: 0 }} />
+                              <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.62)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Sin iniciativa</span>
+                              <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{cerradas(sueltasDe(f.id))}/{sueltasDe(f.id).length}</span>
+                            </button>
+                          )}
                         </Fragment>
                       )
                     })}
@@ -9082,8 +9095,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 11.5, marginBottom: 10 }}>
                     <button onClick={() => setObjSel({ kind: 'epica' })} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, color: 'rgba(20,35,61,0.55)', fontWeight: 700 }}>{featured.name}</button>
                     {fSel && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span>
-                      <button onClick={() => setObjSel({ kind: 'feature', fId: fSel.id })} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, color: iniSel ? 'rgba(20,35,61,0.55)' : acc, fontWeight: 700 }}>{fSel.t}</button></>}
+                      <button onClick={() => setObjSel({ kind: 'feature', fId: fSel.id })} style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, color: (iniSel || objSel.kind === 'sinIniciativa') ? 'rgba(20,35,61,0.55)' : acc, fontWeight: 700 }}>{fSel.t}</button></>}
                     {iniSel && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span><span style={{ color: acc, fontWeight: 700 }}>{iniSel.nombre}</span></>}
+                    {objSel.kind === 'sinIniciativa' && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span><span style={{ color: 'rgba(20,35,61,0.6)', fontWeight: 700 }}>Sin iniciativa</span></>}
                     {objSel.kind === 'sinFeature' && <><span style={{ color: 'rgba(20,35,61,0.3)' }}>›</span><span style={{ color: 'rgba(20,35,61,0.6)', fontWeight: 700 }}>Sin feature</span></>}
                   </div>
                 )
@@ -9146,8 +9160,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   detalle = (
                     <div style={bloque}>
                       <div style={{ ...eyebrowSec, marginBottom: 4 }}>Tareas sin feature</div>
-                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)', marginBottom: 10 }}>Cuelgan directo de la épica. Asígnalas a un Feature desde la ficha de la tarea (⤢) cuando sepas dónde van.</div>
+                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)', marginBottom: 10 }}>Cuelgan directo de la épica. Elige su Feature en el selector de cada fila.</div>
                       {listaTareas(sinFeature, featured.color, null, null)}
+                    </div>
+                  )
+                } else if (objSel.kind === 'sinIniciativa' && fSel) {
+                  const sueltas = sueltasDe(fSel.id)
+                  detalle = (
+                    <div style={bloque}>
+                      <div style={{ ...eyebrowSec, marginBottom: 4 }}>Sin iniciativa · {fSel.t}</div>
+                      <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.5)', marginBottom: 10 }}>Trabajo suelto dentro del feature: o lo agrupas en una iniciativa con el selector de cada fila, o se hace y ya.</div>
+                      {listaTareas(sueltas, acc, fSel.id, null)}
                     </div>
                   )
                 } else if (fSel && !iniSel) {
@@ -9298,7 +9321,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                         )
                       })}
                       {sinFeature.length > 0 && <button onClick={() => setObjSel({ kind: 'sinFeature' })} style={objChip(objSel.kind === 'sinFeature')}>Sin feature</button>}
-                      {fSel && (fSel.iniciativas || []).length > 0 && (
+                      {fSel && ((fSel.iniciativas || []).length > 0 || sueltasDe(fSel.id).length > 0) && (
                         <>
                           <span style={{ width: 1, height: 18, background: 'rgba(15,35,64,0.12)' }} />
                           <span style={objEyebrow}>Iniciativa</span>
@@ -9313,6 +9336,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               </button>
                             )
                           })}
+                          {sueltasDe(fSel.id).length > 0 && (
+                            <button aria-pressed={objSel.kind === 'sinIniciativa'} onClick={() => setObjSel(objSel.kind === 'sinIniciativa' ? { kind: 'feature', fId: fSel.id } : { kind: 'sinIniciativa', fId: fSel.id })}
+                              style={{ ...objChip(objSel.kind === 'sinIniciativa'), display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                              Sin iniciativa
+                              <span style={{ font: '800 9.5px var(--font-ui)', opacity: .7 }}>{sueltasDe(fSel.id).length}</span>
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
