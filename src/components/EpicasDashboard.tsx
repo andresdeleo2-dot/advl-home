@@ -779,8 +779,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         if (weekCloseOpen) { setWeekCloseOpen(false); return }
         if (triageOpen) { setTriageOpen(false); return }
         if (dayCloseOpen) { setDayCloseOpen(false); return }
-        // Estos cuatro no cerraban con Escape: en un modal a pantalla completa
-        // la tecla simplemente no hacía nada.
+        // Estos cinco no cerraban con Escape: en un modal a pantalla completa la tecla simplemente
+        // no hacía nada (evita que un Escape para cancelar un "+ Objetivo"/"+ Iniciativa" de adentro
+        // cierre TODA la vista de un jalón, ya que el listener nativo aquí no distingue quién lo pidió).
         if (taskEdit) { setTaskEdit(null); return }
         if (taskView) { setTaskView(null); return }
         if (editing) { setEditing(null); setEditMode(null); return }
@@ -2592,6 +2593,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     ) : (
       <button type="button" onClick={onOpen} style={addBtn}>{placeholder}</button>
     )
+  )
+  /** Objetivos de la ÉPICA (no de un Feature): la tarjeta de siempre + "+ Objetivo de la épica".
+   *  Compartida entre la vista normal (siempre visible) y la vista "Objetivos" a pantalla completa. */
+  const renderEpicaObjetivosSection = () => (
+    <>
+      {featured.kpis.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 11, marginBottom: 12 }}>
+          {featured.kpis.map(k => renderObjetivoCard(k, featured, featured.color,
+            v => setObjetivoCurrent(featured, k, v),
+            patch => patchObjetivo(featured.id, k.id, patch),
+            () => deleteObjetivo(featured.id, k.id)))}
+        </div>
+      )}
+      {renderQuickAddRow('+ Objetivo de la épica', quickObjOwner === 'epica', quickObjName, setQuickObjName,
+        () => { setQuickObjOwner('epica'); setQuickObjName('') },
+        () => { commitQuickObjetivo(featured.id, null, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
+        () => { setQuickObjOwner(null); setQuickObjName('') })}
+    </>
   )
   /** Chips para elegir el Feature de una tarea — misma prominencia que Prioridad/Dificultad,
    *  siempre visible (aunque no haya Features aún) con "+ Nuevo" para crear uno sin salir. */
@@ -8521,19 +8540,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 )
               })()}
 
-              {featured.kpis.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 11, marginBottom: 12 }}>
-                  {featured.kpis.map(k => renderObjetivoCard(k, featured, featured.color,
-                    v => setObjetivoCurrent(featured, k, v),
-                    patch => patchObjetivo(featured.id, k.id, patch),
-                    () => deleteObjetivo(featured.id, k.id)))}
-                </div>
-              )}
               <div style={{ marginBottom: 22 }}>
-                {renderQuickAddRow('+ Objetivo de la épica', quickObjOwner === 'epica', quickObjName, setQuickObjName,
-                  () => { setQuickObjOwner('epica'); setQuickObjName('') },
-                  () => { commitQuickObjetivo(featured.id, null, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
-                  () => { setQuickObjOwner(null); setQuickObjName('') })}
+                {renderEpicaObjetivosSection()}
               </div>
 
               <div role="group" aria-label="Vista de la épica" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 9, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', marginBottom: 14 }}>
@@ -8637,49 +8645,92 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </>)}
 
               {epicTab === 'objetivos' && (
-                <div style={{ marginBottom: 18 }}>
-                  {(featured.features || []).length === 0 ? (
-                    <div style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.55)', padding: '4px 0 14px' }}>Todavía no hay Features en esta épica. Créalos desde &quot;Editar&quot; — ahí puedes agregarles Objetivos e Iniciativas, o hazlo aquí mismo en cuanto exista el primero.</div>
-                  ) : (featured.features || []).map(f => {
-                    const featTasks = featured.tasks.filter(t => t.featureId === f.id)
-                    const featEpica: Epica = { ...featured, tasks: featTasks }
-                    const doneN = featTasks.filter(t => t.status === 'Terminada').length
-                    const fc = f.color || '#5B6B86'
-                    return (
-                      <div key={f.id} style={{ marginBottom: 20, border: '1px solid rgba(15,35,64,0.08)', borderRadius: 14, padding: 14, background: 'rgba(15,35,64,0.015)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                          <span style={{ width: 10, height: 10, borderRadius: 99, background: fc, flexShrink: 0 }} />
-                          <span style={{ font: '700 13px var(--font-ui)', color: '#16365F' }}>{f.t}</span>
-                          {featTasks.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>· {doneN}/{featTasks.length} tareas</span>}
+                <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: '#FBFAF6', overflowY: 'auto' }}>
+                  <div style={{ position: 'sticky', top: 0, zIndex: 2, background: '#FBFAF6', borderBottom: '1px solid rgba(15,35,64,0.08)', padding: '14px 28px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ width: 12, height: 12, borderRadius: 99, background: featured.color, flexShrink: 0 }} />
+                    <h1 className="serif" style={{ fontWeight: 600, fontSize: 22, margin: 0, color: '#10233F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {featured.name} <span style={{ fontSize: 14, fontWeight: 500, color: 'rgba(20,35,61,0.5)' }}>· Objetivos</span>
+                    </h1>
+                    <button onClick={() => setEpicTab('tareas')} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '8px 16px', fontSize: 13, fontWeight: 700, color: '#16365F', flexShrink: 0 }}>✕ Cerrar</button>
+                  </div>
+
+                  <div style={{ maxWidth: 1140, margin: '0 auto', padding: '26px 28px 80px' }}>
+                    <div style={{ font: '700 11px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 10 }}>Objetivos de la épica</div>
+                    <div style={{ marginBottom: 34 }}>{renderEpicaObjetivosSection()}</div>
+
+                    {(featured.features || []).length === 0 ? (
+                      <div style={{ fontSize: 13, color: 'rgba(20,35,61,0.55)' }}>Todavía no hay Features en esta épica. Créalos desde &quot;Editar&quot;.</div>
+                    ) : (featured.features || []).map(f => {
+                      const fc = f.color || '#5B6B86'
+                      const inis = f.iniciativas || []
+                      const featTasksAll = indexed.filter(t => t.featureId === f.id && t.status !== ARCHIVED)
+                      const looseTasks = featTasksAll.filter(t => !t.iniciativaId)
+                      const doneN = featTasksAll.filter(t => t.status === 'Terminada').length
+                      const featEpica: Epica = { ...featured, tasks: featTasksAll }
+                      return (
+                        <div key={f.id} style={{ marginBottom: 36, paddingBottom: 28, borderBottom: '1px solid rgba(15,35,64,0.10)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                            <span style={{ width: 14, height: 14, borderRadius: 99, background: fc, flexShrink: 0 }} />
+                            <h2 className="serif" style={{ fontSize: 21, fontWeight: 600, margin: 0, color: '#16365F' }}>{f.t}</h2>
+                            {featTasksAll.length > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>{doneN}/{featTasksAll.length} tareas</span>}
+                          </div>
+
+                          {(f.kpis || []).length > 0 && (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 8 }}>
+                              {(f.kpis || []).map(k => renderObjetivoCard(k, featEpica, fc,
+                                v => setObjetivoCurrent(featEpica, k, v),
+                                patch => patchObjetivo(featured.id, k.id, patch),
+                                () => deleteObjetivo(featured.id, k.id)))}
+                            </div>
+                          )}
+                          {renderQuickAddRow('+ Objetivo', quickObjOwner === f.id, quickObjName, setQuickObjName,
+                            () => { setQuickObjOwner(f.id); setQuickObjName('') },
+                            () => { commitQuickObjetivo(featured.id, f.id, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
+                            () => { setQuickObjOwner(null); setQuickObjName('') })}
+
+                          <div style={{ marginTop: 22, display: 'flex', flexDirection: 'column', gap: 18 }}>
+                            {inis.map(ini => {
+                              const iniTasks = featTasksAll.filter(t => t.iniciativaId === ini.id)
+                              return (
+                                <div key={ini.id}>
+                                  {renderIniciativaRowEditable(ini, featured.id, f.id, fc)}
+                                  <div style={{ marginLeft: 16, marginTop: 6, paddingLeft: 12, borderLeft: '2px solid rgba(15,35,64,0.08)' }}>
+                                    {iniTasks.length > 0
+                                      ? iniTasks.map(t => renderTaskRow(t))
+                                      : <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', padding: '6px 0' }}>Sin tareas aún.</div>}
+                                    <button onClick={() => openTaskEdit(featured.id, null, { featureId: f.id, iniciativaId: ini.id })}
+                                      style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700, padding: '6px 0 2px' }}>+ Tarea aquí</button>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                          {renderQuickAddRow('+ Iniciativa', quickIniFeature === f.id, quickIniName, setQuickIniName,
+                            () => { setQuickIniFeature(f.id); setQuickIniName('') },
+                            () => { commitQuickIniciativa(featured.id, f.id, quickIniName); setQuickIniFeature(null); setQuickIniName('') },
+                            () => { setQuickIniFeature(null); setQuickIniName('') })}
+
+                          {looseTasks.length > 0 && (
+                            <div style={{ marginTop: 20 }}>
+                              <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', marginBottom: 6 }}>Tareas sin iniciativa</div>
+                              {looseTasks.map(t => renderTaskRow(t))}
+                            </div>
+                          )}
                         </div>
+                      )
+                    })}
 
-                        <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', marginBottom: 8 }}>Objetivos</div>
-                        {(f.kpis || []).length > 0 && (
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 10 }}>
-                            {(f.kpis || []).map(k => renderObjetivoCard(k, featEpica, fc,
-                              v => setObjetivoCurrent(featEpica, k, v),
-                              patch => patchObjetivo(featured.id, k.id, patch),
-                              () => deleteObjetivo(featured.id, k.id)))}
-                          </div>
-                        )}
-                        {renderQuickAddRow('+ Objetivo', quickObjOwner === f.id, quickObjName, setQuickObjName,
-                          () => { setQuickObjOwner(f.id); setQuickObjName('') },
-                          () => { commitQuickObjetivo(featured.id, f.id, quickObjName); setQuickObjOwner(null); setQuickObjName('') },
-                          () => { setQuickObjOwner(null); setQuickObjName('') })}
-
-                        <div style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', margin: '16px 0 8px' }}>Iniciativas</div>
-                        {(f.iniciativas || []).length > 0 && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
-                            {(f.iniciativas || []).map(ini => renderIniciativaRowEditable(ini, featured.id, f.id, fc))}
-                          </div>
-                        )}
-                        {renderQuickAddRow('+ Iniciativa', quickIniFeature === f.id, quickIniName, setQuickIniName,
-                          () => { setQuickIniFeature(f.id); setQuickIniName('') },
-                          () => { commitQuickIniciativa(featured.id, f.id, quickIniName); setQuickIniFeature(null); setQuickIniName('') },
-                          () => { setQuickIniFeature(null); setQuickIniName('') })}
-                      </div>
-                    )
-                  })}
+                    {(() => {
+                      const looseEpicTasks = indexed.filter(t => !t.featureId && t.status !== ARCHIVED)
+                      if (!looseEpicTasks.length) return null
+                      return (
+                        <div>
+                          <div style={{ font: '700 11px/1 var(--font-ui)', letterSpacing: '.16em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', marginBottom: 10 }}>Tareas sin Feature</div>
+                          {looseEpicTasks.map(t => renderTaskRow(t))}
+                        </div>
+                      )
+                    })()}
+                  </div>
                 </div>
               )}
 
