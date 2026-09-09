@@ -7,7 +7,7 @@ import SectionNav from '@/components/SectionNav'
 import type { Epica, EpicaFeature, EpicaMilestone, EpicaTask, Iniciativa } from '@/lib/supabase'
 import {
   ARCHIVED, addDays, addMonths, clickable, doneCount, duracionLabel, dueTone, featureStyle, fmtDue,
-  hexA, iniciativaStyle, normalize, normalizeMilestone, pctOf, plazoLabel, taskCount, todayISO, uid,
+  hexA, iniciativaStyle, normalize, normalizeMilestone, pctOf, plazoLabel, taskCount, taskStyle, todayISO, uid,
   WEEK_EST_MIN, type Duracion,
 } from '@/components/epicas/core'
 
@@ -1208,6 +1208,21 @@ export default function RoadmapClient() {
     )
   }
 
+  // Fila de tarea para las listas "Tareas" del panel (feature e iniciativa) — antes era una línea
+  // de texto plana ("· nombre · vence"); ahora lleva el mismo chip de estado con color que ya usan
+  // Épicas/backlog (taskStyle), para que se sienta la misma pieza aunque aquí sea de solo lectura.
+  const renderTareaRow = (t: EpicaTask) => {
+    const st = taskStyle(t.status)
+    const pz = t.due ? plazoLabel(t.due, today, { hecho: t.status === 'Terminada', verbo: 'seco' }) : null
+    return (
+      <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+        <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 800, borderRadius: 99, padding: '2px 8px', background: st.bg, color: st.c }}>{st.label}</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</span>
+        {pz && <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: pz.c }}>{pz.corto}</span>}
+      </div>
+    )
+  }
+
   const renderPanel = () => {
     if (!sel || !selObj) return null
     const ep = (epicas || []).find(e => e.id === sel.epicaId)
@@ -1311,13 +1326,7 @@ export default function RoadmapClient() {
             <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>
               {tareas.filter(t => t.status === 'Terminada').length} terminadas · {tareas.filter(t => t.status !== 'Terminada').length} pendientes
             </div>
-            {tareas.slice(0, 8).map(t => (
-              <div key={t.id} style={{ fontSize: 12, color: 'rgba(20,35,61,0.62)', marginTop: 5, display: 'flex', gap: 6 }}>
-                <span aria-hidden>{t.status === 'Terminada' ? '✓' : '·'}</span>
-                <span style={{ flex: 1 }}>{t.t}</span>
-                {t.due && <span style={{ color: plazoLabel(t.due, today, { hecho: t.status === 'Terminada' }).c }}>{plazoLabel(t.due, today, { hecho: t.status === 'Terminada', verbo: 'seco' }).corto}</span>}
-              </div>
-            ))}
+            <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow)}</div>
             {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
             <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>
           </>
@@ -1372,13 +1381,7 @@ export default function RoadmapClient() {
                 <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>
                   {tareas.filter(t => t.status === 'Terminada').length} terminadas · {tareas.filter(t => t.status !== 'Terminada').length} pendientes
                 </div>
-                {tareas.slice(0, 8).map(t => (
-                  <div key={t.id} style={{ fontSize: 12, color: 'rgba(20,35,61,0.62)', marginTop: 5, display: 'flex', gap: 6 }}>
-                    <span aria-hidden>{t.status === 'Terminada' ? '✓' : '·'}</span>
-                    <span style={{ flex: 1 }}>{t.t}</span>
-                    {t.due && <span style={{ color: plazoLabel(t.due, today, { hecho: t.status === 'Terminada' }).c }}>{plazoLabel(t.due, today, { hecho: t.status === 'Terminada', verbo: 'seco' }).corto}</span>}
-                  </div>
-                ))}
+                <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow)}</div>
                 {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
               </>)}
             <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>

@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v72-boton-volver-iniciativas */
+/* BUILD-MARKER: v73-tareas-con-chip-estado */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */
