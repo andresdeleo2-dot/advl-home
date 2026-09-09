@@ -1212,8 +1212,27 @@ export default function RoadmapClient() {
     if (!sel || !selObj) return null
     const ep = (epicas || []).find(e => e.id === sel.epicaId)
     const feat = sel.featureId ? (ep?.features || []).find(f => f.id === sel.featureId) : undefined
-    const migas = [ep?.name, feat?.t].filter(Boolean).join(' › ')
     const cierra = () => setSel(null)
+    // Migas de pan CLICKEABLES: antes eran texto plano — para volver a las otras iniciativas de un
+    // feature (o a las otras features de una épica) había que cerrar el panel entero y volver a
+    // tocar la pieza. Ninguno de los dos segmentos es el nivel actual (ese ya se ve abajo, en el
+    // título editable), así que ambos son ancestros y ambos navegan.
+    const migas = (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+        {ep && (
+          <button onClick={() => setSel({ kind: 'epica', id: ep.id, epicaId: ep.id })} title={`Volver a ${ep.name}`}
+            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, font: 'inherit', color: 'inherit', textDecorationLine: 'underline', textDecorationColor: 'transparent', transition: 'text-decoration-color .12s' }}
+            onMouseEnter={e => { e.currentTarget.style.textDecorationColor = 'currentColor' }} onMouseLeave={e => { e.currentTarget.style.textDecorationColor = 'transparent' }}>{ep.name}</button>
+        )}
+        {feat && <>
+          <span aria-hidden style={{ opacity: 0.5 }}>›</span>
+          <button onClick={() => setSel({ kind: 'feature', id: feat.id, epicaId: sel.epicaId })} title={`Volver a ${feat.t}`}
+            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, font: 'inherit', color: 'inherit', textDecorationLine: 'underline', textDecorationColor: 'transparent', transition: 'text-decoration-color .12s' }}
+            onMouseEnter={e => { e.currentTarget.style.textDecorationColor = 'currentColor' }} onMouseLeave={e => { e.currentTarget.style.textDecorationColor = 'transparent' }}>{feat.t}</button>
+        </>}
+        {!ep && 'Roadmap'}
+      </span>
+    )
 
     const cuerpo = () => {
       if (sel.kind === 'epica') {
@@ -1308,6 +1327,9 @@ export default function RoadmapClient() {
         const i = selObj as Iniciativa
         const hermanas = (feat?.iniciativas || []).filter(x => x.id !== i.id)
         const dep = tablero.riesgos.dependencias.filter(r => r.id === i.id)
+        // Antes esta pieza no mostraba NADA de trabajo real — para ver qué tareas trae había que
+        // salir del todo a Épicas. Mismo patrón que la lista de "Tareas" del feature, de arriba.
+        const tareas = (ep?.tasks || []).filter(t => t.iniciativaId === i.id && t.status !== ARCHIVED)
         return (
           <>
             <input key={i.id} defaultValue={i.nombre} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== i.nombre) escribir(sel, { nombre: v }) }}
@@ -1335,6 +1357,24 @@ export default function RoadmapClient() {
               </select>
             </label>
             {dep.map(r => <div key={r.key} style={{ ...banner, marginTop: 10, marginBottom: 0 }}>⛓ {r.detalle}</div>)}
+
+            <div style={{ ...eb, marginTop: 20, marginBottom: 6 }}>Tareas · {tareas.length}</div>
+            {tareas.length === 0
+              ? <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Sin tareas todavía — se agregan desde Épicas.</div>
+              : (<>
+                <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>
+                  {tareas.filter(t => t.status === 'Terminada').length} terminadas · {tareas.filter(t => t.status !== 'Terminada').length} pendientes
+                </div>
+                {tareas.slice(0, 8).map(t => (
+                  <div key={t.id} style={{ fontSize: 12, color: 'rgba(20,35,61,0.62)', marginTop: 5, display: 'flex', gap: 6 }}>
+                    <span aria-hidden>{t.status === 'Terminada' ? '✓' : '·'}</span>
+                    <span style={{ flex: 1 }}>{t.t}</span>
+                    {t.due && <span style={{ color: plazoLabel(t.due, today, { hecho: t.status === 'Terminada' }).c }}>{plazoLabel(t.due, today, { hecho: t.status === 'Terminada', verbo: 'seco' }).corto}</span>}
+                  </div>
+                ))}
+                {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
+              </>)}
+            <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>
           </>
         )
       }
@@ -1394,7 +1434,7 @@ export default function RoadmapClient() {
           }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={eb}>{migas || 'Roadmap'}</div>
+              <div style={eb}>{migas}</div>
             </div>
             <button onClick={cierra} aria-label="Cerrar" style={{ ...ghostBtn, padding: '4px 9px', fontSize: 13 }}>✕</button>
           </div>
