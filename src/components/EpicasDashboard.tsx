@@ -6313,11 +6313,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? (
-              // Colapsable igual que el backlog — "Todas las actividades" puede ser una lista larga
-              // y esta pestaña (a diferencia del backlog) no comparte página con nada más que ver.
+            return detalle ? (
+              // Colapsable igual que el backlog — MISMA estructura: una tarjeta "glass" con un
+              // encabezado (cuenta + título + flecha) y TODO lo demás (filtros y la lista) adentro,
+              // plegado junto. Antes sólo la lista vivía adentro del colapsable y los filtros se
+              // quedaban siempre a la vista, así que no se sentía "una sola pieza" como el backlog.
               <div id="detalle-actividades" className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px' }}>
                   <button onClick={() => setDetalleOpen(v => !v)} aria-expanded={detalleOpen} aria-controls="detalle-actividades-body"
                     style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, textAlign: 'left' }}>
                     <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{enfRows.length}</span>
@@ -6326,9 +6328,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <button onClick={() => setDetalleOpen(v => !v)} aria-label={detalleOpen ? 'Plegar' : 'Desplegar'}
                     style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 4, fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: detalleOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</button>
                 </div>
-                {detalleOpen && <div id="detalle-actividades-body" style={{ padding: '0 15px 15px' }}>{renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) })}</div>}
+                {detalleOpen && (
+                  <div id="detalle-actividades-body" style={{ padding: '0 17px 17px' }}>
+                    {renderBoardFilters(enfEpics, effEnf)}
+                    {rangeChips}
+                    {renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) })}
+                  </div>
+                )}
               </div>
-            ) : renderCalendarPanel(enfRows)}</>
+            ) : <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 

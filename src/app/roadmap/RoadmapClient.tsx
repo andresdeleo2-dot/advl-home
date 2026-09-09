@@ -1217,18 +1217,18 @@ export default function RoadmapClient() {
     // feature (o a las otras features de una épica) había que cerrar el panel entero y volver a
     // tocar la pieza. Ninguno de los dos segmentos es el nivel actual (ese ya se ve abajo, en el
     // título editable), así que ambos son ancestros y ambos navegan.
+    // Color + flecha SIEMPRE visibles (no sólo al pasar el mouse) — un botón que se ve idéntico
+    // a texto plano hasta que lo tocas no se percibe como clickeable; con "‹" + el color dorado
+    // de acción (mismo que "Abrir en Épicas ↗") queda claro de un vistazo que se puede navegar.
+    const migaBtn: CSSProperties = { cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, font: 'inherit', fontWeight: 800, color: '#A87A2C' }
     const migas = (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
         {ep && (
-          <button onClick={() => setSel({ kind: 'epica', id: ep.id, epicaId: ep.id })} title={`Volver a ${ep.name}`}
-            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, font: 'inherit', color: 'inherit', textDecorationLine: 'underline', textDecorationColor: 'transparent', transition: 'text-decoration-color .12s' }}
-            onMouseEnter={e => { e.currentTarget.style.textDecorationColor = 'currentColor' }} onMouseLeave={e => { e.currentTarget.style.textDecorationColor = 'transparent' }}>{ep.name}</button>
+          <button onClick={() => setSel({ kind: 'epica', id: ep.id, epicaId: ep.id })} title={`Volver a ${ep.name}`} style={migaBtn}>‹ {ep.name}</button>
         )}
         {feat && <>
           <span aria-hidden style={{ opacity: 0.5 }}>›</span>
-          <button onClick={() => setSel({ kind: 'feature', id: feat.id, epicaId: sel.epicaId })} title={`Volver a ${feat.t}`}
-            style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, font: 'inherit', color: 'inherit', textDecorationLine: 'underline', textDecorationColor: 'transparent', transition: 'text-decoration-color .12s' }}
-            onMouseEnter={e => { e.currentTarget.style.textDecorationColor = 'currentColor' }} onMouseLeave={e => { e.currentTarget.style.textDecorationColor = 'transparent' }}>{feat.t}</button>
+          <button onClick={() => setSel({ kind: 'feature', id: feat.id, epicaId: sel.epicaId })} title={`Volver a ${feat.t}`} style={migaBtn}>{feat.t}</button>
         </>}
         {!ep && 'Roadmap'}
       </span>
