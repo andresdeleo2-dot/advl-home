@@ -496,6 +496,9 @@ export default function RoadmapClient() {
   // medio teclear). Sin esto el cambio se quedaba aplicado en local para siempre y al recargar
   // «volvía solo» sin explicación.
   const [sinGuardar, setSinGuardar] = useState<Set<string>>(new Set())
+  // Popup ligero de tarea (título/estado/vence editables) — antes las tareas de Feature/Iniciativa
+  // eran de solo lectura aquí; para todo lo demás (subtareas, nota…) sigue mandando a Épicas.
+  const [tareaPeek, setTareaPeek] = useState<{ eId: string; tid: string } | null>(null)
 
   const epicasRef = useRef<Epica[] | null>(null)
   const selRef = useRef<Sel | null>(null)
@@ -697,6 +700,26 @@ export default function RoadmapClient() {
     const revert = applyLocal({ ...t, data: final })
     patchRemoto(urlDe(t), final, `${t.kind}:${t.id}`, revert, exito)
   }, [gates, applyLocal, patchRemoto, showToast, fusionarPendientes])
+
+  /** Edita UNA tarea desde el popup de Roadmap — camino aparte de escribir()/Sel (que es sólo para
+   *  épica/feature/iniciativa/hito): las tareas viven en /api/tareas/sync, que espera el objeto
+   *  COMPLETO (no un patch), así que se manda t con el campo cambiado encima. El revert es
+   *  quirúrgico (sólo ESTA tarea vuelve a su valor de antes) — no toda la épica — para no pisar
+   *  otro cambio optimista a la misma épica que haya terminado bien mientras éste fallaba. */
+  const patchTarea = useCallback((epicaId: string, taskId: string, patch: Partial<EpicaTask>) => {
+    const cur = epicasRef.current?.find(e => e.id === epicaId)
+    const prevTask = cur?.tasks?.find(x => x.id === taskId)
+    if (!cur || !prevTask) return
+    const nextTask: EpicaTask = { ...prevTask, ...patch }
+    setEpicas(list => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id === taskId ? nextTask : x)) })))
+    const revertir = () => {
+      setEpicas(list => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id === taskId ? prevTask : x)) })))
+      showToast('No se pudo guardar la tarea', { err: true })
+    }
+    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [nextTask] }) })
+      .then(r => r.json()).then(j => { if (!j?.ok) revertir() })
+      .catch(revertir)
+  }, [showToast])
 
   const fechasDe = useCallback((t: Sel): { desde: string; hasta: string } => {
     const o = buscar(epicasRef.current, t)
@@ -1209,17 +1232,55 @@ export default function RoadmapClient() {
   }
 
   // Fila de tarea para las listas "Tareas" del panel (feature e iniciativa) — antes era una línea
-  // de texto plana ("· nombre · vence"); ahora lleva el mismo chip de estado con color que ya usan
-  // Épicas/backlog (taskStyle), para que se sienta la misma pieza aunque aquí sea de solo lectura.
-  const renderTareaRow = (t: EpicaTask) => {
+  // de texto plana Y de solo lectura; ahora lleva el mismo chip de estado con color que ya usan
+  // Épicas/backlog, y tocarla abre un popup editable (renderTareaPeek) sin salir de Roadmap.
+  const renderTareaRow = (epicaId: string) => (t: EpicaTask) => {
     const st = taskStyle(t.status)
     const pz = t.due ? plazoLabel(t.due, today, { hecho: t.status === 'Terminada', verbo: 'seco' }) : null
     return (
-      <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
+      <button key={t.id} onClick={() => setTareaPeek({ eId: epicaId, tid: t.id! })} title={`Abrir “${t.t}”`}
+        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: '6px 0', border: 'none', borderBottom: '1px solid rgba(15,35,64,0.06)', background: 'transparent', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
         <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 800, borderRadius: 99, padding: '2px 8px', background: st.bg, color: st.c }}>{st.label}</span>
         <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none' }}>{t.t}</span>
         {pz && <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: pz.c }}>{pz.corto}</span>}
-      </div>
+      </button>
+    )
+  }
+
+  /** Popup ligero de UNA tarea: título, estado y fecha de entrega editables ahí mismo — para todo
+   *  lo demás (subtareas, nota, estimado…) manda a Épicas, no intenta ser el editor completo. */
+  const renderTareaPeek = () => {
+    if (!tareaPeek) return null
+    const ep = (epicas || []).find(e => e.id === tareaPeek.eId)
+    const t = ep?.tasks?.find(x => x.id === tareaPeek.tid)
+    if (!ep || !t) return null
+    const cerrar = () => setTareaPeek(null)
+    return createPortal(
+      <>
+        <div onClick={cerrar} className="rm-noprint" style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,64,0.4)', zIndex: 98, backdropFilter: 'blur(2px)' }} />
+        <div role="dialog" aria-modal="true" aria-label="Detalle de la tarea" onClick={ev => ev.stopPropagation()} className="rm-noprint"
+          style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 99, width: 'min(440px, calc(100vw - 32px))', maxHeight: 'calc(100dvh - 48px)', overflowY: 'auto', background: '#FBFAF6', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', padding: '20px 22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(20,35,61,0.55)' }}><span aria-hidden style={{ width: 8, height: 8, borderRadius: 99, background: ep.color, flexShrink: 0 }} />{ep.name}</span>
+            <button onClick={cerrar} aria-label="Cerrar" style={{ ...ghostBtn, padding: '4px 9px', fontSize: 13 }}>✕</button>
+          </div>
+          <input key={t.id} defaultValue={t.t} aria-label="Nombre de la tarea"
+            onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== t.t) patchTarea(ep.id, t.id!, { t: v }) }}
+            style={{ ...field, width: '100%', fontSize: 16, fontWeight: 700, marginTop: 10 }} />
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 10 }}>
+            {(['Por hacer', 'En curso', 'Esperando', 'Terminada'] as const).map(s => {
+              const st = taskStyle(s), on = t.status === s
+              return <button key={s} onClick={() => patchTarea(ep.id, t.id!, { status: s })}
+                style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: on ? '#fff' : st.c, background: on ? st.c : st.bg, border: `1px solid ${on ? st.c : 'transparent'}` }}>{st.label}</button>
+            })}
+          </div>
+          <label style={{ display: 'block', marginTop: 16 }}>
+            <span style={eb}>Vence</span>
+            <input type="date" value={t.due || ''} onChange={ev => patchTarea(ep.id, t.id!, { due: ev.target.value })} style={{ ...field, display: 'block', marginTop: 4 }} />
+          </label>
+          <a href={`/epicas?e=${ep.id}&t=${t.id}`} style={{ display: 'inline-block', marginTop: 18, fontSize: 12.5, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>Editar todo en Épicas ↗</a>
+        </div>
+      </>, document.body
     )
   }
 
@@ -1326,7 +1387,7 @@ export default function RoadmapClient() {
             <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>
               {tareas.filter(t => t.status === 'Terminada').length} terminadas · {tareas.filter(t => t.status !== 'Terminada').length} pendientes
             </div>
-            <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow)}</div>
+            <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow(sel.epicaId))}</div>
             {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
             <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>
           </>
@@ -1381,7 +1442,7 @@ export default function RoadmapClient() {
                 <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>
                   {tareas.filter(t => t.status === 'Terminada').length} terminadas · {tareas.filter(t => t.status !== 'Terminada').length} pendientes
                 </div>
-                <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow)}</div>
+                <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow(sel.epicaId))}</div>
                 {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
               </>)}
             <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>
@@ -1664,6 +1725,7 @@ export default function RoadmapClient() {
       </main>
 
       {mounted && sel && !printMode && renderPanel()}
+      {mounted && !printMode && renderTareaPeek()}
 
       {mounted && toast && createPortal(
         <div className="ep-abovenav rm-noprint" role="status" style={{
