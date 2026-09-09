@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   // Columnas REALES de `tareas` son `titulo`/`estado` (ver lib/tareas.ts) — `t`/`status` no existen
   // y esta consulta fallaba con "column does not exist": el cron nunca llegó a mandar nada.
   const { data: due, error } = await supabase.from('tareas')
-    .select('id, titulo, remind_at, estado')
+    .select('id, titulo, remind_at, estado, epica_id')
     .not('remind_at', 'is', null)
     .lte('remind_at', to)
     .gte('remind_at', from)
@@ -48,7 +48,11 @@ export async function GET(req: NextRequest) {
   if (tasks.length) {
     const deadEndpoints = new Set<string>()
     const results = await Promise.allSettled(tasks.flatMap(task => {
-      const payload = JSON.stringify({ title: '⏰ Recordatorio', body: task.titulo || 'Tienes un recordatorio', tag: 'remind-' + task.id, url: '/epicas' })
+      // Antes siempre mandaba a /epicas a secas: con la app cerrada, tocar la notificación abría
+      // la lista general y había que rebuscar la tarea a mano. ?e=&t= es el mismo deep-link que ya
+      // usa CommandPalette (EpicasDashboard.tsx lo lee al montar y abre la tarea directo).
+      const url = task.epica_id ? `/epicas?e=${task.epica_id}&t=${task.id}` : '/epicas'
+      const payload = JSON.stringify({ title: '⏰ Recordatorio', body: task.titulo || 'Tienes un recordatorio', tag: 'remind-' + task.id, url })
       return subs.map(s => webpush.sendNotification(s.sub as unknown as webpush.PushSubscription, payload)
         .then(() => ({ taskId: task.id as string, ok: true as const }))
         .catch((err: unknown) => {
@@ -79,7 +83,7 @@ export async function GET(req: NextRequest) {
   let staleSent = 0, staleNudged = 0
   const nudgeCutoff = new Date(now - WAIT_NUDGE_DAYS * 24 * 60 * 60 * 1000).toISOString()
   const { data: waiting, error: waitErr } = await supabase.from('tareas')
-    .select('id, titulo, waiting_since, waiting_nudged_at')
+    .select('id, titulo, waiting_since, waiting_nudged_at, epica_id')
     .eq('estado', 'Esperando')
     .not('waiting_since', 'is', null)
     .lte('waiting_since', nudgeCutoff)
@@ -89,7 +93,8 @@ export async function GET(req: NextRequest) {
     if (stale.length && subs.length) {
       const nudgedByTask = new Map<string, number>()
       const staleResults = await Promise.allSettled(stale.flatMap(task => {
-        const payload = JSON.stringify({ title: '⏳ Sigues esperando', body: `"${task.titulo || 'Una tarea'}" lleva varios días en espera`, tag: 'wait-' + task.id, url: '/epicas' })
+        const url = task.epica_id ? `/epicas?e=${task.epica_id}&t=${task.id}` : '/epicas'
+        const payload = JSON.stringify({ title: '⏳ Sigues esperando', body: `"${task.titulo || 'Una tarea'}" lleva varios días en espera`, tag: 'wait-' + task.id, url })
         return subs.map(s => webpush.sendNotification(s.sub as unknown as webpush.PushSubscription, payload)
           .then(() => ({ taskId: task.id as string, ok: true as const }))
           .catch(() => ({ taskId: task.id as string, ok: false as const })))

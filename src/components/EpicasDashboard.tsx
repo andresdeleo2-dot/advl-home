@@ -520,6 +520,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance', 'estancada', 'multidia', 'arrastre'].includes(f)) setPlanFilter(f as typeof planFilter)
       const ep = q.get('ep'); if (ep) setWeekEpica(ep)
       const df = q.get('df'); if (df && ['todas', 'facil', 'media', 'dificil'].includes(df)) setWeekDif(df as typeof weekDif)
+      // et/os: pestaña Objetivos (pantalla completa) + en qué nodo estaba parado. Se leen
+      // juntos porque os sin et==='obj' no significa nada (la pestaña Tareas no usa objSel).
+      const et = q.get('et')
+      if (et === 'obj') {
+        setEpicTab('objetivos')
+        const os = q.get('os')
+        const parts = os ? os.split(':') : []
+        if (parts[0] === 'f' && parts[1]) setObjSel({ kind: 'feature', fId: parts[1] })
+        else if (parts[0] === 'i' && parts[1] && parts[2]) setObjSel({ kind: 'iniciativa', fId: parts[1], iniId: parts[2] })
+        else if (parts[0] === 'si' && parts[1]) setObjSel({ kind: 'sinIniciativa', fId: parts[1] })
+        else if (parts[0] === 'sf') setObjSel({ kind: 'sinFeature' })
+        else setObjSel({ kind: 'epica' })
+      }
     }
     applyFromUrl()
     urlReady.current = true
@@ -535,9 +548,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (planFilter !== 'todas') q.set('f', planFilter)
     if (weekEpica !== 'todas') q.set('ep', weekEpica)
     if (weekDif !== 'todas') q.set('df', weekDif)
+    if (epicTab === 'objetivos') {
+      q.set('et', 'obj')
+      const os = objSel.kind === 'feature' ? `f:${objSel.fId}`
+        : objSel.kind === 'iniciativa' ? `i:${objSel.fId}:${objSel.iniId}`
+        : objSel.kind === 'sinIniciativa' ? `si:${objSel.fId}`
+        : objSel.kind === 'sinFeature' ? 'sf'
+        : ''
+      if (os) q.set('os', os)
+    }
     const next = `${window.location.pathname}?${q.toString()}`
     if (next !== window.location.pathname + window.location.search) window.history.replaceState(null, '', next)
-  }, [planMode, viewDate, featuredId, planFilter, weekEpica, weekDif])
+  }, [planMode, viewDate, featuredId, planFilter, weekEpica, weekDif, epicTab, objSel])
 
   // El día se recalcula solo: una pestaña abierta pasada la medianoche seguía
   // mostrando "Hoy" del día anterior y no recalculaba las arrastradas.
@@ -801,17 +823,32 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         if (weekCloseOpen) { setWeekCloseOpen(false); return }
         if (triageOpen) { setTriageOpen(false); return }
         if (dayCloseOpen) { setDayCloseOpen(false); return }
-        // Estos cinco no cerraban con Escape: en un modal a pantalla completa la tecla simplemente
-        // no hacía nada (evita que un Escape para cancelar un "+ Objetivo"/"+ Iniciativa" de adentro
+        // El editor completo SÍ cierra con Escape, pero pasando por closeTaskEdit() — igual que la X,
+        // el fondo o "Cancelar" — para que si hay cambios sin guardar se cacheen como borrador
+        // ("Borrador restaurado ↩" la próxima vez). Antes hacía setTaskEdit(null) directo: Escape,
+        // el reflejo que el resto de la app entrena todo el tiempo, era la ÚNICA forma de perder
+        // cambios en silencio.
+        if (taskEdit) { closeTaskEdit(); return }
+        // La vista Objetivos SÍ cierra con Escape (a diferencia de taskView/editing abajo): sus
+        // inputs de adentro (título, "+ Objetivo"/"+ Iniciativa"/"+ Tarea") ya cortan la propagación
+        // en su propio Escape, así que si este handler global llega a enterarse es porque no había
+        // nada más superficial que cancelar y el usuario quiere salir de la pantalla completa.
+        if (epicTab === 'objetivos') { setEpicTab('tareas'); setObjSel({ kind: 'epica' }); return }
+        // Estos no cerraban con Escape: en un modal a pantalla completa la tecla simplemente no
+        // hacía nada (evita que un Escape para cancelar un "+ Objetivo"/"+ Iniciativa" de adentro
         // cierre TODA la vista de un jalón, ya que el listener nativo aquí no distingue quién lo pidió).
-        if (taskEdit) { setTaskEdit(null); return }
         if (taskView) { setTaskView(null); return }
         if (editing) { setEditing(null); setEditMode(null); return }
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, triageOpen, dayCloseOpen])
+    // taskDraft/taskEditTarget entran aquí SÓLO por closeTaskEdit(): sin ellos, el handler de Escape
+    // quedaría cerrado sobre el borrador de cuando se abrió el editor (taskEdit no cambia mientras
+    // tecleas) y compararía contra ESE, no contra lo más reciente — perdiendo la edición en curso
+    // igual que el bug que esto arregla, sólo que en silencio. Resuscribir el listener por cada
+    // tecla es barato (addEventListener/removeEventListener no hacen nada pesado).
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, triageOpen, dayCloseOpen, taskDraft, taskEditTarget, epicTab])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -2316,14 +2353,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  ambos) contra /api/objetivos/[id]. Ya NO se manda el arreglo completo (ver
    *  sql/epicas-19-objetivos.sql). Optimista: actualiza el estado local de inmediato; si el PATCH
    *  falla, avisa (no revierte solo — mismo criterio que setTaskFeature/setTaskPersona). */
+  /** Revierte UNA épica a su snapshot de antes del cambio optimista (capturado por quien llama,
+   *  justo antes de mutar) y avisa. patchEpic ya hace esto para tareas/campos de épica; los
+   *  escritores más chicos (objetivo/feature/iniciativa) lo compartían por un toast — sin revertir,
+   *  así que un PATCH que fallaba dejaba la pantalla mintiendo hasta el siguiente refresh. */
+  const revertYAvisa = (epicaId: string, prevEpic: Epica | undefined, msg: string) => {
+    if (prevEpic) setEpics(list => list.map(e => (e.id === epicaId ? prevEpic : e)))
+    showToast(msg, true)
+  }
   const patchObjetivo = (epicaId: string, objetivoId: string, patch: Partial<EpicaMilestone>) => {
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     const applyTo = (arr: EpicaMilestone[]) => arr.map(m => (m.id === objetivoId ? { ...m, ...patch } : m))
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, kpis: applyTo(e.kpis || []), features: (e.features || []).map(f => ({ ...f, kpis: applyTo(f.kpis || []) })),
     })))
     fetch(`/api/objetivos/${objetivoId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo guardar el objetivo', true) })
-      .catch(() => showToast('No se pudo guardar el objetivo', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo guardar el objetivo') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo guardar el objetivo'))
   }
   /** Cambia el valor actual de CUALQUIER objetivo (de la épica o de un Feature — `scopeEpica` sólo
    *  importa para milestoneDone/Progress si se mide "con tareas cerradas"). Reemplaza a la vieja
@@ -2412,11 +2458,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setFeatQuickAdd(false); setFeatQuickName('')
     if (!name) return
     const e = epics.find(x => x.id === epicaId); if (!e) return
+    const prevEpic = epicsRef.current.find(x => x.id === epicaId)
     const nf: EpicaFeature = { id: uid(), t: name, color: FEATURE_COLORS[(e.features || []).length % FEATURE_COLORS.length] }
     setEpics(list => list.map(x => (x.id === epicaId ? { ...x, features: [...(x.features || []), nf] } : x)))
     fetch('/api/features', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: nf.id, epicaId, t: nf.t, color: nf.color }) })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo crear el feature', true) })
-      .catch(() => showToast('No se pudo crear el feature', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo crear el feature') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo crear el feature'))
     onPick(nf.id)
   }
   /** Crea un objetivo (métrica, por defecto — se puede pasar a hito con el toggle de la tarjeta)
@@ -2425,6 +2472,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const commitQuickObjetivo = (epicaId: string, featureId: string | null, name: string, tipo: 'metrica' | 'hito' = 'metrica') => {
     const t = name.trim()
     if (!t) return
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     const nk: EpicaMilestone = { id: uid(), t, tipo, ...(tipo === 'hito' ? { hitoEstado: 'pendiente' as const } : {}) }
     setEpics(list => list.map(e => {
       if (e.id !== epicaId) return e
@@ -2432,19 +2480,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       return { ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, kpis: [...(f.kpis || []), nk] } : f)) }
     }))
     fetch('/api/objetivos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: nk.id, epicaId: featureId ? undefined : epicaId, featureId: featureId || undefined, t, tipo, hitoEstado: tipo === 'hito' ? 'pendiente' : undefined }) })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo crear el objetivo', true) })
-      .catch(() => showToast('No se pudo crear el objetivo', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo crear el objetivo') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo crear el objetivo'))
   }
   /** Actualiza UN Feature (nombre, color, estado, fechas de roadmap) — no existía: hasta ahora los
    *  features sólo se editaban desde el draft del editor de épica o se creaban con commitQuickFeature.
    *  OJO: /api/features/[id] espera nombres de CLIENTE (roadmapStart/roadmapEnd), no los de la columna. */
   const patchFeature = (epicaId: string, featureId: string, patch: Partial<EpicaFeature>) => {
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, ...patch } : f)),
     })))
     fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo guardar el feature', true) })
-      .catch(() => showToast('No se pudo guardar el feature', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo guardar el feature') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo guardar el feature'))
   }
   /** Alta de tarea SIN abrir el modal, ya colgada de su Feature/Iniciativa. Va por patchEpic, que
    *  diffea contra el estado previo y manda sólo el alta a /api/tareas/sync. Los campos gateados
@@ -2461,43 +2510,47 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   /** Elimina un objetivo (de la épica o de cualquiera de sus features — se busca en ambos lados). */
   const deleteObjetivo = (epicaId: string, objetivoId: string) => {
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e,
       kpis: (e.kpis || []).filter(k => k.id !== objetivoId),
       features: (e.features || []).map(f => ({ ...f, kpis: (f.kpis || []).filter(k => k.id !== objetivoId) })),
     })))
     fetch(`/api/objetivos/${objetivoId}`, { method: 'DELETE' })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo eliminar el objetivo', true) })
-      .catch(() => showToast('No se pudo eliminar el objetivo', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo eliminar el objetivo') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo eliminar el objetivo'))
   }
   /** Crea una Iniciativa dentro de un Feature directo desde "Objetivos", sin el editor completo. */
   const commitQuickIniciativa = (epicaId: string, featureId: string, name: string) => {
     const nombre = name.trim()
     if (!nombre) return
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     const ni: Iniciativa = { id: uid(), featureId, epicaId, nombre, estado: 'pendiente' }
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, iniciativas: [...(f.iniciativas || []), ni] } : f)),
     })))
     fetch('/api/iniciativas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: ni.id, featureId, epicaId, nombre }) })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo crear la iniciativa', true) })
-      .catch(() => showToast('No se pudo crear la iniciativa', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo crear la iniciativa') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo crear la iniciativa'))
   }
   /** Actualiza UNA Iniciativa por su id — mismo patrón optimista que patchObjetivo. */
   const patchIniciativa = (epicaId: string, featureId: string, iniciativaId: string, patch: Partial<Iniciativa>) => {
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, features: (e.features || []).map(f => (f.id !== featureId ? f : { ...f, iniciativas: (f.iniciativas || []).map(i => (i.id === iniciativaId ? { ...i, ...patch } : i)) })),
     })))
     fetch(`/api/iniciativas/${iniciativaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo guardar la iniciativa', true) })
-      .catch(() => showToast('No se pudo guardar la iniciativa', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo guardar la iniciativa') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo guardar la iniciativa'))
   }
   const deleteIniciativa = (epicaId: string, featureId: string, iniciativaId: string) => {
+    const prevEpic = epicsRef.current.find(e => e.id === epicaId)
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, features: (e.features || []).map(f => (f.id !== featureId ? f : { ...f, iniciativas: (f.iniciativas || []).filter(i => i.id !== iniciativaId) })),
     })))
     fetch(`/api/iniciativas/${iniciativaId}`, { method: 'DELETE' })
-      .then(r => r.json()).then(j => { if (!j.ok) showToast('No se pudo eliminar la iniciativa', true) })
-      .catch(() => showToast('No se pudo eliminar la iniciativa', true))
+      .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, prevEpic, 'No se pudo eliminar la iniciativa') })
+      .catch(() => revertYAvisa(epicaId, prevEpic, 'No se pudo eliminar la iniciativa'))
   }
   /* ─── Plazos y duraciones a la vista ────────────────────────────
      Toda fecha de la app debe decir, al lado, CUÁNTO falta o CUÁNTO dura — en días,
@@ -2570,7 +2623,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const titulo = full
       ? (
         <input defaultValue={k.t} key={`obj:${k.id}:t`} aria-label="Nombre del objetivo"
-          onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { (ev.target as HTMLInputElement).value = k.t; (ev.target as HTMLInputElement).blur() } }}
+          onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { ev.stopPropagation(); (ev.target as HTMLInputElement).value = k.t; (ev.target as HTMLInputElement).blur() } }}
           onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = k.t; return } if (v !== k.t) onPatch({ t: v }) }}
           style={{ flex: 1, minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '3px 6px', font: '700 12.5px var(--font-ui)', color: '#16365F', background: 'transparent', outline: 'none' }} />
       )
@@ -2801,7 +2854,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       }}>
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
           <input defaultValue={t.t} key={`task:${t.id}:t`} disabled={bloqueada} aria-label="Título de la tarea"
-            onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { (ev.target as HTMLInputElement).value = t.t; (ev.target as HTMLInputElement).blur() } }}
+            onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur(); if (ev.key === 'Escape') { ev.stopPropagation(); (ev.target as HTMLInputElement).value = t.t; (ev.target as HTMLInputElement).blur() } }}
             onBlur={ev => { const v = ev.target.value.trim(); if (!v) { ev.target.value = t.t; return } if (v !== t.t) setTaskTitle(featured, t._i, v) }}
             style={{ minWidth: 0, border: '1px solid transparent', borderRadius: 7, padding: '4px 6px', fontSize: 13, fontWeight: 600, background: 'transparent', outline: 'none', color: done ? 'rgba(20,35,61,0.45)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }} />
           {asignar === 'feature' && (featured.features || []).length > 0 && (
@@ -2858,7 +2911,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <input value={activo ? objQuickTaskName : ''} onFocus={() => { setObjQuickTask(key); setObjQuickTaskName('') }}
           onChange={ev => setObjQuickTaskName(ev.target.value)}
           onKeyDown={ev => {
-            if (ev.key === 'Escape') { setObjQuickTask(null); setObjQuickTaskName('') }
+            if (ev.key === 'Escape') { ev.stopPropagation(); setObjQuickTask(null); setObjQuickTaskName('') }
             if (ev.key !== 'Enter') return
             const v = objQuickTaskName.trim(); if (!v) return
             addTaskInline(fId, iniId, v)
@@ -2874,7 +2927,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     active ? (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
         <input autoFocus value={name} onChange={ev => setName(ev.target.value)}
-          onKeyDown={ev => { if (ev.key === 'Enter') onCommit(); if (ev.key === 'Escape') onCancel() }}
+          onKeyDown={ev => { if (ev.key === 'Enter') onCommit(); if (ev.key === 'Escape') { ev.stopPropagation(); onCancel() } }}
           placeholder={placeholder} style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 160 }} />
         <button type="button" title="Crear" onClick={onCommit} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
         <button type="button" title="Cancelar" onClick={onCancel} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
@@ -2899,7 +2952,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           ))}
         </span>
         <input autoFocus value={quickObjName} onChange={ev => setQuickObjName(ev.target.value)}
-          onKeyDown={ev => { if (ev.key === 'Enter') crear(); if (ev.key === 'Escape') { setQuickObjOwner(null); setQuickObjName('') } }}
+          onKeyDown={ev => { if (ev.key === 'Enter') crear(); if (ev.key === 'Escape') { ev.stopPropagation(); setQuickObjOwner(null); setQuickObjName('') } }}
           placeholder={objNewTipo === 'hito' ? 'Firmar el contrato' : 'Llegar a 80 kg'}
           style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 190 }} />
         <button type="button" onClick={crear} title="Crear" style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
@@ -2947,7 +3000,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
             <input autoFocus value={featQuickName} onChange={ev => setFeatQuickName(ev.target.value)}
               onClick={ev => ev.stopPropagation()}
-              onKeyDown={ev => { if (ev.key === 'Enter') commitQuickFeature(epicaId, onPick); if (ev.key === 'Escape') { setFeatQuickAdd(false); setFeatQuickName('') } }}
+              onKeyDown={ev => { if (ev.key === 'Enter') commitQuickFeature(epicaId, onPick); if (ev.key === 'Escape') { ev.stopPropagation(); setFeatQuickAdd(false); setFeatQuickName('') } }}
               placeholder="Nombre del feature" style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 140 }} />
             <button type="button" onClick={() => commitQuickFeature(epicaId, onPick)} title="Crear" style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
             <button type="button" onClick={() => { setFeatQuickAdd(false); setFeatQuickName('') }} title="Cancelar" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>

@@ -1399,7 +1399,10 @@ export default function RoadmapClient() {
             <button onClick={cierra} aria-label="Cerrar" style={{ ...ghostBtn, padding: '4px 9px', fontSize: 13 }}>✕</button>
           </div>
           {cuerpo()}
-          <a href={`/epicas?ep=${sel.epicaId}`} style={{ display: 'inline-block', marginTop: 22, fontSize: 12.5, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>Abrir en Épicas ↗</a>
+          {/* EpicasDashboard.tsx lee ?e=<id> para dejar esa épica destacada (?ep= es un parámetro
+              DISTINTO ahí — el filtro de Feature en la vista Semana — así que este link nunca
+              llevaba a ningún lado útil). */}
+          <a href={`/epicas?e=${sel.epicaId}`} style={{ display: 'inline-block', marginTop: 22, fontSize: 12.5, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>Abrir en Épicas ↗</a>
           <div style={{ height: 24 }} />
         </aside>
       </>, document.body)
