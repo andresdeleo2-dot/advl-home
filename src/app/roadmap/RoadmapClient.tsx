@@ -6,9 +6,9 @@ import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import type { Epica, EpicaFeature, EpicaMilestone, EpicaTask, Iniciativa } from '@/lib/supabase'
 import {
-  ARCHIVED, addDays, addMonths, clickable, doneCount, duracionLabel, dueTone, featureStyle, fmtDue,
-  hexA, iniciativaStyle, normalize, normalizeMilestone, pctOf, plazoLabel, taskCount, taskStyle, todayISO, uid,
-  WEEK_EST_MIN, type Duracion,
+  ARCHIVED, DifDots, PrioBars, addDays, addMonths, clickable, difStyle, doneCount, duracionLabel, dueTone,
+  featureStyle, fmtDue, hexA, iniciativaStyle, normalize, normalizeMilestone, pctOf, plazoLabel, prioStyle,
+  taskCount, taskStyle, todayISO, uid, WEEK_EST_MIN, type Dif, type Duracion, type Prio,
 } from '@/components/epicas/core'
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1274,10 +1274,38 @@ export default function RoadmapClient() {
                 style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: on ? '#fff' : st.c, background: on ? st.c : st.bg, border: `1px solid ${on ? st.c : 'transparent'}` }}>{st.label}</button>
             })}
           </div>
-          <label style={{ display: 'block', marginTop: 16 }}>
-            <span style={eb}>Vence</span>
-            <input type="date" value={t.due || ''} onChange={ev => patchTarea(ep.id, t.id!, { due: ev.target.value })} style={{ ...field, display: 'block', marginTop: 4 }} />
-          </label>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>
+            <label style={{ display: 'block', flex: '1 1 150px' }}>
+              <span style={eb}>Hacer</span>
+              <input type="date" value={t.plan || ''} onChange={ev => patchTarea(ep.id, t.id!, { plan: ev.target.value })} style={{ ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4 }} />
+            </label>
+            <label style={{ display: 'block', flex: '1 1 150px' }}>
+              <span style={eb}>Vence</span>
+              <input type="date" value={t.due || ''} onChange={ev => patchTarea(ep.id, t.id!, { due: ev.target.value })} style={{ ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4 }} />
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
+            <div style={{ flex: '1 1 150px' }}>
+              <span style={eb}>Prioridad</span>
+              <div style={{ display: 'flex', gap: 5, marginTop: 5 }}>
+                {(['alta', 'media', 'baja'] as Prio[]).map(p => {
+                  const ps = prioStyle(p), on = (t.priority || 'media') === p
+                  return <button key={p} onClick={() => patchTarea(ep.id, t.id!, { priority: p })} title={ps.label}
+                    style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', borderRadius: 8, padding: '6px 4px', border: on ? `1px solid ${ps.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? 'rgba(194,147,58,0.08)' : '#fff' }}><PrioBars p={p} size={11} /></button>
+                })}
+              </div>
+            </div>
+            <div style={{ flex: '1 1 150px' }}>
+              <span style={eb}>Dificultad</span>
+              <div style={{ display: 'flex', gap: 5, marginTop: 5 }}>
+                {(['facil', 'media', 'dificil'] as Dif[]).map(d => {
+                  const ds = difStyle(d), on = (t.difficulty || 'media') === d
+                  return <button key={d} onClick={() => patchTarea(ep.id, t.id!, { difficulty: d })} title={ds.label}
+                    style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', borderRadius: 8, padding: '6px 4px', border: on ? `1px solid ${ds.c}` : '1px solid rgba(15,35,64,0.14)', background: on ? ds.bg : '#fff' }}><DifDots d={d} size={9} /></button>
+                })}
+              </div>
+            </div>
+          </div>
           <a href={`/epicas?e=${ep.id}&t=${t.id}`} style={{ display: 'inline-block', marginTop: 18, fontSize: 12.5, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>Editar todo en Épicas ↗</a>
         </div>
       </>, document.body
