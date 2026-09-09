@@ -203,6 +203,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [diaryEpica, setDiaryEpica] = useState<string>('todas')    // filtro de épica del diario
   const [objsOpen, setObjsOpen] = useState(false)                  // modal "Objetivos en riesgo"
   const [weekCloseOpen, setWeekCloseOpen] = useState(false)        // modal "Cerrar la semana"
+  const [weekScores, setWeekScores] = useState<Record<string, number>>({})  // calificación 1-10 de la semana, por lunes ISO (localStorage 'epicas.weekScores.v1')
+  const [weekNotes, setWeekNotes] = useState<Record<string, string>>({})    // comentario libre de la semana, por lunes ISO (localStorage 'epicas.weekNotes.v1')
+  const [weekClosed, setWeekClosed] = useState<Record<string, string>>({})  // semanas ya cerradas, por lunes ISO (localStorage 'epicas.weekClosed.v1'; valor = ISO del cierre)
   const [triageOpen, setTriageOpen] = useState(false)              // modal "Triage" (tareas sin fecha)
   const [calPanelMonth, setCalPanelMonth] = useState('')            // mes de la vista Calendario+panel ('' = este mes)
   const [cpSinOpen, setCpSinOpen] = useState(true)                  // drop-down "Sin fecha" del panel
@@ -717,6 +720,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       } catch { /* noop */ }
     }
   }
+  // Comentario/calificación/cierre de la SEMANA — mismo molde que día, clave = lunes ISO de esa semana.
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.weekNotes.v1'); if (raw) setWeekNotes(JSON.parse(raw)) } catch { /* noop */ } }, [])
+  const setWeekNote = (mon: string, text: string) => setWeekNotes(prev => {
+    const next = { ...prev }; if (text.trim()) next[mon] = text; else delete next[mon]
+    try { localStorage.setItem('epicas.weekNotes.v1', JSON.stringify(next)) } catch { /* noop */ }
+    return next
+  })
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.weekScores.v1'); if (raw) setWeekScores(JSON.parse(raw)) } catch { /* noop */ } }, [])
+  const setWeekScore = (mon: string, score: number | null) => setWeekScores(prev => {
+    const next = { ...prev }; if (score != null && score > 0) next[mon] = score; else delete next[mon]
+    try { localStorage.setItem('epicas.weekScores.v1', JSON.stringify(next)) } catch { /* noop */ }
+    return next
+  })
+  useEffect(() => { try { const raw = localStorage.getItem('epicas.weekClosed.v1'); if (raw) setWeekClosed(JSON.parse(raw)) } catch { /* noop */ } }, [])
+  const markWeekClosed = (mon: string, closed: boolean) => setWeekClosed(prev => {
+    const next = { ...prev }; if (closed) next[mon] = new Date().toISOString(); else delete next[mon]
+    try { localStorage.setItem('epicas.weekClosed.v1', JSON.stringify(next)) } catch { /* noop */ }
+    return next
+  })
   const celebrateClose = () => { setDcCelebrate(true); setTimeout(() => setDcCelebrate(false), 4000) }
   useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false); setDcSubsAll(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
@@ -6156,6 +6178,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <button onClick={() => setDayCloseOpen(true)} title={pastPend ? 'Este día quedó sin cerrar — mueve sus pendientes a hoy u otro día' : 'Cierre del día: resumen, planeado vs trabajado, comentario y mover pendientes'} style={{ border: warn ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: warn ? 'rgba(176,82,46,0.06)' : '#fff', color: warn ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🌙 Cerrar día{pastPend ? ` · ${planPend.length} sin cerrar` : arrastradas.length > 0 ? ` · ${arrastradas.length} arrastre` : ''}</button>
                 )
               })()}
+              {/* Antes vivía suelto en el toolbar de "Todas las épicas" — lejos de las vistas
+                  semanales donde de verdad se está revisando la semana. Mismo nivel que Cerrar día. */}
+              {(week || ajuste || resumen) && (() => {
+                const wPend = weekSummary.committed.length
+                return (
+                  <button onClick={() => setWeekCloseOpen(true)} title="Cierre de la semana: resumen, tiempo por épica, comentario y mover el arrastre" style={{ border: wPend ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: wPend ? 'rgba(176,82,46,0.06)' : '#fff', color: wPend ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🗓 Cerrar semana{wPend ? ` · ${wPend} sin cerrar` : ''}</button>
+                )
+              })()}
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
               <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
@@ -9706,7 +9736,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )
           })()}
           {objetivosAll.length > 0 && <button onClick={() => setObjsOpen(true)} title="Objetivos de todas las épicas ordenados por riesgo" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>🎯 Objetivos{objetivosAll.some(o => o.days != null && o.days < 0) ? <span style={{ color: '#B0522E' }}> ●</span> : ''}</button>}
-          <button onClick={() => setWeekCloseOpen(true)} title="Cerrar la semana: resumen y mover el arrastre a la próxima" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>🗓 Cerrar semana</button>
           {sinFechaTasks.length > 0 && <button onClick={() => setTriageOpen(true)} title="Tareas sin fecha (para no dejarlas pudrirse)" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>📥 Sin fecha {sinFechaTasks.length}</button>}
           <button onClick={() => setDiaryOpen(true)} title="Diario de trabajo: tus notas de avance y comentarios en orden" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: '#16365F', borderRadius: 9, padding: '6px 12px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }}>📖 Diario</button>
           <span style={{ height: 1, flex: 1, minWidth: 40, background: 'rgba(15,35,64,0.09)' }} />
@@ -10551,17 +10580,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         )
       })()}
       {weekCloseOpen && (() => {
+        const mon = weekSummary.mon, sun = weekSummary.sun
         const pend = weekSummary.committed.length
         const staleEps = activeEpics.filter(e => pendCount(e) > 0 && e.status !== 'En pausa' && (() => { const d = daysSinceISO(epicLastActivity(e)); return d == null || d >= 10 })())
+        // Cumplimiento: de lo que planeaste ESTA semana (plan cae en el rango), cuánto cerraste —
+        // mismo criterio que usa renderPlanResumen, para que el % no "no cuadre" entre las dos vistas.
+        const plannedThisWeek = activeEpics.flatMap(e => (e.tasks || []).filter(t => t.status !== ARCHIVED && !!t.plan && t.plan >= mon && t.plan <= sun))
+        const cumplimiento = plannedThisWeek.length ? Math.round(plannedThisWeek.filter(t => t.status === 'Terminada').length / plannedThisWeek.length * 100) : null
+        // Minutos trabajados esta semana por épica — misma fuente (progressLog) que renderPlanResumen.
+        const minPerEpica = activeEpics
+          .map(e => ({ e, min: (e.tasks || []).reduce((n, t) => n + (t.progressLog || []).reduce((s, l) => s + (l.d >= mon && l.d <= sun && typeof l.min === 'number' ? l.min : 0), 0), 0) }))
+          .filter(x => x.min > 0).sort((a, b) => b.min - a.min)
+        const weekMin = minPerEpica.reduce((s, x) => s + x.min, 0)
+        const hmw = (m: number) => { m = Math.round(m); const h = Math.floor(m / 60), r = m % 60; return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m` }
+        const sc = weekScores[mon] ?? null
+        const scColor = sc == null ? '#94A3B8' : sc < 4 ? '#B0522E' : sc < 7 ? '#C2933A' : '#2E6E6E'
+        const lbl = (txt: string, extra?: ReactNode) => (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, margin: '16px 0 6px' }}>
+            <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)' }}>{txt}</span>
+            {extra}
+          </div>
+        )
         return (
           <div onClick={() => setWeekCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cerrar la semana" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
+            <div role="dialog" aria-modal="true" aria-label="Cerrar la semana" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 520, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
               <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
               <div style={{ padding: '18px 22px 22px' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
                   <div>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>🗓 Cerrar la semana</div>
-                    <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>{weekRangeLabel(weekSummary.mon)}</div>
+                    <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>{weekRangeLabel(mon)}</div>
+                    {weekClosed[mon] && (() => { const dt = new Date(weekClosed[mon]); return (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, borderRadius: 99, padding: '3px 11px', background: 'rgba(46,110,110,0.12)', border: '1px solid rgba(46,110,110,0.35)', font: '800 11.5px var(--font-ui)', color: '#2E6E6E' }}>✓ Semana cerrada{isNaN(dt.getTime()) ? '' : ` · ${dt.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}`}</div>
+                    ) })()}
                   </div>
                   <button aria-label="Cerrar" onClick={() => setWeekCloseOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
                 </div>
@@ -10569,6 +10620,28 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E6E6E' }}>✓ {weekSummary.closedN}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cerradas esta semana</div></div>
                   <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: pend ? '#A87A2C' : '#2E6E6E' }}>↻ {pend}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>comprometidas sin cerrar</div></div>
                 </div>
+                {(cumplimiento != null || weekMin > 0) && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginTop: 10 }}>
+                    {cumplimiento != null && <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: cumplimiento >= 70 ? '#2E6E6E' : cumplimiento >= 40 ? '#C2933A' : '#B0522E' }}>{cumplimiento}%</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cumplimiento de lo planeado</div></div>}
+                    {weekMin > 0 && <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E5A9E' }}>⏱ {hmw(weekMin)}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>trabajadas esta semana</div></div>}
+                  </div>
+                )}
+                {minPerEpica.length > 0 && (
+                  <div>
+                    {lbl('⏱ Minutos por épica')}
+                    <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 13px', background: '#FBFAF6' }}>
+                      {minPerEpica.map((x, k) => { const pct = weekMin > 0 ? Math.round(x.min / weekMin * 100) : 0; return (
+                        <div key={x.e.id} style={{ marginBottom: k < minPerEpica.length - 1 ? 9 : 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, marginBottom: 3 }}>
+                            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#16365F' }}>{x.e.name}</span>
+                            <span style={{ flexShrink: 0, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{pct}% · {hmw(x.min)}</span>
+                          </div>
+                          <div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: x.e.color }} /></div>
+                        </div>
+                      ) })}
+                    </div>
+                  </div>
+                )}
                 {staleEps.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#B0522E', marginBottom: 6 }}>Frentes desatendidos</div>
@@ -10581,6 +10654,24 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   ? <button onClick={moveWeekPendingToNext} style={{ ...goldBtn, width: '100%', marginTop: 18, padding: '12px' }}>Mover {pend} a la próxima semana →</button>
                   : <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo comprometido ✦</div>}
                 <button onClick={() => copyWeekRecap(staleEps)} style={{ cursor: 'pointer', width: '100%', marginTop: 8, padding: '10px', borderRadius: 11, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.65)', fontSize: 12.5, fontWeight: 700 }}>📋 Copiar recap de la semana</button>
+                <div>
+                  {lbl('⭐ Qué tan buena fue', sc != null ? <button onClick={() => setWeekScore(mon, null)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>quitar</button> : undefined)}
+                  <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 14px', background: '#FBFAF6' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+                      <span className="serif" style={{ fontSize: 30, lineHeight: .9, fontWeight: 600, color: scColor }}>{sc == null ? '—' : sc.toFixed(1)}</span>
+                      <span style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', fontWeight: 600 }}>/ 10</span>
+                    </div>
+                    <input type="range" min={1} max={10} step={0.1} value={sc ?? 5} onChange={e => setWeekScore(mon, Number(e.target.value))} style={{ width: '100%', accentColor: scColor, cursor: 'pointer' }} />
+                  </div>
+                </div>
+                <div>
+                  {lbl('✍️ Comentario de la semana')}
+                  <textarea value={weekNotes[mon] || ''} onChange={e => setWeekNote(mon, e.target.value)} placeholder="¿Cómo fue la semana? Lo importante, qué quedó pendiente, qué cambiar la próxima…"
+                    style={{ width: '100%', minHeight: 90, resize: 'vertical', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--font-ui)', color: '#16365F', background: '#FBFAF6', outline: 'none' }} />
+                </div>
+                <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button onClick={() => { markWeekClosed(mon, true); celebrateClose(); setWeekCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>{weekClosed[mon] ? '✓ Cerrar de nuevo' : '✓ Cerrar la semana'}</button>
+                </div>
               </div>
             </div>
           </div>

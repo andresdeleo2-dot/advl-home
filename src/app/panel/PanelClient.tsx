@@ -13,13 +13,12 @@ import BirthdayCelebration from '@/components/BirthdayCelebration'
 import PersonaExpediente from '@/components/PersonaExpediente'
 import type { Persona, Vida } from '@/lib/persona-card'
 import type { Epica, EpicaTask } from '@/lib/supabase'
-import { todayISO, mondayISO } from '@/components/epicas/core'
+import { todayISO } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { fotoSrc, edadEnFecha, colorTipo, diffFechas, formatDiff } from '@/lib/vida'
+import { useTodayResumen, hmm } from '@/lib/useTodayResumen'
 
 const SERIF = 'var(--epica-serif, Georgia, serif)'
-const dayIdxMon = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return (new Date(y, m - 1, d).getDay() + 6) % 7 }
-const hmm = (min: number) => min >= 60 ? `${Math.round(min / 60 * 10) / 10}h` : `${min}m`
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const MES3 = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 const longDay = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); const dt = new Date(y, m - 1, d); const dn = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']; const mn = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']; return `${dn[dt.getDay()]}, ${d} de ${mn[m - 1]}` }
@@ -36,7 +35,6 @@ const signoDe = (mes0: number, dia: number) => {
   return ''
 }
 
-type Tt = { e: Epica; t: EpicaTask }
 type SlotState = 'normal' | 'collapsed'
 // Estado inicial de cada slot cuando el usuario NUNCA lo ha tocado (nada guardado en localStorage
 // todavía). El resto arrancan expandidos como siempre; sólo Noticias arranca cerrado.
@@ -79,10 +77,8 @@ function SectionTitle({ icon, children, href, cta, external }: { icon?: string; 
   )
 }
 export default function PanelClient() {
-  const [epics, setEpics] = useState<Epica[] | null>(null)
+  const { epics, today, todayTasks, routines, routinesDone, dueSoon, workedMin, runningName } = useTodayResumen()
   const [now, setNow] = useState<Date | null>(null)
-  const [workedMin, setWorkedMin] = useState(0)
-  const [runningName, setRunningName] = useState<string | null>(null)
   const [personas, setPersonas] = useState<{ id: string; nombre: string; apodo: string | null; cumple: string; excepcional?: boolean; foto?: string | null; celular?: string | null }[]>([])
   const [momentos, setMomentos] = useState<{ id: number; titulo: string; tipo?: string | null; fecha: string | null; fecha_fin?: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null; descripcion?: string | null; nota?: string | null; fotos?: string[] | null; importancia?: number | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
@@ -105,69 +101,21 @@ export default function PanelClient() {
     setPersonaLoading(null)
   }
 
-  const today = todayISO()
-
   useEffect(() => { setNow(new Date()); const id = setInterval(() => setNow(new Date()), 30000); return () => clearInterval(id) }, [])
   useEffect(() => { try { const raw = localStorage.getItem('panel.layout.v1'); if (raw) setLayout(JSON.parse(raw)) } catch { /* noop */ } }, [])
   const setSlot = (id: string, s: SlotState) => setLayout(prev => { const next = { ...prev, [id]: s }; if (s === (SLOT_DEFAULTS[id] || 'normal')) delete next[id]; try { localStorage.setItem('panel.layout.v1', JSON.stringify(next)) } catch { /* noop */ } return next })
 
   useEffect(() => {
     let alive = true
-    fetch('/api/epicas').then(r => r.json()).then(j => { if (alive && j?.ok) setEpics(j.data as Epica[]) }).catch(() => {})
     fetch('/api/cumples').then(r => r.json()).then(j => { if (alive && j?.ok) setPersonas(j.personas || []) }).catch(() => {})
     fetch('/api/momentos').then(r => r.json()).then(j => { if (alive && j?.ok) setMomentos(j.recuerdos || []) }).catch(() => {})
     fetch('/api/weather').then(r => r.json()).then(j => { if (alive && j && !j.error) setWeather(j) }).catch(() => {})
     return () => { alive = false }
   }, [])
 
-  useEffect(() => {
-    const read = () => {
-      try {
-        const raw = localStorage.getItem('margen.v1'); if (!raw) return
-        const data = JSON.parse(raw)
-        setWorkedMin((data.history || []).filter((h: { date: string; area: string }) => h.date === today && h.area === 'trabajo').reduce((s: number, h: { dur: number }) => s + h.dur, 0))
-        const s = data.session
-        setRunningName(s && s.area === 'trabajo' ? (s.name || 'Trabajo') : null)
-      } catch { /* noop */ }
-    }
-    read(); window.addEventListener('focus', read); window.addEventListener('storage', read)
-    const id = setInterval(read, 20000)
-    return () => { window.removeEventListener('focus', read); window.removeEventListener('storage', read); clearInterval(id) }
-  }, [today])
-
-  const list = epics || []
-
-  const todayTasks = useMemo<Tt[]>(() => {
-    const out: Tt[] = []
-    for (const e of list) for (const t of (e.tasks || [])) {
-      if (t.status === 'Terminada' || t.status === 'Archivada') continue
-      if (t.plan === today || (Array.isArray(t.dayPlans) && t.dayPlans.some(d => d.day === today))) out.push({ e, t })
-    }
-    // Orden por IMPORTANCIA: prioridad (alta→media→baja), luego vencimiento, luego orden manual.
-    const prioRank = (p?: string) => (p === 'alta' ? 0 : p === 'baja' ? 2 : 1)
-    return out.sort((a, b) => prioRank(a.t.priority) - prioRank(b.t.priority) || (a.t.due || '9999').localeCompare(b.t.due || '9999') || (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9))
-  }, [list, today])
-
   // Épicas presentes en las tareas de hoy (para el filtro) + tareas filtradas.
   const enfEpics = useMemo(() => { const seen = new Map<string, Epica>(); todayTasks.forEach(({ e }) => { if (!seen.has(e.id)) seen.set(e.id, e) }); return [...seen.values()] }, [todayTasks])
   const filteredTasks = useMemo(() => enfEpic === 'todas' ? todayTasks : todayTasks.filter(x => x.e.id === enfEpic), [todayTasks, enfEpic])
-
-  const routines = useMemo(() => {
-    const mon = mondayISO(today), di = dayIdxMon(today)
-    const out: { e: Epica; name: string; done: boolean }[] = []
-    for (const e of list) for (const r of (e.routines || [])) if ((r.t || '').trim()) out.push({ e, name: r.t, done: !!(r.weeks?.[mon]?.[di]) })
-    return out
-  }, [list, today])
-
-  const dueSoon = useMemo(() => {
-    const out: { e: Epica; t: EpicaTask; days: number }[] = []
-    for (const e of list) for (const t of (e.tasks || [])) {
-      if (t.status === 'Terminada' || t.status === 'Archivada' || !t.due) continue
-      const d = Math.round((new Date(t.due + 'T00:00:00').getTime() - new Date(today + 'T00:00:00').getTime()) / 86400000)
-      if (d >= 0 && d <= 14) out.push({ e, t, days: d })
-    }
-    return out.sort((a, b) => a.days - b.days).slice(0, 6)
-  }, [list, today])
 
   const cumples = useMemo(() => {
     const hoy = new Date(); hoy.setHours(12, 0, 0, 0)
@@ -201,7 +149,6 @@ export default function PanelClient() {
     return (rest.length ? rest : weather.hourly).slice(0, 11)
   }, [weather, now])
 
-  const routinesDone = routines.filter(r => r.done).length
   const greet = now ? (now.getHours() < 12 ? 'Buenos días' : now.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches') : ''
   const seeAll = (href: string) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(231,197,107,0.9)', textDecoration: 'none' }}>ver todos →</a>
 

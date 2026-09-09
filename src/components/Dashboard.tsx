@@ -19,6 +19,7 @@ import CalendarWidget from './CalendarWidget'
 import MomentosWidget from './MomentosWidget'
 import FlujoCalendar from './FlujoCalendar'
 import EditModal from './EditModal'
+import { useTodayResumen, hmm } from '@/lib/useTodayResumen'
 
 function isFlujo(section: string) {
   return section.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim() === 'flujo'
@@ -36,6 +37,50 @@ function greetingFor(hour: number) {
   if (hour >= 5 && hour < 12) return 'Buenos días'
   if (hour >= 12 && hour < 19) return 'Buenas tardes'
   return 'Buenas noches'
+}
+
+// Resumen de "hoy" (tareas/rutinas/tiempo) — esta pantalla es la primera que se abre cada vez y
+// antes no sabía nada de Épicas/Tiempo pese a que /panel ya calculaba todo esto. Mismo hook que
+// PanelClient.tsx, así que el criterio de "tarea de hoy" y la fuente de tiempo trabajado no se
+// duplican ni pueden divergir entre las dos pantallas.
+function TodayStrip() {
+  const { loading, todayTasks, routines, routinesDone, dueSoon, workedMin, runningName } = useTodayResumen()
+  if (loading) return null   // evita un salto de layout mientras carga (esto NO viene del SSR de items)
+  return (
+    <section className="mb-6 rounded-2xl glass p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="eyebrow">Hoy</h2>
+        <Link href="/panel" className="text-[11px] font-semibold text-[#2E5A9E] no-underline">panel completo →</Link>
+      </div>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {[
+          { n: todayTasks.length, l: 'tareas de hoy', c: '#2E5A9E' },
+          { n: `${routinesDone}/${routines.length}`, l: 'rutinas hechas', c: '#2E6E6E' },
+          { n: hmm(workedMin), l: runningName ? `▶ ${runningName}` : 'trabajado hoy', c: '#A87A2C' },
+          { n: dueSoon.length, l: 'por vencer (14 d)', c: '#B0522E' },
+        ].map((s, i) => (
+          <div key={i} className="rounded-xl border border-[rgba(15,35,64,0.09)] bg-white px-3 py-2.5" style={{ borderTop: `3px solid ${s.c}` }}>
+            <div className="serif" style={{ fontSize: 22, lineHeight: 1, color: s.c }}>{s.n}</div>
+            <div className="mt-1 text-[10.5px] font-semibold text-[rgba(20,35,61,0.55)]">{s.l}</div>
+          </div>
+        ))}
+      </div>
+      {todayTasks.length > 0 ? (
+        <div className="mt-3 flex flex-col gap-1">
+          {todayTasks.slice(0, 4).map(({ e, t }, k) => (
+            <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-[#16365F] no-underline hover:bg-[rgba(15,35,64,0.04)]">
+              <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: e.color }} />
+              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.t}</span>
+              <span className="flex-shrink-0 text-[10.5px] text-[rgba(20,35,61,0.4)]">{e.name}</span>
+            </Link>
+          ))}
+          {todayTasks.length > 4 && <Link href="/panel" className="mt-0.5 px-2 text-[11px] font-semibold text-[#2E5A9E] no-underline">ver las {todayTasks.length} →</Link>}
+        </div>
+      ) : (
+        <div className="mt-3 px-0.5 text-[12.5px] text-[rgba(20,35,61,0.5)]">Nada planeado para hoy. <Link href="/epicas" className="font-semibold text-[#A87A2C] no-underline">Elige tu enfoque →</Link></div>
+      )}
+    </section>
+  )
 }
 
 export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
@@ -414,6 +459,8 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
               {query && <span className="hidden sm:inline"> · Enter abre el primero</span>}
             </p>
           </div>
+
+          <TodayStrip />
 
           {/* RECIENTES */}
           {recents.length > 0 && !query && (
