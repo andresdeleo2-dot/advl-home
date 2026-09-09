@@ -1332,6 +1332,13 @@ export default function RoadmapClient() {
         const tareas = (ep?.tasks || []).filter(t => t.iniciativaId === i.id && t.status !== ARCHIVED)
         return (
           <>
+            {/* Botón EXPLÍCITO además de la miga de pan de arriba — "Eugenia" ahí ya hace esto
+                mismo, pero como nombre de feature no se lee obvio como "el botón para volver a
+                las iniciativas"; con las palabras puestas no hay duda. Misma navegación (no
+                cierra el panel, sólo cambia sel a la feature). */}
+            {feat && (
+              <button onClick={() => setSel({ kind: 'feature', id: feat.id, epicaId: sel.epicaId })} style={{ ...ghostBtn, marginBottom: 10 }}>‹ Ver las otras iniciativas de {feat.t}</button>
+            )}
             <input key={i.id} defaultValue={i.nombre} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== i.nombre) escribir(sel, { nombre: v }) }}
               aria-label="Nombre de la iniciativa" style={{ ...field, width: '100%', fontSize: 16, fontWeight: 700, marginTop: 4 }} />
             <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 10 }}>
