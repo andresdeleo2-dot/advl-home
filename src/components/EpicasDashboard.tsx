@@ -287,6 +287,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [subPop, setSubPop] = useState<{ eId: string; tid: string; sid: string } | null>(null)  // popup de subtarea
   const [subSort, setSubSort] = useState<'manual' | 'prioridad' | 'dificultad' | 'dia'>('manual') // orden de subtareas
   const subNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const taskNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)  // debounce de la Nota editable en el peek de tarea
   const [newSubtask, setNewSubtask] = useState('')                 // input de subtarea nueva en el detalle
   const [estCustomId, setEstCustomId] = useState<string | null>(null)  // tarea con el Estimado en modo "Personalizado…" (input libre)
   const [orderTapMode, setOrderTapMode] = useState(false)               // "Ordenar tocando": numerar las tareas en el orden que las tocas (sin arrastrar ni teclear)
@@ -1955,6 +1956,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const setTaskTitle = (e: Epica, ti: number, v: string) => {
     const t = (v || '').trim(); if (!t) return
     const tasks = clone(e.tasks); tasks[ti].t = t
+    patchEpic(e.id, { tasks })
+  }
+  // Nota editable directo en el peek (antes sólo se podía VER ahí — para editarla había que
+  // abrir el editor completo). Mismo criterio de sanitizado que saveTask().
+  const setTaskNote = (e: Epica, ti: number, html: string) => {
+    const tasks = clone(e.tasks); tasks[ti].note = sanitizeHtml(html)
     patchEpic(e.id, { tasks })
   }
   // Estimado propio (minutos) editable inline. null = usar el default por dificultad.
@@ -8388,12 +8395,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   )
                 })()}
 
-                {t.note && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={eb}>Nota</div>
-                    <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.55, color: '#14233D', maxHeight: 320, overflowY: 'auto' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(t.note) }} />
-                  </div>
-                )}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={eb}>Nota</div>
+                  <RichText key={`note:${t.id}`} value={t.note || ''} onChange={v => { if (taskNoteTimer.current) clearTimeout(taskNoteTimer.current); taskNoteTimer.current = setTimeout(() => setTaskNote(ep, i, v), 450) }} placeholder="Nota (negritas, cursiva, viñetas)…" />
+                </div>
 
                 {/* LINKS — editables aquí mismo (agregar / editar / ordenar / quitar) */}
                 <div style={{ marginBottom: 16 }}>
@@ -8481,7 +8486,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <button onClick={() => setTaskPlan(ep, i, '')} title="Quitar esta tarea del plan de hoy (no la borra ni la termina)" style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', borderRadius: 11, padding: '11px 16px', fontSize: 13, fontWeight: 700 }}>Quitar de hoy</button>
                   )}
                   <button onClick={() => opts.onClose()} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '11px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cerrar</button>
-                  <button onClick={openEditFromView} title="Editor completo: nota con formato, mover de épica, fin de la serie…" style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
+                  <button onClick={openEditFromView} title="Editor completo: repetición, resumen y más campos avanzados" style={{ ...goldBtn, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '11px 22px' }}><PencilIcon /> Editar</button>
                 </div>
             </div>
     )
@@ -10473,6 +10478,144 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   <input type="date" value={taskDraft.due} onChange={e => setTaskDraft(d => ({ ...d, due: e.target.value }))} style={{ ...inpBig, flex: 1, fontWeight: 600, border: `1px solid ${dt.border}`, color: dt.c, background: dt.bg }} />
                   {taskDraft.due && <button onClick={() => setTaskDraft(d => ({ ...d, due: '' }))} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '9px 12px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>Quitar</button>}
                 </div>
+
+                {/* Estimado / Recordarme / Días de trabajo / Contribuye a objetivo — antes sólo se
+                    podían tocar en el peek (renderTaskDetail); acá una tarea NUEVA todavía no existe
+                    como fila en epics, así que estos controles siguen su mismo patrón de autoguardado
+                    inmediato (patchEpic por campo) en vez de pasar por taskDraft/Guardar — sólo se
+                    muestran editando una tarea que YA existe. */}
+                {!isNew && (() => {
+                  const found = findTask(taskEdit.epicId, taskEdit.tid!)
+                  if (!found) return null
+                  const { e: ep, t, i } = found
+                  return (<>
+                    <label style={lbl}>Estimado <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: 'rgba(20,35,61,0.4)' }}>· cuánto crees que te tomará</span></label>
+                    {estMinReady.current ? (() => {
+                      const has = typeof t.estMin === 'number' && t.estMin > 0
+                      const cur = has ? t.estMin! : 0
+                      const defMin = WEEK_EST_MIN(t.difficulty)
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          {renderEstControl(t.id!, t.estMin, defMin, m => setTaskEstMin(ep, i, m))}
+                          {has && <span style={{ fontSize: 12.5, fontWeight: 700, color: '#2E6E6E' }}>= {fmtEst(cur)}</span>}
+                          {has
+                            ? <button onClick={() => { setEstCustomId(null); setTaskEstMin(ep, i, null) }} title="Volver al estimado por dificultad" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: '#A87A2C', fontSize: 11.5, fontWeight: 700 }}>usar dificultad</button>
+                            : <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)' }}>{defMin ? `usando ~${fmtEst(defMin)}` : 'elige un tiempo o pon dificultad'}</span>}
+                        </div>
+                      )
+                    })() : <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>Corre <code>sql/epicas-09-est-min.sql</code> en Supabase para poner tu estimado propio.</div>}
+
+                    <label style={lbl}>Recordarme 🔔</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="datetime-local" value={isoToLocalInput(t.remindAt)} onChange={e => setTaskRemind(ep, i, e.target.value)} style={{ ...inpBig, flex: 1 }} />
+                      {t.remindAt && <button onClick={() => setTaskRemind(ep, i, '')} title="Quitar recordatorio" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 9, padding: '9px 12px', fontSize: 12, fontWeight: 700, color: 'rgba(20,35,61,0.5)', whiteSpace: 'nowrap' }}>Quitar</button>}
+                    </div>
+
+                    <label style={lbl}>Días de trabajo <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600, color: 'rgba(20,35,61,0.4)' }}>· agéndala en varios días</span></label>
+                    {dayPlansReady.current ? (() => {
+                      const dps = dayPlansOf(t)
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.5)' }}>Repartir {estMinOf(t) > 0 ? `${fmtEst(estMinOf(t))} ` : ''}en:</span>
+                            {[2, 3, 4, 5].map(n => (
+                              <button key={n} onClick={() => splitIntoNDays(ep, i, n)} title={`Partir en ${n} días consecutivos, cada uno con su porción de horas`} style={{ cursor: 'pointer', borderRadius: 8, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, border: '1px solid rgba(122,111,176,0.35)', background: 'rgba(122,111,176,0.08)', color: '#5F5596' }}>{n} días</button>
+                            ))}
+                            {dps.length > 0 && <button onClick={() => mutateDayPlans(ep, i, () => [])} title="Quitar todos los días de trabajo" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 11, fontWeight: 700 }}>limpiar</button>}
+                          </div>
+                          {dps.length === 0 && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Un solo día por ahora. Reparte arriba o agrega fechas abajo para trabajarla en varios días, cada uno con sus horas y dificultad.</div>}
+                          {dps.map(dp => {
+                            const workedMin = (t.progressLog || []).filter(x => x.d === dp.day).reduce((s, x) => s + (typeof (x as { min?: number }).min === 'number' ? (x as { min?: number }).min! : 0), 0)
+                            const est = (typeof dp.estMin === 'number' && dp.estMin > 0) ? dp.estMin : estMinOf(t)
+                            const isPast = dp.day < today
+                            const done = !!dp.done
+                            const met = done || (est > 0 && workedMin >= est) || (workedMin > 0 && est === 0)
+                            const partial = !met && workedMin > 0
+                            const state = met ? 'met' : partial ? 'partial' : (isPast ? 'missed' : 'plan')
+                            const bg = state === 'met' ? 'rgba(46,110,110,0.08)' : state === 'partial' ? 'rgba(194,147,58,0.10)' : state === 'missed' ? 'rgba(176,82,46,0.06)' : 'rgba(15,35,64,0.03)'
+                            const bd = state === 'met' ? 'rgba(46,110,110,0.35)' : state === 'partial' ? 'rgba(194,147,58,0.4)' : state === 'missed' ? 'rgba(176,82,46,0.28)' : 'rgba(15,35,64,0.08)'
+                            return (
+                              <div key={dp.day} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 9, background: bg, border: `1px solid ${bd}` }}>
+                                <button onClick={() => toggleDayPlanDone(ep, i, dp.day)} title={done ? 'Marcar como no trabajado ese día' : 'Marcar: sí trabajé este día'} style={{ flexShrink: 0, height: 18, width: 18, borderRadius: 5, cursor: 'pointer', border: met ? 'none' : partial ? '1.5px solid #C2933A' : '1.5px solid rgba(15,35,64,0.25)', background: met ? '#2E6E6E' : '#fff', color: met ? '#fff' : '#C2933A', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{met ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17l-5-5" /></svg> : partial ? <span style={{ fontSize: 10, lineHeight: 1 }}>◐</span> : null}</button>
+                                <input type="date" value={dp.day} onChange={ev => { const nd = ev.target.value; if (nd && nd !== dp.day) setDayPlanField(ep, i, dp.day, { day: nd }) }} aria-label="Día" style={{ flexShrink: 0, border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 6px', fontSize: 11.5, fontWeight: 700, color: '#16365F', background: '#fff', outline: 'none' }} />
+                                {isPast ? (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                    <span style={{ font: '700 11.5px var(--font-ui)', color: state === 'met' ? '#2E6E6E' : state === 'partial' ? '#A87A2C' : '#B0522E' }}>{state === 'met' ? '✅ Cumplió' : state === 'partial' ? '◐ Parcial' : '○ No se trabajó'}</span>
+                                    {workedMin > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{fmtEst(workedMin)}{est > 0 ? ` de ~${fmtEst(est)}` : ''}</span>}
+                                    {workedMin === 0 && est > 0 && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.45)' }}>eran ~{fmtEst(est)}</span>}
+                                  </span>
+                                ) : (
+                                  <>
+                                    {renderEstControl(`${t.id}:${dp.day}`, dp.estMin, estMinOf(t), m => setDayPlanField(ep, i, dp.day, { estMin: m == null ? undefined : m }), true)}
+                                    <select value={dp.difficulty || ''} onChange={ev => setDayPlanField(ep, i, dp.day, { difficulty: (ev.target.value || undefined) as EpicaDayPlan['difficulty'] })} title="Dificultad ese día" aria-label="Dificultad ese día" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.12)', borderRadius: 7, padding: '4px 5px', fontSize: 11, fontWeight: 700, color: dp.difficulty ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none' }}>
+                                      <option value="">Dif ·</option><option value="facil">Fácil</option><option value="media">Media</option><option value="dificil">Difícil</option>
+                                    </select>
+                                  </>
+                                )}
+                                <span style={{ flex: 1 }} />
+                                <button onClick={() => removeDayPlan(ep, i, dp.day)} aria-label="Quitar día" title="Quitar día" style={{ flexShrink: 0, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.45)', fontSize: 13, lineHeight: 1 }}>✕</button>
+                              </div>
+                            )
+                          })}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 2 }}>
+                            <input type="date" value="" onChange={ev => { if (ev.target.value) addDayPlan(ep, i, ev.target.value) }} aria-label="Agregar día de trabajo" style={{ cursor: 'pointer', border: '1px dashed rgba(15,35,64,0.22)', borderRadius: 7, padding: '5px 7px', fontSize: 11.5, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }} />
+                            <span style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.45)' }}>+ agregar un día para trabajarla</span>
+                          </div>
+                        </div>
+                      )
+                    })() : <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>Corre <code>sql/epicas-10-day-plans.sql</code> en Supabase para agendarla en varios días.</div>}
+
+                    {(ep.kpis || []).length > 0 && (() => {
+                      const actual = milestoneOfTask(ep, t.id)
+                      return (<>
+                        <label style={lbl}>Contribuye a</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <select value={actual?.id || ''} onChange={ev => setTaskMilestone(ep, t.id!, ev.target.value || null)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: actual ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                            <option value="">— Ningún objetivo —</option>
+                            {ep.kpis.map(m => <option key={m.id} value={m.id}>{m.t}</option>)}
+                          </select>
+                          {actual && (() => {
+                            const mp = milestoneProgress(actual, ep); const hecho = milestoneDone(actual, ep)
+                            return mp.hasMeta ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: hecho ? '#2E6E6E' : '#A87A2C' }}>
+                                <span style={{ width: 54, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden', display: 'inline-block' }}><span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : ep.color }} /></span>
+                                {mp.cur}/{mp.target}{hecho ? ' ✦' : ''}
+                              </span>
+                            ) : null
+                          })()}
+                        </div>
+                      </>)
+                    })()}
+
+                    {/* Objetivo DEL FEATURE: usa el feature que está eligiéndose arriba (taskDraft.featureId),
+                        no el que ya tiene guardado la tarea — si acabas de cambiarlo, tiene que reflejar
+                        el nuevo antes de que exista un "Guardar" que lo confirme. */}
+                    {(() => {
+                      const feat = (ep.features || []).find(f => f.id === taskDraft.featureId)
+                      if (!feat || !(feat.kpis || []).length) return null
+                      const actualF = (feat.kpis || []).find(m => (m.taskIds || []).includes(t.id || ''))
+                      const featEpica = { ...ep, tasks: ep.tasks.filter(x => x.featureId === feat.id) }
+                      return (<>
+                        <label style={lbl}>Contribuye a (del feature)</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <select value={actualF?.id || ''} onChange={ev => setTaskFeatureMilestone(ep, feat.id, t.id!, ev.target.value || null)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 9, padding: '7px 9px', fontSize: 12.5, fontWeight: 600, color: actualF ? '#16365F' : 'rgba(20,35,61,0.5)', background: '#fff', outline: 'none', maxWidth: '100%' }}>
+                            <option value="">— Ningún objetivo —</option>
+                            {feat.kpis!.map(m => <option key={m.id} value={m.id}>{m.t}</option>)}
+                          </select>
+                          {actualF && (() => {
+                            const mp = milestoneProgress(actualF, featEpica); const hecho = milestoneDone(actualF, featEpica)
+                            return mp.hasMeta ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: hecho ? '#2E6E6E' : '#A87A2C' }}>
+                                <span style={{ width: 54, height: 5, borderRadius: 99, background: 'rgba(15,35,64,0.10)', overflow: 'hidden', display: 'inline-block' }}><span style={{ display: 'block', width: `${mp.pct * 100}%`, height: '100%', background: hecho ? '#2E6E6E' : (feat.color || ep.color) }} /></span>
+                                {mp.cur}/{mp.target}{hecho ? ' ✦' : ''}
+                              </span>
+                            ) : null
+                          })()}
+                        </div>
+                      </>)
+                    })()}
+                  </>)
+                })()}
 
                 <TaskLinks links={taskDraft.links || []} onChange={ls => setTaskDraft(d => ({ ...d, links: ls }))} />
 
