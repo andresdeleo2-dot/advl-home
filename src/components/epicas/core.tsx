@@ -653,8 +653,7 @@ export type Prefs = {
   backlogView: 'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'
   backlogDone: boolean; backlogFEpica: string; backlogFStatus: string; backlogFPrio: string
   featuredId: string | null
-  detalleOpen: boolean
-  diaResumenOpen: boolean
+  vistaOpen: boolean
 }
 export const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
@@ -663,8 +662,7 @@ export const DEFAULT_PREFS: Prefs = {
   backlogOpen: false, backlogSort: { key: 'plan', dir: 'asc' }, backlogView: 'tabla',
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
-  detalleOpen: true,
-  diaResumenOpen: true,
+  vistaOpen: true,
 }
 export function loadPrefs(): Prefs {
   if (typeof window === 'undefined') return DEFAULT_PREFS

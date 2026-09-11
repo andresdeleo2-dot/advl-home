@@ -166,8 +166,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
-  const [detalleOpen, setDetalleOpen] = useState(true)   // "Todas las actividades" (Detalle del Enfoque) — colapsable igual que el backlog
-  const [diaResumenOpen, setDiaResumenOpen] = useState(true)   // franja L-D + recordatorios + rutinas + arrastre + "trabajaste hoy" en la vista Día — colapsable, toma mucho alto y no siempre hace falta para trabajar la lista
+  // Colapsa el CONTENIDO de la vista activa del Enfoque (Día/Detalle/Ajuste/Semana/…) — mismo
+  // interruptor para las 9, no uno distinto por vista. El interruptor de vista y los botones de
+  // arriba (Cerrar día, +Nueva tarea…) se quedan SIEMPRE visibles; sólo se pliega lo de abajo.
+  const [vistaOpen, setVistaOpen] = useState(true)
   const [backlogSort, setBacklogSort] = useState<SortSpec>({ key: 'plan', dir: 'asc' })
   // Orden de la lista Detalle del Enfoque ("Todas las actividades") — INDEPENDIENTE de backlogSort
   // (son secciones distintas; si compartieran el mismo estado, ordenar en una movería la otra sin
@@ -493,8 +495,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setBacklogOpen(p.backlogOpen); setBacklogSort(savedSort); setBacklogDone(p.backlogDone)
     setBacklogView(p.backlogView)
     setBacklogFEpica(p.backlogFEpica); setBacklogFStatus(p.backlogFStatus); setBacklogFPrio(p.backlogFPrio)
-    setDetalleOpen(p.detalleOpen)
-    setDiaResumenOpen(p.diaResumenOpen)
+    setVistaOpen(p.vistaOpen)
     // La épica destacada se restaura tal cual: loadEpics conserva el valor previo
     // si el id sigue existiendo, y si no cae en la primera de la lista.
     if (p.featuredId) setFeaturedId(p.featuredId)
@@ -506,13 +507,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
       weekEpica, weekDif, routinesOpen, boardHideDone, dayView, boardView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
-      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, detalleOpen, diaResumenOpen,
+      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, vistaOpen,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
       weekEpica, weekDif, routinesOpen, boardHideDone, dayView, boardView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
-      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, detalleOpen, diaResumenOpen])
+      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, vistaOpen])
 
   /* ─── Estado en la URL ───────────────────────────────────────
      Vista, día, épica y filtros viajan en el query string: el enlace es
@@ -6257,25 +6258,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
-          {/* Colapsa la franja L-D + recordatorios + rutinas + arrastre + "trabajaste hoy": en la
-              vista Día antes no se podía achicar y empujaba la lista de tareas bien abajo. El
-              interruptor de vista (arriba) y los filtros (abajo) se quedan SIEMPRE visibles — sólo
-              se pliega este bloque informativo, que no hace falta ver todo el tiempo para trabajar. */}
-          {!board && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
-              <button onClick={() => setDiaResumenOpen(v => !v)} aria-expanded={diaResumenOpen} aria-controls="dia-resumen-body"
-                style={{ cursor: 'pointer', border: 'none', background: 'transparent', display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 2px', font: '700 10.5px var(--font-ui)', letterSpacing: '.04em', color: 'rgba(20,35,61,0.5)' }}>
-                {diaResumenOpen ? 'Ocultar resumen del día' : 'Mostrar resumen del día'}
-                <span aria-hidden style={{ display: 'inline-block', fontSize: 11, transform: diaResumenOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
-              </button>
-            </div>
-          )}
-
           {/* Filtros por estado de trabajo del día — presentes en las vistas board (salvo Resumen,
               que es un digest semanal y filtrarlo por "trabajo de hoy" vaciaría sus KPIs). */}
           {board && !resumen && renderWorkFilters(today)}
 
-          {detalle || agenda ? (() => {
+          {(() => {
+            // Un solo colapsable para las 9 vistas (Día/Detalle/Ajuste/Semana/3 sem/Agenda/
+            // Calendario/Timeline/Resumen) — antes cada vista tenía su propio criterio (o ninguno)
+            // y Día en particular no se podía achicar nada. El interruptor de vista y los botones
+            // de arriba (Cerrar día, +Nueva tarea…) se quedan SIEMPRE visibles: sólo se pliega el
+            // contenido de abajo, igual que ya hacía el backlog.
+            const cuenta = board ? wTot : planTotal
+            const contenido = detalle || agenda ? (() => {
             // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
             // con el filtro de épica (chips), dificultad, "ocultar completadas" y un rango
             // de fecha (esta semana / 2 sem / mes) por su día "Hacer".
@@ -6329,34 +6323,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 </div>
               </>
             )
-            return detalle ? (
-              // Colapsable igual que el backlog — MISMA estructura: una tarjeta "glass" con un
-              // encabezado (cuenta + título + flecha) y TODO lo demás (filtros y la lista) adentro,
-              // plegado junto. Antes sólo la lista vivía adentro del colapsable y los filtros se
-              // quedaban siempre a la vista, así que no se sentía "una sola pieza" como el backlog.
-              <div id="detalle-actividades" className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px' }}>
-                  <button onClick={() => setDetalleOpen(v => !v)} aria-expanded={detalleOpen} aria-controls="detalle-actividades-body"
-                    style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, textAlign: 'left' }}>
-                    <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{enfRows.length}</span>
-                    <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Todas las actividades</span>
-                  </button>
-                  <button onClick={() => setDetalleOpen(v => !v)} aria-label={detalleOpen ? 'Plegar' : 'Desplegar'}
-                    style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 4, fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: detalleOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</button>
-                </div>
-                {detalleOpen && (
-                  <div id="detalle-actividades-body" style={{ padding: '0 17px 17px' }}>
-                    {renderBoardFilters(enfEpics, effEnf)}
-                    {rangeChips}
-                    {renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) })}
-                  </div>
-                )}
-              </div>
-            ) : <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{renderCalendarPanel(enfRows)}</>
+            // La tarjeta colapsable ya NO vive aquí adentro — ahora envuelve TODA vista (Día,
+            // Detalle, Ajuste, Semana…) desde afuera, un solo interruptor para las 9, así que esto
+            // vuelve a ser contenido plano como cualquier otra vista.
+            return <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{detalle ? renderMasterDetail(enfRows, { order: true, sort: enfSort, onSortKey: key => setEnfSort(s => nextSort(s, key)) }) : renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
-
-          {diaResumenOpen && (<div id="dia-resumen-body">
 
           {renderDayStrip()}
 
@@ -6509,8 +6481,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )
           })()}
-
-          </div>)}
 
           {empty ? (
             <div style={{ padding: '28px 12px 12px', textAlign: 'center' }}>
@@ -6829,7 +6799,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )
           })()}
-          </>)}
+          </>)
+            return (
+              <div id="vista-body" className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px' }}>
+                  <button onClick={() => setVistaOpen(v => !v)} aria-expanded={vistaOpen} aria-controls="vista-body-inner"
+                    style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, textAlign: 'left' }}>
+                    {cuenta > 0 && <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{cuenta}</span>}
+                    <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>{board ? eyebrow : isToday ? 'Enfoque de hoy' : 'Plan del día'}</span>
+                  </button>
+                  <button onClick={() => setVistaOpen(v => !v)} aria-label={vistaOpen ? 'Plegar' : 'Desplegar'}
+                    style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 4, fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: vistaOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</button>
+                </div>
+                {vistaOpen && <div id="vista-body-inner" style={{ padding: '0 17px 17px' }}>{contenido}</div>}
+              </div>
+            )
+          })()}
         </div>
       </div>
     )
