@@ -654,6 +654,7 @@ export type Prefs = {
   backlogDone: boolean; backlogFEpica: string; backlogFStatus: string; backlogFPrio: string
   featuredId: string | null
   detalleOpen: boolean
+  diaResumenOpen: boolean
 }
 export const DEFAULT_PREFS: Prefs = {
   sortBy: 'Pendientes', compact: false, showRowKpi: true,
@@ -663,6 +664,7 @@ export const DEFAULT_PREFS: Prefs = {
   backlogDone: false, backlogFEpica: 'todas', backlogFStatus: 'todas', backlogFPrio: 'todas',
   featuredId: null,
   detalleOpen: true,
+  diaResumenOpen: true,
 }
 export function loadPrefs(): Prefs {
   if (typeof window === 'undefined') return DEFAULT_PREFS

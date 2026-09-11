@@ -167,6 +167,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
   const [detalleOpen, setDetalleOpen] = useState(true)   // "Todas las actividades" (Detalle del Enfoque) — colapsable igual que el backlog
+  const [diaResumenOpen, setDiaResumenOpen] = useState(true)   // franja L-D + recordatorios + rutinas + arrastre + "trabajaste hoy" en la vista Día — colapsable, toma mucho alto y no siempre hace falta para trabajar la lista
   const [backlogSort, setBacklogSort] = useState<SortSpec>({ key: 'plan', dir: 'asc' })
   // Orden de la lista Detalle del Enfoque ("Todas las actividades") — INDEPENDIENTE de backlogSort
   // (son secciones distintas; si compartieran el mismo estado, ordenar en una movería la otra sin
@@ -493,6 +494,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setBacklogView(p.backlogView)
     setBacklogFEpica(p.backlogFEpica); setBacklogFStatus(p.backlogFStatus); setBacklogFPrio(p.backlogFPrio)
     setDetalleOpen(p.detalleOpen)
+    setDiaResumenOpen(p.diaResumenOpen)
     // La épica destacada se restaura tal cual: loadEpics conserva el valor previo
     // si el id sigue existiendo, y si no cae en la primera de la lista.
     if (p.featuredId) setFeaturedId(p.featuredId)
@@ -504,13 +506,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
       weekEpica, weekDif, routinesOpen, boardHideDone, dayView, boardView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
-      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, detalleOpen,
+      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, detalleOpen, diaResumenOpen,
     }
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)) } catch { /* noop */ }
   }, [sortBy, compact, showRowKpi, estadoFilter, catFilter, planSort, planFilter, planMode,
       weekEpica, weekDif, routinesOpen, boardHideDone, dayView, boardView, epicView, dayCapacity,
       epicSort, epicFilter, backlogOpen, backlogSort, backlogDone, backlogView,
-      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, detalleOpen])
+      backlogFEpica, backlogFStatus, backlogFPrio, featuredId, detalleOpen, diaResumenOpen])
 
   /* ─── Estado en la URL ───────────────────────────────────────
      Vista, día, épica y filtros viajan en el query string: el enlace es
@@ -6255,6 +6257,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             </div>
           </div>
 
+          {/* Colapsa la franja L-D + recordatorios + rutinas + arrastre + "trabajaste hoy": en la
+              vista Día antes no se podía achicar y empujaba la lista de tareas bien abajo. El
+              interruptor de vista (arriba) y los filtros (abajo) se quedan SIEMPRE visibles — sólo
+              se pliega este bloque informativo, que no hace falta ver todo el tiempo para trabajar. */}
+          {!board && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
+              <button onClick={() => setDiaResumenOpen(v => !v)} aria-expanded={diaResumenOpen} aria-controls="dia-resumen-body"
+                style={{ cursor: 'pointer', border: 'none', background: 'transparent', display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 2px', font: '700 10.5px var(--font-ui)', letterSpacing: '.04em', color: 'rgba(20,35,61,0.5)' }}>
+                {diaResumenOpen ? 'Ocultar resumen del día' : 'Mostrar resumen del día'}
+                <span aria-hidden style={{ display: 'inline-block', fontSize: 11, transform: diaResumenOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</span>
+              </button>
+            </div>
+          )}
+
           {/* Filtros por estado de trabajo del día — presentes en las vistas board (salvo Resumen,
               que es un digest semanal y filtrarlo por "trabajo de hoy" vaciaría sus KPIs). */}
           {board && !resumen && renderWorkFilters(today)}
@@ -6339,6 +6355,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             ) : <>{renderBoardFilters(enfEpics, effEnf)}{rangeChips}{renderCalendarPanel(enfRows)}</>
           })()
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
+
+          {diaResumenOpen && (<div id="dia-resumen-body">
 
           {renderDayStrip()}
 
@@ -6491,6 +6509,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )
           })()}
+
+          </div>)}
 
           {empty ? (
             <div style={{ padding: '28px 12px 12px', textAlign: 'center' }}>
