@@ -6179,7 +6179,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   ? <span className="serif plan-date" style={{ fontStyle: 'italic', fontSize: 26, lineHeight: 1, color: '#A87A2C' }}>Enfoque cumplido ✦</span>
                   : <span className="serif plan-date" style={{ fontWeight: 600, fontSize: 30, lineHeight: 1, color: '#10233F' }}>{dateLabel(viewDate)}</span>}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* Plegado a fondo: cuando vistaOpen es false, esta flecha es lo ÚNICO que queda aparte
+                del título — interruptor de vista, filtros y lista viven todos adentro de lo que
+                se pliega, no sólo la lista como antes. */}
+            <button onClick={() => setVistaOpen(v => !v)} aria-expanded={vistaOpen} aria-controls="vista-body" aria-label={vistaOpen ? 'Plegar' : 'Desplegar'}
+              style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 14, flexShrink: 0, transform: vistaOpen ? 'none' : 'rotate(180deg)', transition: 'transform .15s' }}>▾</button>
+          </div>
+
+          {vistaOpen && (<div id="vista-body">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
               {/* Interruptor de horizonte: Día · Semana · 2 sem · 3 sem · Mes */}
               <div role="group" aria-label="Vista del enfoque" className="ep-modes" style={{ display: 'inline-flex', gap: 2, padding: 2, borderRadius: 10, background: 'rgba(15,35,64,0.05)', border: '1px solid rgba(15,35,64,0.08)', flexWrap: 'wrap' }}>
                 {([['dia', 'Día'], ['detalle', 'Detalle'], ['ajuste', 'Ajuste'], ['semana', 'Semana'], ['3sem', '3 sem'], ['agenda', 'Agenda'], ['calendario', 'Calendario'], ['timeline', 'Timeline'], ['resumen', 'Resumen']] as const).map(([m, label]) => {
@@ -6256,20 +6264,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
               <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
-          </div>
 
           {/* Filtros por estado de trabajo del día — presentes en las vistas board (salvo Resumen,
               que es un digest semanal y filtrarlo por "trabajo de hoy" vaciaría sus KPIs). */}
           {board && !resumen && renderWorkFilters(today)}
 
-          {(() => {
-            // Un solo colapsable para las 9 vistas (Día/Detalle/Ajuste/Semana/3 sem/Agenda/
-            // Calendario/Timeline/Resumen) — antes cada vista tenía su propio criterio (o ninguno)
-            // y Día en particular no se podía achicar nada. El interruptor de vista y los botones
-            // de arriba (Cerrar día, +Nueva tarea…) se quedan SIEMPRE visibles: sólo se pliega el
-            // contenido de abajo, igual que ya hacía el backlog.
-            const cuenta = board ? wTot : planTotal
-            const contenido = detalle || agenda ? (() => {
+          {detalle || agenda ? (() => {
             // Vistas Detalle / Agenda en el Enfoque: operan sobre TODAS las tareas activas,
             // con el filtro de épica (chips), dificultad, "ocultar completadas" y un rango
             // de fecha (esta semana / 2 sem / mes) por su día "Hacer".
@@ -6799,22 +6799,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
             )
           })()}
-          </>)
-            return (
-              <div id="vista-body" className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 17px' }}>
-                  <button onClick={() => setVistaOpen(v => !v)} aria-expanded={vistaOpen} aria-controls="vista-body-inner"
-                    style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', border: 'none', background: 'transparent', padding: 0, textAlign: 'left' }}>
-                    {cuenta > 0 && <span className="serif" style={{ fontStyle: 'italic', fontWeight: 600, fontSize: 14, color: '#B58B35' }}>{cuenta}</span>}
-                    <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>{board ? eyebrow : isToday ? 'Enfoque de hoy' : 'Plan del día'}</span>
-                  </button>
-                  <button onClick={() => setVistaOpen(v => !v)} aria-label={vistaOpen ? 'Plegar' : 'Desplegar'}
-                    style={{ cursor: 'pointer', border: 'none', background: 'transparent', padding: 4, fontSize: 12, color: 'rgba(20,35,61,0.55)', transform: vistaOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>▾</button>
-                </div>
-                {vistaOpen && <div id="vista-body-inner" style={{ padding: '0 17px 17px' }}>{contenido}</div>}
-              </div>
-            )
-          })()}
+          </>)}
+          </div>)}
         </div>
       </div>
     )
