@@ -6,8 +6,8 @@ import {
   ResponsiveContainer, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts'
-import { addRegistro, updateRegistro, deleteRegistro } from './actions'
-import type { PesoRecord } from './page'
+import { addRegistro, updateRegistro, deleteRegistro, savePlan } from './actions'
+import type { PesoRecord, PesoPlan } from './page'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -276,7 +276,7 @@ const FORM_FIELDS = [
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-export default function PesoClient({ initialData }: { initialData: PesoRecord[] }) {
+export default function PesoClient({ initialData, initialPlan }: { initialData: PesoRecord[]; initialPlan: PesoPlan | null }) {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<PesoRecord | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -292,20 +292,30 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
   const [trendFrom, setTrendFrom] = useState(defaultFrom)
   const [trendTo, setTrendTo] = useState(lastDate)
 
-  // Chart data — filter RMR outlier (17775)
-  const chartData = useMemo(() =>
-    initialData.map(r => ({
-      fecha: fmtDate(r.fecha),
-      peso: r.peso,
-      pct_grasa: r.pct_grasa,
-      pct_musculo: r.pct_musculo,
-      imc: r.imc,
-      rmr: r.rmr && r.rmr < 5000 ? r.rmr : null,
-      edad_corporal: r.edad_corporal,
-      grasa_visceral: r.grasa_visceral,
-    })),
-    [initialData]
-  )
+  // Chart data — filter RMR outlier (17775). peso_ma = promedio móvil de peso en ventana de 14
+  // días (no de N mediciones: el cadence es irregular, así que una ventana de TIEMPO es la que
+  // de verdad filtra el ruido de agua/sal/glucógeno del que ya avisa el texto de "Qué mide").
+  const chartData = useMemo(() => {
+    return initialData.map(r => {
+      const windowStart = new Date(r.fecha + 'T00:00:00'); windowStart.setDate(windowStart.getDate() - 13)
+      const windowStartStr = windowStart.toISOString().slice(0, 10)
+      const windowVals = initialData
+        .filter(x => x.fecha <= r.fecha && x.fecha >= windowStartStr && x.peso != null)
+        .map(x => x.peso as number)
+      const peso_ma = windowVals.length >= 2 ? windowVals.reduce((s, v) => s + v, 0) / windowVals.length : null
+      return {
+        fecha: fmtDate(r.fecha),
+        peso: r.peso,
+        peso_ma: peso_ma != null ? Math.round(peso_ma * 10) / 10 : null,
+        pct_grasa: r.pct_grasa,
+        pct_musculo: r.pct_musculo,
+        imc: r.imc,
+        rmr: r.rmr && r.rmr < 5000 ? r.rmr : null,
+        edad_corporal: r.edad_corporal,
+        grasa_visceral: r.grasa_visceral,
+      }
+    })
+  }, [initialData])
 
   // Range data for trend analysis
   const inRange = useMemo(() =>
@@ -447,6 +457,12 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
         </form>
       )}
 
+      {/* ── Resultados esperados (meta + proyección) ── */}
+      <MetaSection plan={initialPlan} latest={latest} rangeFirst={rangeFirst} rangeLast={rangeLast} firstEver={first} />
+
+      {/* ── Plan: rutina y dieta ── */}
+      <PlanSection plan={initialPlan} />
+
       {/* ── Summary tiles ── */}
       <SummaryTiles data={initialData} />
 
@@ -514,6 +530,15 @@ export default function PesoClient({ initialData }: { initialData: PesoRecord[] 
                 connectNulls
               />
             ))}
+            {/* Tendencia de peso (promedio móvil 14 días) — el propio texto de "Cómo leer" pide
+                fijarse en tendencia, no en un solo día; antes la gráfica sólo dibujaba el dato crudo. */}
+            {activeMetrics.has('peso') && (
+              <Line
+                yAxisId="kg" type="monotone" dataKey="peso_ma" name="Peso · tendencia 14d"
+                stroke="#2d6cdf" strokeWidth={2} strokeDasharray="5 4" dot={false} activeDot={false}
+                connectNulls opacity={0.55}
+              />
+            )}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -1122,6 +1147,255 @@ function GeneralRec({ rangeFirst, rangeLast }: { rangeFirst: PesoRecord; rangeLa
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ── Plan: rutina y dieta ─────────────────────────────────────────────────────
+// Una sola fila en peso_plan (savePlan hace upsert de TODO el registro) — cada form manda los
+// campos del OTRO bloque como hidden para no borrarlos: PlanSection edita rutina/dieta/notas
+// pero también reenvía meta_*, y MetaSection al revés.
+
+function PlanSection({ plan }: { plan: PesoPlan | null }) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setSaving(true)
+    await savePlan(new FormData(e.currentTarget))
+    setSaving(false)
+    setEditing(false)
+  }
+
+  const hasContent = !!(plan?.rutina || plan?.dieta || plan?.notas)
+  const inputCls = 'w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20'
+
+  if (editing) {
+    return (
+      <form onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 animate-fade">
+        <h2 className="text-base font-semibold text-[var(--ink-950)] mb-4">Editar plan</h2>
+        <input type="hidden" name="meta_peso" value={plan?.meta_peso ?? ''} />
+        <input type="hidden" name="meta_fecha" value={plan?.meta_fecha ?? ''} />
+        <input type="hidden" name="meta_grasa" value={plan?.meta_grasa ?? ''} />
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">🏋️ Rutina</label>
+            <textarea name="rutina" defaultValue={plan?.rutina ?? ''} rows={5} placeholder="Días, ejercicios, series/reps…" className={inputCls} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">🍽️ Dieta</label>
+            <textarea name="dieta" defaultValue={plan?.dieta ?? ''} rows={5} placeholder="Calorías objetivo, macros, comidas del día…" className={inputCls} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">Notas</label>
+            <textarea name="notas" defaultValue={plan?.notas ?? ''} rows={2} placeholder="Lo que quieras recordar…" className={inputCls} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-4">
+          <button type="button" onClick={() => setEditing(false)}
+            className="text-sm font-medium px-4 py-2 rounded-xl border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
+            Cancelar
+          </button>
+          <button type="submit" disabled={saving}
+            className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--blue-600)] transition-colors shadow-sm">
+            {saving ? 'Guardando…' : 'Guardar cambios'}
+          </button>
+        </div>
+      </form>
+    )
+  }
+
+  return (
+    <div className="glass rounded-2xl px-6 py-5 animate-fade">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-semibold text-[var(--ink-950)]">Plan actual</h2>
+        <button onClick={() => setEditing(true)}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
+          {hasContent ? 'Editar' : '+ Definir plan'}
+        </button>
+      </div>
+      {hasContent ? (
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <div className="text-xs font-semibold text-[var(--blue-600)] uppercase tracking-wide mb-1.5">🏋️ Rutina</div>
+            <p className="text-sm text-[var(--ink-900)] whitespace-pre-wrap">{plan?.rutina || 'Sin definir.'}</p>
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-[var(--blue-600)] uppercase tracking-wide mb-1.5">🍽️ Dieta</div>
+            <p className="text-sm text-[var(--ink-900)] whitespace-pre-wrap">{plan?.dieta || 'Sin definir.'}</p>
+          </div>
+          {plan?.notas && (
+            <div className="sm:col-span-2 pt-3 border-t border-[var(--line)]">
+              <div className="text-xs font-semibold text-[var(--ink-700)] mb-1">Notas</div>
+              <p className="text-sm text-[var(--ink-700)] whitespace-pre-wrap">{plan.notas}</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-[var(--ink-700)]">Aún no defines qué rutina ni dieta vas a seguir. Agrégalo para tenerlo siempre a la vista.</p>
+      )}
+    </div>
+  )
+}
+
+// ── Resultados esperados: meta + proyección ──────────────────────────────────
+
+function MetaSection({ plan, latest, rangeFirst, rangeLast, firstEver }: {
+  plan: PesoPlan | null
+  latest: PesoRecord
+  rangeFirst: PesoRecord | null
+  rangeLast: PesoRecord | null
+  firstEver: PesoRecord
+}) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const inputCls = 'w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20'
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setSaving(true)
+    await savePlan(new FormData(e.currentTarget))
+    setSaving(false)
+    setEditing(false)
+  }
+
+  const hasMeta = plan?.meta_peso != null
+
+  if (editing) {
+    return (
+      <form onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 animate-fade">
+        <h2 className="text-base font-semibold text-[var(--ink-950)] mb-4">Editar meta</h2>
+        <input type="hidden" name="rutina" value={plan?.rutina ?? ''} />
+        <input type="hidden" name="dieta" value={plan?.dieta ?? ''} />
+        <input type="hidden" name="notas" value={plan?.notas ?? ''} />
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">Peso meta (kg)</label>
+            <input name="meta_peso" type="number" step="0.1" defaultValue={plan?.meta_peso ?? ''} className={inputCls} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">Fecha meta</label>
+            <input name="meta_fecha" type="date" defaultValue={plan?.meta_fecha ?? ''} className={inputCls} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">% Grasa meta</label>
+            <input name="meta_grasa" type="number" step="0.1" defaultValue={plan?.meta_grasa ?? ''} className={inputCls} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-4">
+          <button type="button" onClick={() => setEditing(false)}
+            className="text-sm font-medium px-4 py-2 rounded-xl border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
+            Cancelar
+          </button>
+          <button type="submit" disabled={saving}
+            className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--blue-600)] transition-colors shadow-sm">
+            {saving ? 'Guardando…' : 'Guardar cambios'}
+          </button>
+        </div>
+      </form>
+    )
+  }
+
+  if (!hasMeta) {
+    return (
+      <div className="glass rounded-2xl px-6 py-5 animate-fade">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <h2 className="text-base font-semibold text-[var(--ink-950)]">Resultados esperados</h2>
+          <button onClick={() => setEditing(true)}
+            className="text-xs font-medium px-3 py-1.5 rounded-lg border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
+            + Poner meta
+          </button>
+        </div>
+        <p className="text-sm text-[var(--ink-700)]">Define un peso y fecha meta para ver tu proyección calculada con tu ritmo actual.</p>
+      </div>
+    )
+  }
+
+  const metaPeso = plan!.meta_peso as number
+  const startPeso = firstEver.peso ?? latest.peso ?? metaPeso
+  const curPeso = latest.peso ?? metaPeso
+  const totalToChange = startPeso - metaPeso   // negativo si la meta es SUBIR de peso
+  const doneSoFar = startPeso - curPeso
+  const progressPct = totalToChange !== 0 ? Math.max(0, Math.min(100, Math.round((doneSoFar / totalToChange) * 100))) : 0
+  const reached = totalToChange >= 0 ? curPeso <= metaPeso : curPeso >= metaPeso
+
+  // Proyección: ritmo del MISMO rango elegido arriba en "Rango de análisis" (rangeFirst → rangeLast) —
+  // así la proyección se mueve con el mismo control que ya usa el resto de la página, sin uno nuevo.
+  let projText: string | null = null
+  let projColor = '#3E5C86'
+  if (!reached && rangeFirst && rangeLast && rangeFirst.peso != null && rangeLast.peso != null && rangeFirst.id !== rangeLast.id) {
+    const days = daysBetween(rangeFirst.fecha, rangeLast.fecha)
+    const kgPerDay = days > 0 ? (rangeLast.peso - rangeFirst.peso) / days : 0
+    const wantDown = metaPeso < curPeso
+    const movingRight = wantDown ? kgPerDay < -0.001 : kgPerDay > 0.001
+    if (!movingRight) {
+      projText = 'A tu ritmo actual no te estás acercando a la meta en el rango seleccionado — ajusta el plan.'
+      projColor = '#ef4444'
+    } else {
+      const daysToGoal = (metaPeso - curPeso) / kgPerDay
+      const projDate = new Date(latest.fecha + 'T00:00:00')
+      projDate.setDate(projDate.getDate() + Math.round(daysToGoal))
+      const projDateStr = projDate.toISOString().slice(0, 10)
+      const kgPerWeek = Math.abs(kgPerDay * 7)
+      if (plan!.meta_fecha) {
+        const onTrack = projDateStr <= plan!.meta_fecha
+        projText = onTrack
+          ? `Vas bien: a ${kgPerWeek.toFixed(2)} kg/semana llegarías el ${fmtDate(projDateStr)}, antes de tu meta (${fmtDate(plan!.meta_fecha)}).`
+          : `A ${kgPerWeek.toFixed(2)} kg/semana llegarías el ${fmtDate(projDateStr)} — después de tu meta (${fmtDate(plan!.meta_fecha)}). Acelera el ritmo o ajusta la fecha.`
+        projColor = onTrack ? '#22c55e' : '#f59e0b'
+      } else {
+        projText = `A tu ritmo actual (${kgPerWeek.toFixed(2)} kg/semana) llegarías el ${fmtDate(projDateStr)}.`
+        projColor = '#2d6cdf'
+      }
+    }
+  }
+
+  const daysLeft = plan!.meta_fecha ? daysBetween(latest.fecha, plan!.meta_fecha) : null
+
+  return (
+    <div className="glass rounded-2xl px-6 py-5 animate-fade">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 className="text-base font-semibold text-[var(--ink-950)]">Resultados esperados</h2>
+        <button onClick={() => setEditing(true)}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
+          Editar meta
+        </button>
+      </div>
+
+      <div className="flex items-end justify-between gap-3 mb-3 flex-wrap">
+        <div>
+          <div className="text-2xl font-bold tabular-nums text-[var(--blue-500)]">{metaPeso} kg</div>
+          <div className="text-xs text-[var(--ink-700)]">
+            meta{plan!.meta_fecha ? ` para ${fmtDate(plan!.meta_fecha)}` : ''}{plan!.meta_grasa != null ? ` · ${plan!.meta_grasa}% grasa` : ''}
+          </div>
+        </div>
+        {daysLeft != null && !reached && (
+          <div className={`text-sm font-semibold tabular-nums ${daysLeft < 0 ? 'text-red-500' : 'text-[var(--ink-900)]'}`}>
+            {daysLeft < 0 ? `${Math.abs(daysLeft)} d de retraso` : `${daysLeft} d restantes`}
+          </div>
+        )}
+      </div>
+
+      {reached ? (
+        <div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm font-semibold text-green-700">✓ Meta alcanzada ({curPeso} kg).</div>
+      ) : (
+        <>
+          <div className="h-2.5 rounded-full bg-[var(--line)]/60 overflow-hidden mb-1.5">
+            <div className="h-full rounded-full transition-all" style={{ width: `${progressPct}%`, background: '#2d6cdf' }} />
+          </div>
+          <div className="flex items-center justify-between text-xs text-[var(--ink-700)] mb-3">
+            <span>{startPeso} kg</span>
+            <span className="font-semibold text-[var(--blue-600)]">{progressPct}% del camino · {curPeso} kg ahora</span>
+            <span>{metaPeso} kg</span>
+          </div>
+          {projText && (
+            <div className="text-xs font-medium rounded-lg px-3 py-2" style={{ background: `${projColor}12`, color: projColor }}>
+              {projText}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

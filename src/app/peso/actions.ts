@@ -53,3 +53,26 @@ export async function deleteRegistro(id: string) {
   await supabase.from('peso_registros').delete().eq('id', id)
   revalidatePath('/peso')
 }
+
+// Una sola fila (id fijo 'main') con el plan de rutina/dieta y la meta — upsert, no insert, para
+// no tener que distinguir "crear" de "editar" en el cliente (siempre hay a lo más una fila).
+export async function savePlan(formData: FormData) {
+  const str = (key: string) => {
+    const v = formData.get(key) as string
+    return v && v.trim() ? v.trim() : null
+  }
+  const num = (key: string) => {
+    const v = formData.get(key) as string
+    return v ? parseFloat(v) : null
+  }
+  await supabase.from('peso_plan').upsert({
+    id: 'main',
+    rutina: str('rutina'),
+    dieta: str('dieta'),
+    notas: str('notas'),
+    meta_peso: num('meta_peso'),
+    meta_fecha: str('meta_fecha'),
+    meta_grasa: num('meta_grasa'),
+  })
+  revalidatePath('/peso')
+}
