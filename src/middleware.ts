@@ -1,6 +1,11 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+// El proyecto de Supabase es compartido con otras apps (mi-vida, lighthouse, asistencia…), así que
+// tener sesión no basta: tiene que ser una cuenta de Andrés. La API usa la service key (se salta RLS),
+// por lo que este es el único candado entre cualquier cuenta del proyecto y todos los datos.
+const CUENTAS_CON_ACCESO = ['andresdeleo2@gmail.com', 'andres@a-dvl.com']
+
 // Protege toda la página y la API con Supabase Auth (mismo patrón que dashboard-finanzas).
 export async function middleware(request: NextRequest) {
   // Cron de recordatorios push: lo llama Vercel Cron (o un cron externo) SIN sesión de usuario, así
@@ -60,7 +65,26 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(redirect)
   }
 
-  if (user && pathname.startsWith('/login')) {
+  if (!CUENTAS_CON_ACCESO.includes((user.email ?? '').toLowerCase())) {
+    let res: NextResponse
+    if (pathname.startsWith('/api/')) {
+      res = NextResponse.json({ ok: false, error: 'cuenta sin acceso' }, { status: 403 })
+    } else if (pathname.startsWith('/login')) {
+      res = NextResponse.next({ request })
+    } else {
+      const redirect = request.nextUrl.clone()
+      redirect.pathname = '/login'
+      redirect.search = '?e=cuenta'
+      res = NextResponse.redirect(redirect)
+    }
+    // path '/' explícito: sin él, el borrado desde /api/x/y quedaría con path '/api/x' y no tocaría la cookie real.
+    for (const c of request.cookies.getAll()) {
+      if (c.name.startsWith('sb-')) res.cookies.set(c.name, '', { path: '/', maxAge: 0 })
+    }
+    return res
+  }
+
+  if (pathname.startsWith('/login')) {
     const redirect = request.nextUrl.clone()
     redirect.pathname = '/'
     return NextResponse.redirect(redirect)

@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v79-peso-plan-y-meta */
+/* BUILD-MARKER: v80-seguridad-acceso-xss-next */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */

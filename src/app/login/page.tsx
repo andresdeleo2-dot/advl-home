@@ -1,7 +1,6 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 
 export default function Login() {
@@ -9,7 +8,12 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const router = useRouter()
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('e') === 'cuenta') {
+      setError('Esa cuenta no tiene acceso a este panel')
+    }
+  }, [])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,8 +28,9 @@ export default function Login() {
       setError('Email o contraseña incorrectos')
       setLoading(false)
     } else {
-      router.push('/')
-      router.refresh()
+      // Navegación completa: si la cuenta no tiene acceso, el middleware regresa a /login?e=cuenta y
+      // esta página se vuelve a montar para mostrar el aviso (con router.push se quedaba en "Entrando…").
+      window.location.assign('/')
     }
   }
 

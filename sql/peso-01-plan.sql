@@ -11,6 +11,9 @@ create table if not exists peso_plan (
   updated_at timestamptz not null default now()
 );
 
+-- Solo se accede desde el servidor con la service key; sin políticas, la llave pública no ve nada.
+alter table peso_plan enable row level security;
+
 create or replace function peso_plan_touch_updated_at() returns trigger language plpgsql as $$
 begin new.updated_at = now(); return new; end $$;
 
