@@ -57,6 +57,35 @@ export type AppData = {
 
 export const KEY = 'margen.v1'
 
+/** Marca durable de "/tiempo tiene cambios hechos sin una lectura válida del servidor" (sobrevive a
+ *  recargas/cierres de la PWA). `rows` = renglones de historial creados entonces y aún no confirmados
+ *  en el server: se conservan al reconciliar aunque el server traiga algo más nuevo. `base` = el estado
+ *  contra el que se miden esas ediciones (KEY ya las trae); un PUT confirmado la descarta (settleDirty). */
+export const DIRTY_KEY = KEY + '.dirty'
+/** Identidad de un renglón de historial: su logId o, si no tiene, su contenido. */
+export const rowKey = (h: HistoryRow) => h.logId || `${h.date}|${h.start}|${h.dur}|${h.area}|${h.name}`
+/** Agrega a `base` los renglones de `rows` que no tenga (por rowKey). El sueño es UNO por fecha: un
+ *  renglón de sueño agregado reemplaza al de esa fecha en `base` (si no, se sumarían dos noches). */
+export function addRows(base: HistoryRow[], rows: HistoryRow[]): HistoryRow[] {
+  const have = new Set(base.map(rowKey))
+  const add = rows.filter(r => !have.has(rowKey(r)))
+  if (!add.length) return base
+  const sleepDays = new Set(add.filter(r => r.area === 'sueno').map(r => r.date))
+  return (sleepDays.size ? base.filter(h => !(h.area === 'sueno' && sleepDays.has(h.date))) : base).concat(add)
+}
+/** Tras un PUT CONFIRMADO de `uploaded`: los renglones pendientes que ese blob ya llevaba dejan de
+ *  estarlo; sin pendientes se borra la marca. Devuelve los que siguen pendientes. */
+export function settleDirty(uploaded: HistoryRow[]): HistoryRow[] {
+  try {
+    const raw = localStorage.getItem(DIRTY_KEY); if (!raw) return []
+    const rows = JSON.parse(raw)?.rows
+    const have = new Set(uploaded.map(rowKey))
+    const left: HistoryRow[] = Array.isArray(rows) ? rows.filter((r: HistoryRow) => !have.has(rowKey(r))) : []
+    if (left.length) localStorage.setItem(DIRTY_KEY, JSON.stringify({ rows: left })); else localStorage.removeItem(DIRTY_KEY)
+    return left
+  } catch { return [] }
+}
+
 export const AREAS: Record<Area, { label: string; color: string }> = {
   trabajo: { label: 'Trabajo', color: '#b4653a' },
   cuerpo: { label: 'Cuerpo', color: '#6f8256' },
@@ -112,13 +141,14 @@ export function defaults(): AppData {
     bed: 1350,
     sleep: 480,
     session: null,
-    history: seed(),
+    // Historial VACÍO (no seed()): un dispositivo sin datos no debe mostrar ni poder subir días inventados.
+    history: [],
     scheduled: [],
     focusGoal: 180,
   }
 }
 
-/** Semana de datos sembrados, para que Historial no arranque vacío. */
+/** Semana de datos de ejemplo. Ya no la usa defaults(): no debe mezclarse con el historial real. */
 export function seed(): HistoryRow[] {
   const out: HistoryRow[] = [], today = new Date()
   for (let i = 7; i >= 1; i--) {

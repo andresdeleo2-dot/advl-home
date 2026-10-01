@@ -7,7 +7,7 @@ import FavoritosStrip from '@/components/FavoritosStrip'
 import PushReminders from '@/components/PushReminders'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
-  DOW_CHIPS, blockActiveOn, daysLabel,
+  DOW_CHIPS, blockActiveOn, daysLabel, DIRTY_KEY, rowKey, addRows, settleDirty,
   type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
 } from '@/lib/tiempo'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink, EpicaFeature } from '@/lib/supabase'
@@ -31,6 +31,35 @@ const PRIO_TONE: Record<string, string> = { alta: '#B0522E', media: '#A87A2C', b
 type Filters = { epica: string | null; prio: Set<string>; diff: Set<string>; estado: Set<string> }
 
 const TS_KEY = KEY + '.ts'
+// Sesión a conservar al adoptar un blob entrante (misma regla que adopt/onStorage): gana la de `mod`
+// más nuevo; la local se descarta si ya terminó en otro lado (tombstone sessionEnd posterior a su inicio).
+const pickSession = (local: AppData['session'], inc: AppData): AppData['session'] => {
+  if (local && inc.session) return (local.mod || 0) >= (inc.session.mod || 0) ? local : inc.session
+  if (local && !inc.session) return (Number(inc.sessionEnd) || 0) > (local.startedAt || 0) ? null : local
+  return inc.session
+}
+// Reconciliar lo editado aquí SIN sincronizar (de `base` a `local`) con un blob más nuevo (`other`):
+// se aplica encima sólo lo que cambió aquí, sin tirar lo demás de `other`. Listas por identidad
+// (historial por rowKey, agendados y bloques por id: borrados, ediciones y nuevos); lo demás (MIT,
+// meta, sueño…) gana lo de aquí si cambió. La sesión va aparte (pickSession).
+const sameJ = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b)
+function diffList<T>(b: T[], l: T[], o: T[], id: (x: T) => string): [T[], T[]] {
+  const bm = new Map(b.map(x => [id(x), x])), lm = new Map(l.map(x => [id(x), x]))
+  const kept = o.filter(x => !bm.has(id(x)) || lm.has(id(x)))   // fuera lo que se borró aquí
+    .map(x => { const k = id(x), lx = lm.get(k); return lx !== undefined && bm.has(k) && !sameJ(bm.get(k), lx) ? lx : x })   // lo editado aquí gana
+  return [kept, l.filter(x => !bm.has(id(x)))]   // + lo nuevo de aquí
+}
+function mergeLocal(base: AppData, local: AppData, other: AppData): AppData {
+  const out: AppData = { ...other }
+  for (const k of Object.keys(local) as (keyof AppData)[]) {
+    if (k === 'session' || k === 'sessionEnd' || sameJ(base[k], local[k])) continue
+    if (k === 'history') { const [kept, add] = diffList(base.history || [], local.history || [], other.history || [], rowKey); out.history = addRows(kept, add) }
+    else if (k === 'scheduled') { const [kept, add] = diffList(base.scheduled || [], local.scheduled || [], other.scheduled || [], x => x.id); out.scheduled = kept.concat(add.filter(a => !kept.some(x => x.id === a.id))) }
+    else if (k === 'blocks') { const [kept, add] = diffList(base.blocks || [], local.blocks || [], other.blocks || [], x => x.id); out.blocks = kept.concat(add.filter(a => !kept.some(x => x.id === a.id))) }
+    else (out as Record<string, unknown>)[k] = local[k]
+  }
+  return out
+}
 // Minutos transcurridos de una sesión, tolerando cruce de medianoche (now se reinicia
 // a minutos-del-día). Si la resta es fuertemente negativa (cruzó medianoche), +1440.
 const elapsedMin = (start: number, nowMin: number) => { let d = nowMin - start; if (d < -1) d += 1440; return d }
@@ -156,6 +185,8 @@ export default function TiempoClient() {
   const [saveErrMsg, setSaveErrMsg] = useState('')           // mensaje exacto del error (diagnóstico)
   const [undo, setUndo] = useState<{ msg: string; fn: () => void } | null>(null)  // toast "deshacer"
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [syncNote, setSyncNote] = useState(false)            // aviso "cargando tu estado" (aparte: no pisa un "deshacer" pendiente)
+  const syncNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pendingStart, setPendingStart] = useState<string | null>(null)  // ?start=<taskId> desde Épicas
   const [focusOpen, setFocusOpen] = useState(false)          // Modo foco: overlay a pantalla completa de la sesión
   const [workedOpen, setWorkedOpen] = useState(false)        // dropdown "ya trabajadas hoy" bajo las tareas del día (cerrado por defecto)
@@ -170,6 +201,16 @@ export default function TiempoClient() {
   const [sortBy, setSortBy] = useState<'manual' | 'plan' | 'alfa' | 'prioridad' | 'dificultad'>('plan')
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
+  // Hasta la PRIMERA lectura válida del servidor no se sube nada: un blob viejo o recién creado
+  // en este dispositivo pisaría el historial real (y los demás dispositivos lo adoptarían).
+  const syncedRef = useRef(false)
+  const dirtyRef = useRef(false)   // hubo cambios locales antes de esa lectura (se suben si el server no traía algo más nuevo)
+  const baseRef = useRef<AppData | null>(null)   // copia de lo local al cerrar la subida: contra ella se mide qué se editó aquí sin sincronizar
+  const pendRowsRef = useRef<HistoryRow[]>([])   // renglones de historial creados sin sincronizar y aún no confirmados en el server (se conservan aunque gane el server)
+  const repullRef = useRef<() => void>(() => {}) // relanza la lectura inicial (con reintentos) tras re-cerrar la subida
+  const lastOkRef = useRef(0)      // última lectura/escritura confirmada con el server: si es vieja, lo local puede estar viejo
+  const aliveRef = useRef(true)    // montado: una respuesta que llega tras desmontar NO escribe KEY/TS_KEY ni sube nada
+  const pushingRef = useRef(false) // hay un PUT propio en vuelo: una lectura que llegue mientras tanto no lo refleja aún (no se adopta)
   const tasksRef = useRef<TodayTask[]>([])
   useEffect(() => { tasksRef.current = allTasks || [] }, [allTasks])
   // Espejo siempre-fresco de `data`: save() mezcla sobre ESTE (no sobre el `data` capturado por
@@ -181,39 +222,90 @@ export default function TiempoClient() {
   const pendingSync = useRef<Map<string, { epicaId: string; task: EpicaTask }>>(new Map())
 
   useEffect(() => {
-    let d = defaults()
+    let d = defaults(), base: AppData | null = null
     try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
-    const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
-    setData(d); setLoaded(true); tick()
-    // El ritmo del reloj lo maneja otro efecto (1s en sesión activa, 15s en reposo).
-    const onVis = () => { if (document.visibilityState === 'visible') tick() }
-    document.addEventListener('visibilitychange', onVis)
-    // Flush del último push pendiente al salir/cerrar (keepalive), para no perder la
-    // última edición si se desmonta o se cierra la pestaña dentro de la ventana del debounce.
-    const flush = () => { if (!pendingPush.current) return; const body = pendingPush.current; pendingPush.current = null; fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }), keepalive: true }).catch(() => {}) }
-    window.addEventListener('pagehide', flush)
-    // Estado durable en Supabase: gana el más nuevo (por ts). Si el server no tiene
-    // nada y aquí sí, se sube (migración). localStorage queda como caché offline.
-    fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
-      if (!j?.ok) return
-      const serverTs = Number(j.ts) || 0
-      // Re-lee el ts local AHORA: el usuario pudo editar mientras el fetch estaba en vuelo.
-      const curTs = Number(localStorage.getItem(TS_KEY) || 0)
-      if (serverTs > curTs && j.data && Object.keys(j.data).length) {
-        const merged = Object.assign(defaults(), j.data)
-        setData(merged)
-        try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
-      } else if (j.ready && curTs > 0 && serverTs < curTs) {
-        // Migración/subida SOLO si el server respondió bien (ready): usa el estado local MÁS
-        // FRESCO (no el snapshot de montaje), para no reenviar datos pre-edición.
-        let localData = d
-        try { const raw = localStorage.getItem(KEY); if (raw) localData = Object.assign(defaults(), JSON.parse(raw)) } catch {}
-        fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: localData }) })
-          .then(r => r.json()).then(k => { if (k?.ts) try { localStorage.setItem(TS_KEY, String(k.ts)) } catch {} }).catch(() => {})
+    try {
+      const m = localStorage.getItem(DIRTY_KEY)
+      if (m) {
+        dirtyRef.current = true
+        const mk = JSON.parse(m)
+        if (Array.isArray(mk?.rows)) { pendRowsRef.current = mk.rows; d = { ...d, history: addRows(d.history, mk.rows) } }
+        // KEY ya trae lo editado sin sincronizar en un montaje anterior: se mide contra la base guardada con la marca.
+        if (mk?.base) base = Object.assign(defaults(), mk.base) as AppData
       }
-    }).catch(() => {})
-    return () => { if (pushTimer.current) clearTimeout(pushTimer.current); flush(); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', onVis) }
+    } catch {}
+    const tick = () => { const x = new Date(); setNow(x.getHours() * 60 + x.getMinutes() + x.getSeconds() / 60) }
+    dataRef.current = d; baseRef.current = base || d; setData(d); setLoaded(true); tick()
+    // Flush del último push pendiente al ocultarse, salir o cerrar, para no perder la última edición
+    // si se desmonta o se cierra la pestaña dentro de la ventana del debounce.
+    const flush = () => pushNow(true)
+    // El ritmo del reloj lo maneja otro efecto (1s en sesión activa, 15s en reposo). Al ocultarse se sube ya
+    // lo pendiente: iOS congela el JS sin pagehide y el debounce saldría al volver, con datos viejos.
+    const onVis = () => { if (document.visibilityState === 'visible') tick(); else flush() }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('pagehide', flush)
+    // Estado durable en Supabase (ver pullState). Si la lectura falla se sigue en local, sin subir,
+    // y se reintenta con espera creciente (también al volver a la pestaña, en adopt()).
+    let alive = true, retryT: ReturnType<typeof setTimeout> | null = null, delay = 3000, inFlight = false
+    aliveRef.current = true
+    const firstPull = () => {
+      if (!alive || syncedRef.current || inFlight) return
+      inFlight = true
+      pullState().then(() => { inFlight = false }, () => {
+        inFlight = false
+        if (!alive || syncedRef.current) return
+        // Sólo si de verdad hay cambios sin subir (si no, el aviso de "no se pudo guardar" sería falso).
+        if (dirtyRef.current) { setSaveErr(true); setSaveErrMsg('Sin conexión con el servidor: tus cambios se guardan sólo en este dispositivo hasta reconectar.') }
+        retryT = setTimeout(firstPull, delay); delay = Math.min(delay * 2, 60000)
+      })
+    }
+    repullRef.current = () => { if (retryT) clearTimeout(retryT); retryT = null; delay = 3000; firstPull() }
+    firstPull()
+    return () => { alive = false; aliveRef.current = false; if (retryT) clearTimeout(retryT); if (pushTimer.current) clearTimeout(pushTimer.current); flush(); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', onVis) }
   }, [])
+
+  // Lee el estado del servidor. La PRIMERA lectura válida reconcilia y abre la subida (syncedRef):
+  // se toma lo más nuevo (el server si su ts es mayor; si no, lo guardado en este navegador) y ENCIMA
+  // se aplica lo editado aquí sin sincronizar + los renglones pendientes; luego se sube si hace falta.
+  function pullState(): Promise<void> {
+    // Con tope de tiempo: una petición colgada (conexión muerta tras cambiar de red) dejaría inFlight sin reintentos.
+    return fetch('/api/tiempo-estado', { signal: AbortSignal.timeout?.(10000) }).then(r => r.json()).then(j => {
+      if (!j?.ok || !j.ready) throw new Error('estado del servidor no disponible')
+      if (!aliveRef.current || syncedRef.current) return   // desmontado (no escribas desde una instancia muerta) o ya reconciliado
+      const serverTs = Number(j.ts) || 0
+      // Re-lee el ts local AHORA (antes de sincronizar save() no lo toca: describe lo guardado en KEY).
+      const curTs = Number(localStorage.getItem(TS_KEY) || 0)
+      const fromServer = serverTs > curTs && !!j.data && Object.keys(j.data).length > 0
+      const local = dataRef.current, base = baseRef.current, wasDirty = dirtyRef.current
+      // Contra qué se reconcilia: el server si es más nuevo; si no, KEY (lo que TS_KEY describe: otra
+      // pestaña o instancia pudo adelantarlo sin que esta memoria lo viera).
+      let other: AppData = local
+      if (fromServer) other = Object.assign(defaults(), j.data) as AppData
+      else try { const raw = localStorage.getItem(KEY); if (raw) other = Object.assign(defaults(), JSON.parse(raw)) as AppData } catch {}
+      const m = wasDirty && base ? mergeLocal(base, local, other) : other
+      const history = addRows(m.history, pendRowsRef.current)
+      const merged: AppData = { ...m, history, session: pickSession(local.session, other) }
+      // El editor de registro va por índice: si cambiaron los renglones u orden, apuntaría a otro → se cierra.
+      if (!sameJ(merged.history.map(rowKey), local.history.map(rowKey))) setHistIdx(null)
+      dataRef.current = merged; setData(merged)
+      try { localStorage.setItem(KEY, JSON.stringify(merged)); if (fromServer) localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
+      syncedRef.current = true; dirtyRef.current = false; lastOkRef.current = Date.now(); setSyncNote(false)
+      setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('')
+      // Se sube si aquí hubo cambios, si se rescataron renglones o la sesión de aquí, o si lo local es más
+      // nuevo que el server (migración). La marca DIRTY_KEY se borra cuando ese PUT se confirma.
+      // Sesión por identidad, no por JSON: jsonb reordena las llaves y daría "distinta" (un PUT de más) siendo la misma.
+      const ms = merged.session, os = other.session
+      const sameSess = ms === os || (!!ms && !!os && ms.startedAt === os.startedAt && ms.mod === os.mod)
+      const needPush = wasDirty || history !== m.history || !sameSess || (!fromServer && curTs > 0 && serverTs < curTs)
+      if (needPush) {
+        // Lo de aquí ya va encima de lo del server: ésa es la nueva base si esta subida no llega a confirmarse
+        // (si `other` es KEY ya trae estas ediciones; ahí la base anterior sigue siendo la correcta).
+        if (wasDirty && fromServer) try { localStorage.setItem(DIRTY_KEY, JSON.stringify({ rows: pendRowsRef.current, base: other })) } catch {}
+        save({})
+      }
+      else { pendRowsRef.current = []; try { localStorage.removeItem(DIRTY_KEY) } catch {} }
+    })
+  }
 
   // Reloj: 1s mientras hay sesión activa (cronómetro vivo), 15s en reposo para ahorrar renders.
   const sessionActive = !!data.session
@@ -360,14 +452,20 @@ export default function TiempoClient() {
     // Re-lee el estado durable del servidor al volver: si OTRO dispositivo/pestaña lo dejó más
     // nuevo (serverTs > el ts local), lo ADOPTA antes de seguir editando aquí. Así una edición en
     // el teléfono no se pierde cuando la laptop (con estado viejo en memoria) guarde encima.
-    // No adopta con un editor abierto ni con una sesión en curso (para no pisar trabajo en vuelo).
+    // Conserva la sesión viva de aquí (pickSession). También corre cada 25s con la pestaña visible, aun
+    // con un editor abierto: si no hay nada más nuevo la lectura cuenta como vigente (lastOkRef).
     const adopt = () => {
-      if (!canRefresh()) return   // no adopta con un editor abierto (edición por índice)
+      if (document.visibilityState !== 'visible') return
+      if (!syncedRef.current) { repullRef.current(); return }   // sin lectura válida vigente: (re)intenta ésa
       fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
-        if (!j?.ok || !canRefresh()) return
+        if (!j?.ok || !j.ready || !aliveRef.current || !syncedRef.current) return   // muerta o re-cerrada: no escribas
+        if (pendingPush.current || pushingRef.current) return   // subida propia pendiente/en vuelo: esta lectura no la trae (su respuesta sí)
         const serverTs = Number(j.ts) || 0
         const curTs = Number(localStorage.getItem(TS_KEY) || 0)
         if (serverTs > curTs && j.data && Object.keys(j.data).length) {
+          // Con un editor abierto (va por índice) no se reemplaza de golpe, pero tampoco se sigue subiendo lo
+          // viejo: se re-cierra la subida y pullState reconcilia (lo editado aquí se aplica encima de lo nuevo).
+          if (!canRefresh()) { syncedRef.current = false; baseRef.current = dataRef.current; repullRef.current(); return }
           const sv = Object.assign(defaults(), j.data)
           // Sesión: gana la de `mod` más nuevo; si la local ya terminó en OTRO dispositivo (tombstone
           // sessionEnd > su inicio), se limpia — así el cronómetro no queda "vivo" ni se registra doble.
@@ -377,18 +475,34 @@ export default function TiempoClient() {
             ? ((localSess.mod || 0) >= (sv.session.mod || 0) ? localSess : sv.session)
             : (localSess && !sv.session) ? (endedElsewhere ? null : localSess) : sv.session
           const merged = { ...sv, session: sess }
-          setData(merged)
+          dataRef.current = merged; setData(merged)
           try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
         }
+        lastOkRef.current = Date.now()
       }).catch(() => {})
     }
-    const onVis = () => { if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
-    const onFocus = () => { if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
+    // Si hace >1 min que no hay una lectura/escritura confirmada (segundo plano, laptop dormida, red
+    // caída…), lo local puede estar viejo: se re-cierra la subida (y la sesión) hasta releer. Lo que se
+    // edite mientras tanto se aplica encima de lo leído (pullState), no se pierde.
+    const recheck = () => {
+      if (!syncedRef.current || document.visibilityState !== 'visible' || Date.now() - lastOkRef.current <= 60000) return
+      if (pendingPush.current || pushingRef.current) return   // su confirmación renueva la vigencia
+      syncedRef.current = false; baseRef.current = dataRef.current; repullRef.current()
+    }
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      recheck()
+      if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() }
+    }
+    const onFocus = () => { recheck(); if (canRefresh()) { adopt(); refreshTasks(); loadMeetings() } }
     // OTRA pestaña del MISMO navegador (p.ej. el widget de foco en /epicas) cambió margen.v1 →
     // adóptalo en memoria. Sin esto, esta pestaña quedaba ciega y su próximo save() pisaba la
     // sesión/el historial escritos desde /epicas. No adopta con un editor abierto (edición por índice).
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== KEY || !e.newValue || editorOpenRef.current) return
+      if (e.key !== KEY || !e.newValue) return
+      // Con un editor abierto no se reemplaza (va por índice), pero tampoco se sigue con la copia vieja (su
+      // próximo save pisaría lo de la otra pestaña): se re-cierra la subida y pullState reconcilia sobre KEY.
+      if (editorOpenRef.current) { if (syncedRef.current) { syncedRef.current = false; baseRef.current = dataRef.current; repullRef.current() } return }
       try {
         const inc = Object.assign(defaults(), JSON.parse(e.newValue))
         // Elige la sesión a conservar: si AMBAS traen una, gana la de `mod` más nuevo (así un
@@ -403,11 +517,13 @@ export default function TiempoClient() {
       } catch {}
     }
     document.addEventListener('visibilitychange', onVis)
+    document.addEventListener('pointerdown', recheck, true)   // antes del clic: una acción sobre lo viejo espera a releer
     window.addEventListener('focus', onFocus)
     window.addEventListener('storage', onStorage)
-    // Poll "en vivo": cada 25s (salvo con un editor abierto) refleja cambios de Épicas sin recargar.
-    const id = setInterval(() => { if (canRefresh()) refreshTasks() }, 25000)
-    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onFocus); window.removeEventListener('storage', onStorage) }
+    // Poll "en vivo": cada 25s refleja cambios de Épicas (salvo con un editor abierto) y del estado de
+    // Tiempo de otros dispositivos, sin recargar.
+    const id = setInterval(() => { if (document.visibilityState !== 'visible') return; adopt(); if (canRefresh()) refreshTasks() }, 25000)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('pointerdown', recheck, true); window.removeEventListener('focus', onFocus); window.removeEventListener('storage', onStorage) }
   }, [refreshTasks, loadMeetings])
 
   // Tareas del día visible (plan === día, o recurrente que aplica ese día).
@@ -517,6 +633,7 @@ export default function TiempoClient() {
   const waitTasks = useMemo(() => filteredTasks === null ? [] : filteredTasks.filter(t => t.task.status === 'Esperando'), [filteredTasks])
 
   function save(patch: Partial<AppData>) {
+    const prevH = dataRef.current.history
     const nd = { ...dataRef.current, ...patch }
     dataRef.current = nd
     // Poda: conserva ~12 semanas de historial (Historial sólo usa la última semana); evita que
@@ -532,18 +649,53 @@ export default function TiempoClient() {
     // backToTasks son claves `fecha·id`: conserva sólo las de hoy (la lista de tareas es del día).
     if (nd.backToTasks && nd.backToTasks.length) nd.backToTasks = nd.backToTasks.filter(k => k.split('·')[0] === t0)
     setData(nd)
+    // Sin una lectura válida vigente del servidor: sólo local, sin tocar el ts (sigue siendo la versión
+    // base para comparar) ni subir; pullState() lo reconcilia (aplicándolo encima de lo más nuevo) y lo sube.
+    // Los renglones NUEVOS (o ediciones de ésos) quedan pendientes en DIRTY_KEY hasta que un PUT los confirme;
+    // ya sincronizado, borrar/editar un pendiente también lo actualiza ahí (si no, revivía al reconciliar).
+    const pre = !syncedRef.current
+    if (pre) dirtyRef.current = true
+    if (patch.history && patch.history !== prevH && (pre || pendRowsRef.current.length)) {
+      const nextSet = new Set(patch.history), prevSet = new Set(prevH)
+      const rm = new Set(prevH.filter(h => !nextSet.has(h)).map(rowKey)), add = patch.history.filter(h => !prevSet.has(h))
+      const wasPend = pendRowsRef.current.some(p => rm.has(rowKey(p)))
+      pendRowsRef.current = pendRowsRef.current.filter(p => !rm.has(rowKey(p))).concat(wasPend || (pre && rm.size === 0) ? add : [])
+      if (!pre) try { if (pendRowsRef.current.length) localStorage.setItem(DIRTY_KEY, JSON.stringify({ rows: pendRowsRef.current })); else localStorage.removeItem(DIRTY_KEY) } catch {}
+    }
+    if (pre) {
+      // La base va con la marca: tras recargar o cerrar, KEY ya trae estas ediciones y sólo contra ella se distinguen.
+      try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(DIRTY_KEY, JSON.stringify({ rows: pendRowsRef.current, base: baseRef.current })) } catch {}
+      return
+    }
     try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(Date.now())) } catch {}
     // Push durable a Supabase (debounce): localStorage es el instantáneo/offline. El ts lo
     // asigna el servidor y lo guardamos al responder (fuente única de versión).
     pendingPush.current = nd
     if (pushTimer.current) clearTimeout(pushTimer.current)
-    pushTimer.current = setTimeout(() => {
-      const body = pendingPush.current; pendingPush.current = null
-      fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }) })
-        .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('estado ' + r.status + ' ' + t.slice(0, 160)) } return r.json() })
-        .then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} ; setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('') })
-        .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] guardado de estado falló:', e) })
-    }, 900)
+    pushTimer.current = setTimeout(() => pushNow(), 900)
+  }
+  // Sube lo pendiente (debounce o flush). Con keepalive (ocultar/cerrar/desmontar) la respuesta igual se
+  // procesa si la página sigue viva: sin eso los renglones pendientes nunca se daban por confirmados.
+  function pushNow(keepalive = false) {
+    const body = pendingPush.current; pendingPush.current = null
+    if (!body) return   // ya lo subió flush(): un PUT de `null` dejaría el estado del server VACÍO
+    const json = JSON.stringify({ data: body })
+    pushingRef.current = true
+    // keepalive rechaza cuerpos de más de 64 KB: arriba de eso va como petición normal.
+    fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: json, keepalive: keepalive && new Blob([json]).size < 60000 })
+      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('estado ' + r.status + ' ' + t.slice(0, 160)) } return r.json() })
+      .then(j => {
+        if (j?.ts) {
+          try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {}
+          lastOkRef.current = Date.now()
+          // Confirmado: los renglones pendientes que este blob llevaba dejan de estarlo (y sin pendientes se
+          // borra la marca). No si ya hay otros cambios sin sincronizar esperando su propia reconciliación.
+          if (!dirtyRef.current) pendRowsRef.current = settleDirty(body.history || [])
+        }
+        setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('')
+      })
+      .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] guardado de estado falló:', e) })
+      .finally(() => { pushingRef.current = false })
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
     save({ blocks: data.blocks.map(b => b.id === id ? { ...b, ...patch } : b) })
@@ -1175,10 +1327,21 @@ export default function TiempoClient() {
       })
       .catch(e => { if (task.id) pendingSync.current.set(task.id, { epicaId, task }); setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] sync de tarea falló:', e) })
   }
+  // Mismo candado que FocusSession: sin una lectura válida del servidor no se toca la sesión (la de
+  // este equipo puede ser vieja, ya haber terminado en otro, o haber otra viva en el server).
+  const notSynced = () => {
+    if (syncedRef.current) return false
+    repullRef.current()   // reintenta YA (sin esperar la espera creciente)
+    setSyncNote(true)
+    if (syncNoteTimer.current) clearTimeout(syncNoteTimer.current)
+    syncNoteTimer.current = setTimeout(() => setSyncNote(false), 5000)
+    return true
+  }
   // Empieza una sesión NUEVA. Si ya hay una en curso, la cierra REGISTRANDO su tiempo (no la
   // descarta) tras confirmar, y arranca la nueva en UNA sola escritura (más `extraPatch`, p. ej.
   // sacar un bloque de agendados). Devuelve true si arrancó (false si el usuario canceló).
   const beginSession = (nsIn: NonNullable<AppData['session']>, extraPatch: Partial<AppData> = {}): boolean => {
+    if (notSynced()) return false
     const t0ms = Date.now()
     const ns = { ...nsIn, origStart: nsIn.start, startedAt: t0ms, segAt: t0ms, mod: t0ms, segs: [] as [number, number][] }   // ancla al reloj real
     const s = data.session
@@ -1431,7 +1594,7 @@ export default function TiempoClient() {
   // Cierra el bloque en curso: lo registra en el día y, si es una tarea de Épicas,
   // le SUMA el tiempo invertido (entra a la bitácora de avances). markDone la cierra.
   const finish = (markDone = false) => {
-    const s = data.session; if (!s) return
+    const s = data.session; if (!s || notSynced()) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     const today = iso(new Date())
     // Cronómetro olvidado: una sola sesión de >8h casi siempre quedó corriendo (p. ej. toda la
@@ -1628,7 +1791,7 @@ export default function TiempoClient() {
     setAllTasks(prev => [...(prev || []), { epicaId, epicaName: ep?.name || '', color: ep?.color || '#b4653a', task }])
     setEditTask(null)
   }
-  const extend = () => { const s = data.session; if (s) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }
+  const extend = () => { const s = data.session; if (s && !notSynced()) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }
   // Marca/desmarca una subtarea de la tarea en foco (desde el Modo foco): fija/limpia doneAt y
   // sincroniza a Épicas para que se vea completada en todos lados (incl. "subtareas completadas hoy").
   const toggleSubtaskOf = (taskId: string, epicaId: string, subKey: string) => {
@@ -1686,14 +1849,14 @@ export default function TiempoClient() {
     syncTask(epicaId, upd)
     setAllTasks(prev => (prev || []).map(x => x.task.id === taskId ? { ...x, task: upd } : x))
   }
-  const cancel = () => save({ session: null, sessionEnd: Date.now() })
+  const cancel = () => { if (!notSynced()) save({ session: null, sessionEnd: Date.now() }) }
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
-  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }
-  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }
+  const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null || notSynced()) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }
+  const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null || notSynced()) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }
   // Corregir la hora en que empezó la actividad en curso (desde el Planificador o "el día"): reancla
   // el inicio real a esa hora de HOY, así el transcurrido pasa a ser "ahora − ese inicio".
   const setSessionStart = (startMin: number) => {
-    const s = data.session; if (!s) return
+    const s = data.session; if (!s || notSynced()) return
     const m = Math.max(0, Math.min(1439, Math.round(startMin)))
     const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
     if (d.getTime() > Date.now()) return   // no dejar un inicio en el futuro
@@ -1718,6 +1881,8 @@ export default function TiempoClient() {
     // NO cambia de vista: se queda donde estás (la sesión en curso sale como popup flotante).
     if (beginSession({ name: row.name, area: row.area, start: Math.round(now), dur: 0, ...(row.taskId ? { epicaId: row.epicaId, taskId: row.taskId } : {}) })) setHistIdx(null)
   }
+  // Declarado ANTES de `diaRows`, que lo lee durante el render (más abajo daría ReferenceError por TDZ).
+  const today = iso(new Date())
   // Devolver una tarea (a la que ya le pusiste tiempo hoy) a "tus tareas del día".
   const sendBackToTasks = (taskId: string) => {
     const key = `${today}·${taskId}`
@@ -1873,7 +2038,6 @@ export default function TiempoClient() {
   }
   const areaOptions = (Object.keys(AREAS) as Area[]).filter(k => k !== 'sueno').map(k => ({ id: k, label: AREAS[k].label }))
   const bed = data.bed, sleepGoal = data.sleep
-  const today = iso(new Date())
 
   const tabs: [typeof view, string][] = [['plan', 'Planificador'], ['hoy', 'Hoy'], ['semana', 'Semana'], ['rutina', 'Mi rutina'], ['historial', 'Historial']]
 
@@ -2760,7 +2924,7 @@ export default function TiempoClient() {
                 <input type="range" min={0} max={480} step={15} value={data.focusGoal ?? 0} onChange={e => save({ focusGoal: Number(e.target.value) })} style={{ width: '100%', height: 26, accentColor: '#8a4b28' }} />
                 <span style={{ fontSize: 12.5, color: '#a49b90', lineHeight: 1.5 }}>Cuánto trabajo (área Trabajo) quieres registrar cada día. El Brief de Hoy te muestra el avance. Ponlo en 0 para no fijar meta.</span>
               </div>
-              <div onClick={() => { if (window.confirm('¿Restaurar la rutina de ejemplo? Se reemplazan tus bloques y el historial.')) save(defaults()) }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#a49b90', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>Restaurar la rutina de ejemplo</div>
+              <div onClick={() => { if (window.confirm('¿Restaurar la rutina de ejemplo? Se reemplazan tus bloques y tu hora de dormir (tu historial no se toca).')) { const ex = defaults(); save({ blocks: ex.blocks, bed: ex.bed, sleep: ex.sleep }) } }} style={{ alignSelf: 'flex-start', fontSize: 13, color: '#a49b90', cursor: 'pointer', borderBottom: '1px solid #ddd4c6' }}>Restaurar la rutina de ejemplo</div>
             </div>
           </div>
         ) : (
@@ -3509,11 +3673,18 @@ export default function TiempoClient() {
         </div>
       )}
 
+      {/* Aviso informativo (sin "Deshacer"): una acción de sesión esperó a que cargue el estado del servidor. */}
+      {syncNote && (
+        <div role="status" style={{ position: 'fixed', left: '50%', top: 'calc(14px + env(safe-area-inset-top))', transform: 'translateX(-50%)', zIndex: 122, background: '#1c1a17', color: '#faf7f1', borderRadius: 999, padding: '10px 16px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', fontSize: 13, maxWidth: 'calc(100vw - 32px)', textAlign: 'center' }}>
+          Cargando tu estado… intenta de nuevo en unos segundos
+        </div>
+      )}
+
       {/* Aviso de guardado fallido (sin red / error): nada se pierde en localStorage, pero avisa. */}
       {saveErr && (
         <div className="t-abovenav" style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 120, maxWidth: 'min(360px, calc(100vw - 32px))', background: '#8a3c2a', color: '#faf7f1', borderRadius: 14, padding: '12px 14px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
           <span style={{ flex: 1, lineHeight: 1.4 }}>⚠ No se pudo guardar el último cambio. Revisa tu conexión.{saveErrMsg && <><br /><span style={{ fontSize: 11.5, opacity: .85, fontFamily: 'monospace' }}>{saveErrMsg}</span></>}</span>
-          <button onClick={() => { const items = [...pendingSync.current.values()]; items.forEach(v => syncTask(v.epicaId, v.task)); save({}) }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
+          <button onClick={() => { const items = [...pendingSync.current.values()]; items.forEach(v => syncTask(v.epicaId, v.task)); if (!syncedRef.current) repullRef.current(); else save({}) }} style={{ border: '1px solid rgba(255,255,255,.45)', background: 'transparent', color: '#faf7f1', borderRadius: 999, padding: '6px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>Reintentar</button>
         </div>
       )}
     </div>

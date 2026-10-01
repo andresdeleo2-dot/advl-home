@@ -7,7 +7,7 @@
    La escritura a Épicas (sumar tiempo a la bitácora / marcar terminada) se delega al
    contenedor por callbacks, para no duplicar la lógica de tareas. */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { KEY, hm, clock, parse, iso, defaults, type AppData, type Session, type Area, type HistoryRow } from '@/lib/tiempo'
+import { KEY, hm, clock, parse, iso, defaults, settleDirty, type AppData, type Session, type Area, type HistoryRow } from '@/lib/tiempo'
 import type { EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment } from '@/lib/supabase'
 import { safeUrl, uid as coreUid } from '@/components/epicas/core'
 
@@ -84,7 +84,12 @@ export function useFocusSession(hooks: FocusHooks) {
   const [sessionMin, setSessionMin] = useState(false)
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
-  const readyRef = useRef(false)   // ya reconciliamos con el servidor: recién ahí se permite ARRANCAR una sesión (evita pisar los datos reales de /tiempo)
+  const readyRef = useRef(false)   // ya hubo una lectura VÁLIDA del servidor: recién ahí se permite tocar la sesión (evita pisar los datos reales de /tiempo)
+  const lastOkRef = useRef(0)      // última lectura/escritura confirmada con el server: si es vieja, lo local puede estar viejo
+  const kickRef = useRef<() => void>(() => {})   // relanza YA la lectura (sin esperar la espera creciente)
+  const pushingRef = useRef(false) // hay un PUT propio en vuelo: una lectura que llegue mientras tanto no lo refleja aún (no se adopta)
+  const [syncNote, setSyncNote] = useState(false)   // aviso propio "cargando tu estado" (el toast de Épicas queda tapado por el Modo foco/modales)
+  const syncNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const phaseNotified = useRef<number>(-1)
   const pomoStartElRef = useRef(0)   // minutos de sesión transcurridos cuando se PRENDIÓ el Pomodoro (los ciclos cuentan desde ahí, no desde el inicio de la sesión)
 
@@ -104,10 +109,14 @@ export function useFocusSession(hooks: FocusHooks) {
     let d = defaults()
     try { const raw = localStorage.getItem(KEY); if (raw) d = Object.assign(defaults(), JSON.parse(raw)) } catch {}
     dataRef.current = d; setData(d)
-    const markReady = () => { readyRef.current = true }
-    const readyFallback = setTimeout(markReady, 2500)   // no bloquear para siempre si el server cuelga
-    fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
-      if (!j?.ok || !j.ready) return
+    // El candado (readyRef) se abre SÓLO con una lectura válida del servidor: si tarda o falla NO se
+    // abre (un blob viejo o vacío de este equipo pisaría el de /tiempo) y se reintenta.
+    let alive = true, retryT: ReturnType<typeof setTimeout> | null = null, delay = 3000, inFlight = false
+    // Con tope de tiempo: una petición colgada (conexión muerta tras cambiar de red) dejaría inFlight sin reintentos.
+    const pull = () => fetch('/api/tiempo-estado', { signal: AbortSignal.timeout?.(10000) }).then(r => r.json()).then(j => {
+      if (!j?.ok || !j.ready) throw new Error('estado del servidor no disponible')
+      if (!alive) return   // desmontado: no escribas KEY/TS_KEY desde una instancia muerta (la nueva leyó KEY antes)
+      if (readyRef.current && (pendingPush.current || pushingRef.current)) return   // subida propia pendiente/en vuelo: esta lectura no la trae
       const serverTs = Number(j.ts) || 0
       const localTs = Number(localStorage.getItem(TS_KEY) || 0)
       if (serverTs > localTs) {
@@ -117,8 +126,24 @@ export function useFocusSession(hooks: FocusHooks) {
         const merged: AppData = { ...sv, session: chooseSession(dataRef.current.session, sv) }
         dataRef.current = merged; setData(merged)
         try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
+      } else if (!readyRef.current) {
+        // Abre el candado sobre lo guardado en este navegador (KEY, lo que TS_KEY describe), no sobre la
+        // copia leída al montar: otra instancia pudo adelantar KEY sin evento storage (mismo documento).
+        try {
+          const raw = localStorage.getItem(KEY)
+          if (raw) { const kd = Object.assign(defaults(), JSON.parse(raw)) as AppData; const nd: AppData = { ...kd, session: chooseSession(dataRef.current.session, kd) }; dataRef.current = nd; setData(nd) }
+        } catch {}
       }
-    }).catch(() => {}).finally(() => { clearTimeout(readyFallback); markReady() })
+      readyRef.current = true; lastOkRef.current = Date.now(); setSyncNote(false)
+    })
+    const firstPull = () => {
+      if (!alive || readyRef.current || inFlight) return
+      inFlight = true
+      pull().then(() => { inFlight = false }, () => { inFlight = false; if (!alive || readyRef.current) return; retryT = setTimeout(firstPull, delay); delay = Math.min(delay * 2, 60000) })
+    }
+    const kick = () => { if (retryT) clearTimeout(retryT); retryT = null; delay = 3000; firstPull() }
+    kickRef.current = kick
+    firstPull()
 
     // Otra pestaña (p.ej. /tiempo) cambió el estado → recárgalo (mantiene ambas en sync).
     // Si el blob entrante NO trae sesión pero aquí hay una VIVA que este tab controla, conserva
@@ -131,27 +156,29 @@ export function useFocusSession(hooks: FocusHooks) {
         dataRef.current = nd; setData(nd)
       } catch {}
     }
-    // Al enfocar, adopta lo del servidor si es más nuevo, conservando la sesión local viva.
-    const adopt = () => {
-      if (document.visibilityState !== 'visible') return
-      fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
-        if (!j?.ok || !j.ready) return
-        const serverTs = Number(j.ts) || 0
-        const localTs = Number(localStorage.getItem(TS_KEY) || 0)
-        if (serverTs > localTs) {
-          const sv = Object.assign(defaults(), j.data || {})
-          const merged: AppData = { ...sv, session: chooseSession(dataRef.current.session, sv) }
-          dataRef.current = merged; setData(merged)
-          try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
-        }
-      }).catch(() => {})
+    // Si hace >1 min que no hay una lectura/escritura confirmada (segundo plano, laptop dormida, red
+    // caída…), el blob local puede estar viejo: re-cierra el candado hasta releer.
+    const recheck = () => {
+      if (pendingPush.current || pushingRef.current) return   // su confirmación renueva la vigencia
+      if (readyRef.current && document.visibilityState === 'visible' && Date.now() - lastOkRef.current > 60000) { readyRef.current = false; kick() }
     }
-    const flush = () => { if (!pendingPush.current) return; const body = pendingPush.current; pendingPush.current = null; fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }), keepalive: true }).catch(() => {}) }
+    const flush = () => pushNow(true)
+    // Al enfocar/volver, adopta lo del servidor si es más nuevo, conservando la sesión local viva
+    // (si aún no había lectura válida, ésta abre el candado). Al ocultarse sube ya lo pendiente: iOS
+    // congela el JS sin pagehide y el debounce saldría al volver, con datos viejos.
+    const adopt = () => {
+      if (document.visibilityState !== 'visible') { flush(); return }
+      recheck()
+      if (readyRef.current) pull().catch(() => {}); else kick()
+    }
+    // Con la pestaña visible, relee cada 25s: lo local se mantiene al día y la lectura sigue vigente.
+    const poll = setInterval(() => { if (document.visibilityState === 'visible' && readyRef.current) pull().catch(() => {}) }, 25000)
     window.addEventListener('storage', onStorage)
     window.addEventListener('focus', adopt)
     document.addEventListener('visibilitychange', adopt)
+    document.addEventListener('pointerdown', recheck, true)   // antes del clic: una acción sobre lo viejo espera a releer
     window.addEventListener('pagehide', flush)
-    return () => { window.removeEventListener('storage', onStorage); window.removeEventListener('focus', adopt); document.removeEventListener('visibilitychange', adopt); window.removeEventListener('pagehide', flush) }
+    return () => { alive = false; clearInterval(poll); if (retryT) clearTimeout(retryT); window.removeEventListener('storage', onStorage); window.removeEventListener('focus', adopt); document.removeEventListener('visibilitychange', adopt); document.removeEventListener('pointerdown', recheck, true); window.removeEventListener('pagehide', flush) }
   }, [])
 
   // Persiste un cambio: localStorage instantáneo + PUT al servidor (debounce). Preserva el resto
@@ -172,12 +199,25 @@ export function useFocusSession(hooks: FocusHooks) {
     try { localStorage.setItem(KEY, JSON.stringify(nd)); localStorage.setItem(TS_KEY, String(Date.now())) } catch {}
     pendingPush.current = nd
     if (pushTimer.current) clearTimeout(pushTimer.current)
-    pushTimer.current = setTimeout(() => {
-      const body = pendingPush.current; if (!body) return; pendingPush.current = null
-      fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: body }) })
-        .then(r => r.json()).then(j => { if (j?.ts) try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {} }).catch(() => {})
-    }, 700)
+    pushTimer.current = setTimeout(() => pushNow(), 700)
   }, [])
+  // Sube lo pendiente (debounce o flush). Con keepalive (ocultar/cerrar) la respuesta igual se procesa si
+  // la página sigue viva, para fijar el ts y dar por confirmados los renglones pendientes.
+  function pushNow(keepalive = false) {
+    const body = pendingPush.current; if (!body) return; pendingPush.current = null
+    const json = JSON.stringify({ data: body })
+    pushingRef.current = true
+    // keepalive rechaza cuerpos de más de 64 KB: arriba de eso va como petición normal.
+    fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: json, keepalive: keepalive && new Blob([json]).size < 60000 })
+      .then(r => r.json()).then(j => {
+        if (!j?.ts) return
+        try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {}
+        lastOkRef.current = Date.now()
+        // Los renglones que /tiempo dejó pendientes (DIRTY_KEY) y que este blob ya subió dejan de estarlo
+        // (si no, al abrir /tiempo se re-anexarían aunque otro dispositivo los hubiera borrado/editado).
+        settleDirty(body.history || [])
+      }).catch(() => {}).finally(() => { pushingRef.current = false })
+  }
 
   // Registra a Épicas el tiempo de una sesión ligada a una tarea (bitácora + opcional terminar).
   // El MISMO logId liga el registro de margen.v1 con la entrada de bitácora (para editar/borrar en sync).
@@ -186,8 +226,19 @@ export function useFocusSession(hooks: FocusHooks) {
     hooksRef.current.onFinishTask?.(s.epicaId, s.taskId, { minutes, day, logId, note: `⏱ ${hm(minutes)} trabajado`, markDone })
   }, [])
 
+  // Sin una lectura válida del servidor no se toca la sesión (la de este equipo puede ser vieja o ya
+  // haber terminado en otro) ni, por tanto, se sube nada.
+  const notReady = useCallback(() => {
+    if (readyRef.current) return false
+    kickRef.current()   // reintenta YA (sin esperar la espera creciente)
+    setSyncNote(true)   // aviso propio, por encima del Modo foco y de los modales (el toast de Épicas queda debajo)
+    if (syncNoteTimer.current) clearTimeout(syncNoteTimer.current)
+    syncNoteTimer.current = setTimeout(() => setSyncNote(false), 5000)
+    return true
+  }, [])
+
   const begin = useCallback((a: BeginArgs): boolean => {
-    if (!readyRef.current) { hooksRef.current.onToast?.('Cargando tu estado… intenta de nuevo en un segundo'); return false }
+    if (notReady()) return false
     pomoStartElRef.current = 0; setPomoOn(false)   // Pomodoro arranca limpio para la nueva sesión (no hereda el baseline de la anterior)
     const t0 = Date.now()
     const ns: NonNullable<Session> = { name: a.name || 'Tarea', area: a.area || 'trabajo', start: Math.round(now), dur: a.dur || 0, epicaId: a.epicaId, taskId: a.taskId, origStart: Math.round(now), startedAt: t0, segAt: t0, mod: t0, segs: [] }
@@ -210,13 +261,13 @@ export function useFocusSession(hooks: FocusHooks) {
     }
     setSessionMin(false)
     return true
-  }, [now, save, logToEpica])
+  }, [now, save, logToEpica, notReady])
 
-  const pauseSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt != null) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }, [now, save])
-  const resumeSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt == null) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }, [now, save])
-  const extend = useCallback(() => { const s = dataRef.current.session; if (s) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }, [save])
+  const pauseSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt != null || notReady()) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }, [now, save, notReady])
+  const resumeSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt == null || notReady()) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }, [now, save, notReady])
+  const extend = useCallback(() => { const s = dataRef.current.session; if (s && !notReady()) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }, [save, notReady])
   const setSessionStart = useCallback((startMin: number) => {
-    const s = dataRef.current.session; if (!s) return
+    const s = dataRef.current.session; if (!s || notReady()) return
     const m = Math.max(0, Math.min(1439, Math.round(startMin)))
     const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
     if (d.getTime() > Date.now()) return
@@ -231,10 +282,10 @@ export function useFocusSession(hooks: FocusHooks) {
     } else {
       save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
     }
-  }, [save])
-  const cancel = useCallback(() => { const s = dataRef.current.session; save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save])
+  }, [save, notReady])
+  const cancel = useCallback(() => { if (notReady()) return; const s = dataRef.current.session; save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save, notReady])
   const finish = useCallback((markDone = false) => {
-    const s = dataRef.current.session; if (!s) return
+    const s = dataRef.current.session; if (!s || notReady()) return
     const elapsed = Math.max(1, Math.round(sessionElapsed(s, now)))
     if (elapsed > 480 && !window.confirm(`Llevas ${hm(elapsed)} en «${s.name}». Parece que el cronómetro se quedó corriendo. ¿Registrar TODO ese tiempo?\n\nAceptar = registrarlo · Cancelar = descartarlo sin registrar.`)) {
       save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`); return
@@ -258,7 +309,7 @@ export function useFocusSession(hooks: FocusHooks) {
     // Si la sesión venía de una rutina y elegiste "y hecha", marca su día como hecho (llena el chip de hoy).
     if (s.routineRef && markDone) hooksRef.current.onFinishRoutine?.(s.routineRef.epicaId, s.routineRef.rIdx, iso(new Date()))
     hooksRef.current.onToast?.(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`)
-  }, [now, save, logToEpica])
+  }, [now, save, logToEpica, notReady])
 
   // Pomodoro: avisa (beep + notificación) en cada cambio foco↔descanso.
   useEffect(() => {
@@ -548,7 +599,14 @@ export function useFocusSession(hooks: FocusHooks) {
     if (session && session.area === 'trabajo' && session.taskId && startedToday && dy === day0) { const c = m.get(session.taskId) || { name: session.name, min: 0, done: false }; c.min += Math.max(0, Math.round(elapsed)); m.set(session.taskId, c) }
     return [...m.entries()].map(([taskId, v]) => ({ taskId, ...v })).sort((a, b) => b.min - a.min)
   }
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card, workedTodayMin, runningTodayMin, breakTodayMin, runningBreakMin, breakOnDay, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
+  // Aviso "cargando" del candado: propio del widget y por encima del Modo foco (120) y de los modales,
+  // para que un botón bloqueado no parezca muerto.
+  const syncNotice: ReactNode = syncNote ? (
+    <div role="status" style={{ position: 'fixed', left: '50%', top: 'calc(14px + env(safe-area-inset-top))', transform: 'translateX(-50%)', zIndex: 130, background: '#1c1a17', color: '#faf7f1', border: '1px solid rgba(255,255,255,.18)', borderRadius: 999, padding: '10px 16px', boxShadow: '0 16px 44px -14px rgba(0,0,0,.55)', fontSize: 13, maxWidth: 'calc(100vw - 32px)', textAlign: 'center' }}>
+      Cargando tu estado… intenta de nuevo en unos segundos
+    </div>
+  ) : null
+  return { session, active: !!session, busy: focusOpen, mitIds, begin, card: <>{card}{syncNotice}</>, workedTodayMin, runningTodayMin, breakTodayMin, runningBreakMin, breakOnDay, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }
