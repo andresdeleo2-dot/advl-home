@@ -59,6 +59,7 @@ export type EpicaFeature = {
   estado?: string        // 'en_curso'|'en_riesgo'|'al_dia'|'en_pausa'|'cerrado'; ausente = 'en_curso'. Requiere sql/epicas-18-features.sql
   orden?: number
   iniciativas?: Iniciativa[]   // Iniciativas dentro de este Feature. Requiere sql/epicas-20-iniciativas.sql
+  links?: EpicaLink[]          // Dashboards/carpetas del feature, mismo formato que Epica.links. Requiere sql/epicas-25-feature-links.sql
 }
 export type Iniciativa = {
   id: string

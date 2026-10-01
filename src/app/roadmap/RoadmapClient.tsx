@@ -10,6 +10,7 @@ import {
   featureStyle, fmtDue, hexA, iniciativaStyle, normalize, normalizeMilestone, pctOf, plazoLabel, prioStyle,
   taskCount, taskStyle, todayISO, uid, WEEK_EST_MIN, type Dif, type Duracion, type Prio,
 } from '@/components/epicas/core'
+import { LinkPillRow } from '@/components/epicas/FeatureLinks'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    /roadmap — TABLERO CUANTIZADO
@@ -1459,6 +1460,18 @@ export default function RoadmapClient() {
           <>
             <input key={f.id} defaultValue={f.t} onBlur={ev => { const v = ev.target.value.trim(); if (v && v !== f.t) escribir(sel, { t: v }) }}
               aria-label="Nombre del feature" style={{ ...field, width: '100%', fontSize: 16, fontWeight: 700, marginTop: 4 }} />
+            {/* Links de solo lectura: se editan en Épicas (?fe= deja este feature elegido con su franja abierta) */}
+            <div style={{ marginTop: 10 }}>
+              {(f.links || []).length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <span style={eb}>Links · {(f.links || []).length}</span>
+                  <a href={`/epicas?e=${encodeURIComponent(sel.epicaId)}&fe=${encodeURIComponent(f.id)}`} style={{ display: 'inline-flex', alignItems: 'center', minHeight: 34, padding: '0 8px', margin: '-8px -8px', fontSize: 11.5, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>Editar en Épicas ↗</a>
+                </div>
+              )}
+              {(f.links || []).length > 0
+                ? <LinkPillRow links={f.links || []} />
+                : <a href={`/epicas?e=${encodeURIComponent(sel.epicaId)}&fe=${encodeURIComponent(f.id)}`} style={{ display: 'inline-flex', alignItems: 'center', minHeight: 34, padding: '0 8px', marginLeft: -8, fontSize: 11.5, fontWeight: 700, color: 'rgba(168,122,44,0.85)', textDecoration: 'none' }}>+ Agregar links en Épicas ↗</a>}
+            </div>
             <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 10 }}>
               {['en_curso', 'al_dia', 'en_riesgo', 'en_pausa', 'cerrado'].map(s => {
                 const st = featureStyle(s), on = (f.estado || 'en_curso') === s

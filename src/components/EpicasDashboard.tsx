@@ -15,6 +15,8 @@ import type { Persona, Vida } from '@/lib/persona-card'
 import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan, EpicaFeature, Iniciativa, ObjetivoUnit } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
+import { FeatureLinksStrip, LinkPillRow, linkDomain } from './epicas/FeatureLinks'
+import { MAX_FEATURE_LINKS } from '@/lib/features'
 import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
@@ -333,6 +335,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const dragKeyRef = useRef<string | null>(null)
   const planListRef = useRef<HTMLDivElement>(null)
   const epicsRef = useRef<Epica[]>(epics)
+  const featLinksQ = useRef(new Map<string, { seq: number; pending: number; ok: EpicaLink[]; chain: Promise<void>; at: number }>())   // fila de guardados de links por feature
+  const featLinksClock = useRef(0)   // tic por cada guardado de links (al salir y al volver): loadEpics no pisa los que se movieron durante su GET
+  const pendingFeatureRef = useRef<string | null>(null)   // ?fe=<featureId> por aplicar cuando su épica esté destacada
   const planHistReady = useRef(false)   // true cuando la columna plan_hist existe (tras la migración)
   const ordenReady = useRef(false)       // true si la columna `orden` existe (lo dice el API); mismo patrón que plan_hist
   const remindReady = useRef(false)      // true si la columna remind_at existe (recordatorios)
@@ -394,6 +399,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // refresca desde el server al montar (revalidate corto en el page)
   const loadEpics = useCallback(() => {
     setLoading(true)
+    const linksDesde = featLinksClock.current
+    // Feature con guardado de links en vuelo o que se movió durante este GET: manda lo local (el GET pudo leer la BD antes).
+    const conLinksLocales = (e: Epica): Epica => {
+      const vivo = (fid: string) => { const q = featLinksQ.current.get(fid); return !!q && (q.pending > 0 || q.at > linksDesde) }
+      if (!(e.features || []).some(f => vivo(f.id))) return e
+      const local = epicsRef.current.find(x => x.id === e.id)?.features || []
+      return { ...e, features: (e.features || []).map(f => {
+        const lf = vivo(f.id) ? local.find(x => x.id === f.id) : undefined
+        if (!lf) return f
+        const { links: _srv, ...rest } = f; void _srv
+        return lf.links?.length ? { ...rest, links: lf.links } : rest
+      }) }
+    }
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok || !Array.isArray(j.data)) throw new Error(j.error || 'respuesta inválida')
       planHistReady.current = !!j.planHistReady
@@ -415,7 +433,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       iniciativaIdReady.current = !!j.iniciativaIdReady
       {
         const raw = j.data as Epica[]
-        const normed = raw.map(normalize)
+        const normed = raw.map(normalize).map(conLinksLocales)
         setEpics(normed)
         setFeaturedId(prev => (prev && normed.some(e => e.id === prev)) ? prev : (normed[0]?.id ?? null))
         // Persiste UNA vez la migración de rutinas legadas (days → weeks[semana actual]),
@@ -529,6 +547,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const v = q.get('v'); if (v && MODES.includes(v)) setPlanMode((v === '2sem' || v === 'mes' ? '3sem' : v) as typeof planMode)
       const d = q.get('d'); if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) setViewDate(d)
       const e = q.get('e'); if (e) setFeaturedId(e)
+      const fe = q.get('fe'); if (fe && e) pendingFeatureRef.current = fe
       const tsk = q.get('t'); if (tsk && e) setTimeout(() => openTaskEditRef.current?.(e, tsk), 0)
       const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance', 'estancada', 'multidia', 'arrastre'].includes(f)) setPlanFilter(f as typeof planFilter)
       const ep = q.get('ep'); if (ep) setWeekEpica(ep)
@@ -1034,7 +1053,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       await run
       return true
     } catch {
-      if (prevEpic) setEpics(list => list.map(e => (e.id === id ? prevEpic : e)))
+      // Regresa SÓLO las claves de este cambio: la foto entera borraba features/links guardados mientras tanto.
+      if (prevEpic) setEpics(list => list.map(e => {
+        if (e.id !== id) return e
+        const back: Record<string, unknown> = { ...e }
+        for (const k of Object.keys(changes)) { const v = (prevEpic as unknown as Record<string, unknown>)[k]; if (v === undefined) delete back[k]; else back[k] = v }
+        return back as unknown as Epica
+      }))
       showToast('No se pudo guardar', true)
       return false
     }
@@ -1203,6 +1228,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }), [epics, estadoFilter, catFilter])
 
   const featured = useMemo(() => visibleEpics.find(e => e.id === featuredId) || visibleEpics[0] || epics[0] || null, [visibleEpics, featuredId, epics])
+  // ?e=&fe= (desde /roadmap "Editar en Épicas ↗"): selecciona ese feature con su franja de links a la
+  // vista. Va DESPUÉS del efecto que limpia filtros al cambiar de épica, para ganarle en el mismo commit.
+  useEffect(() => {
+    const fId = pendingFeatureRef.current
+    if (!fId || !featured || !(featured.features || []).some(f => f.id === fId)) return
+    pendingFeatureRef.current = null
+    setEpicTab('tareas'); setEpicFeatureFilter(fId); setEpicIniciativaFilter('todas')
+    setTimeout(() => document.getElementById('feature-links-strip')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 250)
+  }, [featured])
 
   /* ─── Próximos vencimientos (tareas con fecha ≤45d o vencidas) ─ */
   const vencimientos = useMemo(() => {
@@ -2646,10 +2680,75 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, ...patch } : f)),
     })))
-    const revert = (e: Epica): Epica => ({ ...e, features: (e.features || []).map(f => (f.id === featureId ? (prevFeature || f) : f)) })
+    // Regresa SÓLO las claves de este patch: la foto entera borraba links/iniciativas guardados mientras tanto.
+    const revert = (e: Epica): Epica => ({ ...e, features: (e.features || []).map(f => {
+      if (f.id !== featureId || !prevFeature) return f
+      const back: Record<string, unknown> = { ...f }
+      for (const k of Object.keys(patch)) { const v = (prevFeature as Record<string, unknown>)[k]; if (v === undefined) delete back[k]; else back[k] = v }
+      return back as EpicaFeature
+    }) })
     fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conNulos(patch)) })
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo guardar el feature') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo guardar el feature'))
+  }
+  /** Links de UN feature. No usa patchFeature: cada guardado parte de los links VIVOS (epicsRef, que
+   *  se adelanta aquí mismo) para que dos seguidos no se pisen, y la red va en fila por feature. Si
+   *  uno falla se regresa SÓLO ese feature a lo último confirmado, salvo que ya venga otro guardado
+   *  detrás: ése manda la lista completa y es el que decide. */
+  const saveFeatureLinks = (epicaId: string, featureId: string, update: (links: EpicaLink[]) => EpicaLink[]) => {
+    const feat = epicsRef.current.find(e => e.id === epicaId)?.features?.find(f => f.id === featureId)
+    if (!feat) return
+    const before = feat.links || []
+    const next = update(before)
+    if (JSON.stringify(next) === JSON.stringify(before)) return
+    const put = (links: EpicaLink[]) => (e: Epica): Epica => (e.id !== epicaId ? e : {
+      ...e, features: (e.features || []).map(f => {
+        if (f.id !== featureId) return f
+        const { links: _old, ...rest } = f; void _old
+        return links.length ? { ...rest, links } : rest
+      }),
+    })
+    const q = featLinksQ.current.get(featureId) || { seq: 0, pending: 0, ok: before, chain: Promise.resolve(), at: 0 }
+    if (!q.pending) q.ok = before   // sin nada en vuelo, lo que se ve ES lo confirmado
+    const seq = ++q.seq
+    q.pending++
+    q.at = ++featLinksClock.current
+    featLinksQ.current.set(featureId, q)
+    epicsRef.current = epicsRef.current.map(put(next))
+    setEpics(list => list.map(put(next)))
+    q.chain = q.chain.then(async () => {
+      let falla: string | null = 'No se pudo guardar el link'
+      try {
+        const r = await fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links: next }) })
+        const j = await r.json().catch(() => null)
+        if (j?.ok) falla = null
+        else if (j?.needsMigration) falla = 'Para guardar links corre sql/epicas-25-feature-links.sql en Supabase'
+      } catch { /* sin red: cuenta como fallo */ }
+      q.pending--
+      q.at = ++featLinksClock.current
+      if (!falla) { q.ok = next; return }
+      if (q.seq !== seq) return
+      epicsRef.current = epicsRef.current.map(put(q.ok))
+      setEpics(list => list.map(put(q.ok)))
+      showToast(falla, true)
+    })
+  }
+  const sameLink = (a: EpicaLink) => (b: EpicaLink) => a.url === b.url && a.l === b.l && a.type === b.type
+  const addFeatureLink = (epicaId: string, featureId: string, link: EpicaLink) =>
+    saveFeatureLinks(epicaId, featureId, ls => (ls.length >= MAX_FEATURE_LINKS ? ls : [...ls, link]))
+  const editFeatureLink = (epicaId: string, featureId: string, prev: EpicaLink, link: EpicaLink) =>
+    saveFeatureLinks(epicaId, featureId, ls => {
+      const i = ls.findIndex(sameLink(prev))
+      return i < 0 ? ls : ls.map((x, k) => (k === i ? link : x))
+    })
+  const removeFeatureLink = (epicaId: string, featureId: string, link: EpicaLink) => {
+    const at = (epicsRef.current.find(e => e.id === epicaId)?.features?.find(f => f.id === featureId)?.links || []).findIndex(sameLink(link))
+    if (at < 0) return
+    saveFeatureLinks(epicaId, featureId, ls => { const i = ls.findIndex(sameLink(link)); return i < 0 ? ls : ls.filter((_, k) => k !== i) })
+    showToast(`Quitaste «${link.l || linkDomain(link.url) || 'el link'}»`, false, {
+      label: 'Deshacer',
+      fn: () => saveFeatureLinks(epicaId, featureId, ls => (ls.some(sameLink(link)) || ls.length >= MAX_FEATURE_LINKS ? ls : [...ls.slice(0, at), link, ...ls.slice(at)])),
+    })
   }
   /** Alta de tarea SIN abrir el modal, ya colgada de su Feature/Iniciativa. Va por patchEpic, que
    *  diffea contra el estado previo y manda sólo el alta a /api/tareas/sync. Los campos gateados
@@ -3937,8 +4036,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const objOptions = featured.kpis.filter(m => indexed.some(t => t.status !== ARCHIVED && (m.taskIds || []).includes(t.id || '') && passEpicChip(t)))
   const hasSinObj = indexed.some(t => t.status !== ARCHIVED && !objOfTask(t.id) && passEpicChip(t))
   // Features que aún tienen tareas bajo el filtro de chip activo (cascada)
-  const featureOptions = (featured.features || []).filter(f => indexed.some(t => t.status !== ARCHIVED && t.featureId === f.id && passEpicChip(t)))
+  // El elegido se queda aunque no tenga tareas (p. ej. ?fe= de Roadmap a un feature nuevo): si no, ni tarjeta ni select lo muestran y no hay cómo quitar el filtro.
+  const featureOptions = (featured.features || []).filter(f => f.id === epicFeatureFilter || indexed.some(t => t.status !== ARCHIVED && t.featureId === f.id && passEpicChip(t)))
   const hasSinFeature = indexed.some(t => t.status !== ARCHIVED && !t.featureId && passEpicChip(t))
+  // El Feature elegido (tarjeta con borde o select "Todo feature"): su franja y fila de links
+  const featSel = epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' ? (featured.features || []).find(f => f.id === epicFeatureFilter) || null : null
   const filteredGroups = taskGroups.map(g => ({ ...g, items: g.items.filter(passEpicFilter) })).filter(g => g.items.length > 0)
   const filteredActive = indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && passEpicFilter(t))
   const epicSortCmp = (a: (typeof indexed)[number], b: (typeof indexed)[number]) => {
@@ -9312,10 +9414,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const inis = f.iniciativas || []
                     const iniOpen = iniOpenFeatureId === f.id
                     const pickFeature = () => { setEpicFeatureFilter(on ? 'todas' : f.id); setEpicIniciativaFilter('todas') }
+                    const fLinks = f.links || []
                     return (
                       <div key={f.id} style={{ borderRadius: 12, background: on ? hexA(fc, 0.1) : 'rgba(15,35,64,0.02)', border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden' }}>
                         <button type="button" onClick={pickFeature} title="Filtrar las tareas de abajo por este Feature"
-                          style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '10px 12px' }}>
+                          style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: fLinks.length ? '10px 12px 7px' : '10px 12px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                             <span style={{ height: 8, width: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />
                             <span style={{ font: '700 11.5px var(--font-ui)', color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
@@ -9336,6 +9439,16 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           )}
                           <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{doneN}/{featTasks.length} {featTasks.length === 1 ? 'tarea' : 'tareas'}{mp?.hasMeta ? ` · ${Math.round(mp.pct * 100)}%` : ''}</span>
                         </button>
+                        {/* Fuera del <button>: un <a> no puede ir anidado dentro. El hueco alrededor de las pastillas también elige el feature (ellas cortan la propagación). */}
+                        {fLinks.length > 0 && (
+                          <div onClick={pickFeature} style={{ cursor: 'pointer' }}>
+                            <LinkPillRow links={fLinks} max={3} style={{ padding: '0 12px 10px' }}
+                              onMore={() => {
+                                if (!on) pickFeature()
+                                setTimeout(() => document.getElementById('feature-links-strip')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
+                              }} />
+                          </div>
+                        )}
                         {iniOpen && inis.length > 0 && (
                           <div style={{ borderTop: '1px solid rgba(15,35,64,0.08)', padding: '8px 12px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
                             {inis.map(ini => {
@@ -9380,6 +9493,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     )
                   })()}
                 </div>
+              )}
+              {featSel && (
+                <FeatureLinksStrip key={featSel.id} id="feature-links-strip" featureName={featSel.t} color={featSel.color} links={featSel.links || []}
+                  onAdd={l => addFeatureLink(featured.id, featSel.id, l)}
+                  onEdit={(prev, l) => editFeatureLink(featured.id, featSel.id, prev, l)}
+                  onRemove={l => removeFeatureLink(featured.id, featSel.id, l)} />
               )}
               {/* Sub-filtro por Iniciativa, en cascada: sólo con un Feature concreto elegido arriba */}
               {epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' && (
@@ -9936,6 +10055,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     )
                   })()}
                 </div>
+              )}
+
+              {featSel && (featSel.links || []).length > 0 && (
+                <LinkPillRow links={featSel.links || []} style={{ marginBottom: 11 }}
+                  label={<span style={{ font: '700 9.5px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)', marginRight: 2, flexShrink: 0 }}>Links:</span>} />
               )}
 
               {(() => {

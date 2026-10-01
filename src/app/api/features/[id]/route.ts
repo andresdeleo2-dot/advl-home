@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { rowToFeature, type FeatureRow } from '@/lib/features'
+import { rowToFeature, sanitizeFeatureLinks, type FeatureRow } from '@/lib/features'
 
 export const dynamic = 'force-dynamic'
 
+// PGRST204/42703 = columna inexistente: falta correr sql/epicas-25-feature-links.sql.
+const isMissingColumn = (code?: string) => code === 'PGRST204' || code === '42703'
+
 /** Body sparse: sólo se escribe lo que venga. Body: { t?, color?, estado?, roadmapStart?,
- *  roadmapEnd?, orden? }. */
+ *  roadmapEnd?, orden?, links? }. */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
@@ -17,9 +20,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if ('roadmapStart' in body) payload.fecha_inicio = body.roadmapStart || null
     if ('roadmapEnd' in body) payload.fecha_fin_objetivo = body.roadmapEnd || null
     if ('orden' in body) payload.orden = typeof body.orden === 'number' ? body.orden : null
+    if ('links' in body) payload.links = sanitizeFeatureLinks(body.links)
     if (Object.keys(payload).length === 0) return NextResponse.json({ ok: false, error: 'nada que actualizar' }, { status: 400 })
     const { data, error } = await supabase.from('features').update(payload).eq('id', id).select().single()
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    if (error) {
+      if ('links' in payload && isMissingColumn(error.code)) return NextResponse.json({ ok: false, needsMigration: true, error: 'falta sql/epicas-25-feature-links.sql' })
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    }
     return NextResponse.json({ ok: true, data: rowToFeature(data as FeatureRow) })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e) }, { status: 400 })
