@@ -499,6 +499,8 @@ export default function RoadmapClient() {
   // Popup ligero de tarea (título/estado/vence editables) — antes las tareas de Feature/Iniciativa
   // eran de solo lectura aquí; para todo lo demás (subtareas, nota…) sigue mandando a Épicas.
   const [tareaPeek, setTareaPeek] = useState<{ eId: string; tid: string } | null>(null)
+  // Hacer/Vence del popup mientras se teclean: el año a medias ('0002-…') se ve pero no se guarda.
+  const [fechaTecleo, setFechaTecleo] = useState<{ k: string; v: string } | null>(null)
 
   const epicasRef = useRef<Epica[] | null>(null)
   const selRef = useRef<Sel | null>(null)
@@ -507,6 +509,12 @@ export default function RoadmapClient() {
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())
   const dateDebounce = useRef<Map<string, number>>(new Map())
   const pendFechas = useRef<Map<string, { vals: Record<string, string>; reverts: (() => void)[] }>>(new Map())
+  // Sube con cada escritura encolada: una relectura que salió antes no puede pisar lo guardado después.
+  const escrituras = useRef(0)
+  // Una relectura que se descartó por escrituras en curso queda debiéndose: se hace al terminar éstas.
+  const relecturaPendiente = useRef(false)
+  // Última copia de cada tarea que confirmó el servidor mientras su cola tiene cambios (a eso se revierte).
+  const tareaConfirmada = useRef<Map<string, EpicaTask>>(new Map())
   const toastTimer = useRef<number | null>(null)
 
   useEffect(() => { epicasRef.current = epicas }, [epicas])
@@ -566,15 +574,25 @@ export default function RoadmapClient() {
     // También cuenta como "escritura en vuelo" lo que está en el debounce de fechas o acumulado
     // sin mandar: relerlo borraría de la pantalla una edición que el usuario acaba de hacer.
     const ocupado = () => inflight.current.size > 0 || dateDebounce.current.size > 0 || pendFechas.current.size > 0
-    if (ocupado()) return
     if (!force && Date.now() - lastLoad.current < 30000) return
-    const j = await fetch('/api/epicas').then(r => r.json()).catch(() => null)
-    if (!j?.ok || ocupado()) return
-    const s = selRef.current
-    const antes = s ? JSON.stringify(buscar(epicasRef.current, s)) : ''
-    lastLoad.current = Date.now()
-    const rows = aplicar(j)
-    if (s && JSON.stringify(buscar(rows, s)) !== antes) showToast('Se actualizó desde otro lado')
+    // Una relectura descartada por escrituras no se pierde (antes la vista se quedaba vieja hasta el
+    // siguiente focus): si siguen en curso, la relanza el final de su cola (patchRemoto/patchTarea);
+    // si ya terminaron mientras se leía, se vuelve a leer aquí mismo.
+    for (;;) {
+      if (ocupado()) { relecturaPendiente.current = true; return }
+      const gen = escrituras.current
+      const j = await fetch('/api/epicas').then(r => r.json()).catch(() => null)
+      if (!j?.ok) return
+      if (ocupado()) { relecturaPendiente.current = true; return }
+      if (escrituras.current !== gen) continue
+      relecturaPendiente.current = false
+      const s = selRef.current
+      const antes = s ? JSON.stringify(buscar(epicasRef.current, s)) : ''
+      lastLoad.current = Date.now()
+      const rows = aplicar(j)
+      if (s && JSON.stringify(buscar(rows, s)) !== antes) showToast('Se actualizó desde otro lado')
+      return
+    }
   }, [aplicar, showToast])
 
   useEffect(() => {
@@ -651,6 +669,7 @@ export default function RoadmapClient() {
    *  vuelo (para que la relectura no la pise) y revierte + avisa si el servidor dice que no. */
   const patchRemoto = useCallback((url: string, body: Record<string, unknown>, key: string, revert: () => void, exito?: { msg: string; undo?: () => void }) => {
     inflight.current.add(key)
+    escrituras.current++
     const anterior = writeChain.current.get(key) || Promise.resolve()
     const run = anterior.catch(() => { }).then(async () => {
       const r = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -658,10 +677,13 @@ export default function RoadmapClient() {
       if (!r?.ok) { revert(); showToast(r?.error || 'No se pudo guardar', { err: true }) }
       else if (exito) showToast(exito.msg, { undo: exito.undo })
     }).finally(() => {
-      if (writeChain.current.get(key) === run) { inflight.current.delete(key); writeChain.current.delete(key) }
+      if (writeChain.current.get(key) === run) {
+        inflight.current.delete(key); writeChain.current.delete(key)
+        if (relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+      }
     })
     writeChain.current.set(key, run)
-  }, [showToast])
+  }, [showToast, revalidar])
 
   /** Absorbe lo que el debounce de fechas tenía pendiente para ESTA pieza y devuelve el body ya
    *  fusionado. Sin esto, el atajo de trimestre (o «1 sem →», o un chip de estado) encolaba su
@@ -711,18 +733,53 @@ export default function RoadmapClient() {
     const prevTask = cur?.tasks?.find(x => x.id === taskId)
     if (!cur || !prevTask) return
     const nextTask: EpicaTask = { ...prevTask, ...patch }
-    setEpicas(list => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id === taskId ? nextTask : x)) })))
-    const revertir = () => {
-      setEpicas(list => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id === taskId ? prevTask : x)) })))
-      showToast('No se pudo guardar la tarea', { err: true })
+    // Estado y ref a la vez: la siguiente escritura encadenada lee el ref antes de que React repinte.
+    const tocar = (fn: (x: EpicaTask) => EpicaTask) => {
+      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id === taskId ? fn(x) : x)) }))
+      epicasRef.current = mapear(epicasRef.current)
+      setEpicas(mapear)
     }
-    fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [nextTask] }) })
-      .then(r => r.json()).then(j => { if (!j?.ok) revertir() })
-      .catch(revertir)
-  }, [showToast])
+    tocar(x => ({ ...x, ...patch }))
+    // Encolado por tarea (como patchRemoto): cada envío sale con el updated_at que selló el anterior.
+    const key = `tarea:${taskId}`
+    // Con la cola vacía, lo que había en pantalla es lo último que confirmó el servidor.
+    if (!writeChain.current.has(key)) tareaConfirmada.current.set(key, prevTask)
+    // Sólo regresan los campos de ESTE cambio, si nadie los volvió a tocar, y al valor confirmado (no al de pantalla).
+    const revertir = (msg: string) => {
+      const base = tareaConfirmada.current.get(key) || prevTask
+      tocar(x => {
+        const y: Record<string, unknown> = { ...x }
+        ;(Object.keys(patch) as (keyof EpicaTask)[]).forEach(k => { if (x[k] === nextTask[k]) y[k] = base[k] })
+        return y as unknown as EpicaTask
+      })
+      showToast(msg, { err: true })
+    }
+    inflight.current.add(key)
+    escrituras.current++
+    let choque = false
+    const anterior = writeChain.current.get(key) || Promise.resolve()
+    const run = anterior.catch(() => { }).then(async () => {
+      const fresca = epicasRef.current?.find(e => e.id === epicaId)?.tasks?.find(x => x.id === taskId)
+      const enviar: EpicaTask = { ...(fresca || nextTask), ...patch }
+      const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: [enviar] }) })
+        .then(r => r.json()).catch(() => null) as { ok?: boolean; conflicts?: string[]; stamps?: Record<string, string> } | null
+      if (!j?.ok) { revertir('No se pudo guardar la tarea'); return }
+      if (j.conflicts?.includes(taskId)) { choque = true; revertir('Esa tarea cambió o se borró en otro lado: tu cambio NO se guardó'); return }
+      const sello = j.stamps?.[taskId]
+      if (sello) tocar(x => ({ ...x, updatedAt: sello }))
+      tareaConfirmada.current.set(key, { ...enviar, updatedAt: sello || enviar.updatedAt })
+    }).finally(() => {
+      if (writeChain.current.get(key) === run) {
+        inflight.current.delete(key); writeChain.current.delete(key); tareaConfirmada.current.delete(key)
+        if (choque || relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+      }
+    })
+    writeChain.current.set(key, run)
+  }, [showToast, revalidar])
 
-  const fechasDe = useCallback((t: Sel): { desde: string; hasta: string } => {
-    const o = buscar(epicasRef.current, t)
+  // En render se pasa `epicas` (el estado): el ref se pone al día un commit tarde.
+  const fechasDe = useCallback((t: Sel, lista?: Epica[] | null): { desde: string; hasta: string } => {
+    const o = buscar(lista === undefined ? epicasRef.current : lista, t)
     if (!o) return { desde: '', hasta: '' }
     if (t.kind === 'epica') { const e = o as Epica; return { desde: isoOf(e.roadmap_start), hasta: isoOf(e.roadmap_end) } }
     if (t.kind === 'feature') { const f = o as EpicaFeature; return { desde: isoOf(f.roadmapStart), hasta: isoOf(f.roadmapEnd) } }
@@ -749,7 +806,9 @@ export default function RoadmapClient() {
     if (prev != null) window.clearTimeout(prev)
     // Los dos casos en que NO se manda nada se MARCAN: el cambio ya se ve en pantalla y sin la
     // marca se quedaba ahí, sin guardar y sin avisar, hasta que una recarga lo revertía.
-    if (v && !ISO_RE.test(v)) { marcarPendiente(tk, true); return }          // fecha a medio teclear
+    // Fecha a medio teclear: también el año intermedio de Chrome ('0002-…', '0020-…', '0202-…'), que
+    // si no caía como «rango al revés» y avisaba en rojo que NO se guardó un cambio que sí se guarda.
+    if (v && (!ISO_RE.test(v) || v < '2000-01-01' || v > '2100-12-31')) { marcarPendiente(tk, true); return }
     const nd = campo === 'desde' ? v : cur.desde, nh = campo === 'hasta' ? v : cur.hasta
     if (t.kind !== 'hito' && nd && nh && nh < nd) {                          // rango al revés
       marcarPendiente(tk, true)
@@ -1191,7 +1250,7 @@ export default function RoadmapClient() {
   }
 
   const renderFechasEditor = (t: Sel, disabled?: string) => {
-    const { desde, hasta } = fechasDe(t)
+    const { desde, hasta } = fechasDe(t, epicas)
     const d = duracionLabel(desde, hasta, today)
     const pendiente = sinGuardar.has(`${t.kind}:${t.id}`)
     return (
@@ -1254,7 +1313,29 @@ export default function RoadmapClient() {
     const ep = (epicas || []).find(e => e.id === tareaPeek.eId)
     const t = ep?.tasks?.find(x => x.id === tareaPeek.tid)
     if (!ep || !t) return null
-    const cerrar = () => setTareaPeek(null)
+    const cerrar = () => { setTareaPeek(null); setFechaTecleo(null) }
+    const fechaTarea = (campo: 'plan' | 'due') => {
+      const k = `${t.id}:${campo}`
+      const guardada = t[campo] || ''
+      return (
+        <input type="date" value={fechaTecleo?.k === k ? fechaTecleo.v : guardada}
+          onChange={ev => {
+            const v = ev.target.value
+            // Sólo viaja una fecha completa y razonable (o vaciarla), nunca el año a medio teclear.
+            // '' con badInput = borraste UN segmento (Chrome escritorio) y quedan otros: no es vaciarla.
+            const viaja = (v === '' && !ev.target.validity.badInput) || (ISO_RE.test(v) && v >= '2000-01-01' && v <= '2100-12-31')
+            // El borrador es sólo para lo que no viaja; lo demás sigue al estado (y se ve su revert).
+            setFechaTecleo(viaja ? null : { k, v })
+            if (viaja && v !== guardada) patchTarea(ep.id, t.id!, campo === 'plan' ? { plan: v } : { due: v })
+          }}
+          onBlur={ev => {
+            // Chrome sólo avisa del PRIMER segmento borrado; si al salir ya no queda ninguno, sí era vaciarla.
+            if (fechaTecleo?.k === k && fechaTecleo.v === '' && ev.target.value === '' && !ev.target.validity.badInput && guardada) patchTarea(ep.id, t.id!, campo === 'plan' ? { plan: '' } : { due: '' })
+            setFechaTecleo(null)
+          }}
+          style={{ ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4 }} />
+      )
+    }
     return createPortal(
       <>
         <div onClick={cerrar} className="rm-noprint" style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,64,0.4)', zIndex: 98, backdropFilter: 'blur(2px)' }} />
@@ -1277,11 +1358,11 @@ export default function RoadmapClient() {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>
             <label style={{ display: 'block', flex: '1 1 150px' }}>
               <span style={eb}>Hacer</span>
-              <input type="date" value={t.plan || ''} onChange={ev => patchTarea(ep.id, t.id!, { plan: ev.target.value })} style={{ ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4 }} />
+              {fechaTarea('plan')}
             </label>
             <label style={{ display: 'block', flex: '1 1 150px' }}>
               <span style={eb}>Vence</span>
-              <input type="date" value={t.due || ''} onChange={ev => patchTarea(ep.id, t.id!, { due: ev.target.value })} style={{ ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4 }} />
+              {fechaTarea('due')}
             </label>
           </div>
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>

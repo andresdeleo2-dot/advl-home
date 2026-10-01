@@ -952,7 +952,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
 
   /* ─── Persistencia optimista ─────────────────────────────── */
-  async function patchEpic(id: string, changes: Partial<Epica>): Promise<boolean> {
+  // `moved`: ids que salen de esta épica hacia otra. NO viajan en `remove`: el upsert de la destino ya
+  // reasigna epica_id, y borrarlas aquí las perdía si el alta fallaba o chocaba (dos POST en paralelo).
+  async function patchEpic(id: string, changes: Partial<Epica>, opts?: { moved?: ReadonlyArray<string | undefined> }): Promise<boolean> {
+    const movedOut = new Set(opts?.moved || [])
     // Revierte SOLO esta épica en caso de fallo (update funcional), para no pisar
     // los updates optimistas concurrentes de otras épicas del mismo tick (reorden multi-épica).
     const prevEpic = epicsRef.current.find(e => e.id === id)
@@ -1003,7 +1006,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         const create = nextTasks.filter(t => t.id && !beforeById.has(t.id))
         const update = nextTasks.filter(t => { const b = t.id ? beforeById.get(t.id) : null; return b && !sameTask(b, t) })
           .map(t => { const f = t.id ? freshById.get(t.id) : null; return f?.updatedAt ? { ...t, updatedAt: f.updatedAt } : t })
-        const remove = before.filter(t => t.id && !afterById.has(t.id)).map(t => t.id!)
+        const remove = before.filter(t => t.id && !afterById.has(t.id) && !movedOut.has(t.id)).map(t => t.id!)
         if (create.length || update.length || remove.length) {
           const r = await fetch('/api/tareas/sync', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1048,7 +1051,45 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       return e ? { id, tasks: clone(e.tasks) } : null
     }).filter(Boolean) as Snap[]
   }
-  const restore = (snaps: Snap[]) => snaps.forEach(s => patchEpic(s.id, { tasks: s.tasks }))
+  const restore = (snaps: Snap[]) => {
+    const vivasAhora = () => {
+      const m = new Map<string, { eId: string; t: EpicaTask }>()
+      for (const e of epicsRef.current) for (const t of e.tasks || []) if (t.id) m.set(t.id, { eId: e.id, t })
+      return m
+    }
+    const enFoto = snaps.flatMap(s => s.tasks.map(t => t.id))
+    const v0 = vivasAhora()   // cómo estaba todo al tocar Deshacer
+    const aplicar = (trasEspera: boolean) => {
+      const vivas = vivasAhora()
+      // Deshacer un "mover a otra épica": la tarea regresa con el sello de donde vive ahora (si no,
+      // el server la ve vieja y la descarta) y la épica de la que sale NO la borra (`moved`).
+      const resellada = (t: EpicaTask, sId: string) => { const v = t.id ? vivas.get(t.id) : undefined; return v && v.eId !== sId && v.t.updatedAt ? { ...t, updatedAt: v.t.updatedAt } : t }
+      snaps.forEach(s => {
+        let tasks = s.tasks.map(t => resellada(t, s.id))
+        if (trasEspera) {
+          // Tras la espera NO se repone la foto entera (revertiría lo hecho mientras tanto): lo que la
+          // acción no cambió (igual en la foto y al tocar Deshacer) se toma de lo VIVO; sólo vuelve a la
+          // foto lo cambiado (las movidas). Las creadas aquí después se quedan.
+          const enS = new Set(s.tasks.map(t => t.id))
+          tasks = []
+          for (const t of s.tasks) {
+            const a = t.id ? v0.get(t.id) : undefined, v = t.id ? vivas.get(t.id) : undefined
+            if (a && a.eId === s.id && sameTask(a.t, t)) { if (v && v.eId === s.id) tasks.push(v.t) }
+            else tasks.push(resellada(t, s.id))
+          }
+          for (const t of epicsRef.current.find(e => e.id === s.id)?.tasks || []) if (!enS.has(t.id) && !enFoto.includes(t.id)) tasks.push(t)
+        }
+        patchEpic(s.id, { tasks }, { moved: enFoto })
+      })
+    }
+    // Sólo el deshacer de un mover espera lo que siga en vuelo (para traer ese sello ya fresco); lo
+    // demás se aplica al instante: patchEpic ya encadena la red por épica.
+    const otras = new Set<string>()
+    snaps.forEach(s => s.tasks.forEach(t => { const v = t.id ? v0.get(t.id) : undefined; if (v && v.eId !== s.id) otras.add(v.eId) }))
+    if (!otras.size) { aplicar(false); return }
+    showToast('Deshaciendo…')
+    Promise.all([...snaps.map(s => s.id), ...otras].map(id => writeChain.current.get(id))).then(() => aplicar(true))
+  }
   const undoToast = (msg: string, snaps: Snap[]) =>
     showToast(msg, false, snaps.length ? { label: 'Deshacer', fn: () => restore(snaps) } : undefined)
 
@@ -1691,10 +1732,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (eId === toEId) return
       const ep = epicsRef.current.find(e => e.id === eId); if (!ep) return
       const keep = clone(ep.tasks).filter((_, idx) => !idxs.includes(idx))
-      idxs.forEach(i => { if (ep.tasks[i]) moving.push(clone(ep.tasks[i])) })
-      patchEpic(eId, { tasks: keep })
+      const salen: string[] = []
+      idxs.forEach(i => {
+        if (!ep.tasks[i]) return
+        // El Feature/Iniciativa es de la ÉPICA VIEJA (mismo criterio que moveTaskToEpica).
+        const m = clone(ep.tasks[i])
+        if (m.featureId) m.featureId = ''
+        if (m.iniciativaId) m.iniciativaId = ''
+        moving.push(m)
+        if (m.id) salen.push(m.id)
+      })
+      patchEpic(eId, { tasks: keep }, { moved: salen })
     })
-    if (moving.length) patchEpic(toEId, { tasks: [...clone(toE.tasks), ...moving] })
+    if (moving.length) patchEpic(toEId, { tasks: [...clone(toE.tasks), ...moving] }).then(ok => { if (!ok) loadEpics() })
     undoToast(`${count} ${count === 1 ? 'movida' : 'movidas'} a ${toE.name}`, snaps); setPlanSel(new Set())
   }
 
@@ -1893,27 +1943,44 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
 
   /* ─── Interacciones inline en la destacada ───────────────── */
-  const setTaskStatus = (e: Epica, ti: number, v: string) => {
-    const tasks = clone(e.tasks)
+  // Cambia el estado de `t` (MUTÁNDOLA). Devuelve el aviso de recurrencia, o null. La usan
+  // setTaskStatus (una tarea) y las acciones en lote (varias en un solo patch por épica).
+  const applyTaskStatus = (t: EpicaTask, v: string): string | null => {
     // Marcar "Terminada" una tarea recurrente NO la termina: la reprograma (misma lógica que el
     // botón de completar). Así la serie no se rompe sin importar por dónde la marcaste.
-    if (v === 'Terminada' && tasks[ti].repeat && tasks[ti].status !== 'Terminada') {
-      const msg = applyComplete(tasks[ti]); patchEpic(e.id, { tasks }); if (msg) showToast(msg); return
-    }
+    if (v === 'Terminada' && t.repeat && t.status !== 'Terminada') return applyComplete(t)
     // Recuerda el estado previo al completar, para que "descompletar" desde el plan lo restaure
-    if (v === 'Terminada' && tasks[ti].status !== 'Terminada') tasks[ti].planPrev = tasks[ti].status
-    const wasDone = tasks[ti].doneAt
-    tasks[ti].status = v
-    if (v === 'Terminada') { if (!tasks[ti].doneAt) tasks[ti].doneAt = todayISO() }
+    if (v === 'Terminada' && t.status !== 'Terminada') t.planPrev = t.status
+    const wasDone = t.doneAt
+    t.status = v
+    if (v === 'Terminada') { if (!t.doneAt) t.doneAt = todayISO() }
     else {
-      delete tasks[ti].doneAt; delete tasks[ti].planPrev
+      delete t.doneAt; delete t.planPrev
       // Reabrir una recurrente cuya serie había terminado: saca ese día de repeatDone.
-      if (wasDone && Array.isArray(tasks[ti].repeatDone)) {
-        tasks[ti].repeatDone = tasks[ti].repeatDone!.filter(d => d !== wasDone)
-        if (!tasks[ti].repeatDone!.length) delete tasks[ti].repeatDone
+      if (wasDone && Array.isArray(t.repeatDone)) {
+        t.repeatDone = t.repeatDone.filter(d => d !== wasDone)
+        if (!t.repeatDone.length) delete t.repeatDone
       }
     }
+    return null
+  }
+  const setTaskStatus = (e: Epica, ti: number, v: string) => {
+    const tasks = clone(e.tasks)
+    const msg = applyTaskStatus(tasks[ti], v)
     patchEpic(e.id, { tasks })
+    if (msg) showToast(msg)
+  }
+  // Aplica `mutate` a varias tareas con UN patchEpic por épica, partiendo del estado fresco (epicsRef):
+  // un patch por tarea partía de la misma foto de la épica y cada uno pisaba al anterior.
+  const patchTasksByEpic = (list: { e: Epica; t: EpicaTask }[], mutate: (t: EpicaTask) => void) => {
+    const byE = new Map<string, string[]>()
+    list.forEach(x => { if (!x.t.id) return; const a = byE.get(x.e.id) || []; a.push(x.t.id); byE.set(x.e.id, a) })
+    byE.forEach((tids, eId) => {
+      const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
+      const tasks = clone(fresh.tasks)
+      tids.forEach(tid => { const t = tasks.find(x => x.id === tid); if (t) mutate(t) })
+      patchEpic(eId, { tasks })
+    })
   }
   const setTaskDue = (e: Epica, ti: number, v: string) => {
     const tasks = clone(e.tasks); tasks[ti].due = v
@@ -2101,10 +2168,22 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     const moves = items.filter(x => x.day !== x.orig)
     if (moves.length === 0) { showToast('La semana ya está balanceada 👌', false); return }
-    const byTarget = new Map<string, { e: Epica; i: number }[]>()
-    moves.forEach(m => { const a = byTarget.get(m.day) || []; a.push({ e: m.e, i: m.i }); byTarget.set(m.day, a) })
+    // Un patch por ÉPICA (no por día destino): dos moveTasksTo seguidos clonaban la misma foto y se pisaban.
+    const byE = new Map<string, typeof moves>()
+    moves.forEach(m => { const a = byE.get(m.eId) || []; a.push(m); byE.set(m.eId, a) })
+    const base: Record<string, number> = {}
     let n = 0
-    byTarget.forEach((list, day) => { n += moveTasksTo(list, day) })
+    byE.forEach((ms, eId) => {
+      const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
+      const tasks = clone(fresh.tasks)
+      ms.forEach(m => {
+        const t = tasks[m.i]; if (!t || t.status === 'Terminada') return
+        base[m.day] = (base[m.day] ?? maxPlanOrderFor(m.day)) + 1000
+        t.plan = m.day; if (!t.priority) t.priority = prioFromDue(t.due); t.planOrder = base[m.day]
+        relocateDayPlan(t, m.orig, m.day); applyPlanStatus(t, m.day); n++
+      })
+      patchEpic(eId, { tasks })
+    })
     showToast(`Balanceé la semana · moví ${n} ${n === 1 ? 'tarea' : 'tareas'}`)
   }
   // Control reusable de estimado de tiempo: dropdown de presets + "Personalizado…" (tiempo libre).
@@ -2152,8 +2231,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (moved.featureId) moved.featureId = ''
     if (moved.iniciativaId) moved.iniciativaId = ''
     const toTasks = clone(toE.tasks); toTasks.push(moved)
-    patchEpic(fromE.id, { tasks: fromTasks })
-    patchEpic(toE.id, { tasks: toTasks })
+    patchEpic(fromE.id, { tasks: fromTasks }, { moved: [task.id] })
+    // Si el alta falla, la tarea sigue en la BD en la épica origen: recarga para que reaparezca ahí.
+    patchEpic(toE.id, { tasks: toTasks }).then(ok => { if (!ok) loadEpics() })
     setBacklogSel(new Set())
     setFeaturedId(toE.id)   // no "desaparece" de la vista aunque haya filtro activo
     showToast(`«${task.t || 'Tarea'}» movida a ${toE.name}`)
@@ -2419,6 +2499,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     setEpics(list => list.map(e => (e.id === epicaId ? revert(e) : e)))
     showToast(msg, true)
   }
+  // Body de un PATCH parcial: JSON.stringify tira las claves undefined y la API sólo escribe las que
+  // llegan, así que "borrar" (undefined, o una clave que había en `antes` y ya no) viaja como null.
+  const conNulos = (patch: object, antes: object = {}) => {
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(antes)) out[k] = null
+    for (const [k, v] of Object.entries(patch)) out[k] = v === undefined ? null : v
+    return out
+  }
   const patchObjetivo = (epicaId: string, objetivoId: string, patch: Partial<EpicaMilestone>) => {
     const cur = epicsRef.current.find(e => e.id === epicaId)
     const prevObjetivo = cur ? ((cur.kpis || []).find(k => k.id === objetivoId) || (cur.features || []).flatMap(f => f.kpis || []).find(k => k.id === objetivoId)) : undefined
@@ -2431,7 +2519,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       const restoreIn = (arr: EpicaMilestone[]) => arr.map(m => (m.id === objetivoId ? prevObjetivo : m))
       return { ...e, kpis: restoreIn(e.kpis || []), features: (e.features || []).map(f => ({ ...f, kpis: restoreIn(f.kpis || []) })) }
     }
-    fetch(`/api/objetivos/${objetivoId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    fetch(`/api/objetivos/${objetivoId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conNulos(patch)) })
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo guardar el objetivo') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo guardar el objetivo'))
   }
@@ -2559,7 +2647,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, ...patch } : f)),
     })))
     const revert = (e: Epica): Epica => ({ ...e, features: (e.features || []).map(f => (f.id === featureId ? (prevFeature || f) : f)) })
-    fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    fetch(`/api/features/${featureId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conNulos(patch)) })
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo guardar el feature') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo guardar el feature'))
   }
@@ -2619,7 +2707,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       ...e, features: (e.features || []).map(f => (f.id !== featureId ? f : { ...f, iniciativas: (f.iniciativas || []).map(i => (i.id === iniciativaId ? { ...i, ...patch } : i)) })),
     })))
     const revert = (e: Epica): Epica => ({ ...e, features: (e.features || []).map(f => (f.id !== featureId ? f : { ...f, iniciativas: (f.iniciativas || []).map(i => (i.id === iniciativaId ? (prevIniciativa || i) : i)) })) })
-    fetch(`/api/iniciativas/${iniciativaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+    fetch(`/api/iniciativas/${iniciativaId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conNulos(patch)) })
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo guardar la iniciativa') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo guardar la iniciativa'))
   }
@@ -3314,18 +3402,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // Prioridad, dificultad y día del plan editados desde el modal
     if (taskDraft.priority) t.priority = taskDraft.priority; else delete t.priority
     if (taskDraft.difficulty) t.difficulty = taskDraft.difficulty; else delete t.difficulty
+    // Sin el gate confirmado (carga inicial pendiente o fallida) estos campos no se tocan: `t` ya trae los de `orig`.
     // Feature: igual que waitingFor, '' (no delete) para que si lo quitas SÍ se limpie la columna.
     if (featuresReady.current) t.featureId = taskDraft.featureId || ''
-    else if ('featureId' in t) t.featureId = ''
     // Persona: mismo patrón — '' (no delete) para que si la quitas SÍ se limpie la columna.
     if (personaReady.current) { t.personaId = taskDraft.personaId || ''; t.personaNombre = taskDraft.personaId ? (taskDraft.personaNombre || '') : '' }
-    else if ('personaId' in t) { t.personaId = ''; t.personaNombre = '' }
     // Depende de: mismo patrón.
     if (blockedByReady.current) t.blockedByTaskId = taskDraft.blockedByTaskId || ''
-    else if ('blockedByTaskId' in t) t.blockedByTaskId = ''
     // Iniciativa (dentro del Feature) + Responsable: mismo patrón gateado (misma migración, epicas-21).
     if (iniciativaIdReady.current) { t.iniciativaId = taskDraft.iniciativaId || ''; t.responsable = taskDraft.responsable || '' }
-    else { if ('iniciativaId' in t) t.iniciativaId = ''; if ('responsable' in t) t.responsable = '' }
     const newPlan = (taskDraft.plan || '').trim()
     if (newPlan) {
       if (orig.plan !== newPlan || t.planOrder == null) t.planOrder = maxPlanOrderFor(newPlan) + 1000  // al final de ese día
@@ -3373,8 +3458,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       // Cambiar de épica es sacar de un array y meter en otro: dos patches.
       const fromTasks = clone(e.tasks).filter((_, idx) => idx !== curIdx)
       const toTasks = clone(target.tasks); toTasks.push(t)
-      patchEpic(e.id, { tasks: fromTasks })
-      patchEpic(target.id, { tasks: toTasks })
+      patchEpic(e.id, { tasks: fromTasks }, { moved: [t.id] })
+      patchEpic(target.id, { tasks: toTasks }).then(ok => { if (!ok) loadEpics() })
       setFeaturedId(target.id)   // para que no "desaparezca" de la vista
     } else {
       const tasks = clone(e.tasks)
@@ -3408,7 +3493,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
 
   /* ─── Modal ──────────────────────────────────────────────── */
+  // Sesión del editor de épica. `snap` = la épica tal como estaba al abrir (null si es nueva): Guardar
+  // manda sólo lo que el editor cambió respecto a ella, aplicado sobre el estado actual.
+  // `previas`/`fallidos` (sólo épica nueva): ids que ya existían y nombres de intentos que fallaron, para no duplicar al reintentar.
+  const edSessionRef = useRef<{ snap: EpicDraft | null; previas?: string[]; fallidos?: string[] } | null>(null)
+  const edSavingRef = useRef(false)
+  const [edSaving, setEdSaving] = useState(false)
   const openNew = () => {
+    edSessionRef.current = { snap: null }
     setEditMode('new')
     setEditing({
       id: null, name: '', color: '#2E5A9E', description: '', status: 'En curso',
@@ -3420,7 +3512,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   const openEdit = (id: string, inline = false) => {
     const e = epics.find(x => x.id === id); if (!e) return
-    setEditMode('edit'); setEditing(clone(normalize(e)) as EpicDraft); setEditInline(inline)
+    const draft = clone(normalize(e)) as EpicDraft
+    edSessionRef.current = { snap: clone(draft) }
+    // Las rutinas no tienen id: `_o` recuerda su índice original para mezclarlas al guardar.
+    draft.routines = draft.routines.map((r, i) => ({ ...r, _o: i }) as EpicaRoutine)
+    setEditMode('edit'); setEditing(draft); setEditInline(inline)
   }
   const closeEdit = () => { setEditing(null); setEditMode(null); setEditInline(false); setEdTasksOpen(false); setEdTaskRow(null) }
   const patchDraft = (fn: (d: EpicDraft) => EpicDraft) => setEditing(d => (d ? fn(clone(d)) : d))
@@ -3433,134 +3529,288 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  objetivos: objetivos.feature_id es un FK real, dispararlos en paralelo arriesgaría un
    *  choque de llave foránea si el insert de objetivos llega antes que el del feature. */
   const milestoneBody = (k: EpicaMilestone) => { const { id: _id, ...rest } = k; return rest }
+  // Lo que el editor puede BORRAR (va a null si ya no está). taskIds no: el editor no lo toca y un borrador viejo desligaría tareas.
+  const milestoneBorrables = (k: EpicaMilestone) => { const { id: _id, taskIds: _ti, ...rest } = k; return rest }
   const iniciativaBody = (ini: Iniciativa) => { const { id: _id, featureId: _fid, epicaId: _eid, ...rest } = ini; return rest }
+  const featureCampos = (f: EpicaFeature) => ({ t: f.t, color: f.color, estado: f.estado, roadmapStart: f.roadmapStart, roadmapEnd: f.roadmapEnd, orden: f.orden })
+  // Sólo las claves que cambiaron de `antes` a `despues`: lo que el editor no tocó no viaja ni pisa lo hecho en otro lado.
+  const cambios = (antes: object, despues: object): Record<string, unknown> => {
+    const a = antes as Record<string, unknown>, d = despues as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    for (const k of new Set([...Object.keys(a), ...Object.keys(d)])) if (JSON.stringify(a[k]) !== JSON.stringify(d[k])) out[k] = d[k]
+    return out
+  }
+  // Mezcla de 3 vías por id: sobre `cur` (lo vivo) aplica sólo lo que cambió de `base` a `mine`; lo creado o cambiado en otro lado se respeta.
+  const mergeById = <T extends { id: string }>(cur: T[], base: T[], mine: T[], nested: string[] = []): T[] => {
+    const byBase = new Map(base.map(x => [x.id, x]))
+    const out = cur.filter(x => !byBase.has(x.id) || mine.some(m => m.id === x.id))
+    for (const m of mine) {
+      const b = byBase.get(m.id), k = out.findIndex(x => x.id === m.id)
+      if (k < 0) { if (!b) out.push(m); continue }   // si estaba en la foto y ya no existe, la borraron: no se revive
+      if (!b) { out[k] = m; continue }
+      const c0 = out[k] as Record<string, unknown>, c = { ...c0 }
+      const bb = b as Record<string, unknown>, mm = m as Record<string, unknown>
+      for (const key of new Set([...Object.keys(bb), ...Object.keys(mm)])) {
+        if (JSON.stringify(bb[key]) === JSON.stringify(mm[key])) continue
+        if (nested.includes(key)) c[key] = mergeById((c0[key] || []) as { id: string }[], (bb[key] || []) as { id: string }[], (mm[key] || []) as { id: string }[])
+        else if (mm[key] === undefined) delete c[key]
+        else c[key] = mm[key]
+      }
+      out[k] = c as T
+    }
+    return out
+  }
   async function syncFeaturesAndObjetivos(
     epicaId: string,
     original: { kpis?: EpicaMilestone[]; features?: EpicaFeature[] } | undefined,
     draft: { kpis: EpicaMilestone[]; features: EpicaFeature[] },
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; applied: { kpis: EpicaMilestone[]; features: EpicaFeature[] } }> {
     const origKpis = original?.kpis || []
     const origFeatures = original?.features || []
     let failed = false
+    // `original` + cada envío que SÍ entró: si algo falla, el reintento manda sólo lo que faltó.
+    const applied = { kpis: clone(origKpis), features: clone(origFeatures) }
+    const put = <T extends { id: string }>(arr: T[], x: T) => { const i = arr.findIndex(y => y.id === x.id); if (i >= 0) arr[i] = x; else arr.push(x) }
+    const drop = <T extends { id: string }>(arr: T[], id: string) => { const i = arr.findIndex(y => y.id === id); if (i >= 0) arr.splice(i, 1) }
     // Cada llamada checa `ok` (y atrapa el reject de red) en vez de sólo disparar y seguir: así
     // un objetivo/feature que no se guarda no queda en silencio — save() avisa al final si algo
     // falló, en vez de decir "Cambios guardados" con datos a medias.
-    const send = async (url: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown) => {
+    const send = async (url: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<boolean> => {
       try {
         const r = await fetch(url, { method, ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) })
         const j = await r.json().catch(() => null)
-        if (!j?.ok) failed = true
-      } catch { failed = true }
+        if (j?.ok) return true
+      } catch { /* cuenta como fallo */ }
+      failed = true
+      return false
+    }
+    // Objetivos de la épica o de un Feature: altas, sólo-lo-cambiado y bajas; refleja en `into` lo que entró.
+    const syncKpis = async (before: EpicaMilestone[], mine: EpicaMilestone[], owner: { epicaId: string } | { featureId: string }, into: EpicaMilestone[]) => {
+      for (const k of mine) {
+        const bk = before.find(x => x.id === k.id)
+        if (!bk) { if (await send('/api/objetivos', 'POST', { id: k.id, ...owner, ...milestoneBody(k) })) put(into, k) }
+        else {
+          const ch = cambios(milestoneBorrables(bk), milestoneBorrables(k))
+          if (Object.keys(ch).length && await send(`/api/objetivos/${k.id}`, 'PATCH', conNulos(ch))) put(into, k)
+        }
+      }
+      for (const bk of before) if (!mine.some(k => k.id === bk.id) && await send(`/api/objetivos/${bk.id}`, 'DELETE')) drop(into, bk.id)
     }
 
-    for (const k of draft.kpis) {
-      const before = origKpis.find(x => x.id === k.id)
-      if (!before) await send('/api/objetivos', 'POST', { id: k.id, epicaId, ...milestoneBody(k) })
-      else if (JSON.stringify(before) !== JSON.stringify(k)) await send(`/api/objetivos/${k.id}`, 'PATCH', milestoneBody(k))
-    }
-    for (const before of origKpis) {
-      if (!draft.kpis.some(k => k.id === before.id)) await send(`/api/objetivos/${before.id}`, 'DELETE')
-    }
+    await syncKpis(origKpis, draft.kpis, { epicaId }, applied.kpis)
 
     for (const f of draft.features) {
       const before = origFeatures.find(x => x.id === f.id)
-      const featureBody = { t: f.t, color: f.color, estado: f.estado, roadmapStart: f.roadmapStart, roadmapEnd: f.roadmapEnd, orden: f.orden }
       if (!before) {
-        await send('/api/features', 'POST', { id: f.id, epicaId, ...featureBody })
-        for (const k of (f.kpis || [])) await send('/api/objetivos', 'POST', { id: k.id, featureId: f.id, ...milestoneBody(k) })
-        for (const ini of (f.iniciativas || [])) await send('/api/iniciativas', 'POST', { id: ini.id, featureId: f.id, epicaId, ...iniciativaBody(ini) })
+        // Sin el Feature en la BD sus objetivos/iniciativas fallarían por la llave foránea.
+        if (!(await send('/api/features', 'POST', { id: f.id, epicaId, ...featureCampos(f) }))) continue
+        const nf: EpicaFeature = { ...f, kpis: [], iniciativas: [] }
+        applied.features.push(nf)
+        for (const k of (f.kpis || [])) if (await send('/api/objetivos', 'POST', { id: k.id, featureId: f.id, ...milestoneBody(k) })) nf.kpis!.push(k)
+        for (const ini of (f.iniciativas || [])) if (await send('/api/iniciativas', 'POST', { id: ini.id, featureId: f.id, epicaId, ...iniciativaBody(ini) })) nf.iniciativas!.push(ini)
       } else {
-        if (before.t !== f.t || before.color !== f.color || before.estado !== f.estado || before.roadmapStart !== f.roadmapStart || before.roadmapEnd !== f.roadmapEnd || before.orden !== f.orden) {
-          await send(`/api/features/${f.id}`, 'PATCH', featureBody)
-        }
-        const beforeKpis = before.kpis || []
-        const draftKpis = f.kpis || []
-        for (const k of draftKpis) {
-          const bk = beforeKpis.find(x => x.id === k.id)
-          if (!bk) await send('/api/objetivos', 'POST', { id: k.id, featureId: f.id, ...milestoneBody(k) })
-          else if (JSON.stringify(bk) !== JSON.stringify(k)) await send(`/api/objetivos/${k.id}`, 'PATCH', milestoneBody(k))
-        }
-        for (const bk of beforeKpis) {
-          if (!draftKpis.some(k => k.id === bk.id)) await send(`/api/objetivos/${bk.id}`, 'DELETE')
-        }
+        const af = applied.features.find(x => x.id === f.id)!
+        const fch = cambios(featureCampos(before), featureCampos(f))
+        if (Object.keys(fch).length && await send(`/api/features/${f.id}`, 'PATCH', conNulos(fch))) Object.assign(af, featureCampos(f))
+        const ak = af.kpis || []
+        await syncKpis(before.kpis || [], f.kpis || [], { featureId: f.id }, ak)
+        if (af.kpis || ak.length) af.kpis = ak
         const beforeInis = before.iniciativas || []
         const draftInis = f.iniciativas || []
+        const ai = af.iniciativas || []
         for (const ini of draftInis) {
           const bi = beforeInis.find(x => x.id === ini.id)
-          if (!bi) await send('/api/iniciativas', 'POST', { id: ini.id, featureId: f.id, epicaId, ...iniciativaBody(ini) })
-          else if (JSON.stringify(bi) !== JSON.stringify(ini)) await send(`/api/iniciativas/${ini.id}`, 'PATCH', iniciativaBody(ini))
+          if (!bi) { if (await send('/api/iniciativas', 'POST', { id: ini.id, featureId: f.id, epicaId, ...iniciativaBody(ini) })) put(ai, ini) }
+          else {
+            const ch = cambios(iniciativaBody(bi), iniciativaBody(ini))
+            if (Object.keys(ch).length && await send(`/api/iniciativas/${ini.id}`, 'PATCH', conNulos(ch))) put(ai, ini)
+          }
         }
-        for (const bi of beforeInis) {
-          if (!draftInis.some(ini => ini.id === bi.id)) await send(`/api/iniciativas/${bi.id}`, 'DELETE')
-        }
+        for (const bi of beforeInis) if (!draftInis.some(ini => ini.id === bi.id) && await send(`/api/iniciativas/${bi.id}`, 'DELETE')) drop(ai, bi.id)
+        if (af.iniciativas || ai.length) af.iniciativas = ai
       }
     }
     for (const before of origFeatures) {
-      if (!draft.features.some(f => f.id === before.id)) await send(`/api/features/${before.id}`, 'DELETE')
+      if (!draft.features.some(f => f.id === before.id) && await send(`/api/features/${before.id}`, 'DELETE')) drop(applied.features, before.id)
     }
-    return !failed
+    return { ok: !failed, applied }
   }
 
   async function save() {
-    if (!editing) return
-    const d = clone(editing)
-    d.name = (d.name || '').trim() || 'Nueva épica'
-    d.kpis = (d.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim())
-    d.routines = (d.routines || []).filter(r => (r.t || '').trim()).map(r => ({ t: r.t, days: r.days || [false, false, false, false, false, false, false], weeks: (r.weeks && typeof r.weeks === 'object') ? r.weeks : {} }))
-    d.tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map((t, idx) => {
-      const st = t.status || 'Por hacer'
-      // Conserva campos del plan (plan/priority/planOrder/planPrev) que no toca el editor
-      const out: EpicaTask = { ...t, id: t.id || uid(), ...(ordenReady.current ? { orden: idx * 10 } : {}), t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
-      if (st === 'Terminada') out.doneAt = t.doneAt || todayISO()
-      else delete out.doneAt   // evita arrastrar una fecha de terminación obsoleta
-      return out
-    })
-    d.links = (d.links || []).filter(l => (l.l || '').trim() || (l.url || '').trim())
-    d.links.forEach(l => { if (!l.type) l.type = 'Otro' })
-    if (!d.links.some(l => l.primary) && d.links.length) d.links[0].primary = true
-    d.features = (d.features || [])
-      .map(f => ({
-        ...f, t: (f.t || '').trim(), kpis: (f.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim()),
-        iniciativas: (f.iniciativas || []).map(ini => ({ ...ini, nombre: (ini.nombre || '').trim() })).filter(ini => ini.nombre),
-      }))
-      .filter(f => f.t)
-
-    const payload = {
-      name: d.name, color: d.color, description: sanitizeHtml(d.description) || null, status: d.status,
-      categoria: (d.categoria || '').trim() || null, archived: !!d.archived,
-      source_table: d.source_table || null, source_sync: d.source_sync || null, epic_order: d.epic_order,
-      kpis: d.kpis, routines: d.routines, tasks: d.tasks, links: d.links, features: d.features,
+    if (!editing || edSavingRef.current) return
+    const ses = edSessionRef.current
+    const src = editing
+    // Misma normalización para el borrador y para la foto: así compararlos no da diferencias falsas.
+    const prep = (x: EpicDraft): EpicDraft => {
+      x.name = (x.name || '').trim() || 'Nueva épica'
+      x.kpis = (x.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim())
+      x.links = (x.links || []).filter(l => (l.l || '').trim() || (l.url || '').trim())
+      x.links.forEach(l => { if (!l.type) l.type = 'Otro' })
+      if (!x.links.some(l => l.primary) && x.links.length) x.links[0].primary = true
+      x.features = (x.features || [])
+        .map(f => ({
+          ...f, t: (f.t || '').trim(), kpis: (f.kpis || []).map(normalizeMilestone).filter(k => (k.t || '').trim()),
+          iniciativas: (f.iniciativas || []).map(ini => ({ ...ini, nombre: (ini.nombre || '').trim() })).filter(ini => ini.nombre),
+        }))
+        .filter(f => f.t)
+      return x
     }
-
-    if (editMode === 'new') {
-      closeEdit()
-      try {
-        const r = await fetch('/api/epicas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-        const j = await r.json()
-        if (!j.ok) throw new Error(j.error)
-        const created = normalize(j.data as Epica)
-        setEpics(list => [...list, created])
-        // Bug "no se ve la épica nueva": si había un filtro de estado o categoría activo
-        // que no coincidía con la recién creada, quedaba oculta. Se limpian los filtros
-        // y se destaca para que siempre aparezca.
-        setEstadoFilter('activas'); setCatFilter('todas')
-        setFeaturedId(created.id)
-        showToast('Épica creada')
-      } catch {
-        showToast('No se pudo crear', true)
+    const campos = (x: EpicDraft) => ({
+      name: x.name, color: x.color, description: sanitizeHtml(x.description) || null, status: x.status,
+      categoria: (x.categoria || '').trim() || null, archived: !!x.archived,
+      source_table: x.source_table || null, source_sync: x.source_sync || null, epic_order: x.epic_order, links: x.links,
+    })
+    const d = prep(clone(src))
+    // El editor se cierra sólo cuando el servidor confirma; si falla, queda abierto con lo escrito.
+    const cerrar = () => { if (edSessionRef.current === ses) closeEdit() }
+    edSavingRef.current = true; setEdSaving(true)
+    try {
+      if (editMode === 'new') {
+        const routines = (d.routines || []).filter(r => (r.t || '').trim()).map(r => ({ t: r.t, days: r.days || [false, false, false, false, false, false, false], weeks: (r.weeks && typeof r.weeks === 'object') ? r.weeks : {} }))
+        const tasks = (d.tasks || []).filter(t => (t.t || '').trim()).map((t, idx) => {
+          const st = t.status || 'Por hacer'
+          const out: EpicaTask = { ...t, id: t.id || uid(), ...(ordenReady.current ? { orden: idx * 10 } : {}), t: t.t, status: st, due: t.due || '', note: sanitizeHtml(t.note), links: t.links || [] }
+          if (st === 'Terminada') out.doneAt = t.doneAt || todayISO()
+          else delete out.doneAt   // evita arrastrar una fecha de terminación obsoleta
+          return out
+        })
+        const payload = { ...campos(d), kpis: d.kpis, routines, tasks, features: d.features }
+        const listo = (created: Epica, msg: string) => {
+          setEpics(list => (list.some(e => e.id === created.id) ? list : [...list, created]))
+          cerrar()
+          // Bug "no se ve la épica nueva": si había un filtro de estado o categoría activo
+          // que no coincidía con la recién creada, quedaba oculta. Se limpian los filtros
+          // y se destaca para que siempre aparezca.
+          setEstadoFilter('activas'); setCatFilter('todas')
+          setFeaturedId(created.id)
+          showToast(msg)
+        }
+        if (ses) ses.previas ??= epicsRef.current.map(e => e.id)
+        // El alta NO es idempotente (inserta con id nuevo): si un intento anterior falló, pudo haber
+        // entrado sin que llegara la respuesta. Antes de reintentar se busca, para no duplicarla.
+        if (ses?.fallidos?.length) {
+          let ya: Epica | undefined
+          try {
+            const j = await (await fetch('/api/epicas')).json()
+            if (!j.ok || !Array.isArray(j.data)) throw new Error()
+            ya = (j.data as Epica[]).find(e => !ses.previas!.includes(e.id) && ses.fallidos!.includes(e.name))
+          } catch { showToast('Sin conexión · tu borrador sigue abierto', true); return }
+          if (ya) {
+            const e = normalize(ya)
+            if (e.tasks.length >= tasks.length && (e.kpis || []).length >= payload.kpis.length && (e.features || []).length >= (payload.features || []).length) listo(e, 'La épica sí se había creado')
+            else { setEpics(list => (list.some(x => x.id === e.id) ? list : [...list, e])); showToast(`«${e.name}» ya se creó, pero incompleta · pásale a mano lo que falte de este borrador`, true) }
+            return
+          }
+        }
+        try {
+          const r = await fetch('/api/epicas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+          const j = await r.json()
+          if (!j.ok) throw new Error(j.error)
+          listo(normalize(j.data as Epica), 'Épica creada')
+        } catch {
+          if (ses) (ses.fallidos ??= []).push(payload.name)
+          showToast('No se pudo crear · tu borrador sigue abierto', true)
+        }
+        return
       }
-    } else if (d.id) {
+      if (!d.id) return
       const id = d.id
-      const original = epicsRef.current.find(e => e.id === id)
-      closeEdit()
+      const cur = epicsRef.current.find(e => e.id === id)
+      if (!cur) { closeEdit(); showToast('Esa épica ya no existe', true); return }
+      // Foto al abrir: Guardar manda SÓLO lo que el editor cambió respecto a ella, aplicado sobre el
+      // estado ACTUAL. Antes mandaba la foto completa y borraba/revertía lo hecho mientras estaba abierto.
+      const base = prep(clone(ses?.snap || (normalize(cur) as EpicDraft)))
+      const changes = cambios(campos(base), campos(d)) as Partial<Epica>
+
+      // Rutinas: sólo si el editor agregó, quitó o renombró; las existentes conservan lo vivo (días marcados, estMin).
+      const origen = (r: EpicaRoutine) => (r as EpicaRoutine & { _o?: number })._o
+      const dR = (d.routines || []).filter(r => (r.t || '').trim())
+      const sR = base.routines || []
+      if (dR.length !== sR.length || dR.some((r, i) => origen(r) !== i || r.t !== sR[i].t)) {
+        const curR = cur.routines || []
+        const fiable = curR.length === sR.length   // sólo este editor agrega/quita rutinas
+        changes.routines = dR.map(r => {
+          const o = origen(r), c = o != null && fiable ? curR[o] : undefined
+          if (c) return { ...c, t: r.t }
+          return { t: r.t, days: r.days || [false, false, false, false, false, false, false], weeks: (r.weeks && typeof r.weeks === 'object') ? r.weeks : {}, ...(typeof r.estMin === 'number' ? { estMin: r.estMin } : {}) }
+        })
+      }
+
+      // Tareas: el editor sólo maneja título, estado, entrega, nota y Feature (más altas, bajas y orden).
+      const edCampos = (t: EpicaTask) => ({ t: t.t, status: t.status || 'Por hacer', due: t.due || '', note: sanitizeHtml(t.note), featureId: t.featureId || '' })
+      const sT = new Map(base.tasks.filter(t => t.id).map(t => [t.id!, t]))
+      const dT = (d.tasks || []).filter(t => (t.t || '').trim()).map(t => (t.id ? t : { ...t, id: uid() }))
+      const dIds = new Set(dT.map(t => t.id!))
+      // Bajas: sólo las que estaban al abrir y el editor quitó; las creadas mientras tanto se quedan.
+      let tasks = clone(cur.tasks).filter(t => !(t.id && sT.has(t.id) && !dIds.has(t.id)))
+      for (const dt of dT) {
+        const a = edCampos(dt), s = sT.get(dt.id!), b = s ? edCampos(s) : null
+        const c = tasks.find(t => t.id === dt.id)
+        if (!c) {
+          if (s) continue   // la borraron o la movieron de épica mientras tanto: no se revive
+          const nt: EpicaTask = { ...dt, ...a, links: dt.links || [] }
+          if (!a.featureId) delete nt.featureId
+          if (nt.status === 'Terminada') nt.doneAt = dt.doneAt || todayISO(); else delete nt.doneAt
+          tasks.push(nt)
+          continue
+        }
+        if (!b || a.t !== b.t) c.t = a.t
+        if (!b || a.due !== b.due) c.due = a.due
+        if (!b || a.note !== b.note) c.note = a.note
+        if ((!b || a.featureId !== b.featureId) && (a.featureId || 'featureId' in c)) c.featureId = a.featureId
+        if (!b || a.status !== b.status) { c.status = a.status; if (a.status === 'Terminada') c.doneAt = c.doneAt || todayISO(); else delete c.doneAt }
+      }
+      // `orden` sólo se renumera si el editor reordenó (↑/↓), altas incluidas; si no, altas y creadas mientras tanto van al final.
+      const antes = [...base.tasks.map(t => t.id).filter(x => x && dIds.has(x)), ...dT.map(t => t.id).filter(x => !sT.has(x!))]
+      const ahora = dT.map(t => t.id)
+      if (antes.join() !== ahora.join()) {
+        const pos = new Map(dT.map((t, k) => [t.id, k]))
+        tasks = [...tasks.filter(t => pos.has(t.id)).sort((x, y) => pos.get(x.id)! - pos.get(y.id)!), ...tasks.filter(t => !pos.has(t.id))]
+        if (ordenReady.current) tasks.forEach((t, k) => { t.orden = k * 10 })
+      }
+      if (JSON.stringify(tasks) !== JSON.stringify(cur.tasks)) changes.tasks = tasks
+
+      const conEpica = Object.keys(changes).length > 0
       // Espera el resultado: antes se anunciaba "guardado" antes de saber si el PATCH
       // había fallado, y el usuario veía un éxito falso seguido del error real.
-      const [epicOk, featObjOk] = await Promise.all([
-        patchEpic(id, payload),
-        syncFeaturesAndObjetivos(id, original, { kpis: d.kpis, features: d.features }),
+      const [epicOk, sync] = await Promise.all([
+        conEpica ? patchEpic(id, changes) : Promise.resolve(true),
+        syncFeaturesAndObjetivos(id, base, { kpis: d.kpis, features: d.features || [] }),
       ])
-      if (epicOk && featObjOk) showToast('Cambios guardados')
-      else if (epicOk) showToast('Se guardó la épica, pero algo de Features/Objetivos no — revisa e intenta de nuevo', true)
+      const hecho = sync.applied
+      if (JSON.stringify(hecho.kpis) !== JSON.stringify(base.kpis) || JSON.stringify(hecho.features) !== JSON.stringify(base.features)) {
+        setEpics(list => list.map(e => (e.id !== id ? e : {
+          ...e,
+          kpis: mergeById(e.kpis || [], base.kpis, hecho.kpis),
+          features: mergeById(e.features || [], base.features || [], hecho.features, ['kpis', 'iniciativas']),
+        })))
+      }
+      if (ses?.snap) {
+        // Si la parte de la épica entró, la foto avanza a lo enviado: el reintento manda sólo lo nuevo
+        // (incluido regresar un campo a como estaba al abrir) y no re-aplica lo del primer intento.
+        ses.snap = epicOk
+          ? { ...d, routines: changes.routines ?? base.routines, tasks: dT, kpis: hecho.kpis, features: hecho.features }
+          : { ...ses.snap, kpis: hecho.kpis, features: hecho.features }
+        if (epicOk && changes.routines && edSessionRef.current === ses) {
+          // `_o` del borrador pasa a apuntar a la foto nueva (la i-ésima rutina con nombre ↔ changes.routines[i]).
+          const porPos: (number | undefined)[] = []; let k = 0
+          for (const r of src.routines) porPos.push((r.t || '').trim() ? k++ : undefined)
+          const porO = new Map<number, number>()
+          dR.forEach((r, i) => { const o = origen(r); if (o != null) porO.set(o, i) })
+          setEditing(x => x && {
+            ...x,
+            routines: x.routines.map((r, j) => {
+              const o = origen(r)
+              return { ...r, _o: x.routines.length === src.routines.length ? porPos[j] : (o != null ? porO.get(o) : undefined) } as EpicaRoutine
+            }),
+          })
+        }
+      }
+      if (epicOk && sync.ok) { cerrar(); showToast('Cambios guardados') }
+      else if (epicOk) showToast('Se guardó la épica, pero algo de Features/Objetivos no — tu borrador sigue abierto, intenta de nuevo', true)
+      else showToast('No se pudo guardar · tu borrador sigue abierto', true)
+    } finally {
+      edSavingRef.current = false; setEdSaving(false)
     }
   }
 
@@ -7618,7 +7868,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <button aria-label="Cerrar editor de épica" onClick={closeEdit} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 10, height: 36, width: 36, color: 'rgba(20,35,61,0.55)', fontSize: 17 }}>✕</button>
           </div>
 
-          <div className="ep-modal-body ep-editor-body" style={{ padding: '10px 28px 22px', maxHeight: inline ? 'none' : '72vh', overflow: inline ? 'visible' : 'auto' }}>
+          {/* Bloqueado mientras guarda: lo tecleado en esa ventana se perdía al cerrarse el editor con el éxito. */}
+          <div className="ep-modal-body ep-editor-body" inert={edSaving} style={{ padding: '10px 28px 22px', maxHeight: inline ? 'none' : '72vh', overflow: inline ? 'visible' : 'auto' }}>
             <label style={lbl}>Nombre de la épica</label>
             <input value={d.name} onChange={e => patchDraft(x => ({ ...x, name: e.target.value }))} placeholder="Ej. Inmuebles" style={inpBig} />
 
@@ -7874,7 +8125,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               {isEdit && <button onClick={deleteEpic} style={{ cursor: 'pointer', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.08)', color: '#B0522E', borderRadius: 11, padding: '12px 16px', fontSize: 13, fontWeight: 700 }}>Eliminar</button>}
               <span style={{ flex: 1 }} />
               <button onClick={closeEdit} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', borderRadius: 11, padding: '12px 18px', fontSize: 13, fontWeight: 700, color: 'rgba(20,35,61,0.6)' }}>Cancelar</button>
-              <button onClick={save} style={{ ...goldBtn, padding: '12px 24px' }}>Guardar</button>
+              <button onClick={save} disabled={edSaving} style={{ ...goldBtn, padding: '12px 24px', opacity: edSaving ? 0.6 : 1 }}>{edSaving ? 'Guardando…' : 'Guardar'}</button>
             </div>
           </div>
       </>
@@ -8596,7 +8847,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const toggleAll = () => setMdMultiSel(prev => { const n = new Set(prev); if (allSel) keys.forEach(k => n.delete(k)); else keys.forEach(k => n.add(k)); return n })
     const doMove = (dayISO: string) => {
       if (selRows.length === 0) return
-      if (!dayISO) { selRows.forEach(x => setTaskPlan(x.e, x.i, '')); setMdMultiSel(new Set()); showToast(`Quité ${selRows.length} del calendario`); return }
+      if (!dayISO) {
+        // Igual que setTaskPlan(…, ''), pero un solo patch por épica (si no, sólo quedaba la última).
+        patchTasksByEpic(selRows, t => { delete t.plan; delete t.planOrder; applyPlanStatus(t, '') })
+        setMdMultiSel(new Set()); showToast(`Quité ${selRows.length} del calendario`); return
+      }
       const n = moveTasksTo(selRows.map(x => ({ e: x.e, i: x.i })), dayISO)
       setMdMultiSel(new Set())
       if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${relLong(dayISO).toLowerCase()}`)
@@ -11213,7 +11468,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               const lbl = d === today ? 'Hoy' : d === addDays(today, 1) ? 'Mañana' : cap(new Date(d + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'short' }).replace('.', '')) + ' ' + dayNum(d)
                               return <button key={d} onClick={() => moveSel(d)} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: '1px solid rgba(46,90,158,0.3)', background: '#fff', color: '#2E5A9E' }}>{lbl}</button>
                             })}
-                            <button onClick={() => { dcSelRefs().forEach(r => setTaskStatus(r.e, r.i, 'Terminada')); setDcSel(new Set()) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Terminar</button>
+                            <button onClick={() => { const msgs: string[] = []; patchTasksByEpic(dcSelRefs(), t => { const m = applyTaskStatus(t, 'Terminada'); if (m) msgs.push(m) }); setDcSel(new Set()); if (msgs.length) showToast(msgs[msgs.length - 1]) }} style={{ cursor: 'pointer', borderRadius: 8, padding: '5px 10px', font: '700 11px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Terminar</button>
                             <button onClick={() => setDcSel(new Set())} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '600 11px var(--font-ui)', color: 'rgba(20,35,61,0.5)' }}>Limpiar</button>
                           </div>
                         )}
@@ -11542,7 +11797,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <div className="ep-abovenav" style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)', display: 'flex', alignItems: 'center', gap: 14 }}>
           <span>{toast.msg}</span>
           {toast.action && (
-            <button onClick={() => { toast.action!.fn(); setToast(null) }} style={{ border: 'none', background: 'transparent', color: '#E7C56B', fontWeight: 800, fontSize: 13, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>{toast.action.label}</button>
+            <button onClick={() => { const fn = toast.action!.fn; setToast(null); fn() }} style={{ border: 'none', background: 'transparent', color: '#E7C56B', fontWeight: 800, fontSize: 13, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>{toast.action.label}</button>
           )}
         </div>
       )}
