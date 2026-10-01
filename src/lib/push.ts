@@ -1,6 +1,7 @@
 // Clave PÚBLICA VAPID (no es secreta: se manda al servicio de push del navegador). La PRIVADA vive
-// sólo en la variable de entorno VAPID_PRIVATE_KEY del servidor. Generadas con web-push (una vez).
-export const VAPID_PUBLIC_KEY = 'BGC69HPWQJld3oleODJdLvHER6hSc8BFOsWUR47n9dp3bq6fbYDef8KBU_RIaD8HLEvuOZn2AiZNs3G0_6z3AR8'
+// sólo en la variable de entorno VAPID_PRIVATE_KEY del servidor. Generadas con web-push; rotadas el
+// 2026-09-30 porque la privada original se perdió (cambiarla obliga a re-suscribir: PushReminders lo detecta).
+export const VAPID_PUBLIC_KEY = 'BO1dzo-vaSSjGOdF0w-WH2-tKSWcOOamUix4dqlmICShBBwNDeX1dP6ihmhOs6og0DZZrPbLZSKBSTmNDwG2MYs'
 
 // base64url → Uint8Array, como pide pushManager.subscribe({ applicationServerKey }).
 export function urlBase64ToUint8Array(base64String: string): Uint8Array {

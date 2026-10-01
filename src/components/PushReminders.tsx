@@ -9,6 +9,18 @@ const AYUDA = 'Con las notificaciones activas te llega un resumen de tu día a l
 // Una vez por carga de página aunque haya varios botones montados (panel + detalle de tarea).
 let resincronizada = false
 
+// Una suscripción hecha con otra llave VAPID (se rotó) se ve activa pero el push la rechaza.
+function llaveVigente(sub: PushSubscription): boolean {
+  const k = sub.options?.applicationServerKey
+  if (!k) return true
+  const a = new Uint8Array(k), b = urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+  return a.length === b.length && a.every((x, i) => x === b[i])
+}
+async function quitar(sub: PushSubscription) {
+  await fetch('/api/push/subscribe', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {})
+  await sub.unsubscribe().catch(() => {})
+}
+
 export default function PushReminders() {
   const [state, setState] = useState<'loading' | 'unsupported' | 'off' | 'on' | 'denied' | 'working'>('loading')
   const [verAyuda, setVerAyuda] = useState(false)
@@ -18,7 +30,8 @@ export default function PushReminders() {
     if (Notification.permission === 'denied') { setState('denied'); return }
     navigator.serviceWorker.ready
       .then(reg => reg.pushManager.getSubscription())
-      .then(sub => {
+      .then(async sub => {
+        if (sub && !llaveVigente(sub)) { await quitar(sub); sub = null }
         setState(sub ? 'on' : 'off')
         // Si un guardado anterior falló, el servidor no la tiene y el resumen nunca llega (upsert idempotente).
         if (sub && !resincronizada) {
@@ -37,6 +50,8 @@ export default function PushReminders() {
       const perm = await Notification.requestPermission()
       if (perm !== 'granted') { setState(perm === 'denied' ? 'denied' : 'off'); return }
       const reg = await navigator.serviceWorker.ready
+      const vieja = await reg.pushManager.getSubscription()
+      if (vieja && !llaveVigente(vieja)) await quitar(vieja)   // subscribe() falla si existe una con otra llave
       const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource })
       const r = await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sub) })
       const j = await r.json().catch(() => ({}))
