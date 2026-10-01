@@ -1,7 +1,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask, isAutoNote, fmtLogDate } from '@/lib/tareas'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS, WAIT_REASONS_SIMPLE, waitMeta } from '@/lib/waiting'
@@ -17,6 +17,7 @@ import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTa
 import { useFocusSession } from './FocusSession'
 import { FeatureLinksStrip, LinkPillRow, linkDomain } from './epicas/FeatureLinks'
 import { MAX_FEATURE_LINKS } from '@/lib/features'
+import { fechasClave, fechasClavePorDia, fechasClaveVisibles, plazoFechaClave, tonoFechaClave, ICONO_FECHA_CLAVE, type FechaClave } from '@/lib/hitos'
 import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
@@ -325,6 +326,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [sprintOverDay, setSprintOverDay] = useState<string | null>(null) // día concreto bajo el drag (mover a ese día)
   const sprintDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [hideYesterday, setHideYesterday] = useState(false)
+  const [fcOcultoDia, setFcOcultoDia] = useState('')     // día en que se ocultó la banda de fechas clave (localStorage 'epicas.fechasClaveOculto.v1')
+  const [fcVerTodas, setFcVerTodas] = useState(false)    // banda de fechas clave: ver más de 3
   const [viewDate, setViewDate] = useState<string>(todayISO())               // día del plan en vista
   const [calOpen, setCalOpen] = useState(false)                              // popover de mes (masthead)
   const [calMonth, setCalMonth] = useState<string>(() => todayISO().slice(0, 7)) // 'YYYY-MM'
@@ -773,6 +776,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.weekClosed.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
+  useEffect(() => { try { setFcOcultoDia(localStorage.getItem('epicas.fechasClaveOculto.v1') || '') } catch { /* noop */ } }, [])
+  const ocultarFechasClave = (dia: string) => {
+    setFcOcultoDia(dia)
+    try { if (dia) localStorage.setItem('epicas.fechasClaveOculto.v1', dia); else localStorage.removeItem('epicas.fechasClaveOculto.v1') } catch { /* noop */ }
+  }
   const celebrateClose = () => { setDcCelebrate(true); setTimeout(() => setDcCelebrate(false), 4000) }
   useEffect(() => { if (!dayCloseOpen) { setDcClose(false); setDcShowAll(false); setDcSel(new Set()); setDcEpic('todas'); setDcCompare(false); setDcSubsAll(false) } }, [dayCloseOpen])
   const budgetOf = (e: Epica): number => weekBudgetReady.current ? (e.week_budget || 0) : (epicBudgets[e.id] || 0)
@@ -1465,6 +1473,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     const start = inBase ? addDays(today, -STRIP_BACK) : addDays(viewDate, -STRIP_BACK)
     return Array.from({ length: STRIP_LEN }, (_, i) => addDays(start, i))
   }, [today, viewDate])
+  // Fechas clave abiertas por día (sin horizonte: el calendario navega meses) para marcar tira/semana/calendario.
+  const fechasClaveDia = useMemo(() => fechasClavePorDia(fechasClave(activeEpics, today, Infinity)), [activeEpics, today])
+  // Banda de la vista Día (memo: con una sesión de foco activa el dashboard re-renderiza cada segundo).
+  const fechasBanda = useMemo(() => fechasClave(activeEpics, viewDate, 3), [activeEpics, viewDate])
 
   /* ─── Plan de hoy: acciones (cada tarjeta = 1 patchEpic) ──── */
   // Reasigna planOrder=1000,2000,… agrupando por épica (1 patch por épica tocada).
@@ -2752,16 +2764,53 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   }
   /** Alta de tarea SIN abrir el modal, ya colgada de su Feature/Iniciativa. Va por patchEpic, que
    *  diffea contra el estado previo y manda sólo el alta a /api/tareas/sync. Los campos gateados
-   *  se omiten (no se ponen en el objeto) para no mandar columnas que aún no existen. */
-  const addTaskInline = (featureId: string | null, iniciativaId: string | null, titulo: string) => {
+   *  se omiten (no se ponen en el objeto) para no mandar columnas que aún no existen.
+   *  `opts.epicaId` la crea en otra épica (default: la destacada); `opts.plan` la deja planeada ese día. */
+  const addTaskInline = (featureId: string | null, iniciativaId: string | null, titulo: string, opts?: { epicaId?: string; plan?: string; priority?: Prio }): string | null => {
     const t = titulo.trim()
-    if (!t) return
+    const ep = opts?.epicaId ? epicsRef.current.find(e => e.id === opts.epicaId) : featured
+    if (!t || !ep) return null
     const nt: EpicaTask = {
       id: uid(), t, status: 'Por hacer', due: '', note: '', createdAt: todayISO(),
       ...(featuresReady.current && featureId ? { featureId } : {}),
       ...(iniciativaIdReady.current && iniciativaId ? { iniciativaId } : {}),
     }
-    patchEpic(featured.id, { tasks: [...clone(featured.tasks), nt] })
+    if (opts?.plan) {
+      nt.plan = opts.plan
+      nt.priority = opts.priority || 'media'
+      nt.planOrder = maxPlanOrderFor(opts.plan) + 1000
+      applyPlanStatus(nt, opts.plan)
+    }
+    patchEpic(ep.id, { tasks: [...clone(ep.tasks), nt] })
+    return nt.id!
+  }
+  /** Banda de fechas clave (vista Día): marca un hito como logrado hoy, con Deshacer que restaura
+   *  su estado previo tal cual (los undefined viajan como null y limpian la columna). */
+  const marcarHitoLogrado = (fc: FechaClave) => {
+    const cur = epicsRef.current.find(e => e.id === fc.epicaId)
+    const prev = cur ? [...(cur.kpis || []), ...(cur.features || []).flatMap(f => f.kpis || [])].find(k => k.id === fc.id) : undefined
+    if (!prev) return
+    const hoy = todayISO()
+    patchObjetivo(fc.epicaId, fc.id, { hitoEstado: 'logrado', fechaLogrado: hoy, done: true, doneAt: hoy })
+    showToast(`⚑ Hito logrado: ${fc.titulo}`, false, {
+      label: 'Deshacer',
+      fn: () => patchObjetivo(fc.epicaId, fc.id, { hitoEstado: prev.hitoEstado, fechaLogrado: prev.fechaLogrado, done: prev.done, doneAt: prev.doneAt }),
+    })
+  }
+  /** "+ Tarea" de una fecha clave: tarea de preparación planeada para `dia`, colgada de su
+   *  feature/iniciativa, y abre su vistazo con el título seleccionado para renombrarla. */
+  const crearTareaFechaClave = (fc: FechaClave, dia: string) => {
+    const hoy = todayISO()
+    // flushSync: el vistazo se monta dentro del mismo toque; sólo así iOS abre el teclado con el focus().
+    const tid = flushSync(() => {
+      const id = addTaskInline(fc.featureId || null, fc.kind === 'iniciativa' ? fc.id : null, `Preparar: ${fc.titulo}`, { epicaId: fc.epicaId, plan: dia < hoy ? hoy : dia, priority: fc.dias <= 1 ? 'alta' : 'media' })
+      if (id) setTaskView({ eId: fc.epicaId, tid: id })
+      return id
+    })
+    if (!tid) return
+    const els = document.querySelectorAll<HTMLTextAreaElement>('textarea[aria-label="Título de la tarea"]')
+    const el = els[els.length - 1]
+    if (el) { el.focus(); el.setSelectionRange(0, el.value.length) }
   }
   /** Elimina un objetivo (de la épica o de cualquiera de sus features — se busca en ambos lados). */
   const deleteObjetivo = (epicaId: string, objetivoId: string) => {
@@ -4268,6 +4317,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  // Puntito de fecha clave en un día: rojo si ya venció o vence hoy (sigue abierta), dorado si viene.
+  const fcTitle = (d: string) => {
+    const fcs = fechasClaveDia.get(d)
+    return fcs ? fcs.map(f => `${ICONO_FECHA_CLAVE[f.kind]} ${f.titulo} · ${f.ruta}`).join('\n') : undefined
+  }
+  const fcDot = (d: string, extra?: CSSProperties) => {
+    const n = fechasClaveDia.get(d)?.length || 0
+    if (!n) return null
+    return <span role="img" aria-label={`${n} ${n === 1 ? 'fecha clave' : 'fechas clave'}`} title={fcTitle(d)}
+      style={{ width: 6, height: 6, borderRadius: 99, flexShrink: 0, background: d <= today ? '#B0522E' : '#C2933A', ...extra }} />
+  }
+
   // Tira de días (navegación) + botón de calendario
   const renderDayStrip = () => (
     <div style={{ marginTop: 16, display: 'flex', gap: 8, alignItems: 'stretch', position: 'relative' }}>
@@ -4294,13 +4355,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           const lblColor = sel ? '#E7C56B' : isT ? '#A87A2C' : pastPend ? '#B0522E' : 'rgba(20,35,61,0.5)'
           const numColor = sel ? '#F3EFE6' : pastPend ? '#B0522E' : ((c && c.total > 0) || isT ? '#10233F' : 'rgba(16,35,64,0.4)')
           return (
-            <button key={d} data-day={d} data-day-selected={sel || undefined} onClick={() => { setViewDate(d); setCalMonth(d.slice(0, 7)) }} className="plan-day"
-              style={{ flexShrink: 0, minWidth: 58, height: 62, padding: '0 6px', borderRadius: 14, border: over ? '1.5px solid #C2933A' : sel ? '1px solid #10233F' : isT ? '1px solid rgba(194,147,58,0.45)' : pastPend ? '1px solid rgba(176,82,46,0.35)' : '1px solid rgba(15,35,64,0.10)', background: over ? 'rgba(194,147,58,0.12)' : sel ? '#10233F' : pastPend ? 'rgba(176,82,46,0.05)' : '#fff', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, scrollSnapAlign: 'start', opacity: past && !sel && !pastPend ? 0.55 : 1, boxShadow: sel ? '0 8px 18px -10px rgba(15,35,64,.55)' : 'none' }}>
+            <button key={d} data-day={d} data-day-selected={sel || undefined} onClick={() => { setViewDate(d); setCalMonth(d.slice(0, 7)) }} className="plan-day" title={fcTitle(d)}
+              style={{ position: 'relative', flexShrink: 0, minWidth: 58, height: 62, padding: '0 6px', borderRadius: 14, border: over ? '1.5px solid #C2933A' : sel ? '1px solid #10233F' : isT ? '1px solid rgba(194,147,58,0.45)' : pastPend ? '1px solid rgba(176,82,46,0.35)' : '1px solid rgba(15,35,64,0.10)', background: over ? 'rgba(194,147,58,0.12)' : sel ? '#10233F' : pastPend ? 'rgba(176,82,46,0.05)' : '#fff', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, scrollSnapAlign: 'start', opacity: past && !sel && !pastPend && !fechasClaveDia.has(d) ? 0.55 : 1, boxShadow: sel ? '0 8px 18px -10px rgba(15,35,64,.55)' : 'none' }}>
               <span className="plan-day-lbl" style={{ font: '700 10px/1 var(--font-ui)', textTransform: 'uppercase', letterSpacing: '.06em', color: lblColor }}>{relShort(d)}</span>
               <span className="serif plan-day-num" style={{ fontSize: 22, fontWeight: 600, lineHeight: 1, fontVariantNumeric: 'tabular-nums', color: numColor }}>{dayNum(d)}</span>
               {c && c.total > 0
                 ? <span title={pastPend ? `${pend} sin terminar` : undefined} style={{ height: 16, padding: '0 6px', borderRadius: 99, display: 'flex', alignItems: 'center', font: '700 10px/1 var(--font-ui)', background: allDone ? (sel ? 'rgba(231,197,107,0.22)' : 'rgba(62,142,142,0.14)') : pastPend && !sel ? 'rgba(176,82,46,0.14)' : (sel ? 'rgba(255,255,255,0.16)' : 'rgba(194,147,58,0.14)'), color: allDone ? (sel ? '#E7C56B' : '#2E6E6E') : pastPend && !sel ? '#B0522E' : (sel ? '#F3EFE6' : '#A87A2C') }}>{allDone ? '✓' : pastPend ? pend : c.total}</span>
                 : <span style={{ width: 3, height: 3, borderRadius: 99, background: sel ? 'rgba(255,255,255,0.3)' : 'rgba(15,35,64,0.16)' }} />}
+              {fcDot(d, { position: 'absolute', top: 6, right: 6, boxShadow: `0 0 0 1.5px ${sel ? '#10233F' : '#fff'}` })}
             </button>
           )
         })}
@@ -4880,6 +4942,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               <div style={{ height: HEADER_H, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 7, padding: '0 10px', borderBottom: '1px solid rgba(15,35,64,0.06)' }}>
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: isTd ? '#A87A2C' : 'rgba(20,35,61,0.55)' }}>{DAYNAMES[wd].slice(0, 3)}</span>
                 <span className="serif" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1, color: isTd ? '#A87A2C' : '#10233F', fontVariantNumeric: 'tabular-nums' }}>{dayNum(d)}</span>
+                {fcDot(d)}
                 {list.length > 0 && (
                   <span style={{ height: 15, padding: '0 6px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', font: '700 9.5px/1 var(--font-ui)', background: allDone ? 'rgba(62,142,142,0.14)' : 'rgba(194,147,58,0.14)', color: allDone ? '#2E6E6E' : '#A87A2C' }}>{allDone ? '✓' : `${done}/${full.length}`}</span>
                 )}
@@ -5746,6 +5809,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <span className="serif" style={{ fontSize: 13, fontWeight: 600, color: isTd ? '#A87A2C' : inMonth ? '#10233F' : 'rgba(20,35,61,0.35)' }}>{dayNum(cd)}</span>
                       {isTd && <span style={{ font: '700 8px var(--font-ui)', color: '#A87A2C' }}>HOY</span>}
+                      {fcDot(cd)}
                       <span style={{ flex: 1 }} />
                       {inMonth && <button onClick={() => newTaskForDay(cd)} aria-label={`Nueva tarea ${fmtDue(cd)}`} title="Nueva tarea" style={{ height: 16, width: 16, borderRadius: 4, cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.5)', fontSize: 11, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>}
                     </div>
@@ -6683,6 +6747,66 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
+
+          {/* Fechas clave (hitos, objetivos, iniciativas, features) vencidas o a ≤3 días del día que ves. */}
+          {(() => {
+            const fcs = fechasBanda
+            if (!fcs.length) return null
+            const nVenc = fcs.filter(f => f.dias < 0).length
+            const tono = nVenc ? '#B0522E' : '#A87A2C'
+            const resumen = `${fcs.length} ${fcs.length === 1 ? 'fecha clave' : 'fechas clave'}${nVenc ? ` · ${nVenc} ${nVenc === 1 ? 'vencida' : 'vencidas'}` : ''}`
+            const actBtn: CSSProperties = { minHeight: 34, minWidth: 34, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 9, padding: '0 11px', font: '800 11.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap', textDecoration: 'none' }
+            if (fcOcultoDia === today) return (
+              <button onClick={() => ocultarFechasClave('')} title="Mostrar las fechas clave"
+                style={{ ...actBtn, marginTop: 16, width: '100%', gap: 8, borderRadius: 11, border: '1px dashed rgba(194,147,58,0.45)', background: 'transparent', padding: '0 13px', color: tono, textAlign: 'left' }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>⚑ {resumen}</span>
+                <span style={{ fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>Mostrar ▾</span>
+              </button>
+            )
+            const KIND_LBL = { hito: 'Hito', objetivo: 'Objetivo', iniciativa: 'Iniciativa', feature: 'Feature' } as const
+            const shown = fcVerTodas ? fcs : fechasClaveVisibles(fcs, 3)
+            return (
+              <div style={{ marginTop: 16, borderRadius: 13, background: 'rgba(194,147,58,0.05)', border: `1px solid ${nVenc ? 'rgba(176,82,46,0.30)' : 'rgba(194,147,58,0.32)'}`, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 6px 2px 13px', background: nVenc ? 'rgba(176,82,46,0.06)' : 'rgba(194,147,58,0.09)' }}>
+                  <span style={{ fontSize: 13, color: tono }}>⚑</span>
+                  <span style={{ font: '800 10.5px/1 var(--font-ui)', letterSpacing: '.06em', textTransform: 'uppercase', color: tono }}>Fechas clave</span>
+                  <span style={{ fontSize: 10.5, fontWeight: 800, color: 'rgba(20,35,61,0.45)' }}>{fcs.length}</span>
+                  <span style={{ flex: 1 }} />
+                  <button onClick={() => { ocultarFechasClave(today); setFcVerTodas(false) }} title="Plegar a una línea hasta mañana" style={{ ...actBtn, border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', font: '700 11px var(--font-ui)', padding: '0 8px' }}>Ocultar por hoy</button>
+                </div>
+                <div style={{ padding: '2px 6px 4px' }}>
+                  {shown.map((fc, k) => {
+                    const tn = tonoFechaClave(fc.dias)
+                    const pc = tn === 'vencido' ? { c: '#B0522E', bg: 'rgba(176,82,46,0.10)' } : tn === 'pronto' ? { c: '#A87A2C', bg: 'rgba(194,147,58,0.14)' } : { c: 'rgba(20,35,61,0.55)', bg: 'rgba(15,35,64,0.06)' }
+                    // Viendo otro día, "vence hoy/mañana" engañaría: se muestra la fecha (el color sí es relativo a ese día).
+                    const plazo = isToday ? plazoFechaClave(fc.dias) : `${fc.dias < 0 ? 'venció' : 'vence'} ${fmtDue(fc.fecha)}`
+                    const href = `/roadmap?ep=${encodeURIComponent(fc.epicaId)}${fc.featureId ? `&f=${encodeURIComponent(fc.featureId)}` : ''}`
+                    return (
+                      <div key={fc.kind + ':' + fc.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '7px 8px', borderTop: k > 0 ? '1px solid rgba(15,35,64,0.06)' : 'none' }}>
+                        <span role="img" aria-label={KIND_LBL[fc.kind]} title={KIND_LBL[fc.kind]} style={{ flexShrink: 0, width: 16, textAlign: 'center', fontSize: 13, color: fc.color }}>{ICONO_FECHA_CLAVE[fc.kind]}</span>
+                        <div style={{ flex: '1 1 120px', minWidth: 0 }}>
+                          <div title={fc.titulo} style={{ fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fc.titulo}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3 }}>
+                            <span title={fc.ruta} style={{ minWidth: 0, fontSize: 10.5, color: 'rgba(20,35,61,0.5)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fc.ruta}</span>
+                            <span title={fmtDue(fc.fecha)} style={{ flexShrink: 0, font: '800 10px/1 var(--font-ui)', padding: '3px 7px', borderRadius: 99, color: pc.c, background: pc.bg, whiteSpace: 'nowrap' }}>{plazo}</span>
+                          </div>
+                        </div>
+                        {/* En celular (ep-hide-sm) las acciones quedan como íconos de 34px para que la fila no se parta. */}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginLeft: 'auto' }}>
+                          {fc.kind === 'hito' && <button onClick={() => marcarHitoLogrado(fc)} aria-label="Marcar como logrado" title="Marcar el hito como logrado hoy" style={{ ...actBtn, border: '1px solid rgba(62,142,142,0.4)', background: 'rgba(62,142,142,0.08)', color: '#2E6E6E' }}>✓<span className="ep-hide-sm">Logrado</span></button>}
+                          <button onClick={() => crearTareaFechaClave(fc, viewDate)} aria-label="Crear tarea de preparación" title={`Crear «Preparar: ${fc.titulo}» para ${viewDate <= today ? 'hoy' : fmtDue(viewDate)}`} style={{ ...actBtn, border: '1px solid rgba(194,147,58,0.45)', background: '#fff', color: '#A87A2C' }}>+<span className="ep-hide-sm">Tarea</span></button>
+                          <Link href={href} aria-label="Ver en Roadmap" title="Abrir el Roadmap filtrado a esta épica" style={{ ...actBtn, border: '1px solid rgba(15,35,64,0.12)', background: '#fff', color: '#16365F' }}><span className="ep-hide-sm">Ver en Roadmap</span>↗</Link>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {fcs.length > 3 && (
+                    <button onClick={() => setFcVerTodas(v => !v)} style={{ ...actBtn, border: 'none', background: 'transparent', color: '#A87A2C', padding: '0 8px' }}>{fcVerTodas ? '− menos' : `+${fcs.length - 3} más`}</button>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Próximos recordatorios (los remindAt sólo suenan con la app abierta; aquí se VEN). */}
           {isToday && remindReady.current && (() => {

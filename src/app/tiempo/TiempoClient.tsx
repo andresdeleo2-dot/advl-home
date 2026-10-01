@@ -20,6 +20,7 @@ const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '
 import { sanitizeHtml } from '@/lib/sanitize'
 import { readWaitSince, markWaitSince, waitAgeDays, waitAgeLabel, WAIT_NUDGE_DAYS, WAIT_REASONS_SIMPLE, waitMeta as waitMetaT } from '@/lib/waiting'
 import { isAutoNote, fmtLogDate } from '@/lib/tareas'
+import { fechasClave, fechasClaveVisibles, plazoFechaClave, tonoFechaClave } from '@/lib/hitos'
 import Confetti from '@/components/Confetti'
 import TaskLinks from '@/components/TaskLinks'
 import BreakButton from '@/components/BreakButton'
@@ -1883,6 +1884,12 @@ export default function TiempoClient() {
   }
   // Declarado ANTES de `diaRows`, que lo lee durante el render (más abajo daría ReferenceError por TDZ).
   const today = iso(new Date())
+  // Hitos/objetivos/iniciativas/features vencidos o a ≤3 días (las tareas se pasan para las métricas "con tareas cerradas").
+  const fechasPronto = useMemo(() => {
+    const porEpica = new Map<string, EpicaTask[]>()
+    for (const x of allTasks || []) { const arr = porEpica.get(x.epicaId); if (arr) arr.push(x.task); else porEpica.set(x.epicaId, [x.task]) }
+    return fechasClave(epicasList.map(e => ({ ...e, tasks: porEpica.get(e.id) || [] })), today, 3)
+  }, [epicasList, allTasks, today])
   // Devolver una tarea (a la que ya le pusiste tiempo hoy) a "tus tareas del día".
   const sendBackToTasks = (taskId: string) => {
     const key = `${today}·${taskId}`
@@ -2230,6 +2237,25 @@ export default function TiempoClient() {
         ) : view === 'hoy' ? (
           /* ── HOY ──────────────────────────────────────────────────── */
           <div style={{ width: '100%', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 20 }}>
+           {fechasPronto.length > 0 && (
+             <a href="/roadmap" title="Ver hitos y fechas límite en el Roadmap" style={{ alignSelf: 'flex-start', maxWidth: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 8, rowGap: 4, minHeight: 36, padding: '6px 14px', borderRadius: 14, background: '#fff', border: `1px solid ${fechasPronto.some(f => f.dias < 0) ? '#e8cabf' : '#ece3d5'}`, fontSize: 13, color: '#4c4741', textDecoration: 'none' }}>
+               <span style={{ color: '#8a4b28', fontWeight: 600, whiteSpace: 'nowrap' }}>⚑ Vence pronto:</span>
+               {fechasClaveVisibles(fechasPronto, 3).map((f, k) => {
+                 const tn = tonoFechaClave(f.dias)
+                 return (
+                   <Fragment key={f.kind + ':' + f.id}>
+                     {k > 0 && <span style={{ color: '#d6ccbd' }}>·</span>}
+                     <span title={`${f.ruta} · ${fmtDue(f.fecha)}`} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, minWidth: 0, maxWidth: '100%' }}>
+                       <span style={{ minWidth: 0, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}</span>
+                       <span style={{ flexShrink: 0, whiteSpace: 'nowrap', color: tn === 'vencido' ? '#8a3c2a' : tn === 'pronto' ? '#b4653a' : '#a49b90', fontWeight: tn === 'despues' ? 400 : 600 }}>({plazoFechaClave(f.dias).replace(/^vence /, '')})</span>
+                     </span>
+                   </Fragment>
+                 )
+               })}
+               {fechasPronto.length > 3 && <span style={{ color: '#a49b90', whiteSpace: 'nowrap' }}>+{fechasPronto.length - 3} más</span>}
+               <span style={{ color: '#a49b90' }}>↗</span>
+             </a>
+           )}
            <div className="hoy-panels">
            {hoyPanel === 'tareas' ? (
              <div className="hoy-rail">
