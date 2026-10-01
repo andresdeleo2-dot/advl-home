@@ -7,9 +7,10 @@ import FavoritosStrip from '@/components/FavoritosStrip'
 import PushReminders from '@/components/PushReminders'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
-  DOW_CHIPS, blockActiveOn, daysLabel, DIRTY_KEY, rowKey, addRows, settleDirty,
-  type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow,
+  DOW_CHIPS, blockActiveOn, daysLabel, DIRTY_KEY, rowKey, addRows, settleDirty, corregirInicio,
+  type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow, type ResultadoInicio,
 } from '@/lib/tiempo'
+import HoraInicioInput from '@/components/HoraInicioInput'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink, EpicaFeature } from '@/lib/supabase'
 import { taskStyle, fmtDue, safeUrl, uid, isoToLocalInput, cap, typeColor, completeRecurring, hexA, calcCalibration, effCalFactor, PersonaPicker, type PersonaOpt } from '@/components/epicas/core'
 import PersonaExpediente from '@/components/PersonaExpediente'
@@ -1854,23 +1855,15 @@ export default function TiempoClient() {
   // Pausar: banca lo transcurrido en pausedAccum y detiene el reloj. Reanudar: nuevo segmento.
   const pauseSession = () => { const s = data.session; if (!s || s.pausedAt != null || notSynced()) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }
   const resumeSession = () => { const s = data.session; if (!s || s.pausedAt == null || notSynced()) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }
-  // Corregir la hora en que empezó la actividad en curso (desde el Planificador o "el día"): reancla
-  // el inicio real a esa hora de HOY, así el transcurrido pasa a ser "ahora − ese inicio".
-  const setSessionStart = (startMin: number) => {
-    const s = data.session; if (!s || notSynced()) return
-    const m = Math.max(0, Math.min(1439, Math.round(startMin)))
-    const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
-    if (d.getTime() > Date.now()) return   // no dejar un inicio en el futuro
-    if (s.pausedAt != null) {
-      // Estaba EN PAUSA: no la reanudes. Ajusta lo BANCADO por el desplazamiento del inicio (no
-      // recalcules ahora−inicio: contaría el hueco de la pausa como trabajado).
-      const oldStartMs = s.startedAt ?? d.getTime()
-      const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
-      // Corregir el inicio invalida los segmentos (ya no cuadran con el nuevo origen) → se limpian.
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now(), segs: [] } })
-    } else {
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
-    }
+  // Corregir la hora en que empezó la actividad en curso (desde el Planificador o "el día").
+  const setSessionStart = (startMin: number): ResultadoInicio => {
+    const s = dataRef.current.session
+    if (!s) return 'sin-sesion'
+    if (notSynced()) return 'espera'
+    const corr = corregirInicio(s, startMin)
+    if (!corr) return 'futuro'
+    save({ session: { ...corr, mod: Date.now() } })
+    return 'ok'
   }
   // Inicio (minuto del día) y transcurrido de la sesión en curso, para pintarla en el Planificador/"el día".
   const sessStartMin = data.session ? (data.session.startedAt != null ? (() => { const d = new Date(data.session.startedAt!); return d.getHours() * 60 + d.getMinutes() })() : Math.round(data.session.origStart ?? data.session.start)) : 0
@@ -1978,7 +1971,7 @@ export default function TiempoClient() {
       statusLabel: 'en curso', statusColor: '#8a4b28', statusRank: -1,
       onClick: data.session.taskId ? () => { const tt = (allTasks || []).find(x => x.task.id === data.session!.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) } : undefined,
       actions: (<>
-        <input type="time" value={clock(sessStartMin)} onChange={e => setSessionStart(parse(e.target.value))} title="Corrige la hora en que empezaste" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '3px 6px', fontSize: 12, fontVariantNumeric: 'tabular-nums' }} />
+        <HoraInicioInput value={sessStartMin} onCommit={setSessionStart} title="Corrige la hora en que empezaste" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, padding: '3px 6px', fontSize: 12, fontVariantNumeric: 'tabular-nums' }} />
         {data.session.taskId && <button onClick={() => { const tt = (allTasks || []).find(x => x.task.id === data.session!.taskId); if (tt) setEditTask({ epicaId: tt.epicaId, epicaName: tt.epicaName, color: tt.color, task: { ...tt.task } }) }} title="Ver la tarea" style={dtBtn}>Ver</button>}
         <button onClick={() => finish(false)} title="Terminar la sesión" style={{ ...dtBtn, color: '#8a4b28' }}>Terminar</button>
       </>),
@@ -3515,7 +3508,7 @@ export default function TiempoClient() {
             <span style={{ ...LBL, color: V.sessionPaused ? '#d98a55' : '#a49b90' }}>{V.sessionPaused ? '⏸ en pausa' : 'en curso'}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: '#a49b90' }} title="Corrige la hora en que empezaste (ajusta el tiempo que lleva corriendo)">empezó
-                <input type="time" value={clock(sessStartMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #4a443c', borderRadius: 8, color: '#faf7f1', padding: '2px 5px', fontSize: 12.5, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
+                <HoraInicioInput value={sessStartMin} onCommit={setSessionStart} style={{ background: 'transparent', border: '1px solid #4a443c', borderRadius: 8, color: '#faf7f1', padding: '2px 5px', fontSize: 12.5, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
               </label>
               <button onClick={() => setSessionMin(true)} title="Minimizar (queda como pastilla)" aria-label="Minimizar la sesión" style={{ border: '1px solid #4a443c', background: 'transparent', color: '#cdc4b8', borderRadius: 999, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, lineHeight: 1, cursor: 'pointer', flexShrink: 0 }}>–</button>
             </div>
@@ -3575,7 +3568,7 @@ export default function TiempoClient() {
             <span style={{ fontSize: 'clamp(18px,3vw,26px)', fontWeight: 500, textAlign: 'center', maxWidth: 700, lineHeight: 1.2 }}>{V.sessionName}</span>
             <span style={{ fontSize: 14, color: '#a49b90' }}>🕐 son las {nowClock}{sitPlan > 0 ? (overSit ? ` · pasaste tu plan de ${hm(sitPlan)}` : <> · terminarías a las <b style={{ color: '#cdc4b8' }}>{endClock}</b></>) : ' · contador libre'}</span>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#a49b90' }} title="Corrige la hora en que empezaste (ajusta el tiempo que lleva corriendo)">empezó
-              <input type="time" value={clock(sessStartMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
+              <HoraInicioInput value={sessStartMin} onCommit={setSessionStart} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
             </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: V.sessionPaused ? 0.5 : 1 }}>{V.sessionElapsedLabel || '0m'}</span>
             {/* Acumulado de la tarea (retomar) + planeado vs real */}

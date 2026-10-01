@@ -119,6 +119,52 @@ export function clock(m: number): string {
   return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0')
 }
 
+export type ResultadoInicio = 'ok' | 'futuro' | 'espera' | 'sin-sesion'
+
+/** Corrige a qué hora empezó la sesión en curso. Si el inicio se adelanta, ese rato se suma como
+ *  trabajado; si se atrasa, solo cuenta lo trabajado desde el nuevo inicio (las pausas nunca cuentan).
+ *  null = hora futura. */
+export function corregirInicio(s: NonNullable<Session>, startMin: number, ahora = Date.now()): NonNullable<Session> | null {
+  const m = Math.max(0, Math.min(1439, Math.round(startMin)))
+  const d = new Date(ahora); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
+  let nuevo = d.getTime()
+  const viejo = s.startedAt ?? s.segAt ?? nuevo
+  const hoy0 = new Date(ahora); hoy0.setHours(0, 0, 0, 0)
+  if (nuevo > ahora && viejo < hoy0.getTime()) nuevo -= 86400000   // sesión de ayer que cruzó la medianoche
+  if (nuevo > ahora) return null
+  const corriendo = s.pausedAt == null
+  const abierto = s.segAt ?? viejo
+  const segs = s.segs || []
+  const sumMin = (xs: [number, number][]) => xs.reduce((t, [a, b]) => t + Math.max(0, b - a) / 60000, 0)
+  const startDe = (ms: number) => { const x = new Date(ms); return x.getHours() * 60 + x.getMinutes() }
+  // Los tramos sólo sirven si cuadran con lo acumulado (una corrección vieja o datos legados los vaciaron).
+  const coherentes = Math.abs(sumMin(segs) - (s.pausedAccum || 0)) < 1.5
+  const base = { ...s, origStart: m, startedAt: nuevo }
+  if (!coherentes) {
+    // Sin tramos fiables: desplaza lo trabajado lo mismo que se movió el inicio.
+    let banked = (s.pausedAccum || 0) + (viejo - nuevo) / 60000
+    if (!corriendo) return { ...base, start: m, pausedAccum: Math.max(0, banked), segs: [] }
+    let segAt = abierto
+    if (banked < 0) { segAt = Math.min(ahora, segAt - banked * 60000); banked = 0 }
+    return { ...base, start: startDe(segAt), segAt, pausedAccum: banked, pausedAt: undefined, segs: [] }
+  }
+  if (nuevo <= viejo) {
+    if (segs.length) {
+      const [[, b0], ...resto] = segs
+      return { ...base, start: corriendo ? s.start : m, pausedAccum: (s.pausedAccum || 0) + (viejo - nuevo) / 60000, segs: [[nuevo, b0], ...resto] }
+    }
+    // Sin pausas: el tramo en curso (o el acumulado, si está pausada) arranca en el nuevo inicio.
+    if (corriendo) return { ...base, start: startDe(nuevo), segAt: nuevo, pausedAccum: 0, pausedAt: undefined, segs: [] }
+    return { ...base, start: m, pausedAccum: (s.pausedAccum || 0) + (viejo - nuevo) / 60000, segs: [] }
+  }
+  // Se atrasa: recorta los tramos al nuevo inicio y cuenta solo lo que queda.
+  const recortados = segs.map(([a, b]) => [Math.max(a, nuevo), b] as [number, number]).filter(([a, b]) => b > a)
+  const banked = sumMin(recortados)
+  if (!corriendo) return { ...base, start: m, pausedAccum: banked, segs: recortados }
+  const segAt = Math.min(ahora, Math.max(abierto, nuevo))
+  return { ...base, start: startDe(segAt), segAt, pausedAccum: banked, pausedAt: undefined, segs: recortados }
+}
+
 /** "22:30" → 1350. */
 export function parse(s: string): number {
   const p = String(s || '').split(':')

@@ -7,7 +7,8 @@
    La escritura a Épicas (sumar tiempo a la bitácora / marcar terminada) se delega al
    contenedor por callbacks, para no duplicar la lógica de tareas. */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { KEY, hm, clock, parse, iso, defaults, settleDirty, type AppData, type Session, type Area, type HistoryRow } from '@/lib/tiempo'
+import { KEY, hm, clock, iso, defaults, settleDirty, corregirInicio, type AppData, type Session, type Area, type HistoryRow, type ResultadoInicio } from '@/lib/tiempo'
+import HoraInicioInput from './HoraInicioInput'
 import type { EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment } from '@/lib/supabase'
 import { safeUrl, uid as coreUid } from '@/components/epicas/core'
 
@@ -266,22 +267,14 @@ export function useFocusSession(hooks: FocusHooks) {
   const pauseSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt != null || notReady()) return; const openStart = s.segAt ?? s.startedAt ?? Date.now(); const seg = s.segAt != null ? (Date.now() - s.segAt) / 60000 : elapsedMin(s.start, now); save({ session: { ...s, pausedAccum: (s.pausedAccum || 0) + Math.max(0, seg), pausedAt: Math.round(now), mod: Date.now(), segs: [...(s.segs || []), [openStart, Date.now()] as [number, number]] } }) }, [now, save, notReady])
   const resumeSession = useCallback(() => { const s = dataRef.current.session; if (!s || s.pausedAt == null || notReady()) return; save({ session: { ...s, start: Math.round(now), segAt: Date.now(), pausedAt: undefined, mod: Date.now() } }) }, [now, save, notReady])
   const extend = useCallback(() => { const s = dataRef.current.session; if (s && !notReady()) save({ session: { ...s, dur: s.dur + 15, mod: Date.now() } }) }, [save, notReady])
-  const setSessionStart = useCallback((startMin: number) => {
-    const s = dataRef.current.session; if (!s || notReady()) return
-    const m = Math.max(0, Math.min(1439, Math.round(startMin)))
-    const d = new Date(); d.setHours(Math.floor(m / 60), m % 60, 0, 0)
-    if (d.getTime() > Date.now()) return
-    if (s.pausedAt != null) {
-      // Estaba EN PAUSA: no la reanudes. Ajusta lo BANCADO por el desplazamiento del inicio (no
-      // recalcules ahora−inicio: eso contaría el hueco de la pausa como trabajado).
-      const oldStartMs = s.startedAt ?? d.getTime()
-      const banked = Math.max(0, (s.pausedAccum || 0) + (oldStartMs - d.getTime()) / 60000)
-      // Corregir el inicio invalida el mapa de segmentos (los intervalos ya no cuadran con el nuevo
-      // origen): se limpian → al terminar se registra como bloque continuo, con el `dur` correcto.
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), pausedAccum: banked, mod: Date.now(), segs: [] } })
-    } else {
-      save({ session: { ...s, origStart: m, start: m, startedAt: d.getTime(), segAt: d.getTime(), pausedAccum: 0, pausedAt: undefined, mod: Date.now(), segs: [] } })
-    }
+  const setSessionStart = useCallback((startMin: number): ResultadoInicio => {
+    const s = dataRef.current.session
+    if (!s) return 'sin-sesion'
+    if (notReady()) return 'espera'
+    const corr = corregirInicio(s, startMin)
+    if (!corr) return 'futuro'
+    save({ session: { ...corr, mod: Date.now() } })
+    return 'ok'
   }, [save, notReady])
   const cancel = useCallback(() => { if (notReady()) return; const s = dataRef.current.session; save({ session: null, sessionEnd: Date.now() }); setFocusOpen(false); setPomoOn(false); pomoStartElRef.current = 0; if (s) hooksRef.current.onToast?.(`Descartada «${s.name}» sin registrar`) }, [save, notReady])
   const finish = useCallback((markDone = false) => {
@@ -397,7 +390,7 @@ export function useFocusSession(hooks: FocusHooks) {
             <span style={{ ...LBL, color: paused ? '#d98a55' : '#a49b90' }}>{paused ? '⏸ en pausa' : 'en curso'}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: '#a49b90' }} title="Corrige la hora en que empezaste">empezó
-                <input type="time" value={clock(startMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #4a443c', borderRadius: 8, color: '#faf7f1', padding: '2px 5px', fontSize: 12.5, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
+                <HoraInicioInput value={startMin} onCommit={setSessionStart} style={{ background: 'transparent', border: '1px solid #4a443c', borderRadius: 8, color: '#faf7f1', padding: '2px 5px', fontSize: 12.5, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
               </label>
               <button onClick={() => setSessionMin(true)} title="Minimizar" aria-label="Minimizar la sesión" style={{ border: '1px solid #4a443c', background: 'transparent', color: '#cdc4b8', borderRadius: 999, width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, lineHeight: 1, cursor: 'pointer', flexShrink: 0 }}>–</button>
             </div>
@@ -469,7 +462,7 @@ export function useFocusSession(hooks: FocusHooks) {
             <span style={{ fontSize: 'clamp(18px,3vw,26px)', fontWeight: 500, textAlign: 'center', maxWidth: 700, lineHeight: 1.2 }}>{session.name}</span>
             <span style={{ fontSize: 14, color: '#a49b90' }}>🕐 son las {nowClock}{planned > 0 ? (overSit ? ` · pasaste tu plan de ${hm(planned)}` : ` · terminarías a las ${endClock}`) : ' · contador libre'}</span>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#a49b90' }} title="Corrige la hora en que empezaste">empezó
-              <input type="time" value={clock(startMin)} onChange={e => setSessionStart(parse(e.target.value))} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
+              <HoraInicioInput value={startMin} onCommit={setSessionStart} style={{ background: 'transparent', border: '1px solid #3a352e', borderRadius: 8, color: '#faf7f1', padding: '3px 7px', fontSize: 13, fontVariantNumeric: 'tabular-nums', colorScheme: 'dark' }} />
             </label>
             <span style={{ fontFamily: SERIF, fontSize: 'clamp(88px,20vw,190px)', lineHeight: .82, letterSpacing: '-.02em', opacity: paused ? 0.5 : 1 }}>{elapsedLabel || '0m'}</span>
             {(priorMin > 0 || todayTotal > 0 || planBase > 0 || dayTotalNow > 0) && (
