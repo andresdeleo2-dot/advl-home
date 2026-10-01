@@ -291,7 +291,7 @@ const sameLink = (a: EpicaLink, b: EpicaLink) => a.url === b.url && a.l === b.l 
 /** Franja "LINKS · <feature>": tarjetas + alta/edición inline. No guarda nada por sí misma:
  *  avisa con onAdd/onEdit/onRemove (quien la monta escribe, revierte y ofrece Deshacer).
  *  Montarla con key={feature.id} para que el modo editar no se arrastre entre features. */
-export function FeatureLinksStrip({ featureName, color, links, onAdd, onEdit, onRemove, id }: {
+export function FeatureLinksStrip({ featureName, color, links, onAdd, onEdit, onRemove, id, abrirAlta, onAltaAbierta }: {
   featureName: string
   color?: string
   links: EpicaLink[]
@@ -299,11 +299,14 @@ export function FeatureLinksStrip({ featureName, color, links, onAdd, onEdit, on
   onEdit: (prev: EpicaLink, next: EpicaLink) => void
   onRemove: (link: EpicaLink) => void
   id?: string
+  abrirAlta?: boolean          // el "+ Link" de la tarjeta pide abrir el formulario de alta
+  onAltaAbierta?: () => void   // se consume para que no se reabra al volver a montar la franja
 }) {
   const [editMode, setEditMode] = useState(false)
   const [form, setForm] = useState<FormState>(null)
   const n = links.length
   useEffect(() => { if (n === 0) setEditMode(false) }, [n])
+  useEffect(() => { if (abrirAlta) { setEditMode(false); setForm({ mode: 'add' }); onAltaAbierta?.() } }, [abrirAlta, onAltaAbierta])
   const editIdx = form?.mode === 'edit' ? links.findIndex(x => sameLink(x, form.link)) : -1
   useEffect(() => { if (form?.mode === 'edit' && editIdx < 0) setForm(null) }, [form, editIdx])
   const full = n >= MAX_FEATURE_LINKS
@@ -316,16 +319,23 @@ export function FeatureLinksStrip({ featureName, color, links, onAdd, onEdit, on
 
   if (n === 0) {
     return (
-      <div id={id} style={{ marginBottom: 18 }}>
+      <section id={id} aria-label={`Links de ${featureName}`} style={{ marginBottom: 18 }}>
         <FeatureLinksStyles />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, minHeight: 28 }}>
+          <span aria-hidden style={{ width: 7, height: 7, borderRadius: 99, background: color || '#5B6B86', flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0, font: '700 9.5px/1.2 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.5)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Links · <span style={{ color: NAVY2 }}>{featureName}</span>
+          </span>
+        </div>
         {form ? <div className="fl-cards" style={{ display: 'flex' }}>{addForm}</div> : (
           <button type="button" className="fl-add" onClick={() => setForm({ mode: 'add' })}
-            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%', minHeight: 36, padding: '7px 13px', borderRadius: 10, border: '1px dashed rgba(15,35,64,0.22)', background: 'transparent', color: 'rgba(20,35,61,0.55)', font: '700 11.5px/1.2 var(--font-ui)' }}>
-            <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, maxWidth: '100%', minHeight: 44, padding: '9px 15px', borderRadius: 10, border: '1.5px dashed rgba(194,147,58,0.6)', background: 'rgba(194,147,58,0.07)', color: GOLD_D, font: '700 12.5px/1.2 var(--font-ui)' }}>
+            <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>🔗</span>
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Agregar link a {featureName}</span>
+            <span className="ep-hide-sm" style={{ fontWeight: 600, color: 'rgba(20,35,61,0.45)' }}>· dashboard, hoja, carpeta…</span>
           </button>
         )}
-      </div>
+      </section>
     )
   }
 

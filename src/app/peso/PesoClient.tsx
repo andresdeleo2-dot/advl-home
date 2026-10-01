@@ -362,10 +362,18 @@ export default function PesoClient({ initialData, initialPlan }: { initialData: 
     e.preventDefault()
     setSaving(true)
     const fd = new FormData(e.currentTarget)
-    if (editing) await updateRegistro(fd)
-    else await addRegistro(fd)
-    setSaving(false)
-    closeForm()
+    try {
+      if (editing) await updateRegistro(fd)
+      else {
+        const r = await addRegistro(fd)
+        if (!r.ok) { window.alert('No se pudo guardar la medición. Revisa tu conexión e intenta de nuevo.'); return }
+      }
+      closeForm()
+    } catch {
+      window.alert('No se pudo guardar la medición. Revisa tu conexión e intenta de nuevo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleDelete(r: PesoRecord) {

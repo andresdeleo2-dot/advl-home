@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import SiteHeader from '@/components/SiteHeader'
 import SectionNav from '@/components/SectionNav'
 import type { Epica, EpicaFeature, EpicaMilestone, EpicaTask, Iniciativa } from '@/lib/supabase'
@@ -11,6 +11,8 @@ import {
   taskCount, taskStyle, todayISO, uid, WEEK_EST_MIN, type Dif, type Duracion, type Prio,
 } from '@/components/epicas/core'
 import { LinkPillRow } from '@/components/epicas/FeatureLinks'
+import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } from '@/components/epicas/SiguientePaso'
+import { mapaFaltaPaso, tareaPrimerPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    /roadmap — TABLERO CUANTIZADO
@@ -470,7 +472,7 @@ const cuerpoHito = (s: 'pendiente' | 'en_curso' | 'logrado', hoy: string): Recor
 
 export default function RoadmapClient() {
   const [epicas, setEpicas] = useState<Epica[] | null>(null)
-  const [gates, setGates] = useState({ roadmapReady: true, featuresTableReady: true, objetivosTableReady: true, iniciativasTableReady: true })
+  const [gates, setGates] = useState({ roadmapReady: true, featuresTableReady: true, objetivosTableReady: true, iniciativasTableReady: true, featuresReady: true, iniciativaIdReady: true })
   const [err, setErr] = useState('')
   const [today, setToday] = useState<string>(todayISO())
   const [mounted, setMounted] = useState(false)
@@ -489,7 +491,7 @@ export default function RoadmapClient() {
   const [colapsadas, setColapsadas] = useState<Set<string>>(new Set())
   const [sel, setSel] = useState<Sel | null>(null)
   const [showSinFecha, setShowSinFecha] = useState(true)
-  const [toast, setToast] = useState<{ msg: string; err?: boolean; undo?: () => void } | null>(null)
+  const [toast, setToast] = useState<{ msg: string; err?: boolean; undo?: () => void; undoLbl?: string } | null>(null)
   const [flashId, setFlashId] = useState<string | null>(null)
   const [nuevo, setNuevo] = useState<{ kind: 'feature' | 'hito' | 'iniciativa'; epicaId: string; featureId?: string; bucket: number } | null>(null)
   const [nuevoTxt, setNuevoTxt] = useState('')
@@ -502,6 +504,11 @@ export default function RoadmapClient() {
   const [tareaPeek, setTareaPeek] = useState<{ eId: string; tid: string } | null>(null)
   // Hacer/Vence del popup mientras se teclean: el año a medias ('0002-…') se ve pero no se guarda.
   const [fechaTecleo, setFechaTecleo] = useState<{ k: string; v: string } | null>(null)
+  // Siguiente paso: qué iniciativa de la lista del feature tiene su prompt abierto (por un toque),
+  // las recién resueltas (para que se alcance a ver el "✓ Creada") y cómo estaban al resolverlas.
+  const [pasoAbierto, setPasoAbierto] = useState<string | null>(null)
+  const { tiene: pasoRecienTiene, marcar: marcarPasoRecien } = useRecienCreadas()
+  const pasoUltimo = useRef(new Map<string, FaltaPaso>())
 
   const epicasRef = useRef<Epica[] | null>(null)
   const selRef = useRef<Sel | null>(null)
@@ -535,6 +542,8 @@ export default function RoadmapClient() {
       featuresTableReady: j.featuresTableReady !== false,
       objetivosTableReady: j.objetivosTableReady !== false,
       iniciativasTableReady: j.iniciativasTableReady !== false,
+      featuresReady: j.featuresReady !== false,
+      iniciativaIdReady: j.iniciativaIdReady !== false,
     })
     setEpicas(rows)
     return rows
@@ -548,9 +557,9 @@ export default function RoadmapClient() {
     }).catch(() => { setErr('No se pudo cargar'); setEpicas([]) })
   }, [aplicar])
 
-  const showToast = useCallback((msg: string, o?: { err?: boolean; undo?: () => void }) => {
+  const showToast = useCallback((msg: string, o?: { err?: boolean; undo?: () => void; undoLbl?: string }) => {
     if (toastTimer.current != null) window.clearTimeout(toastTimer.current)
-    setToast({ msg, err: o?.err, undo: o?.undo })
+    setToast({ msg, err: o?.err, undo: o?.undo, undoLbl: o?.undoLbl })
     toastTimer.current = window.setTimeout(() => setToast(null), o?.undo ? 6000 : 3200)
   }, [])
 
@@ -778,6 +787,53 @@ export default function RoadmapClient() {
     writeChain.current.set(key, run)
   }, [showToast, revalidar])
 
+  /** Primer paso de una iniciativa sin tareas abiertas: alta optimista (aparece YA en el panel y la
+   *  barra), POST a /api/tareas/sync con create, sella el updated_at devuelto y, si falla, la quita
+   *  con aviso (y Reintentar, porque el prompt ya soltó el texto). Va en la misma cola por tarea que
+   *  patchTarea: una edición inmediata espera al alta. La promesa dice si el servidor la aceptó. */
+  const crearPrimerPaso = useCallback((fp: FaltaPaso, titulo: string, cuando: CuandoPaso): false | Promise<boolean> => {
+    // Sin la columna iniciativa_id la tarea nacería suelta y la iniciativa seguiría sin paso.
+    if (!gates.iniciativaIdReady) { showToast('Corre sql/epicas-21-tarea-iniciativa.sql para ligar tareas a iniciativas', { err: true }); return false }
+    const { epicaId } = fp
+    if (!epicasRef.current?.some(e => e.id === epicaId)) return false
+    const hoy = todayISO()
+    let maxOrden = 0
+    if (cuando === 'hoy') (epicasRef.current || []).forEach(e => (e.tasks || []).forEach(t => { if (t.plan === hoy) maxOrden = Math.max(maxOrden, t.planOrder ?? 0) }))
+    const nueva = tareaPrimerPaso({ id: uid(), titulo, cuando, hoy, featureId: gates.featuresReady ? fp.featureId : null, iniciativaId: fp.ini.id, planOrder: maxOrden + 1000 })
+    const taskId = nueva.id!
+    const tocar = (fn: (ts: EpicaTask[]) => EpicaTask[]) => {
+      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: fn(e.tasks || []) }))
+      epicasRef.current = mapear(epicasRef.current)
+      setEpicas(mapear)
+    }
+    tocar(ts => [...ts, nueva])
+    pasoUltimo.current.set(fp.ini.id, fp)
+    marcarPasoRecien(fp.ini.id)
+    const key = `tarea:${taskId}`
+    inflight.current.add(key)
+    escrituras.current++
+    const anterior = writeChain.current.get(key) || Promise.resolve()
+    const run = anterior.catch(() => { }).then(async () => {
+      const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [nueva] }) })
+        .then(r => r.json()).catch(() => null) as { ok?: boolean; stamps?: Record<string, string> } | null
+      if (!j?.ok) {
+        tocar(ts => ts.filter(t => t.id !== taskId))
+        showToast(`No se pudo crear «${nueva.t}»`, { err: true, undo: () => { void crearPrimerPaso(fp, titulo, cuando) }, undoLbl: 'Reintentar' })
+        return false
+      }
+      const sello = j.stamps?.[taskId]
+      if (sello) tocar(ts => ts.map(t => (t.id === taskId ? { ...t, updatedAt: sello } : t)))
+      return true
+    }).finally(() => {
+      if (writeChain.current.get(key) === run) {
+        inflight.current.delete(key); writeChain.current.delete(key)
+        if (relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+      }
+    })
+    writeChain.current.set(key, run)
+    return run
+  }, [gates, showToast, revalidar, marcarPasoRecien])
+
   // En render se pasa `epicas` (el estado): el ref se pone al día un commit tarde.
   const fechasDe = useCallback((t: Sel, lista?: Epica[] | null): { desde: string; hasta: string } => {
     const o = buscar(lista === undefined ? epicasRef.current : lista, t)
@@ -962,6 +1018,15 @@ export default function RoadmapClient() {
   }, [epicas, epicaFilter])
 
   const selObj = useMemo(() => (sel ? buscar(epicas, sel) : null), [epicas, sel])
+  // Iniciativas abiertas sin tarea abierta (sin siguiente paso, o bloqueadas por otra abierta), por id.
+  const faltaPasoMap = useMemo(() => mapaFaltaPaso(epicas || []), [epicas])
+  const sinPaso = (iniId: string) => { const fp = faltaPasoMap.get(iniId); return !!fp && !fp.bloqueadaPor }
+  // Un prompt abierto a mano no sobrevive a cambiar de pieza en el panel, ni a que la iniciativa ya
+  // tenga paso (pasado el "✓ Creada"): si vuelve a quedarse sin paso, no debe reabrirse solo.
+  useEffect(() => { setPasoAbierto(null) }, [sel?.id])
+  useEffect(() => {
+    if (pasoAbierto && !faltaPasoMap.has(pasoAbierto) && !pasoRecienTiene(pasoAbierto)) setPasoAbierto(null)
+  }, [pasoAbierto, faltaPasoMap, pasoRecienTiene])
   // La pieza abierta se borró (desde otra pestaña, o al filtrar): el panel se cierra solo.
   useEffect(() => { if (sel && epicas && !selObj) setSel(null) }, [sel, epicas, selObj])
 
@@ -1042,16 +1107,18 @@ export default function RoadmapClient() {
     const pl = plazoLabel(ini.hasta, today, { hecho: CERRADO_INI.has(ini.estado) })
     const ci = Math.max(span.ci, Math.min(span.cj, ini.ci)) - span.ci
     const cj = Math.max(span.ci, Math.min(span.cj, ini.cj)) - span.ci
+    const falta = sinPaso(ini.id)
     return (
       <div key={ini.id} style={{ ...colStyle(ci, cj), minWidth: 0 }}>
         <div {...clickable(() => setSel({ kind: 'iniciativa', id: ini.id, epicaId: ini.epicaId, featureId: ini.featureId }), `Iniciativa ${ini.nombre}`)}
-          title={`${ini.nombre} · ${st.label} · ${ini.dur.detalle}`}
+          title={`${ini.nombre} · ${st.label} · ${ini.dur.detalle}${falta ? ' · Sin siguiente paso' : ''}`}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 0,
             background: st.bg, border: `1px ${ini.incompleta ? 'dashed' : 'solid'} ${hexA(st.c, 0.35)}`,
             borderLeft: `3px solid ${st.c}`, borderRadius: 8, padding: '4px 8px',
             boxShadow: flashId === ini.id ? `0 0 0 3px ${hexA('#C2933A', 0.55)}` : 'none',
           }}>
+          {falta && <MarcaSinPaso />}
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: 700, color: '#16365F' }}>
             {ini.cortaIzq ? '‹ ' : ''}{ini.nombre}{ini.cortaDer ? ' ›' : ''}
           </span>
@@ -1394,6 +1461,18 @@ export default function RoadmapClient() {
     )
   }
 
+  /** Prompt de siguiente paso (o "Bloqueada · espera «X»") de una iniciativa que lo necesita o que
+   *  lo acaba de recibir — así se alcanza a ver el "✓ Creada" antes de que se vaya. */
+  const renderPaso = (iniId: string, o?: { autoFocus?: boolean; style?: CSSProperties }) => {
+    const fp = faltaPasoMap.get(iniId) || (pasoRecienTiene(iniId) ? pasoUltimo.current.get(iniId) : undefined)
+    if (!fp) return null
+    return (
+      <SiguientePaso key={`paso:${iniId}`} nombre={fp.ini.nombre} hoy={today} autoFocus={o?.autoFocus}
+        bloqueadaPor={fp.bloqueadaPor?.nombre} style={o?.style}
+        onCrear={(titulo, cuando) => crearPrimerPaso(fp, titulo, cuando)} />
+    )
+  }
+
   const renderPanel = () => {
     if (!sel || !selObj) return null
     const ep = (epicas || []).find(e => e.id === sel.epicaId)
@@ -1493,15 +1572,36 @@ export default function RoadmapClient() {
             {inis.map(i => {
               const st = iniciativaStyle(i.estado)
               const d = duracionLabel(i.fechaInicio, i.fechaFinObjetivo, today)
+              const fp = faltaPasoMap.get(i.id)
+              const falta = !!fp && !fp.bloqueadaPor
+              const abierto = pasoAbierto === i.id
+              const paso = abierto ? renderPaso(i.id, { autoFocus: true, style: { marginTop: 6 } }) : null
               return (
-                <button key={i.id} {...clickable(() => setSel({ kind: 'iniciativa', id: i.id, epicaId: sel.epicaId, featureId: f.id }), `Abrir ${i.nombre}`)}
-                  style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, textAlign: 'left', border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 10, padding: '7px 9px', marginBottom: 6, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
-                  <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: '#16365F' }}>{i.nombre}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: st.c, background: st.bg, borderRadius: 99, padding: '2px 7px' }}>{st.label}</span>
-                  <span style={{ fontSize: 10.5, color: d.c }}>{d.corto}</span>
-                </button>
+                <div key={i.id} style={{ marginBottom: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+                    <button {...clickable(() => setSel({ kind: 'iniciativa', id: i.id, epicaId: sel.epicaId, featureId: f.id }), `Abrir ${i.nombre}`)}
+                      title={falta ? 'Sin siguiente paso' : undefined}
+                      style={{ display: 'flex', flex: 1, minWidth: 0, alignItems: 'center', gap: 8, flexWrap: 'wrap', textAlign: 'left', border: '1px solid rgba(15,35,64,0.10)', background: '#fff', borderRadius: 10, padding: '7px 9px', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+                      {falta && <MarcaSinPaso />}
+                      <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: '#16365F' }}>{i.nombre}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: st.c, background: st.bg, borderRadius: 99, padding: '2px 7px' }}>{st.label}</span>
+                      <span style={{ fontSize: 10.5, color: d.c }}>{d.corto}</span>
+                      {fp?.bloqueadaPor && <span style={{ flexBasis: '100%', fontSize: 10.5, fontWeight: 700, color: '#B0522E' }}>⛓ bloqueada · espera «{fp.bloqueadaPor.nombre}»</span>}
+                    </button>
+                    {(falta || paso) && (
+                      // flushSync: el prompt se monta dentro del mismo toque y iOS sí abre el teclado.
+                      <button type="button" className="sp-tap" aria-expanded={abierto} onClick={() => flushSync(() => setPasoAbierto(abierto ? null : i.id))}
+                        title={abierto ? 'Cerrar' : `Darle su primer paso a «${i.nombre}»`}
+                        style={{ ...addBtn, flexShrink: 0, borderRadius: 10, minHeight: 32, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {abierto ? '✕' : '＋ Paso'}
+                      </button>
+                    )}
+                  </div>
+                  {paso}
+                </div>
               )
             })}
+            <SiguientePasoStyles />
             <button onClick={() => { setNuevo({ kind: 'iniciativa', epicaId: sel.epicaId, featureId: f.id, bucket: bucketSugerido }); setNuevoTxt('') }} style={addBtn}>+ iniciativa</button>
             {nuevo?.kind === 'iniciativa' && nuevo.featureId === f.id && renderAlta()}
 
@@ -1511,7 +1611,7 @@ export default function RoadmapClient() {
             </div>
             <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow(sel.epicaId))}</div>
             {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
-            <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>
+            <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Toca una tarea para editar lo básico; subtareas, notas y lo demás, en Épicas.</div>
           </>
         )
       }
@@ -1522,6 +1622,7 @@ export default function RoadmapClient() {
         // Antes esta pieza no mostraba NADA de trabajo real — para ver qué tareas trae había que
         // salir del todo a Épicas. Mismo patrón que la lista de "Tareas" del feature, de arriba.
         const tareas = (ep?.tasks || []).filter(t => t.iniciativaId === i.id && t.status !== ARCHIVED)
+        const paso = renderPaso(i.id, { style: { marginBottom: 8 } })
         return (
           <>
             {/* Botón EXPLÍCITO además de la miga de pan de arriba — "Eugenia" ahí ya hace esto
@@ -1558,8 +1659,9 @@ export default function RoadmapClient() {
             {dep.map(r => <div key={r.key} style={{ ...banner, marginTop: 10, marginBottom: 0 }}>⛓ {r.detalle}</div>)}
 
             <div style={{ ...eb, marginTop: 20, marginBottom: 6 }}>Tareas · {tareas.length}</div>
+            {paso}
             {tareas.length === 0
-              ? <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Sin tareas todavía — se agregan desde Épicas.</div>
+              ? (!paso && <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.45)' }}>Sin tareas todavía — se agregan desde Épicas.</div>)
               : (<>
                 <div style={{ fontSize: 12, color: 'rgba(20,35,61,0.5)' }}>
                   {tareas.filter(t => t.status === 'Terminada').length} terminadas · {tareas.filter(t => t.status !== 'Terminada').length} pendientes
@@ -1567,7 +1669,7 @@ export default function RoadmapClient() {
                 <div style={{ marginTop: 6 }}>{tareas.slice(0, 8).map(renderTareaRow(sel.epicaId))}</div>
                 {tareas.length > 8 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 5 }}>y {tareas.length - 8} más…</div>}
               </>)}
-            <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Las tareas se editan en Épicas (aquí sólo se leen).</div>
+            <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.4)', marginTop: 8 }}>Toca una tarea para editar lo básico; subtareas, notas y lo demás, en Épicas.</div>
           </>
         )
       }
@@ -1823,6 +1925,7 @@ export default function RoadmapClient() {
                       boxShadow: flashId === s.id ? `0 0 0 3px ${hexA('#C2933A', 0.55)}` : 'none',
                     }}>
                       <span style={eb}>{KIND_LBL[s.kind]}</span>
+                      {s.kind === 'iniciativa' && sinPaso(s.id) && <MarcaSinPaso />}
                       <button {...clickable(() => setSel({ kind: s.kind, id: s.id, epicaId: s.epicaId, featureId: s.featureId }), `Abrir ${s.nombre}`)}
                         style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 12.5, fontWeight: 700, color: '#16365F', fontFamily: 'var(--font-ui)', textAlign: 'left' }}>{s.nombre}</button>
                       <span style={{ fontSize: 11.5, color: GRIS }}>{s.ctx}</span>
@@ -1859,7 +1962,7 @@ export default function RoadmapClient() {
           <span>{toast.msg}</span>
           {toast.undo && (
             <button onClick={() => { const u = toast.undo!; setToast(null); u() }}
-              style={{ cursor: 'pointer', border: '1px solid rgba(255,255,255,0.35)', background: 'transparent', color: '#E7C56B', borderRadius: 99, padding: '3px 11px', fontSize: 11.5, fontWeight: 800, fontFamily: 'var(--font-ui)' }}>Deshacer</button>
+              style={{ cursor: 'pointer', border: '1px solid rgba(255,255,255,0.35)', background: 'transparent', color: '#E7C56B', borderRadius: 99, padding: '3px 11px', fontSize: 11.5, fontWeight: 800, fontFamily: 'var(--font-ui)' }}>{toast.undoLbl || 'Deshacer'}</button>
           )}
         </div>, document.body)}
     </div>

@@ -1,4 +1,4 @@
-/* BUILD-MARKER: v82-hitos-en-el-dia-y-resumen-push */
+/* BUILD-MARKER: v83-paso-revision-captura-links-visibles */
 /* Service worker mínimo para instalar la PWA y dar offline básico.
    Estrategia: NETWORK-FIRST (siempre intenta red; si falla, sirve caché). Así nunca queda JS
    viejo pegado tras un deploy, pero las páginas ya visitadas abren sin conexión. */

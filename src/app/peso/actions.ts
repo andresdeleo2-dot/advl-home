@@ -11,7 +11,7 @@ export async function addRegistro(formData: FormData) {
     const v = formData.get(key) as string
     return v ? parseInt(v, 10) : null
   }
-  await supabase.from('peso_registros').insert({
+  const { error } = await supabase.from('peso_registros').insert({
     fecha: formData.get('fecha') as string,
     peso: num('peso'),
     pct_grasa: num('pct_grasa'),
@@ -21,7 +21,9 @@ export async function addRegistro(formData: FormData) {
     edad_corporal: int('edad_corporal'),
     grasa_visceral: int('grasa_visceral'),
   })
+  if (error) return { ok: false as const, error: error.message }
   revalidatePath('/peso')
+  return { ok: true as const }
 }
 
 export async function updateRegistro(formData: FormData) {

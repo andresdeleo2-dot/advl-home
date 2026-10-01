@@ -16,8 +16,12 @@ import Link from 'next/link'
 import type { Epica, EpicaMilestone, EpicaRoutine, EpicaTask, EpicaLink, EpicaTaskLink, EpicaSubtask, EpicaProgressEntry, EpicaRepeat, EpicaDayPlan, EpicaFeature, Iniciativa, ObjetivoUnit } from '@/lib/supabase'
 import { useFocusSession } from './FocusSession'
 import { FeatureLinksStrip, LinkPillRow, linkDomain } from './epicas/FeatureLinks'
+import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } from './epicas/SiguientePaso'
+import RevisionSemanal, { type RevFeature, type RevIni, type RevObjetivo, type RevSinFeature, type RevSinPaso, type RevTarea } from './epicas/RevisionSemanal'
+import { domingoDeSemana, mapaFaltaPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 import { MAX_FEATURE_LINKS } from '@/lib/features'
 import { fechasClave, fechasClavePorDia, fechasClaveVisibles, plazoFechaClave, tonoFechaClave, ICONO_FECHA_CLAVE, type FechaClave } from '@/lib/hitos'
+import { parseCaptura, quitarToken, escaparToken, etiquetaFecha, normalizar, ICONO_TOKEN, type TokenCaptura, type Captura, type CapturaEpica } from '@/lib/captura'
 import SectionNav from './SectionNav'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
@@ -166,6 +170,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
   const [epicFeatureFilter, setEpicFeatureFilter] = useState<string>('todas')  // filtro por Feature dentro de la épica
   const [epicIniciativaFilter, setEpicIniciativaFilter] = useState<string>('todas')  // filtro por Iniciativa, un nivel más de cascada (sólo con epicFeatureFilter concreto)
+  const [linkAltaPara, setLinkAltaPara] = useState<string | null>(null)  // feature cuyo "+ Link" de la tarjeta pidió abrir el alta en la franja
+  const altaLinkAbierta = useCallback(() => setLinkAltaPara(null), [])
   const [epicDay, setEpicDay] = useState<string>('')                   // filtro GLOBAL por fecha "Hacer" (día ancla; '' = sin filtro)
   const [epicSpan, setEpicSpan] = useState<'dia' | 'semana'>('dia')    // el filtro global cubre un día o toda su semana
   const [backlogOpen, setBacklogOpen] = useState(false)
@@ -209,7 +215,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [diaryOpen, setDiaryOpen] = useState(false)                // modal "Diario de trabajo" (feed de notas+comentarios)
   const [diaryEpica, setDiaryEpica] = useState<string>('todas')    // filtro de épica del diario
   const [objsOpen, setObjsOpen] = useState(false)                  // modal "Objetivos en riesgo"
-  const [weekCloseOpen, setWeekCloseOpen] = useState(false)        // modal "Cerrar la semana"
+  const [weekCloseOpen, setWeekCloseOpen] = useState(false)        // "Revisión semanal" (stepper; su paso 1 es el viejo "Cerrar la semana")
+  const [revisiones, setRevisiones] = useState<Record<string, string>>({})  // revisiones semanales terminadas: lunes ISO → día en que se terminó (localStorage 'epicas.revisionSemanal.v1')
+  const [revOcultoDia, setRevOcultoDia] = useState('')             // día en que se ocultó el aviso "Revisión semanal pendiente"
   const [weekScores, setWeekScores] = useState<Record<string, number>>({})  // calificación 1-10 de la semana, por lunes ISO (localStorage 'epicas.weekScores.v1')
   const [weekNotes, setWeekNotes] = useState<Record<string, string>>({})    // comentario libre de la semana, por lunes ISO (localStorage 'epicas.weekNotes.v1')
   const [weekClosed, setWeekClosed] = useState<Record<string, string>>({})  // semanas ya cerradas, por lunes ISO (localStorage 'epicas.weekClosed.v1'; valor = ISO del cierre)
@@ -272,6 +280,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [quickObjName, setQuickObjName] = useState('')
   const [quickIniFeature, setQuickIniFeature] = useState<string | null>(null)   // featureId con el "+ Iniciativa" abierto
   const [quickIniName, setQuickIniName] = useState('')
+  const pasoRecien = useRecienCreadas()
+  const pasoUltimo = useRef(new Map<string, FaltaPaso>())   // la iniciativa tal cual estaba al crearle el paso (para sostener su prompt mientras dice "✓ Creada")
   // Vista "Objetivos" a pantalla completa. objSel ES el filtro: elegir un Feature o una Iniciativa
   // en la barra de arriba (o en el índice de la izquierda) enfoca la vista en ese nodo. NO se reusan
   // epicFeatureFilter/epicIniciativaFilter: ésos alimentan la pestaña Tareas, que sigue montada detrás.
@@ -776,6 +786,23 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     try { localStorage.setItem('epicas.weekClosed.v1', JSON.stringify(next)) } catch { /* noop */ }
     return next
   })
+  useEffect(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('epicas.revisionSemanal.v1') || 'null')
+      if (v && typeof v === 'object' && !Array.isArray(v)) setRevisiones(v)
+      setRevOcultoDia(localStorage.getItem('epicas.revisionSemanalOculto.v1') || '')
+    } catch { /* noop */ }
+  }, [])
+  const guardarRevision = (mon: string) => setRevisiones(prev => {
+    const next: Record<string, string> = { ...prev, [mon]: todayISO() }
+    Object.keys(next).sort().slice(0, -26).forEach(k => delete next[k])   // medio año basta para saber si la semana ya se revisó
+    try { localStorage.setItem('epicas.revisionSemanal.v1', JSON.stringify(next)) } catch { /* noop */ }
+    return next
+  })
+  const ocultarAvisoRevision = (dia: string) => {
+    setRevOcultoDia(dia)
+    try { localStorage.setItem('epicas.revisionSemanalOculto.v1', dia) } catch { /* noop */ }
+  }
   useEffect(() => { try { setFcOcultoDia(localStorage.getItem('epicas.fechasClaveOculto.v1') || '') } catch { /* noop */ } }, [])
   const ocultarFechasClave = (dia: string) => {
     setFcOcultoDia(dia)
@@ -864,14 +891,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return () => panel.removeEventListener('keydown', onTab)
   }, [anyModal])
 
-  // ⌘K / Ctrl+K abre el picker; Escape cierra el overlay más superficial
+  // B abre "Agregar al plan" (⌘K es sólo de la búsqueda global); Escape cierra el overlay más superficial
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null
-      const typing = el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !typing) {
+      const typing = el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.tagName === 'SELECT' || el?.isContentEditable
+      if ((e.key === 'b' || e.key === 'B') && !e.metaKey && !e.ctrlKey && !e.altKey && !e.repeat && !typing && !anyModal && !epicPeek
+        && !resumenDay && !movePick && !milestonePick && !subPop && !rowMenu && !prioMenu && !calOpen) {
         e.preventDefault(); setPickerOpen(true)
       } else if (e.key === 'Escape') {
+        // Ya lo atendió su componente (la revisión semanal y sus campos marcan preventDefault).
+        if (e.defaultPrevented) return
         // De más superficial a más profundo: un solo Escape no debe cerrar el modal
         // completo si sólo había un popover encima.
         if (rowMenu || prioMenu || calOpen) { setRowMenu(null); setPrioMenu(null); setCalOpen(false); return }
@@ -884,7 +914,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         if (routineStat) { setRoutineStat(null); return }
         if (diaryOpen) { setDiaryOpen(false); return }
         if (objsOpen) { setObjsOpen(false); return }
-        if (weekCloseOpen) { setWeekCloseOpen(false); return }
         if (triageOpen) { setTriageOpen(false); return }
         if (dayCloseOpen) { setDayCloseOpen(false); return }
         // El editor completo SÍ cierra con Escape, pero pasando por closeTaskEdit() — igual que la X,
@@ -898,6 +927,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         // destacada) — así que van ANTES del check de epicTab: si no, un Escape cerraba Objetivos
         // por debajo mientras el overlay que el usuario está viendo se quedaba abierto encima.
         if (taskView) { setTaskView(null); return }
+        // Después del vistazo/editor: "Abrir" de la revisión semanal los pone ENCIMA de ella.
+        if (weekCloseOpen) { setWeekCloseOpen(false); return }
         if (editing) { setEditing(null); setEditMode(null); return }
         // La vista Objetivos SÍ cierra con Escape (a diferencia de arriba): sus inputs de adentro
         // (título, "+ Objetivo"/"+ Iniciativa"/"+ Tarea") ya cortan la propagación en su propio
@@ -913,7 +944,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     // tecleas) y compararía contra ESE, no contra lo más reciente — perdiendo la edición en curso
     // igual que el bug que esto arregla, sólo que en silencio. Resuscribir el listener por cada
     // tecla es barato (addEventListener/removeEventListener no hacen nada pesado).
-  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, triageOpen, dayCloseOpen, taskDraft, taskEditTarget, epicTab])
+  }, [rowMenu, prioMenu, calOpen, movePick, pickerOpen, routineStat, taskEdit, taskView, editing, resumenDay, epicPeek, milestonePick, subPop, diaryOpen, objsOpen, weekCloseOpen, triageOpen, dayCloseOpen, taskDraft, taskEditTarget, epicTab, anyModal])
 
   // cierra menú ⋯ / popovers (prioridad, calendario, mover) al hacer clic fuera.
   // Detección por contención (data-pop) en vez de stopPropagation: así un clic en una flecha
@@ -1128,6 +1159,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   /* ─── Derivados de filtros (activas / archivadas / categoría) ─ */
   const activeEpics = useMemo(() => epics.filter(e => !e.archived), [epics])
+  // Iniciativas abiertas sin tarea abierta (sin siguiente paso, o bloqueadas por otra abierta), por id.
+  const faltaPasoMap = useMemo(() => mapaFaltaPaso(activeEpics), [activeEpics])
   // CALIBRACIÓN de estimados — lógica compartida con Tiempo (components/epicas/core.tsx), así los
   // dos leen el mismo factor real/estimado por dificultad en vez de que sólo Épicas lo calcule.
   const calibration = useMemo(() => calcCalibration(activeEpics.flatMap(e => e.tasks || [])), [activeEpics])
@@ -1164,9 +1197,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }
     return out.sort((a, b) => a.risk - b.risk)
   }, [activeEpics])
-  // Semana en curso (para "Cerrar la semana"): comprometido, cerrado y lo que se arrastra.
+  // Semana que revisa la "Revisión semanal": el lunes, la que acaba de cerrar; los demás días, la actual.
+  const semanaRev = useMemo(() => { const lun = mondayISO(today); return lun === today ? addDays(lun, -7) : lun }, [today])
+  // De viernes a lunes, sin revisión registrada de esa semana, la vista Día lo recuerda en una línea.
+  const revPendiente = [5, 6, 0, 1].includes(new Date(today + 'T00:00:00').getDay()) && !revisiones[semanaRev] && !weekClosed[semanaRev]
+  // Semana en revisión: comprometido, cerrado y lo que se arrastra.
   const weekSummary = useMemo(() => {
-    const mon = mondayISO(today), sun = addDays(mon, 6)
+    const mon = semanaRev, sun = addDays(mon, 6)
     const inWk = (d?: string) => !!d && d >= mon && d <= sun
     const committed: { e: Epica; t: EpicaTask; i: number }[] = []
     const closed: { e: Epica; t: EpicaTask }[] = []
@@ -1176,7 +1213,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (inWk(t.doneAt) || (t.repeatDone || []).some(d => inWk(d))) closed.push({ e, t })
     }))
     return { mon, sun, committed, closed, closedN: closed.length }
-  }, [activeEpics, today])
+  }, [activeEpics, semanaRev])
   // Recap de la semana en texto plano, para copiar y pegar donde quieras.
   const buildWeekRecap = (staleEps: Epica[]) => {
     const lines = [`📅 Semana del ${fmtDue(weekSummary.mon)} al ${fmtDue(weekSummary.sun)}`, '']
@@ -1207,20 +1244,27 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     }))
     return out.sort((a, b) => (a.t.createdAt || '9999').localeCompare(b.t.createdAt || '9999') || (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']))
   }, [activeEpics])
-  // Cerrar la semana: mueve lo comprometido NO terminado al lunes de la próxima semana.
+  // Revisión semanal (paso 2): mueve lo comprometido ATRASADO (plan < hoy; lo de hoy en adelante aún
+  // tiene su día) al lunes siguiente, un patch por épica y por id, con Deshacer.
   const moveWeekPendingToNext = () => {
     const next = addDays(weekSummary.mon, 7)
-    const byE = new Map<string, number[]>()
-    weekSummary.committed.forEach(x => { const a = byE.get(x.e.id) || []; a.push(x.i); byE.set(x.e.id, a) })
+    const byE = new Map<string, string[]>()
+    weekSummary.committed.forEach(x => { if (!x.t.id || !x.t.plan || x.t.plan >= today) return; const a = byE.get(x.e.id) || []; a.push(x.t.id); byE.set(x.e.id, a) })
+    const snaps = snapshot([...byE.keys()])
     let n = 0, base = maxPlanOrderFor(next)
-    byE.forEach((idxs, eId) => {
+    byE.forEach((tids, eId) => {
       const fresh = epicsRef.current.find(x => x.id === eId); if (!fresh) return
       const tasks = clone(fresh.tasks)
-      idxs.forEach(i => { const t = tasks[i]; if (!t || t.status === 'Terminada') return; t.plan = next; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base; applyPlanStatus(t, next); n++ })
+      tids.forEach(tid => {
+        const t = tasks.find(x => x.id === tid); if (!t || t.status === 'Terminada' || t.status === ARCHIVED) return
+        const prev = t.plan || ''
+        t.plan = next; if (!t.priority) t.priority = prioFromDue(t.due); base += 1000; t.planOrder = base
+        // El lunes el destino es hoy: pasarlas "a esta semana" no las vuelve todas "En curso" (se reparten en el Ajuste).
+        relocateDayPlan(t, prev, next); if (next !== todayISO()) applyPlanStatus(t, next); n++
+      })
       patchEpic(eId, { tasks })
     })
-    setWeekCloseOpen(false)
-    if (n) showToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a la próxima semana`)
+    if (n) undoToast(`Moví ${n} ${n === 1 ? 'tarea' : 'tareas'} a ${next > today ? 'la próxima semana' : 'esta semana'}`, snaps)
   }
   const archivedCount = useMemo(() => epics.filter(e => e.archived).length, [epics])
   const categorias = useMemo(() => {
@@ -2765,15 +2809,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   /** Alta de tarea SIN abrir el modal, ya colgada de su Feature/Iniciativa. Va por patchEpic, que
    *  diffea contra el estado previo y manda sólo el alta a /api/tareas/sync. Los campos gateados
    *  se omiten (no se ponen en el objeto) para no mandar columnas que aún no existen.
-   *  `opts.epicaId` la crea en otra épica (default: la destacada); `opts.plan` la deja planeada ese día. */
-  const addTaskInline = (featureId: string | null, iniciativaId: string | null, titulo: string, opts?: { epicaId?: string; plan?: string; priority?: Prio }): string | null => {
+   *  `opts.epicaId` la crea en otra épica (default: la destacada); `opts.plan` la deja planeada ese día;
+   *  `opts.due` le pone fecha de entrega; `opts.estMin`, su estimado propio en minutos. */
+  const addTaskInline = (featureId: string | null, iniciativaId: string | null, titulo: string, opts?: { epicaId?: string; plan?: string; priority?: Prio; due?: string; estMin?: number; alFallar?: () => void }): string | null => {
     const t = titulo.trim()
     const ep = opts?.epicaId ? epicsRef.current.find(e => e.id === opts.epicaId) : featured
     if (!t || !ep) return null
     const nt: EpicaTask = {
-      id: uid(), t, status: 'Por hacer', due: '', note: '', createdAt: todayISO(),
+      id: uid(), t, status: 'Por hacer', due: opts?.due || '', note: '', createdAt: todayISO(),
       ...(featuresReady.current && featureId ? { featureId } : {}),
       ...(iniciativaIdReady.current && iniciativaId ? { iniciativaId } : {}),
+      ...(estMinReady.current && opts?.estMin ? { estMin: opts.estMin } : {}),
     }
     if (opts?.plan) {
       nt.plan = opts.plan
@@ -2781,9 +2827,84 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       nt.planOrder = maxPlanOrderFor(opts.plan) + 1000
       applyPlanStatus(nt, opts.plan)
     }
-    patchEpic(ep.id, { tasks: [...clone(ep.tasks), nt] })
+    patchEpic(ep.id, { tasks: [...clone(ep.tasks), nt] }).then(ok => { if (!ok) opts?.alFallar?.() })
     return nt.id!
   }
+  /** Alta desde la captura rápida del Día. Devuelve el aviso para mostrarlo junto al input (en celular
+   *  un toast queda tapado por el teclado): dónde quedó, el día si no es el que ves, y si un filtro la oculta. */
+  const crearDesdeCaptura = (n: CapturaNueva, alFallar: () => void): NotaCaptura | null => {
+    const id = addTaskInline(n.featureId || null, n.iniciativaId || null, n.titulo, { epicaId: n.epicaId, plan: n.plan, priority: n.priority, due: n.due, estMin: n.estMin, alFallar })
+    if (!id) return null
+    const ep = epicsRef.current.find(e => e.id === n.epicaId)
+    const f = featuresReady.current ? ep?.features?.find(x => x.id === n.featureId) : undefined
+    const ini = iniciativaIdReady.current ? f?.iniciativas?.find(x => x.id === n.iniciativaId) : undefined
+    const otroDia = n.plan !== viewDate ? ` · ${etiquetaFecha(n.plan, today)}` : ''
+    // Mismos filtros que la lista del Día (passF/passE/passWork/passFeat): si no los pasa, lo dice en vez de "desaparecer".
+    let oculta = ''
+    if (n.plan === viewDate) {
+      const t: EpicaTask = { id, t: n.titulo, status: 'Por hacer', due: n.due || '', note: '', createdAt: today, plan: n.plan, priority: n.priority || 'media',
+        ...(f ? { featureId: f.id } : {}), ...(ini ? { iniciativaId: ini.id } : {}) }
+      const dl = daysUntil(t.due)
+      const passF = planFilter === 'alta' ? t.priority === 'alta' : planFilter === 'vencidas' ? dl != null && dl < 0 : planFilter === 'avance' ? false : planFilter === 'estancada' ? isStuck(t) : planFilter === 'multidia' ? isMultiDay(t) : planFilter === 'arrastre' ? isCarried(t) : true
+      const effEp = dayEpica !== 'todas' && planItems.some(x => x.e.id === dayEpica) ? dayEpica : 'todas'
+      const passFeat = (effEp === 'todas' || dayFeature === 'todas' || (dayFeature === 'sin' ? !t.featureId : t.featureId === dayFeature))
+        && (dayIniciativa === 'todas' || (dayIniciativa === 'sin' ? !t.iniciativaId : t.iniciativaId === dayIniciativa))
+      const PF: Record<string, string> = { alta: 'Alta', vencidas: 'Vencidas', avance: 'Con avance', estancada: 'Estancadas', multidia: 'Varios días', arrastre: 'Anteriores' }
+      const WF: Record<string, string> = { plan: 'Se trabajarán', openworked: 'Trabajadas · sin terminar', unworked: 'Sin trabajar' }
+      oculta = !passF ? `«${PF[planFilter]}»` : !passWork(t, viewDate) ? `«${WF[workFilter]}»`
+        : effEp !== 'todas' && n.epicaId !== effEp ? 'de épica' : !passFeat ? (dayIniciativa !== 'todas' ? 'de iniciativa' : 'de feature') : ''
+    }
+    return {
+      msg: `Creada en ${[ep?.name, f?.t, ini?.nombre].filter(Boolean).join(' › ')}${otroDia}`,
+      deshacer: () => {
+        const cur = epicsRef.current.find(e => e.id === n.epicaId)
+        if (cur?.tasks.some(t => t.id === id)) patchEpic(cur.id, { tasks: cur.tasks.filter(t => t.id !== id) })
+      },
+      ...(oculta ? { oculta, ver: () => { setPlanFilter('todas'); setWorkFilter(''); setDayEpica('todas'); setDayFeature('todas'); setDayIniciativa('todas') } } : {}),
+    }
+  }
+  /** "Siguiente paso" de una iniciativa: su primera tarea abierta, colgada de su feature e
+   *  iniciativa. Hoy = planeada hoy (En curso); Esta semana = sin día, vence el domingo. */
+  const crearPrimerPaso = (fp: FaltaPaso, titulo: string, cuando: CuandoPaso): boolean => {
+    // Sin la columna iniciativa_id la tarea nacería suelta y la iniciativa seguiría sin paso.
+    if (!iniciativaIdReady.current) { showToast('Corre sql/epicas-21-tarea-iniciativa.sql para ligar tareas a iniciativas', true); return false }
+    const hoy = todayISO()
+    const id = addTaskInline(fp.featureId, fp.ini.id, titulo, {
+      epicaId: fp.epicaId,
+      ...(cuando === 'hoy' ? { plan: hoy } : cuando === 'semana' ? { due: domingoDeSemana(hoy) } : {}),
+    })
+    if (!id) return false
+    pasoUltimo.current.set(fp.ini.id, fp)
+    pasoRecien.marcar(fp.ini.id)
+    return true
+  }
+  /** Prompt de siguiente paso de una iniciativa (o su "Bloqueada · espera «X»"), si le falta paso
+   *  o lo acaba de recibir (así se alcanza a ver el "✓ Creada"). null si no aplica. */
+  const renderSiguientePaso = (iniId: string, style?: CSSProperties) => {
+    const fp = faltaPasoMap.get(iniId) || (pasoRecien.tiene(iniId) ? pasoUltimo.current.get(iniId) : undefined)
+    if (!fp) return null
+    return (
+      <SiguientePaso key={`paso:${iniId}`} nombre={fp.ini.nombre} hoy={today} inputId={`paso-${iniId}`}
+        bloqueadaPor={fp.bloqueadaPor?.nombre} style={style}
+        onCrear={(titulo, cuando) => crearPrimerPaso(fp, titulo, cuando)} />
+    )
+  }
+  /** Gesto que abre el prompt de una iniciativa: aplica `set` y enfoca su input, ya estuviera montado
+   *  o no. Foco a mano (no autoFocus): un remontaje posterior sin gesto no vuelve a robar el teclado. */
+  const abrirPaso = (iniId: string, set: () => void, centrar = false) => {
+    // flushSync: el input existe dentro del mismo toque; sólo así iOS abre el teclado.
+    flushSync(set)
+    const el = document.getElementById(`paso-${iniId}`) as HTMLInputElement | null
+    if (!el) return
+    if (centrar) el.scrollIntoView({ block: 'center' })
+    el.focus({ preventScroll: centrar })
+  }
+  /** Lleva a la iniciativa (feature + chip en la pestaña Tareas) y abre su prompt con el teclado. */
+  const irAPaso = (fp: FaltaPaso) => abrirPaso(fp.ini.id, () => {
+    setEpicTab('tareas')
+    setEpicFeatureFilter(fp.featureId)
+    setEpicIniciativaFilter(fp.ini.id)
+  }, true)
   /** Banda de fechas clave (vista Día): marca un hito como logrado hoy, con Deshacer que restaura
    *  su estado previo tal cual (los undefined viajan como null y limpian la columna). */
   const marcarHitoLogrado = (fc: FechaClave) => {
@@ -2871,6 +2992,71 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     fetch(`/api/iniciativas/${iniciativaId}`, { method: 'DELETE' })
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo eliminar la iniciativa') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo eliminar la iniciativa'))
+  }
+  /* ─── Revisión semanal: arreglos de un toque ─────────────────
+     Resuelven la tarea por id contra lo más fresco (epicsRef) y siempre ofrecen Deshacer. */
+  const tareaFresca = (eId: string, tid: string) => {
+    const e = epicsRef.current.find(x => x.id === eId); if (!e) return null
+    const i = (e.tasks || []).findIndex(t => t.id === tid)
+    return i < 0 ? null : { e, i }
+  }
+  /** Planea la tarea a `dia` (mismas reglas que planTaskToDay) o, con '', la deja sin día. */
+  const revPlanear = (eId: string, tid: string, dia: string) => {
+    const f = tareaFresca(eId, tid); if (!f) return
+    const snaps = snapshot([eId])
+    const order = dia ? maxPlanOrderFor(dia) + 1000 : 0
+    const tasks = clone(f.e.tasks)
+    const t = tasks[f.i], prev = t.plan || ''
+    if (dia) {
+      t.plan = dia
+      if (!t.priority) t.priority = prioFromDue(t.due)
+      if (prev !== dia || t.planOrder == null) t.planOrder = order
+      relocateDayPlan(t, prev, dia)
+    } else { delete t.plan; delete t.planOrder }
+    applyPlanStatus(t, dia)
+    patchEpic(eId, { tasks })
+    undoToast(!dia ? 'Quedó sin fecha' : dia === today ? 'Planeada para hoy' : `Movida al ${dateLabel(dia).toLowerCase()}`, snaps)
+  }
+  const revArchivar = (eId: string, tid: string) => {
+    const f = tareaFresca(eId, tid); if (!f) return
+    const snaps = snapshot([eId])
+    const tasks = clone(f.e.tasks)
+    applyTaskStatus(tasks[f.i], ARCHIVED)
+    patchEpic(eId, { tasks })
+    undoToast('Archivada', snaps)
+  }
+  const revAsignarFeature = (eId: string, tid: string, fId: string) => {
+    const f = tareaFresca(eId, tid); if (!f) return
+    const snaps = snapshot([eId])
+    setTaskFeature(f.e, f.i, fId)
+    if (featuresReady.current) undoToast(`Asignada a «${(f.e.features || []).find(x => x.id === fId)?.t || 'feature'}»`, snaps)
+  }
+  const revIniEstado = (x: RevIni, estado: Iniciativa['estado']) => {
+    const prev = x.ini.estado
+    patchIniciativa(x.eId, x.fId, x.ini.id, { estado })
+    showToast(estado === 'cerrada' ? `Iniciativa cerrada: ${x.ini.nombre}` : `«${x.ini.nombre}» en curso`, false,
+      { label: 'Deshacer', fn: () => patchIniciativa(x.eId, x.fId, x.ini.id, { estado: prev }) })
+  }
+  const revCerrarFeature = (x: RevFeature) => {
+    const prev = x.f.estado
+    patchFeature(x.eId, x.f.id, { estado: 'cerrado' })
+    showToast(`Feature cerrado: ${x.f.t}`, false, { label: 'Deshacer', fn: () => patchFeature(x.eId, x.f.id, { estado: prev }) })
+  }
+  const revMeta = (x: RevObjetivo, meta: number) => {
+    const { target, done, doneAt } = x.k
+    const ep = epicsRef.current.find(e => e.id === x.eId)
+    // Si la meta ya se cumple, el sello va en este patch: si no, el efecto de "cumplidos" pisa este toast y su Deshacer.
+    const cumple = !!ep && milestoneDone({ ...x.k, target: meta }, ep)
+    patchObjetivo(x.eId, x.k.id, cumple ? { target: meta, done: true, doneAt: todayISO() } : { target: meta })
+    showToast(`Meta de «${x.k.t}»: ${meta}${x.unidad ? ' ' + x.unidad : ''}${cumple ? ' · ya cumplida ✦' : ''}`, false,
+      { label: 'Deshacer', fn: () => patchObjetivo(x.eId, x.k.id, cumple ? { target, done, doneAt } : { target }) })
+  }
+  /** Fin de la revisión (también al saltar al Ajuste): la registra y da la semana por cerrada. */
+  const terminarRevision = (mon: string) => {
+    guardarRevision(mon)
+    markWeekClosed(mon, true)
+    celebrateClose()
+    setWeekCloseOpen(false)
   }
   /* ─── Plazos y duraciones a la vista ────────────────────────────
      Toda fecha de la app debe decir, al lado, CUÁNTO falta o CUÁNTO dura — en días,
@@ -3101,6 +3287,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     return (
       <div key={ini.id} style={{ border: '1px solid rgba(15,35,64,0.10)', borderLeft: `3px solid ${accent}`, borderRadius: 10, padding: '10px 12px', background: '#fff' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {faltaPasoMap.has(ini.id) && !faltaPasoMap.get(ini.id)!.bloqueadaPor && <MarcaSinPaso />}
           {/* key SÓLO por id: si lleva el valor dentro, el eco del PATCH remonta el input y se come lo que estás tecleando */}
           <input defaultValue={ini.nombre} key={ini.id} aria-label="Nombre de la iniciativa"
             onKeyDown={ev => { if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur() }}
@@ -3394,7 +3581,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         <button onClick={() => onChange('todas')} style={chip(value === 'todas')}>Todas</button>
         {inis.map(ini => {
           const on = value === ini.id
-          return <button key={ini.id} onClick={() => onChange(on ? 'todas' : ini.id)} style={chip(on)}>{ini.nombre}</button>
+          const fp = faltaPasoMap.get(ini.id)
+          const sinPaso = !!fp && !fp.bloqueadaPor
+          return (
+            <button key={ini.id} onClick={() => onChange(on ? 'todas' : ini.id)} title={sinPaso ? 'Sin siguiente paso' : fp?.bloqueadaPor ? `Bloqueada · espera «${fp.bloqueadaPor.nombre}»` : undefined}
+              style={{ ...chip(on), ...(sinPaso ? { display: 'inline-flex', alignItems: 'center', gap: 5 } : null) }}>
+              {sinPaso && <MarcaSinPaso />}{ini.nombre}
+            </button>
+          )
         })}
         <button onClick={() => onChange(value === 'sin' ? 'todas' : 'sin')} style={chip(value === 'sin')}>Sin iniciativa</button>
       </>
@@ -3998,6 +4192,64 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const INICIATIVA_ESTADOS: [Iniciativa['estado'], string][] = [
     ['pendiente', 'Pendiente'], ['en_curso', 'En curso'], ['bloqueada', 'Bloqueada'], ['cerrada', 'Cerrada'], ['cancelada', 'Cancelada'],
   ]
+  // Listas vivas de la Revisión semanal; memo (tras UNIT_OPTS) porque con foco activo se re-renderiza cada segundo.
+  const revListas = useMemo(() => {
+    if (!weekCloseOpen) return null
+    const fila = (e: Epica, t: EpicaTask): RevTarea => ({ eId: e.id, eName: e.name, color: e.color, t })
+    const prioN = (t: EpicaTask) => PRIO_RANK[(t.priority || 'media') as Prio] ?? 1
+    const arrastre = weekSummary.committed.filter(x => x.t.id).map(x => fila(x.e, x.t))
+    const estancadas = activeEpics
+      .flatMap(e => (e.tasks || []).flatMap(t => { const m = t.id ? stuckReason(t) : null; return m ? [{ ...fila(e, t), motivo: m }] : [] }))
+      .sort((a, b) => prioN(a.t) - prioN(b.t) || (lastProgressDay(a.t) || a.t.createdAt || '').localeCompare(lastProgressDay(b.t) || b.t.createdAt || ''))
+    const sinFecha = sinFechaTasks.filter(x => x.t.id).map(x => fila(x.e, x.t))
+      .sort((a, b) => prioN(a.t) - prioN(b.t) || (a.t.createdAt || '9999').localeCompare(b.t.createdAt || '9999'))
+    const unidadDe = (k: EpicaMilestone) => k.unit === 'otro' ? (k.unitLabel || '') : (UNIT_OPTS.find(([u]) => u === k.unit)?.[1] || '')
+    // Métrica sin meta: sin target (o 0), sin cumplir y sin "con tareas" (ésa saca la meta del conteo de tareas).
+    const sinMeta = (k: EpicaMilestone) => (k.tipo || 'metrica') === 'metrica' && !k.done && k.auto !== 'tareas' && !k.target
+    const enTitulo = (titulo: string, nombre: string) => {
+      const n = norm(nombre).trim()
+      const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return n.length >= 2 && new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`).test(norm(titulo))
+    }
+    const inisEnCurso: RevIni[] = [], inisCerrar: RevIni[] = [], objsSinMeta: RevObjetivo[] = [], sinFeature: RevSinFeature[] = []
+    let featsVacios: RevFeature[] = []
+    for (const e of activeEpics) {
+      const vivas = (e.tasks || []).filter(t => t.status !== ARCHIVED)
+      const feats = (e.features || []).filter(f => f.estado !== 'cerrado')
+      for (const k of e.kpis || []) if (sinMeta(k)) objsSinMeta.push({ eId: e.id, eName: e.name, k, unidad: unidadDe(k) })
+      for (const f of feats) {
+        for (const k of f.kpis || []) if (sinMeta(k)) objsSinMeta.push({ eId: e.id, eName: e.name, fName: f.t, k, unidad: unidadDe(k) })
+        if (!(f.iniciativas || []).length && !vivas.some(t => t.featureId === f.id)) featsVacios.push({ eId: e.id, eName: e.name, f, objetivos: (f.kpis || []).length })
+        for (const ini of f.iniciativas || []) {
+          if (ini.estado === 'cerrada' || ini.estado === 'cancelada') continue
+          const ts = vivas.filter(t => t.iniciativaId === ini.id)
+          const x: RevIni = { eId: e.id, eName: e.name, fId: f.id, fName: f.t, ini, total: ts.length, hechas: ts.filter(t => t.status === 'Terminada').length, enCurso: ts.filter(t => t.status === 'En curso').length }
+          if (x.total && x.hechas === x.total) inisCerrar.push(x)
+          else if (ini.estado === 'pendiente' && (x.enCurso || x.hechas)) inisEnCurso.push(x)
+        }
+      }
+      if (!feats.length) continue
+      const opts = feats.map(f => ({ id: f.id, t: f.t }))
+      const porLargo = [...feats].sort((a, b) => b.t.length - a.t.length)   // "Ingreso pasivo" gana a "Ingreso"
+      for (const t of vivas) {
+        if (!t.id || t.featureId || t.status === 'Terminada') continue
+        sinFeature.push({ ...fila(e, t), features: opts, sugerido: porLargo.find(f => enTitulo(t.t, f.t))?.id || '' })
+      }
+    }
+    // Un feature que el título de una tarea suelta sugiere no está vacío: lo que toca es asignarle la tarea.
+    const sugeridos = new Set(sinFeature.map(x => x.sugerido).filter(Boolean))
+    featsVacios = featsVacios.filter(x => !sugeridos.has(x.f.id))
+    // Una iniciativa con todo terminado se ofrece cerrar, no darle otro paso.
+    const porCerrar = new Set(inisCerrar.map(x => x.ini.id))
+    const inisSinPaso: RevSinPaso[] = [...faltaPasoMap.values()].filter(x => !x.bloqueadaPor && !porCerrar.has(x.ini.id)).map(x => {
+      const e = activeEpics.find(ep => ep.id === x.epicaId)
+      return { ...x, eName: e?.name || '', fName: (e?.features || []).find(f => f.id === x.featureId)?.t || '' }
+    })
+    const proxLunes = addDays(weekSummary.mon, 7), proxDomingo = addDays(proxLunes, 6)
+    const proxPlaneadas = activeEpics.reduce((n, e) => n + (e.tasks || []).filter(t => t.status !== ARCHIVED && t.status !== 'Terminada' && !!t.plan && t.plan >= proxLunes && t.plan <= proxDomingo).length, 0)
+    return { arrastre, estancadas, sinFecha, inisEnCurso, inisCerrar, inisSinPaso, featsVacios, objsSinMeta, sinFeature, proxLunes, proxPlaneadas }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stuckReason/lastProgressDay sólo leen `today` y la tarea
+  }, [weekCloseOpen, activeEpics, faltaPasoMap, weekSummary, sinFechaTasks, today])
   // Etiquetita en mayúsculas que rotula un control suelto (Para, Desde, Responsable…)
   const objEyebrow: CSSProperties = { font: '700 9px/1 var(--font-ui)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.42)', flexShrink: 0 }
   // Rejilla compartida por TODAS las filas de tarea de la vista Objetivos: así las columnas
@@ -4090,6 +4342,12 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const hasSinFeature = indexed.some(t => t.status !== ARCHIVED && !t.featureId && passEpicChip(t))
   // El Feature elegido (tarjeta con borde o select "Todo feature"): su franja y fila de links
   const featSel = epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' ? (featured.features || []).find(f => f.id === epicFeatureFilter) || null : null
+  // Iniciativas de la destacada sin siguiente paso (orden de pantalla) y cuántas hay por feature.
+  const sinPasoFeatured = [...faltaPasoMap.values()].filter(x => x.epicaId === featured.id && !x.bloqueadaPor)
+  const sinPasoPorFeat = new Map<string, number>()
+  sinPasoFeatured.forEach(x => sinPasoPorFeat.set(x.featureId, (sinPasoPorFeat.get(x.featureId) || 0) + 1))
+  // Sin chip de filtro salen todos los features abiertos, aunque no tengan tareas: desde la tarjeta se les ponen links y se ve qué está vacío.
+  const featureCards = epicFilter === 'todas' ? (featured.features || []).filter(f => featureOptions.includes(f) || sinPasoPorFeat.has(f.id) || f.estado !== 'cerrado') : featureOptions
   const filteredGroups = taskGroups.map(g => ({ ...g, items: g.items.filter(passEpicFilter) })).filter(g => g.items.length > 0)
   const filteredActive = indexed.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && passEpicFilter(t))
   const epicSortCmp = (a: (typeof indexed)[number], b: (typeof indexed)[number]) => {
@@ -6666,18 +6924,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               })()}
               {/* Antes vivía suelto en el toolbar de "Todas las épicas" — lejos de las vistas
                   semanales donde de verdad se está revisando la semana. Mismo nivel que Cerrar día.
-                  Sólo se muestra viendo la semana REAL (mondayISO(viewDate) === mondayISO(today)):
-                  el modal (weekCloseOpen) siempre opera sobre weekSummary, que es SIEMPRE la semana
-                  de hoy — mostrar el botón mientras navegas ‹/› a otra semana (renderPlanResumen sí
-                  respeta viewDate) invitaba a cerrar/calificar/comentar la semana equivocada sin que
-                  nada en el modal avisara del desfase. */}
-              {(week || ajuste || resumen) && mondayISO(viewDate) === mondayISO(today) && (() => {
+                  Sólo se muestra viendo la semana que se revisa (weekSummary.mon: la actual, o el
+                  lunes la que acaba de cerrar) o la de hoy: la revisión siempre opera sobre weekSummary — mostrar
+                  el botón mientras navegas ‹/› a otra semana (renderPlanResumen sí respeta viewDate)
+                  invitaba a cerrar/calificar/comentar la semana equivocada sin que nada avisara del desfase.
+                  El lunes, viendo la semana que empieza, la etiqueta dice que revisa la pasada. */}
+              {(week || ajuste || resumen) && (mondayISO(viewDate) === weekSummary.mon || mondayISO(viewDate) === mondayISO(today)) && (() => {
                 const wPend = weekSummary.committed.length
+                const pasada = mondayISO(viewDate) !== weekSummary.mon
                 return (
-                  <button onClick={() => setWeekCloseOpen(true)} title="Cierre de la semana: resumen, tiempo por épica, comentario y mover el arrastre" style={{ border: wPend ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: wPend ? 'rgba(176,82,46,0.06)' : '#fff', color: wPend ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>🗓 Cerrar semana{wPend ? ` · ${wPend} sin cerrar` : ''}</button>
+                  <button onClick={() => setWeekCloseOpen(true)} title={`Revisión semanal guiada (${weekRangeLabel(weekSummary.mon)}): la semana, lo que se arrastra, estancadas, sin fecha, estructura y la próxima semana`} style={{ border: wPend ? '1px solid rgba(176,82,46,0.4)' : '1px solid rgba(15,35,64,0.16)', background: wPend ? 'rgba(176,82,46,0.06)' : '#fff', color: wPend ? '#B0522E' : '#16365F', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>{pasada ? '📋 Revisión de la semana pasada' : '📋 Revisión semanal'}{wPend ? ` · ${wPend} sin cerrar` : ''}</button>
                 )
               })()}
-              <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
+              <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe (atajo: B)" style={{ border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 10, padding: '9px 15px', font: '700 12.5px var(--font-ui)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Del backlog</button>
               <button onClick={() => newTaskForDay(board ? (horizonHasToday ? today : hStart) : viewDate)} title="Crear una tarea nueva" style={{ ...goldBtn, padding: '9px 15px', font: '700 12.5px var(--font-ui)', whiteSpace: 'nowrap' }}>+ Nueva tarea</button>
             </div>
 
@@ -6747,6 +7006,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
           : week ? renderPlanWeek() : ajuste ? renderPlanAjuste() : sprintLanes ? renderSprintAjuste(weekMondays) : resumen ? renderPlanResumen() : cal ? renderPlanCalendar() : timeline ? renderPlanTimeline() : multi ? renderPlanSprint(weekMondays) : (<>
 
           {renderDayStrip()}
+
+          {/* Revisión semanal pendiente (vie–lun): una línea discreta, descartable por el día. */}
+          {isToday && revPendiente && revOcultoDia !== today && (
+            <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 4, minHeight: 40, borderRadius: 11, border: '1px dashed rgba(194,147,58,0.45)', padding: '2px 3px 2px 13px' }}>
+              <span style={{ flex: 1, minWidth: 0, font: '700 12px var(--font-ui)', color: '#A87A2C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                📋 Revisión semanal pendiente<span className="ep-hide-sm" style={{ fontWeight: 600, color: 'rgba(20,35,61,0.45)' }}> · {weekRangeLabel(semanaRev)}</span> ·
+              </span>
+              <button onClick={() => setWeekCloseOpen(true)} style={{ flexShrink: 0, minHeight: 34, cursor: 'pointer', border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '0 12px', font: '800 12px var(--font-ui)' }}>Empezar</button>
+              <button onClick={() => ocultarAvisoRevision(today)} aria-label="Ocultar por hoy" title="Ocultar por hoy" style={{ flexShrink: 0, minHeight: 34, minWidth: 34, cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.4)', borderRadius: 9, fontSize: 13 }}>✕</button>
+            </div>
+          )}
 
           {/* Fechas clave (hitos, objetivos, iniciativas, features) vencidas o a ≤3 días del día que ves. */}
           {(() => {
@@ -6958,12 +7228,17 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             )
           })()}
 
+          {/* El filtro de épica sólo cuenta si se ve (los chips sólo salen con esa épica en el plan del día). */}
+          <CapturaDia epicas={epics} hoy={today} dia={viewDate}
+            epicaFiltro={dayEpica !== 'todas' && planItems.some(x => x.e.id === dayEpica) ? dayEpica : undefined}
+            featureFiltro={dayFeature} iniciativaFiltro={dayIniciativa} onCrear={crearDesdeCaptura} />
+
           {empty ? (
             <div style={{ padding: '28px 12px 12px', textAlign: 'center' }}>
               <div className="serif" style={{ fontSize: 27, color: '#10233F', margin: '4px 0 6px', lineHeight: 1.1 }}>{isToday ? 'Aún no defines tu enfoque de hoy.' : `Nada planeado para ${daysUntil(viewDate) === 1 ? 'mañana' : 'el ' + weekdayAbbr(viewDate).toLowerCase()}.`}</div>
               <div style={{ fontSize: 13.5, color: 'rgba(20,35,61,0.55)', maxWidth: 380, margin: '0 auto 18px' }}>{isToday ? 'Elige las pocas cosas que de verdad moverán la aguja hoy.' : 'Adelántate: agenda lo que quieras avanzar ese día.'}</div>
               <div style={{ display: 'flex', gap: 9, justifyContent: 'center', flexWrap: 'wrap' }}>
-                <button onClick={() => setPickerOpen(true)} style={{ ...goldBtn, padding: '11px 22px' }}>Elegir del backlog</button>
+                <button onClick={() => setPickerOpen(true)} title="Traer al plan una tarea que ya existe (atajo: B)" style={{ ...goldBtn, padding: '11px 22px' }}>Elegir del backlog</button>
                 <button onClick={() => newTaskForDay(viewDate)} style={{ border: '1px solid rgba(15,35,64,0.16)', background: '#fff', color: '#16365F', borderRadius: 11, padding: '11px 20px', font: '700 13px var(--font-ui)', cursor: 'pointer' }}>+ Nueva tarea</button>
               </div>
               {suggestions.length > 0 && (
@@ -9311,7 +9586,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
 
   return (
     <div style={{ minHeight: '100%' }}>
-      {focus.card}
+      {/* Envoltura sin caja: la Revisión semanal la oculta en pantallas donde taparía su pie. */}
+      <div className="ep-focus-card" style={{ display: 'contents' }}>{focus.card}</div>
       <TopBar sourceCount={sourceCount} onNew={openNew} />
       <BirthdayCelebration />
 
@@ -9461,6 +9737,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {featured.archived && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: 'rgba(20,35,61,0.08)', color: 'rgba(20,35,61,0.5)' }}>Archivada</span>}
                 <button onClick={() => openEdit(featured.id, true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', border: '1px solid rgba(194,147,58,0.35)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}><PencilIcon /> Editar</button>
                 <button onClick={() => toggleArchive(featured)} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)', borderRadius: 9, padding: '5px 10px', fontSize: 11, fontWeight: 700 }}>{featured.archived ? 'Desarchivar' : 'Archivar'}</button>
+                {sinPasoFeatured.length > 0 && (<>
+                  <SiguientePasoStyles />
+                  <button type="button" className="sp-tap" onClick={() => irAPaso(sinPasoFeatured[0])}
+                    title={`Plan sin acción: toca para darle su primer paso a «${sinPasoFeatured[0].ini.nombre}»`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: 28, cursor: 'pointer', border: '1px dashed rgba(194,147,58,0.55)', background: 'rgba(194,147,58,0.08)', color: '#A87A2C', borderRadius: 99, padding: '4px 11px', font: '700 11px var(--font-ui)' }}>
+                    <MarcaSinPaso />
+                    {sinPasoFeatured.length} {sinPasoFeatured.length === 1 ? 'iniciativa' : 'iniciativas'} sin siguiente paso
+                  </button>
+                </>)}
               </div>
               <h1 className="serif ep-featured-title" style={{ fontWeight: 600, fontSize: 46, lineHeight: 1, margin: '0 0 8px', color: '#10233F' }}>{featured.name}</h1>
               {featured.description && <div className="ep-note" style={{ fontSize: 13.5, lineHeight: 1.5, color: 'rgba(20,35,61,0.6)', margin: '0 0 22px', maxWidth: 440 }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(featured.description) }} />}
@@ -9523,10 +9808,10 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               </div>
 
               {epicTab === 'tareas' && (<>
-              {(featureOptions.length > 0 || hasSinFeature) && (
+              {(featureCards.length > 0 || hasSinFeature) && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 9, marginBottom: 18 }}>
                   {/* Sólo Features con tareas bajo el chip de estado activo (cascada, igual que el filtro de abajo) */}
-                  {featureOptions.map(f => {
+                  {featureCards.map(f => {
                     const featTasks = featured.tasks.filter(t => t.featureId === f.id)
                     const featEpica = { ...featured, tasks: featTasks }
                     const doneN = featTasks.filter(t => t.status === 'Terminada').length
@@ -9539,10 +9824,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     const iniOpen = iniOpenFeatureId === f.id
                     const pickFeature = () => { setEpicFeatureFilter(on ? 'todas' : f.id); setEpicIniciativaFilter('todas') }
                     const fLinks = f.links || []
+                    const nSinPaso = sinPasoPorFeat.get(f.id) || 0
                     return (
                       <div key={f.id} style={{ borderRadius: 12, background: on ? hexA(fc, 0.1) : 'rgba(15,35,64,0.02)', border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.08)', overflow: 'hidden' }}>
                         <button type="button" onClick={pickFeature} title="Filtrar las tareas de abajo por este Feature"
-                          style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: fLinks.length ? '10px 12px 7px' : '10px 12px' }}>
+                          style={{ width: '100%', textAlign: 'left', cursor: 'pointer', border: 'none', background: 'transparent', padding: '10px 12px 7px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                             <span style={{ height: 8, width: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />
                             <span style={{ font: '700 11.5px var(--font-ui)', color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.t}</span>
@@ -9562,17 +9848,31 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             </div>
                           )}
                           <span style={{ fontSize: 10.5, fontWeight: 600, color: 'rgba(20,35,61,0.5)' }}>{doneN}/{featTasks.length} {featTasks.length === 1 ? 'tarea' : 'tareas'}{mp?.hasMeta ? ` · ${Math.round(mp.pct * 100)}%` : ''}</span>
+                          {nSinPaso > 0 && (
+                            <span title="Iniciativas abiertas sin ninguna tarea abierta" style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4, fontSize: 10.5, fontWeight: 700, color: '#A87A2C' }}>
+                              <MarcaSinPaso size={6} />{nSinPaso} sin siguiente paso
+                            </span>
+                          )}
                         </button>
                         {/* Fuera del <button>: un <a> no puede ir anidado dentro. El hueco alrededor de las pastillas también elige el feature (ellas cortan la propagación). */}
-                        {fLinks.length > 0 && (
-                          <div onClick={pickFeature} style={{ cursor: 'pointer' }}>
-                            <LinkPillRow links={fLinks} max={3} style={{ padding: '0 12px 10px' }}
-                              onMore={() => {
-                                if (!on) pickFeature()
-                                setTimeout(() => document.getElementById('feature-links-strip')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
-                              }} />
-                          </div>
-                        )}
+                        {(() => {
+                          const irAFranja = () => setTimeout(() => document.getElementById('feature-links-strip')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
+                          const nuevoLink = (ev: React.MouseEvent) => {
+                            ev.stopPropagation()
+                            if (!on) { setEpicFeatureFilter(f.id); setEpicIniciativaFilter('todas') }
+                            setLinkAltaPara(f.id)
+                            irAFranja()
+                          }
+                          return (
+                            <div onClick={pickFeature} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', padding: '0 12px 10px' }}>
+                              {fLinks.length > 0 && <LinkPillRow links={fLinks} max={3} onMore={() => { if (!on) pickFeature(); irAFranja() }} />}
+                              <button type="button" onClick={nuevoLink} aria-label={`Agregar link a ${f.t}`} title={`Agregar un link (dashboard, hoja, carpeta…) a ${f.t}`}
+                                style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, minHeight: 28, padding: fLinks.length ? '3px 9px' : '3px 10px', borderRadius: 99, border: '1px dashed rgba(194,147,58,0.55)', background: 'rgba(194,147,58,0.06)', color: '#A87A2C', font: '700 10.5px/1 var(--font-ui)' }}>
+                                <span aria-hidden>🔗</span>+{fLinks.length ? '' : ' Link'}
+                              </button>
+                            </div>
+                          )
+                        })()}
                         {iniOpen && inis.length > 0 && (
                           <div style={{ borderTop: '1px solid rgba(15,35,64,0.08)', padding: '8px 12px 10px', display: 'flex', flexDirection: 'column', gap: 7 }}>
                             {inis.map(ini => {
@@ -9582,6 +9882,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                               return (
                                 <div key={ini.id}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    {faltaPasoMap.has(ini.id) && !faltaPasoMap.get(ini.id)!.bloqueadaPor && <MarcaSinPaso size={6} />}
                                     <span style={{ fontSize: 11, fontWeight: 700, color: '#16365F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ini.nombre}</span>
                                     <span style={{ flexShrink: 0, fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 99, background: est.bg, color: est.c }}>{est.label}</span>
                                   </div>
@@ -9620,16 +9921,25 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
               )}
               {featSel && (
                 <FeatureLinksStrip key={featSel.id} id="feature-links-strip" featureName={featSel.t} color={featSel.color} links={featSel.links || []}
+                  abrirAlta={linkAltaPara === featSel.id} onAltaAbierta={altaLinkAbierta}
                   onAdd={l => addFeatureLink(featured.id, featSel.id, l)}
                   onEdit={(prev, l) => editFeatureLink(featured.id, featSel.id, prev, l)}
                   onRemove={l => removeFeatureLink(featured.id, featSel.id, l)} />
               )}
               {/* Sub-filtro por Iniciativa, en cascada: sólo con un Feature concreto elegido arriba */}
-              {epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', marginBottom: 18 }}>
-                  {renderIniciativaFilterChipsInline(featured.id, epicFeatureFilter, epicIniciativaFilter, setEpicIniciativaFilter)}
-                </div>
-              )}
+              {epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' && (() => {
+                // La iniciativa elegida sin siguiente paso (o bloqueada) trae su prompt justo debajo de los chips.
+                const paso = (featSel?.iniciativas || []).some(i => i.id === epicIniciativaFilter) ? renderSiguientePaso(epicIniciativaFilter, { marginBottom: 18 }) : null
+                return (<>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', marginBottom: paso ? 10 : 18 }}>
+                    {renderIniciativaFilterChipsInline(featured.id, epicFeatureFilter, epicIniciativaFilter, v => {
+                      if (!faltaPasoMap.has(v)) { setEpicIniciativaFilter(v); return }
+                      abrirPaso(v, () => setEpicIniciativaFilter(v))
+                    })}
+                  </div>
+                  {paso}
+                </>)
+              })()}
               </>)}
 
               {/* ─── MESA DE REVISIÓN (pestaña "Objetivos", pantalla completa) ───────────────
@@ -9651,13 +9961,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const pasaFiltro = (t: (typeof indexed)[number]) =>
                   objTaskFilter === 'todas' ? true : objTaskFilter === 'hechas' ? t.status === 'Terminada' : t.status !== 'Terminada'
                 const cerradas = (rows: (typeof indexed)[number][]) => rows.filter(t => t.status === 'Terminada').length
+                const sinPaso = (iniId: string) => { const fp = faltaPasoMap.get(iniId); return !!fp && !fp.bloqueadaPor }
+                // Abrir una iniciativa sin paso es el gesto que enfoca su prompt.
+                const abrirIni = (fId: string, iniId: string) => {
+                  if (!faltaPasoMap.has(iniId)) { setObjSel({ kind: 'iniciativa', fId, iniId }); return }
+                  abrirPaso(iniId, () => setObjSel({ kind: 'iniciativa', fId, iniId }))
+                }
 
                 /* Lista de tareas de un nodo + su línea de alta. El alta cuelga YA del
                    feature/iniciativa donde estás parado: planear no debería costar un modal.
                    `asignar` sale del contexto: en la lista "sin feature" cada fila ofrece elegir
                    feature, y en la de "sin iniciativa" ofrece elegir iniciativa. Donde la tarea ya
                    está colocada no se ofrece nada: sería ruido en todas las filas. */
-                const listaTareas = (rows: (typeof indexed)[number][], accent: string, fId: string | null, iniId: string | null) => {
+                const listaTareas = (rows: (typeof indexed)[number][], accent: string, fId: string | null, iniId: string | null, sinAlta = false) => {
                   const vis = rows.filter(pasaFiltro)
                   const asignar: 'feature' | 'iniciativa' | null = fId === null ? 'feature' : iniId === null ? 'iniciativa' : null
                   return (
@@ -9665,9 +9981,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                     // Sin esto, en móvil empujaría el body entero y toda la página scrollearía de lado.
                     <div style={{ overflowX: 'auto' }}>
                       {vis.length === 0
-                        ? <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.42)', padding: '8px 8px 2px' }}>{rows.length ? 'Ninguna tarea con ese filtro.' : 'Sin tareas todavía.'}</div>
+                        ? (sinAlta && !rows.length ? null : <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.42)', padding: '8px 8px 2px' }}>{rows.length ? 'Ninguna tarea con ese filtro.' : 'Sin tareas todavía.'}</div>)
                         : vis.map(t => renderTaskRowRich(t, accent, asignar))}
-                      {renderTaskQuickAdd(fId, iniId)}
+                      {!sinAlta && renderTaskQuickAdd(fId, iniId)}
                     </div>
                   )
                 }
@@ -9711,14 +10027,20 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                                 </span>
                               )}
                             </span>
+                            {(sinPasoPorFeat.get(f.id) || 0) > 0 && (
+                              <span title={`${sinPasoPorFeat.get(f.id)} sin siguiente paso`} style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 800, color: '#A87A2C' }}>
+                                <MarcaSinPaso size={6} />{sinPasoPorFeat.get(f.id)}
+                              </span>
+                            )}
                           </button>
                           {abierto && (f.iniciativas || []).map(ini => {
                             const ir = tareasIni(ini.id)
                             const iest = iniciativaStyle(ini.estado)
                             return (
-                              <button key={ini.id} onClick={() => setObjSel({ kind: 'iniciativa', fId: f.id, iniId: ini.id })} style={railBtn(objSel.kind === 'iniciativa' && objSel.iniId === ini.id, 1, fc)}>
+                              <button key={ini.id} onClick={() => abrirIni(f.id, ini.id)} style={railBtn(objSel.kind === 'iniciativa' && objSel.iniId === ini.id, 1, fc)}>
                                 <span style={{ width: 6, height: 6, borderRadius: 99, background: iest.c, flexShrink: 0 }} />
                                 <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ini.nombre}</span>
+                                {sinPaso(ini.id) && <MarcaSinPaso size={6} />}
                                 {ir.length > 0 && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{cerradas(ir)}/{ir.length}</span>}
                               </button>
                             )
@@ -9913,6 +10235,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 } else if (fSel && iniSel) {
                   const ir = tareasIni(iniSel.id)
                   const objsFeature = fSel.kpis || []
+                  // Con el prompt de primer paso a la vista, ésa es la única vía de alta (no otra línea "+ Nueva tarea" debajo).
+                  const paso = renderSiguientePaso(iniSel.id, { marginBottom: 10 })
+                  const unaVia = !!paso && !faltaPasoMap.get(iniSel.id)?.bloqueadaPor
                   detalle = (
                     <>
                       <div style={bloque}>
@@ -9923,7 +10248,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                           <span style={eyebrowSec}>Tareas de la iniciativa</span>
                           <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.45)' }}>{cerradas(ir)}/{ir.length}</span>
                         </div>
-                        {listaTareas(ir, acc, fSel.id, iniSel.id)}
+                        {paso}
+                        {listaTareas(ir, acc, fSel.id, iniSel.id, unaVia)}
                       </div>
                       {objsFeature.length > 0 && (
                         <div style={bloque}>
@@ -9991,9 +10317,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             const on = objSel.kind === 'iniciativa' && objSel.iniId === ini.id
                             const iest = iniciativaStyle(ini.estado)
                             return (
-                              <button key={ini.id} aria-pressed={on} onClick={() => setObjSel(on ? { kind: 'feature', fId: fSel.id } : { kind: 'iniciativa', fId: fSel.id, iniId: ini.id })}
+                              <button key={ini.id} aria-pressed={on} onClick={() => { if (on) setObjSel({ kind: 'feature', fId: fSel.id }); else abrirIni(fSel.id, ini.id) }}
+                                title={sinPaso(ini.id) ? 'Sin siguiente paso' : undefined}
                                 style={{ ...objChip(on, iest.c), display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: 210, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                <span style={{ width: 6, height: 6, borderRadius: 99, background: iest.c, flexShrink: 0 }} />{ini.nombre}
+                                <span style={{ width: 6, height: 6, borderRadius: 99, background: iest.c, flexShrink: 0 }} />
+                                {sinPaso(ini.id) && <MarcaSinPaso size={6} />}{ini.nombre}
                               </button>
                             )
                           })}
@@ -11329,80 +11657,90 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {extra}
           </div>
         )
-        return (
-          <div onClick={() => setWeekCloseOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(10,22,42,0.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflow: 'auto' }}>
-            <div role="dialog" aria-modal="true" aria-label="Cerrar la semana" onClick={e => e.stopPropagation()} className="ep-modal" style={{ width: '100%', maxWidth: 520, background: '#fff', borderRadius: 18, boxShadow: '0 40px 80px -30px rgba(8,18,36,.7)', overflow: 'hidden' }}>
-              <div style={{ height: 4, background: 'linear-gradient(90deg,#3E8E8E,#C2933A)' }} />
-              <div style={{ padding: '18px 22px 22px' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
-                  <div>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)', marginBottom: 5 }}>🗓 Cerrar la semana</div>
-                    <div className="serif" style={{ fontWeight: 600, fontSize: 22, lineHeight: 1, color: '#10233F' }}>{weekRangeLabel(mon)}</div>
-                    {weekClosed[mon] && (() => { const dt = new Date(weekClosed[mon]); return (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, borderRadius: 99, padding: '3px 11px', background: 'rgba(46,110,110,0.12)', border: '1px solid rgba(46,110,110,0.35)', font: '800 11.5px var(--font-ui)', color: '#2E6E6E' }}>✓ Semana cerrada{isNaN(dt.getTime()) ? '' : ` · ${dt.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}`}</div>
-                    ) })()}
-                  </div>
-                  <button aria-label="Cerrar" onClick={() => setWeekCloseOpen(false)} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 32, width: 32, color: 'rgba(20,35,61,0.55)', fontSize: 16 }}>✕</button>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
-                  <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E6E6E' }}>✓ {weekSummary.closedN}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cerradas esta semana</div></div>
-                  <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: pend ? '#A87A2C' : '#2E6E6E' }}>↻ {pend}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>comprometidas sin cerrar</div></div>
-                </div>
-                {(cumplimiento != null || weekMin > 0) && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginTop: 10 }}>
-                    {cumplimiento != null && <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: cumplimiento >= 70 ? '#2E6E6E' : cumplimiento >= 40 ? '#C2933A' : '#B0522E' }}>{cumplimiento}%</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cumplimiento de lo planeado</div></div>}
-                    {weekMin > 0 && <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E5A9E' }}>⏱ {hmw(weekMin)}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>trabajadas esta semana</div></div>}
-                  </div>
-                )}
-                {minPerEpica.length > 0 && (
-                  <div>
-                    {lbl('⏱ Minutos por épica')}
-                    <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 13px', background: '#FBFAF6' }}>
-                      {minPerEpica.map((x, k) => { const pct = weekMin > 0 ? Math.round(x.min / weekMin * 100) : 0; return (
-                        <div key={x.e.id} style={{ marginBottom: k < minPerEpica.length - 1 ? 9 : 0 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, marginBottom: 3 }}>
-                            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#16365F' }}>{x.e.name}</span>
-                            <span style={{ flexShrink: 0, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{pct}% · {hmw(x.min)}</span>
-                          </div>
-                          <div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: x.e.color }} /></div>
-                        </div>
-                      ) })}
+        const enSem = mon === mondayISO(today) ? 'esta semana' : 'esa semana'
+        // Paso 1 de la revisión: el resumen que antes era el modal "Cerrar la semana" (mover el
+        // arrastre vive ahora en el paso 2; cerrar la semana, en "Terminar revisión").
+        const resumen = (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginTop: 6 }}>
+              <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E6E6E' }}>✓ {weekSummary.closedN}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cerradas {enSem}</div></div>
+              <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: pend ? '#A87A2C' : '#2E6E6E' }}>↻ {pend}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>comprometidas sin cerrar</div></div>
+            </div>
+            {(cumplimiento != null || weekMin > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginTop: 10 }}>
+                {cumplimiento != null && <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: cumplimiento >= 70 ? '#2E6E6E' : cumplimiento >= 40 ? '#C2933A' : '#B0522E' }}>{cumplimiento}%</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>cumplimiento de lo planeado</div></div>}
+                {weekMin > 0 && <div className="glass" style={{ borderRadius: 13, padding: '12px 13px' }}><span className="serif" style={{ fontSize: 26, color: '#2E5A9E' }}>⏱ {hmw(weekMin)}</span><div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(20,35,61,0.55)' }}>trabajadas {enSem}</div></div>}
+              </div>
+            )}
+            {minPerEpica.length > 0 && (
+              <div>
+                {lbl('⏱ Minutos por épica')}
+                <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 13px', background: '#FBFAF6' }}>
+                  {minPerEpica.map((x, k) => { const pct = weekMin > 0 ? Math.round(x.min / weekMin * 100) : 0; return (
+                    <div key={x.e.id} style={{ marginBottom: k < minPerEpica.length - 1 ? 9 : 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5, marginBottom: 3 }}>
+                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#16365F' }}>{x.e.name}</span>
+                        <span style={{ flexShrink: 0, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>{pct}% · {hmw(x.min)}</span>
+                      </div>
+                      <div style={{ height: 7, borderRadius: 99, background: 'rgba(15,35,64,0.07)', overflow: 'hidden' }}><div style={{ width: `${pct}%`, height: '100%', background: x.e.color }} /></div>
                     </div>
-                  </div>
-                )}
-                {staleEps.length > 0 && (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#B0522E', marginBottom: 6 }}>Frentes desatendidos</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {staleEps.map(e => { const d = daysSinceISO(epicLastActivity(e)); return <button key={e.id} onClick={() => { setWeekCloseOpen(false); setFeaturedId(e.id) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: `1px solid ${hexA(e.color, 0.4)}`, background: hexA(e.color, 0.08), color: '#16365F' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}<span style={{ color: '#B0522E' }}>{d == null ? '·—' : `·${d}d`}</span></button> })}
-                    </div>
-                  </div>
-                )}
-                {pend > 0
-                  ? <button onClick={moveWeekPendingToNext} style={{ ...goldBtn, width: '100%', marginTop: 18, padding: '12px' }}>Mover {pend} a la próxima semana →</button>
-                  : <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo comprometido ✦</div>}
-                <button onClick={() => copyWeekRecap(staleEps)} style={{ cursor: 'pointer', width: '100%', marginTop: 8, padding: '10px', borderRadius: 11, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.65)', fontSize: 12.5, fontWeight: 700 }}>📋 Copiar recap de la semana</button>
-                <div>
-                  {lbl('⭐ Qué tan buena fue', sc != null ? <button onClick={() => setWeekScore(mon, null)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>quitar</button> : undefined)}
-                  <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 14px', background: '#FBFAF6' }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-                      <span className="serif" style={{ fontSize: 30, lineHeight: .9, fontWeight: 600, color: scColor }}>{sc == null ? '—' : sc.toFixed(1)}</span>
-                      <span style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', fontWeight: 600 }}>/ 10</span>
-                    </div>
-                    <input type="range" min={1} max={10} step={0.1} value={sc ?? 5} onChange={e => setWeekScore(mon, Number(e.target.value))} style={{ width: '100%', accentColor: scColor, cursor: 'pointer' }} />
-                  </div>
-                </div>
-                <div>
-                  {lbl('✍️ Comentario de la semana')}
-                  <textarea value={weekNotes[mon] || ''} onChange={e => setWeekNote(mon, e.target.value)} placeholder="¿Cómo fue la semana? Lo importante, qué quedó pendiente, qué cambiar la próxima…"
-                    style={{ width: '100%', minHeight: 90, resize: 'vertical', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--font-ui)', color: '#16365F', background: '#FBFAF6', outline: 'none' }} />
-                </div>
-                <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid rgba(15,35,64,0.08)', display: 'flex', justifyContent: 'flex-end' }}>
-                  <button onClick={() => { markWeekClosed(mon, true); celebrateClose(); setWeekCloseOpen(false) }} style={{ cursor: 'pointer', border: 'none', borderRadius: 11, padding: '11px 20px', font: '800 13.5px var(--font-ui)', background: 'linear-gradient(135deg,#3E8E8E,#2E6E6E)', color: '#fff', boxShadow: '0 8px 20px -8px rgba(46,110,110,.6)' }}>{weekClosed[mon] ? '✓ Cerrar de nuevo' : '✓ Cerrar la semana'}</button>
+                  ) })}
                 </div>
               </div>
+            )}
+            {staleEps.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#B0522E', marginBottom: 6 }}>Frentes desatendidos</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {staleEps.map(e => { const d = daysSinceISO(epicLastActivity(e)); return <button key={e.id} className="rv-chip" onClick={() => { setWeekCloseOpen(false); setFeaturedId(e.id) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 99, padding: '4px 10px', minHeight: 30, fontSize: 11, fontWeight: 700, border: `1px solid ${hexA(e.color, 0.4)}`, background: hexA(e.color, 0.08), color: '#16365F' }}><span style={{ width: 7, height: 7, borderRadius: 99, background: e.color }} />{e.name}<span style={{ color: '#B0522E' }}>{d == null ? '·—' : `·${d}d`}</span></button> })}
+                </div>
+              </div>
+            )}
+            {pend === 0 && <div style={{ marginTop: 16, textAlign: 'center', fontSize: 13.5, color: '#2E6E6E', fontWeight: 600 }}>Cerraste todo lo comprometido ✦</div>}
+            <button onClick={() => copyWeekRecap(staleEps)} style={{ cursor: 'pointer', width: '100%', marginTop: pend ? 16 : 8, padding: '10px', minHeight: 40, borderRadius: 11, border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.65)', fontSize: 12.5, fontWeight: 700 }}>📋 Copiar recap de la semana</button>
+            <div>
+              {lbl('⭐ Qué tan buena fue', sc != null ? <button className="rv-chip" onClick={() => setWeekScore(mon, null)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', minHeight: 30, font: '700 11px var(--font-ui)', color: 'rgba(20,35,61,0.45)' }}>quitar</button> : undefined)}
+              <div style={{ borderRadius: 12, border: '1px solid rgba(15,35,64,0.09)', padding: '12px 14px', background: '#FBFAF6' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+                  <span className="serif" style={{ fontSize: 30, lineHeight: .9, fontWeight: 600, color: scColor }}>{sc == null ? '—' : sc.toFixed(1)}</span>
+                  <span style={{ fontSize: 13, color: 'rgba(20,35,61,0.5)', fontWeight: 600 }}>/ 10</span>
+                </div>
+                <input type="range" min={1} max={10} step={0.1} value={sc ?? 5} onChange={e => setWeekScore(mon, Number(e.target.value))} style={{ width: '100%', accentColor: scColor, cursor: 'pointer' }} />
+              </div>
             </div>
-          </div>
+            <div>
+              {lbl('✍️ Comentario de la semana')}
+              <textarea className="rv-input" value={weekNotes[mon] || ''} onChange={e => setWeekNote(mon, e.target.value)} placeholder="¿Cómo fue la semana? Lo importante, qué quedó pendiente, qué cambiar la próxima…"
+                style={{ width: '100%', minHeight: 90, resize: 'vertical', boxSizing: 'border-box', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, padding: '10px 12px', font: '400 13px/1.5 var(--font-ui)', color: '#16365F', background: '#FBFAF6', outline: 'none' }} />
+            </div>
+          </>
+        )
+        // Pasos 2–6: listas armadas en revListas (memo).
+        if (!revListas) return null
+        const { arrastre, estancadas, sinFecha, inisEnCurso, inisCerrar, inisSinPaso, featsVacios, objsSinMeta, sinFeature, proxLunes, proxPlaneadas } = revListas
+        const cerradaLabel = weekClosed[mon]
+          ? (() => { const dt = new Date(weekClosed[mon]); return `Semana cerrada${isNaN(dt.getTime()) ? '' : ` · ${dt.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}`}` })()
+          : revisiones[mon] ? `Revisada · ${fmtDue(revisiones[mon])}` : undefined
+        return (
+          <RevisionSemanal
+            semanaLabel={weekRangeLabel(mon)} cerradaLabel={cerradaLabel}
+            hoy={today} proxLunes={proxLunes} lunesSiguiente={addDays(mondayISO(today), 7)}
+            resumen={resumen}
+            arrastre={arrastre} estancadas={estancadas} sinFecha={sinFecha}
+            inisEnCurso={inisEnCurso} inisCerrar={inisCerrar} inisSinPaso={inisSinPaso}
+            featsVacios={featsVacios} objsSinMeta={objsSinMeta} sinFeature={sinFeature}
+            proxPlaneadas={proxPlaneadas}
+            capaEncima={!!(taskView || taskEdit)}
+            aviso={taskView || taskEdit ? null : toast}
+            onAvisoAccion={() => { const fn = toast?.action?.fn; setToast(null); fn?.() }}
+            onPlanear={revPlanear} onPasarTodas={moveWeekPendingToNext} onArchivar={revArchivar}
+            onAbrir={(eId, tid) => setTaskView({ eId, tid })}
+            onIniEstado={revIniEstado} onCrearPaso={crearPrimerPaso}
+            onCerrarFeature={revCerrarFeature} onMeta={revMeta} onAsignarFeature={revAsignarFeature}
+            onAjuste={() => { terminarRevision(mon); setPlanMode('ajuste'); setViewDate(proxLunes); setVistaOpen(true) }}
+            onTerminar={() => terminarRevision(mon)}
+            onClose={() => setWeekCloseOpen(false)}
+          />
         )
       })()}
       {diaryOpen && (() => {
@@ -12041,7 +12379,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       })()}
 
       {dcCelebrate && <Confetti count={140} zIndex={9999} />}
-      {toast && (
+      {/* Con la Revisión semanal arriba, el toast va dentro de su hoja (aquí taparía sus filas). */}
+      {toast && !(weekCloseOpen && !taskView && !taskEdit) && (
         <div className="ep-abovenav" style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 80, background: toast.error ? '#B0522E' : '#16365F', color: '#fff', padding: '11px 18px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 16px 30px -14px rgba(8,18,36,.6)', display: 'flex', alignItems: 'center', gap: 14 }}>
           <span>{toast.msg}</span>
           {toast.action && (
@@ -12050,6 +12389,213 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
       )}
     </div>
+  )
+}
+
+/* ─── Captura rápida del Día ─────────────────────────────────── */
+type CapturaNueva = { epicaId: string; titulo: string; plan: string; featureId?: string; iniciativaId?: string; priority?: Prio; estMin?: number; due?: string }
+/** Aviso bajo el input tras capturar. `oculta` = qué filtro del Día la esconde; `ver` lo quita. */
+type NotaCaptura = { msg: string; error?: boolean; deshacer?: () => void; oculta?: string; ver?: () => void; texto?: string }
+
+// Lo que inline no puede (foco, móvil); React 19 lo sube al <head> una sola vez.
+const CD_CSS = `
+.cd-input:focus{border-color:rgba(194,147,58,.7)!important;background:#fff!important;box-shadow:0 0 0 3px rgba(194,147,58,.14)}
+.cd-chip,.cd-btn{min-height:28px}
+.cd-x{min-height:24px;min-width:24px}
+.cd-x:focus-visible,.cd-btn:focus-visible{outline:2px solid #C2933A;outline-offset:2px}
+@media (max-width:640px){
+  .cd-chip,.cd-btn{min-height:34px}
+  .cd-x{min-height:34px;min-width:34px}
+}
+`
+// Tocar un chip o "Agregar" no le quita el foco al input (en celular, tampoco el teclado).
+const sinBlurCaptura = (ev: { preventDefault: () => void }) => ev.preventDefault()
+
+/** Captura rápida en una línea arriba de la lista del Día ("Llamar notario @inm #eug mañana 30m !").
+ *  Lleva su propio estado: teclear no vuelve a pintar todo el tablero. */
+function CapturaDia({ epicas, hoy, dia, epicaFiltro, featureFiltro, iniciativaFiltro, onCrear }: {
+  epicas: Epica[]; hoy: string; dia: string
+  epicaFiltro?: string; featureFiltro?: string; iniciativaFiltro?: string
+  onCrear: (n: CapturaNueva, alFallar: () => void) => NotaCaptura | null
+}) {
+  const [texto, setTexto] = useState('')
+  const [foco, setFoco] = useState(false)
+  const [aviso, setAviso] = useState<string | null>(null)
+  const [nota, setNota] = useState<NotaCaptura | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!nota || nota.error) return
+    const t = setTimeout(() => setNota(null), 6000)
+    return () => clearTimeout(t)
+  }, [nota])
+  // "+ …" por costumbre de la paleta ⌘K: el "+" no va al título.
+  const off = /^\s*\+\s*/.exec(texto)?.[0].length ?? 0
+  // Destinos vivos para el #: sin features cerrados ni iniciativas cerradas/canceladas (igual que la Revisión semanal).
+  const vivas = useMemo<CapturaEpica[]>(() => epicas.filter(e => !e.archived).map(e => ({
+    id: e.id, name: e.name,
+    features: (e.features || []).filter(f => f.estado !== 'cerrado').map(f => ({ id: f.id, t: f.t, iniciativas: (f.iniciativas || []).filter(i => i.estado !== 'cerrada' && i.estado !== 'cancelada') })),
+  })), [epicas])
+  const cap = useMemo(() => {
+    const txt = texto.slice(off)
+    const todas = parseCaptura(txt, { epicas: vivas, hoy })
+    const pref = epicaFiltro ? vivas.find(e => e.id === epicaFiltro) : undefined
+    if (!pref || todas.tokens.some(t => t.tipo === 'epica' && t.reconocido)) return todas
+    // Sin @, el # se busca primero en la épica filtrada: si ahí lo encuentra, gana sobre las demás.
+    const piezas = (c: Captura) => c.tokens.filter(t => (t.tipo === 'feature' || t.tipo === 'iniciativa') && t.reconocido).length
+    const enPref = parseCaptura(txt, { epicas: [pref], hoy })
+    return piezas(enPref) > 0 && piezas(enPref) >= piezas(todas) ? enPref : todas
+  }, [texto, off, vivas, epicaFiltro, hoy])
+  const activas = epicas.filter(e => !e.archived)
+  const filtrada = epicaFiltro ? activas.find(e => e.id === epicaFiltro) : undefined
+  const ep = cap.epicaId ? activas.find(e => e.id === cap.epicaId)
+    : filtrada || activas.find(e => normalizar(e.name).trim() === 'general') || activas[0]
+  // Sin #, hereda el feature/iniciativa filtrados: si no, la tarea nueva nacería oculta por el filtro.
+  const featHer = !cap.featureId && ep && ep.id === filtrada?.id ? ep.features?.find(f => f.id === featureFiltro) : undefined
+  const iniHer = featHer?.iniciativas?.find(i => i.id === iniciativaFiltro)
+  const etq = etiquetaFecha(dia, hoy)
+  const destino = ['hoy', 'mañana', 'pasado mañana', 'ayer'].includes(etq) ? etq : `el ${etq}`
+  const hayTexto = texto.trim().length > 0
+
+  const crear = () => {
+    // Vacío: "Listo"/Enter suelta el campo (en celular, cierra el teclado).
+    if (!hayTexto) { setAviso(null); inputRef.current?.blur(); return }
+    inputRef.current?.focus()
+    if (!cap.titulo) { setAviso('Falta el título: escribe qué hay que hacer.'); return }
+    if (!ep) { setAviso('No tienes épicas activas donde crearla.'); return }
+    const enviado = texto, titulo = cap.titulo
+    // Si el guardado falla, la captura regresa al input (si sigue vacío) para no perder lo escrito.
+    const alFallar = () => {
+      setTexto(cur => (cur.trim() ? cur : enviado))
+      setNota({ msg: `No se pudo guardar «${titulo}»`, error: true })
+    }
+    const res = onCrear({
+      epicaId: ep.id, titulo, plan: cap.plan || dia,
+      featureId: cap.featureId || featHer?.id, iniciativaId: cap.iniciativaId || iniHer?.id,
+      priority: cap.prioridad, estMin: cap.estMin, due: cap.due,
+    }, alFallar)
+    if (!res) { setAviso('No se pudo crear la tarea.'); return }
+    setTexto(''); setAviso(null); setNota({ ...res, texto: enviado })
+  }
+  const limpiar = () => { setTexto(''); setAviso(null); setNota(n => (n?.error ? null : n)) }
+  // Deshacer regresa la línea al input (si está vacío) para corregir un @/# mal resuelto.
+  const deshacer = () => {
+    if (!nota) return
+    nota.deshacer?.()
+    if (!hayTexto && nota.texto) { setTexto(nota.texto); inputRef.current?.focus() }
+    setNota(null)
+  }
+  // × = quitar el token; "es texto" = dejarlo literal en el título (falsos positivos: "mar", "1/2"…).
+  const editarToken = (tk: TokenCaptura, como: 'quitar' | 'texto') => {
+    setTexto(como === 'quitar' ? quitarToken(texto, tk, off) : escaparToken(texto, tk, off))
+    inputRef.current?.focus()
+  }
+
+  const chip: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, boxSizing: 'border-box', maxWidth: '100%', borderRadius: 99, padding: '0 10px', font: '700 11.5px var(--font-ui)', whiteSpace: 'nowrap' }
+  const chipDef: CSSProperties = { ...chip, background: 'rgba(15,35,64,0.05)', color: 'rgba(20,35,61,0.62)' }
+  const chipBtn: CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', borderRadius: 99, padding: 0, fontFamily: 'inherit' }
+  const punto = (c?: string) => <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 99, flexShrink: 0, background: c || 'rgba(15,35,64,0.3)' }} />
+  const corto = (s: string) => <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{s}</span>
+  // Prefijo visible de los chips por defecto (en celular no hay title que lo explique).
+  const pre = (s: string) => <span style={{ fontWeight: 600, opacity: 0.75 }}>{s}</span>
+  const k: CSSProperties = { color: '#16365F', fontWeight: 800 }
+
+  return (
+    <form onSubmit={ev => { ev.preventDefault(); crear() }} style={{ margin: '16px 0 0', fontFamily: 'var(--font-ui)' }}>
+      <style href="advl-captura-dia" precedence="default">{CD_CSS}</style>
+      <div style={{ position: 'relative' }}>
+        <span aria-hidden="true" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', font: '800 17px/1 var(--font-ui)', color: '#C2933A', pointerEvents: 'none' }}>+</span>
+        <input ref={inputRef} className="cd-input" value={texto}
+          onChange={ev => { setTexto(ev.target.value); if (aviso) setAviso(null) }}
+          onKeyDown={ev => {
+            if (ev.key !== 'Escape') return
+            // Escape sólo limpia (o suelta) este campo: no debe llegar a los Escape globales que cierran capas.
+            ev.preventDefault(); ev.stopPropagation()
+            if (texto) limpiar(); else ev.currentTarget.blur()
+          }}
+          onFocus={() => setFoco(true)} onBlur={() => setFoco(false)}
+          enterKeyHint="done" autoCapitalize="sentences" autoComplete="off" autoCorrect="off" spellCheck={false}
+          aria-label={`Agregar tarea para ${destino}`} placeholder={`Agregar para ${destino}… (@épica #feature mañana 30m !)`}
+          style={{ display: 'block', width: '100%', boxSizing: 'border-box', minHeight: 42, border: '1px solid rgba(15,35,64,0.14)', borderRadius: 11, padding: hayTexto ? '0 42px 0 32px' : '0 13px 0 32px', fontSize: 16, color: '#14233D', background: '#FBFAF6', outline: 'none', fontFamily: 'inherit', textOverflow: 'ellipsis' }} />
+        {/* El "Esc" del celular. */}
+        {hayTexto && (
+          <button type="button" className="cd-x" onMouseDown={sinBlurCaptura} onClick={() => { limpiar(); inputRef.current?.focus() }} aria-label="Borrar la captura"
+            style={{ ...chipBtn, position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', color: 'rgba(20,35,61,0.45)', fontSize: 18, fontWeight: 800 }}>×</button>
+        )}
+        {/* Flota (absolute) para que al soltar el foco no se recorra la lista bajo el clic. */}
+        {foco && !hayTexto && !nota && (
+          <div aria-hidden="true" style={{ position: 'absolute', left: 0, right: 0, top: 'calc(100% + 6px)', zIndex: 5, pointerEvents: 'none', background: '#fff', border: '1px solid rgba(15,35,64,0.10)', borderRadius: 10, boxShadow: '0 12px 24px -16px rgba(15,35,64,0.45)', padding: '7px 11px', fontSize: 11.5, lineHeight: 1.6, color: 'rgba(20,35,61,0.55)' }}>
+            <b style={k}>@</b>épica · <b style={k}>#</b>feature o iniciativa · <b style={k}>mañana</b>, vie, 15/10 · <b style={k}>!</b> alta, !baja · <b style={k}>30m</b>, 1h30 · <b style={k}>vence:</b>20/10
+            <span className="ep-hide-sm"> · <b style={k}>Esc</b> limpia</span>
+          </div>
+        )}
+      </div>
+
+      {hayTexto && (<>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 700, color: cap.titulo ? '#16365F' : 'rgba(20,35,61,0.45)' }}>
+            {cap.titulo ? `«${cap.titulo}»` : 'Falta el título…'}
+          </span>
+          <button type="submit" className="cd-btn" onMouseDown={sinBlurCaptura}
+            style={{ ...goldBtn, flexShrink: 0, borderRadius: 9, padding: '0 14px', fontSize: 12.5, boxShadow: 'none', whiteSpace: 'nowrap', opacity: cap.titulo ? 1 : 0.55 }}>
+            Agregar<span className="ep-hide-sm"> ↵</span>
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 6 }}>
+          {!cap.epicaId && ep && (
+            <span className="cd-chip" title={filtrada && ep.id === filtrada.id ? 'Épica del filtro · escribe @ para elegir otra' : 'Épica por defecto · escribe @ para elegir otra'} style={chipDef}>
+              {pre('en')}{punto(ep.color)}{corto(ep.name)}
+            </span>
+          )}
+          {featHer && (
+            <span className="cd-chip" title="Del filtro · escribe # para elegir otro" style={chipDef}>
+              {pre('del filtro:')}<span aria-hidden="true" style={{ opacity: 0.8 }}>{iniHer ? ICONO_TOKEN.iniciativa : ICONO_TOKEN.feature}</span>{corto(iniHer ? `${featHer.t} › ${iniHer.nombre}` : featHer.t)}
+            </span>
+          )}
+          {!cap.plan && (
+            <span className="cd-chip" title="El día que estás viendo · escribe mañana, vie, 15/10… para otro" style={chipDef}>
+              <span aria-hidden="true" style={{ opacity: 0.8 }}>{ICONO_TOKEN.plan}</span>{pre('para')}{destino}
+            </span>
+          )}
+          {cap.tokens.map(tk => {
+            if (!tk.reconocido) return (
+              <span key={`${tk.pos}-${tk.tipo}`} className="cd-chip" title="No lo reconocí: se queda en el título" style={{ ...chip, border: '1px dashed rgba(15,35,64,0.22)', color: 'rgba(20,35,61,0.5)' }}>
+                ? {corto(tk.etiqueta)}
+              </span>
+            )
+            const alta = tk.tipo === 'prioridad' && cap.prioridad === 'alta'
+            return (
+              <span key={`${tk.pos}-${tk.tipo}`} className="cd-chip" style={{ ...chip, padding: '0 2px 0 10px', gap: 4, background: alta ? 'rgba(176,82,46,0.12)' : 'rgba(194,147,58,0.15)', color: alta ? '#B0522E' : '#7A5A1E' }}>
+                {tk.tipo === 'epica' ? punto(ep?.color) : <span aria-hidden="true" style={{ opacity: 0.8 }}>{ICONO_TOKEN[tk.tipo]}</span>}
+                {corto(tk.etiqueta)}
+                {(tk.tipo === 'plan' || tk.tipo === 'estimado') && (
+                  <button type="button" className="cd-x" onMouseDown={sinBlurCaptura} onClick={() => editarToken(tk, 'texto')} aria-label={`Dejar «${tk.texto}» como texto del título`}
+                    style={{ ...chipBtn, padding: '0 6px', fontSize: 10.5, fontWeight: 800, textDecoration: 'underline', textUnderlineOffset: 2 }}>es texto</button>
+                )}
+                <button type="button" className="cd-x" onMouseDown={sinBlurCaptura} onClick={() => editarToken(tk, 'quitar')} aria-label={`Quitar ${tk.etiqueta}`}
+                  style={{ ...chipBtn, fontSize: 14, fontWeight: 800 }}>×</button>
+              </span>
+            )
+          })}
+        </div>
+      </>)}
+      {aviso && <div role="status" style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: '#B0522E' }}>{aviso}</div>}
+      {nota && (
+        <div role="status" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '2px 6px', marginTop: 6, fontSize: 12, fontWeight: 700, color: nota.error ? '#B0522E' : '#2E6E5A' }}>
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            {nota.error ? nota.msg : `✓ ${nota.msg}`}
+            {nota.oculta && <span style={{ color: '#A87A2C' }}> · oculta por el filtro {nota.oculta}</span>}
+          </span>
+          {nota.ver && (
+            <button type="button" className="cd-btn" onMouseDown={sinBlurCaptura} onClick={() => { nota.ver?.(); setNota({ ...nota, oculta: undefined, ver: undefined }) }}
+              style={{ ...chipBtn, padding: '0 8px', color: '#A87A2C', fontSize: 12, fontWeight: 800, textDecoration: 'underline', textUnderlineOffset: 2 }}>Ver</button>
+          )}
+          {nota.deshacer && (
+            <button type="button" className="cd-btn" onMouseDown={sinBlurCaptura} onClick={deshacer}
+              style={{ ...chipBtn, padding: '0 8px', color: '#16365F', fontSize: 12, fontWeight: 800, textDecoration: 'underline', textUnderlineOffset: 2 }}>Deshacer</button>
+          )}
+        </div>
+      )}
+    </form>
   )
 }
 
