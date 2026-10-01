@@ -13,7 +13,8 @@ export async function middleware(request: NextRequest) {
   // gate de abajo — si no, cualquier petición sin cookie de sesión cae en el 401 de "no autorizado"
   // antes de que la propia ruta llegue a revisar el secreto (el chequeo dentro de la ruta quedaba
   // inalcanzable). Sin CRON_SECRET configurado, esta ruta se queda detrás del login normal.
-  if (request.nextUrl.pathname === '/api/push/send') {
+  // /api/push/daily (resumen de las 7:00, vercel.json) sigue exactamente la misma regla.
+  if (request.nextUrl.pathname === '/api/push/send' || request.nextUrl.pathname === '/api/push/daily') {
     const secret = process.env.CRON_SECRET
     if (secret) {
       const auth = request.headers.get('authorization') || ''
