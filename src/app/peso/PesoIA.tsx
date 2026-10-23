@@ -23,7 +23,7 @@ const PREGUNTAS = [
   '¿Cada cuánto debería medirme?',
   '¿Qué dato mío debería preocuparme más?',
 ]
-const SEIS_HORAS = 6 * 3_600_000
+const MEDIA_HORA = 30 * 60_000   // cuánto espera antes de reintentar con la IA si la última vez cayó al plan B
 
 function hace(iso: string, ahora: number) {
   const min = Math.max(0, Math.round((ahora - new Date(iso).getTime()) / 60_000))
@@ -58,8 +58,8 @@ export default function PesoIA({ firma, inicial, persistencia, nMediciones }: {
   // (marcado como desactualizado) mientras se genera el nuevo.
   const visible = [local, inicial].find(a => a?.firma === firma) ?? local ?? inicial
   const vigente = visible?.firma === firma
-  // Lectura por reglas (la IA falló la vez anterior): se reintenta sola pasadas unas horas.
-  const reglasViejas = !!visible && visible.fuente === 'reglas' && ahora != null && ahora - new Date(visible.created_at).getTime() > SEIS_HORAS
+  // Lectura por reglas (la IA falló la vez anterior): al abrir la página se reintenta sola pasada media hora.
+  const reglasViejas = !!visible && visible.fuente === 'reglas' && ahora != null && ahora - new Date(visible.created_at).getTime() > MEDIA_HORA
   const autoGenerar = persistencia && !!firma && ahora != null && (!vigente || reglasViejas)
 
   async function generar() {
@@ -194,7 +194,7 @@ export default function PesoIA({ firma, inicial, persistencia, nMediciones }: {
             )}
 
             <p className="text-[11px] text-[var(--ink-700)]/80 mt-3">
-              {visible!.fuente === 'ia' ? 'Gemini' : 'Lectura automática'}
+              {visible!.fuente === 'ia' ? 'Gemini' : 'Lectura automática (la IA no respondió; usa «Actualizar» para reintentar)'}
               {ahora != null ? ` · ${hace(visible!.created_at, ahora)}` : ''}
               {` · con ${visible!.n_registros} mediciones hasta el ${visible!.fecha_base.split('-').reverse().join('/')}`}
               {' · Orientativo: no sustituye a un médico o nutriólogo.'}
