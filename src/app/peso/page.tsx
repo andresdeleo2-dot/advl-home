@@ -1,29 +1,10 @@
 import { supabase } from '@/lib/supabase'
+import { firmaDatos, type PesoRecord, type PesoPlan, type PesoAnalisisGuardado } from '@/lib/peso'
 import PesoClient from './PesoClient'
 
 export const revalidate = 0
 
-export type PesoRecord = {
-  id: string
-  fecha: string
-  peso: number | null
-  pct_grasa: number | null
-  pct_musculo: number | null
-  imc: number | null
-  rmr: number | null
-  edad_corporal: number | null
-  grasa_visceral: number | null
-}
-
-export type PesoPlan = {
-  id: string
-  rutina: string | null
-  dieta: string | null
-  notas: string | null
-  meta_peso: number | null
-  meta_fecha: string | null
-  meta_grasa: number | null
-}
+export type { PesoRecord, PesoPlan }
 
 async function getRegistros(): Promise<PesoRecord[]> {
   const { data } = await supabase
@@ -41,7 +22,23 @@ async function getPlan(): Promise<PesoPlan | null> {
   return data
 }
 
+// Igual con sql/peso-02-analisis.sql: sin la tabla el análisis con IA se genera a demanda pero no
+// queda guardado, y la página no lo regenera sola en cada visita (`persistencia: false`).
+async function getAnalisis(): Promise<{ analisis: PesoAnalisisGuardado | null; persistencia: boolean }> {
+  const { data, error } = await supabase.from('peso_analisis').select('*').eq('id', 'main').maybeSingle()
+  if (error) return { analisis: null, persistencia: false }
+  return { analisis: (data as PesoAnalisisGuardado | null) ?? null, persistencia: true }
+}
+
 export default async function PesoPage() {
-  const [registros, plan] = await Promise.all([getRegistros(), getPlan()])
-  return <PesoClient initialData={registros} initialPlan={plan} />
+  const [registros, plan, { analisis, persistencia }] = await Promise.all([getRegistros(), getPlan(), getAnalisis()])
+  return (
+    <PesoClient
+      initialData={registros}
+      initialPlan={plan}
+      initialAnalisis={analisis}
+      persistencia={persistencia}
+      firma={registros.length ? firmaDatos(registros, plan) : ''}
+    />
+  )
 }
