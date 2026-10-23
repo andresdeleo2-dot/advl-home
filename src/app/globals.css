@@ -428,3 +428,18 @@ body {
   /* El panel lateral es `position: fixed`: se imprimía encima de los carriles. */
   .rm-sheet { display: none !important; }
 }
+
+/* ============================================================
+   /peso — accesibilidad de movimiento y numerales
+   Reglas NUEVAS añadidas al final: las de arriba se quedan como estaban.
+   ============================================================ */
+/* Quien pide menos movimiento (ajuste del sistema) no ve entrar las tarjetas ni los diálogos: con `animation: none`
+   el elemento se queda en su estado final (opacidad 1, sin desplazamiento). Cubre Panel/Aviso/PesoTiles (.animate-fade)
+   y los modales de Épicas (.ep-pop, .ep-modal). */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade, .ep-pop, .ep-modal { animation: none; }
+}
+/* Cormorant Garamond dibuja los numerales antiguos por defecto (3, 4, 5, 7 y 9 bajan de la línea base): en cifras
+   sueltas del tablero (Meta, KPIs, Escenarios, Escalas, anillo del hero) se ven desparejas. `lnum` las alinea.
+   Acotado a /peso (PesoClient pone `peso-root` en su contenedor) para no cambiar el resto del sitio. */
+.peso-root .serif { font-feature-settings: "lnum" 1; }

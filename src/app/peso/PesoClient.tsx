@@ -1,1536 +1,506 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import dynamic from 'next/dynamic'
+import { useRouter } from 'next/navigation'
 import SiteHeader from '@/components/SiteHeader'
 import {
-  ResponsiveContainer, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
-} from 'recharts'
-import { addRegistro, updateRegistro, deleteRegistro, savePlan } from './actions'
-import PesoHero from './PesoHero'
-import PesoIA from './PesoIA'
-import {
-  H2, PESO_IMC_25, addDays, addMonths, daysBetween, fmtFecha, hoyMX, masaGrasa, masaMagra,
-  classifyIMC, classifyFat, classifyMuscle, classifyVisceral,
-  type PesoRecord, type PesoPlan, type PesoAnalisisGuardado, type Classification, type Level,
+  etapaActual, fmtFecha, hoyMX,
+  type PesoRecord, type PesoPlan, type PesoAnalisisGuardado,
 } from '@/lib/peso'
+import type { PesoPlanMeta } from '@/lib/peso-planes'
+import { deleteRegistro } from './actions'
+import { PESO_TABS, type PesoTab } from './contratos'
+import { BTN, COLOR, Eyebrow, Panel } from './ui'
+import PesoHero from './PesoHero'
+import PesoFormulario from './PesoFormulario'
+import PesoTabs, { panelId, tabId } from './PesoTabs'
+import PesoIA from './PesoIA'
+import PesoVisuales from './PesoVisuales'
+import PesoMeta from './PesoMeta'
+import PesoTiles from './PesoTiles'
+import PesoHistorial from './PesoHistorial'
+import PesoPlanTexto from './PesoPlanTexto'
+import PlanesEnUso from './planes/EnUso'
+import { PLANES_EVENTO } from './planes/util'
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// Shell de /peso: título, formulario, franja de estado (siempre visible) y pestañas. Solo la pestaña
+// activa monta su contenido: las gráficas necesitan el ancho real de su contenedor, y así la página
+// no carga ni repinta lo que no se está viendo. Los datos llegan del servidor (page.tsx) y cada
+// guardado/borrado revalida la ruta, así que aquí no hay copia local de las mediciones.
 
-const fmtDate = fmtFecha
+/** Alto aproximado de la barra de pestañas pegajosa + aire: el contenido se alinea debajo de ella. */
+const MARGEN_BARRA = 62
+const ID_META = 'peso-meta'
 
-// Diferencia de calendario exacta (años/meses/días) de la fecha `a` (más antigua) a `b`.
-function diffYMD(a: string, b: string) {
-  const [ay, am, ad] = a.split('-').map(Number)
-  const [by, bm, bd] = b.split('-').map(Number)
-  let years = by - ay
-  let months = bm - am
-  let days = bd - ad
-  if (days < 0) {
-    months -= 1
-    days += new Date(by, bm - 1, 0).getDate() // días del mes anterior a `b`
-  }
-  if (months < 0) {
-    years -= 1
-    months += 12
-  }
-  return { years, months, days }
-}
+const esTab = (v: string): v is PesoTab => PESO_TABS.some(t => t.id === v)
 
-// Intervalo legible y exacto entre dos fechas 'YYYY-MM-DD': "5 d", "2 sem 6 d", "3 meses 16 d".
-function fmtGap(a: string, b: string) {
-  const total = daysBetween(a, b)
-  if (total <= 0) return 'mismo día'
-  if (total < 7) return `${total} d`
-  if (total < 30) {
-    const w = Math.floor(total / 7), d = total % 7
-    return d ? `${w} sem ${d} d` : `${w} sem`
-  }
-  const { years, months, days } = diffYMD(a, b)
-  const parts: string[] = []
-  if (years) parts.push(`${years} año${years > 1 ? 's' : ''}`)
-  if (months) parts.push(`${months} mes${months > 1 ? 'es' : ''}`)
-  if (days) parts.push(`${days} d`)
-  return parts.join(' ') || `${total} d`
-}
+// Constante a nivel de módulo: un `= []` en los parámetros crearía un arreglo nuevo en cada render.
+const SIN_PLANES: PesoPlanMeta[] = []
 
-// ── Reference rows ───────────────────────────────────────────────────────────
-
-type RefRow = { range: string; label: string; color: string; kg?: string }
-
-function isCurrentRow(range: string, val: number): boolean {
-  if (range.startsWith('< '))  return val < parseFloat(range.slice(2))
-  if (range.startsWith('≥ '))  return val >= parseFloat(range.slice(2))
-  if (range.startsWith('> '))  return val > parseFloat(range.slice(2))
-  const m = range.match(/^([\d.]+)\s*[–-]\s*([\d.]+)/)
-  if (m) return val >= parseFloat(m[1]) && val <= parseFloat(m[2])
-  return false
-}
-
-function RefTable({ title, note, rows, currentVal }: {
-  title: string; note?: string; rows: RefRow[]; currentVal: number | null
-}) {
+/** Mientras baja el código de una pestaña pesada. Alto fijo para que la página no brinque al llegar. */
+function CargandoPestana({ nombre }: { nombre: string }) {
   return (
-    <div>
-      <div className="text-xs font-semibold text-[var(--ink-700)] mb-1.5">{title}</div>
-      <table className="w-full text-xs">
-        <tbody>
-          {rows.map(row => {
-            const isCurrent = currentVal != null && isCurrentRow(row.range, currentVal)
-            return (
-              <tr key={row.range} style={isCurrent ? { background: `${row.color}18` } : {}}>
-                <td className="py-1 pr-2 tabular-nums font-medium" style={{ color: row.color }}>{row.range}</td>
-                {row.kg && <td className="py-1 pr-2 tabular-nums text-[var(--ink-700)]">{row.kg}</td>}
-                <td className="py-1 text-[var(--ink-950)]">
-                  {row.label}{isCurrent ? <span className="ml-1 font-bold">◀ tú</span> : ''}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-      {note && <p className="text-xs text-[var(--ink-700)] mt-1.5 italic">{note}</p>}
-    </div>
+    <Panel>
+      <div role="status" className="flex h-72 items-center justify-center" style={{ fontSize: 13, color: 'rgba(20,35,61,0.7)' }}>
+        Cargando {nombre}…
+      </div>
+    </Panel>
   )
 }
 
-// ── Metric definitions ───────────────────────────────────────────────────────
+// Pestañas pesadas con carga diferida: Progreso trae recharts (el único archivo de la app que lo usa) y
+// Rutinas y dietas trae todo el visor/subida de HTML. La mayoría de las visitas aterriza en Resumen y no
+// las necesita. Con ssr activo, un enlace ?tab=progreso sigue pintándose ya desde el servidor.
+const PesoProgreso = dynamic(() => import('./PesoProgreso'), { loading: () => <CargandoPestana nombre="el progreso" /> })
+const PesoPlanes = dynamic(() => import('./PesoPlanes'), { loading: () => <CargandoPestana nombre="tus rutinas y dietas" /> })
 
-type MetricDef = {
-  key: keyof PesoRecord
-  label: string
-  unit: string
-  color: string
-  yAxis: 'kg' | 'pct' | 'other'
-  goodDir: 'up' | 'down' | 'neutral'
-  info: { mide: string; leer: string; hacer: string }
-  classify?: (v: number) => Classification
-  refs?: { title: string; note?: string; rows: RefRow[] }
+/** Refleja la pestaña en la URL (?tab= para que el servidor la pinte directo; #hash para enlazar)
+ *  sin recargar ni ensuciar el historial. "Resumen" es la de por defecto y deja la URL limpia. */
+function sincronizarUrl(t: PesoTab) {
+  try {
+    const u = new URL(window.location.href)
+    if (t === 'resumen') { u.searchParams.delete('tab'); u.hash = '' }
+    else { u.searchParams.set('tab', t); u.hash = t }
+    if (t !== 'planes') u.searchParams.delete('plan')
+    const destino = u.pathname + u.search + u.hash
+    if (destino !== window.location.pathname + window.location.search + window.location.hash) {
+      // `null` y no `window.history.state`: Next ignora un replaceState que trae su propio estado interno (__NA),
+      // y entonces su router conserva la URL vieja y la restaura tras cada acción del servidor (guardar, borrar…).
+      window.history.replaceState(null, '', destino)
+    }
+  } catch { /* sin History API: la pestaña funciona igual, solo no queda en la URL */ }
 }
 
-const METRICS: MetricDef[] = [
-  {
-    key: 'peso', label: 'Peso (kg)', unit: 'kg', color: '#2d6cdf', yAxis: 'kg', goodDir: 'down',
-    info: {
-      mide: 'Masa corporal total; incluye agua, glucógeno y contenido digestivo.',
-      leer: 'Usa tendencia de 2–4 semanas, no una sola mañana.',
-      hacer: 'Si también sube grasa, reduce 150–250 kcal y aumenta pasos diarios.',
-    },
-    refs: {
-      title: 'Clasificación OMS — por peso (talla 1.81 m)',
-      note: `Meta: bajar de ${(25 * H2).toFixed(1)} kg para IMC < 25 (salir de sobrepeso).`,
-      rows: [
-        { range: `< ${(18.5 * H2).toFixed(1)}`, label: 'Bajo peso  (IMC < 18.5)', color: '#f59e0b' },
-        { range: `${(18.5 * H2).toFixed(1)} – ${(24.9 * H2).toFixed(1)}`, label: 'Normal  (IMC 18.5–24.9)', color: '#22c55e' },
-        { range: `${(25 * H2).toFixed(1)} – ${(29.9 * H2).toFixed(1)}`, label: 'Sobrepeso  (IMC 25–29.9)', color: '#f59e0b' },
-        { range: `${(30 * H2).toFixed(1)} – ${(34.9 * H2).toFixed(1)}`, label: 'Obesidad I  (IMC 30–34.9)', color: '#ef4444' },
-        { range: `≥ ${(35 * H2).toFixed(1)}`, label: 'Obesidad II+  (IMC ≥ 35)', color: '#dc2626' },
-      ],
-    },
-  },
-  {
-    key: 'pct_grasa', label: '% Grasa', unit: '%', color: '#ef4444', yAxis: 'pct', goodDir: 'down',
-    info: {
-      mide: 'Proporción de grasa corporal estimada por bioimpedancia.',
-      leer: 'Baja sostenida es mejor señal que bajar peso sin contexto.',
-      hacer: 'Buena señal: conserva adherencia y evita recortes agresivos.',
-    },
-    classify: classifyFat,
-    refs: {
-      title: '% Grasa — hombres (30–40 años)',
-      rows: [
-        { range: '< 10%', label: 'Muy bajo', color: '#f59e0b' },
-        { range: '10 – 14%', label: 'Atlético marcado', color: '#22c55e' },
-        { range: '15 – 19%', label: 'Fitness saludable', color: '#22c55e' },
-        { range: '20 – 24%', label: 'Promedio saludable', color: '#84cc16' },
-        { range: '25 – 29%', label: 'Alto', color: '#f59e0b' },
-        { range: '≥ 30%', label: 'Obesidad por grasa', color: '#ef4444' },
-      ],
-    },
-  },
-  {
-    key: 'pct_musculo', label: '% Músculo', unit: '%', color: '#22c55e', yAxis: 'pct', goodDir: 'up',
-    info: {
-      mide: 'Masa magra relativa; señal de si estás preservando músculo.',
-      leer: 'En déficit, mantener o subir es positivo.',
-      hacer: 'Mantén fuerza 3–4 veces/semana y proteína 1.6–2.2 g/kg.',
-    },
-    classify: classifyMuscle,
-    refs: {
-      title: '% Músculo (bioimpedancia)',
-      rows: [
-        { range: '< 30%', label: 'Bajo', color: '#ef4444' },
-        { range: '30 – 33%', label: 'Normal', color: '#84cc16' },
-        { range: '33 – 36%', label: 'Bueno', color: '#22c55e' },
-        { range: '36 – 40%', label: 'Atlético', color: '#2d6cdf' },
-      ],
-    },
-  },
-  {
-    key: 'imc', label: 'IMC', unit: '', color: '#8b5cf6', yAxis: 'other', goodDir: 'down',
-    info: {
-      mide: 'Relación peso/altura. No distingue músculo de grasa.',
-      leer: 'Úsalo como contexto, no como único objetivo.',
-      hacer: 'Interprétalo siempre junto con % grasa y grasa visceral.',
-    },
-    classify: classifyIMC,
-    refs: {
-      title: 'IMC — Clasificación OMS',
-      note: `Tu talla: 1.81 m. IMC < 25 = ${(25 * H2).toFixed(1)} kg.`,
-      rows: [
-        { range: '< 18.5', kg: `< ${(18.5 * H2).toFixed(1)} kg`, label: 'Bajo peso', color: '#f59e0b' },
-        { range: '18.5 – 24.9', kg: `${(18.5 * H2).toFixed(1)} – ${(24.9 * H2).toFixed(1)} kg`, label: 'Normal', color: '#22c55e' },
-        { range: '25.0 – 29.9', kg: `${(25 * H2).toFixed(1)} – ${(29.9 * H2).toFixed(1)} kg`, label: 'Sobrepeso', color: '#f59e0b' },
-        { range: '30.0 – 34.9', kg: `${(30 * H2).toFixed(1)} – ${(34.9 * H2).toFixed(1)} kg`, label: 'Obesidad I', color: '#ef4444' },
-        { range: '≥ 35', kg: `> ${(35 * H2).toFixed(1)} kg`, label: 'Obesidad II+', color: '#dc2626' },
-      ],
-    },
-  },
-  {
-    key: 'rmr', label: 'RMR (kcal)', unit: 'kcal/día', color: '#f59e0b', yAxis: 'other', goodDir: 'neutral',
-    info: {
-      mide: 'Calorías que quemas en reposo absoluto estimadas por la báscula.',
-      leer: 'Valora solo cambios sostenidos de varias semanas, no picos sueltos.',
-      hacer: 'Evalúa en bloques de 3–4 semanas; un dato solo no dice nada.',
-    },
-  },
-  {
-    key: 'edad_corporal', label: 'Edad corporal', unit: 'años', color: '#06b6d4', yAxis: 'other', goodDir: 'down',
-    info: {
-      mide: 'Índice del fabricante basado en composición y metabolismo.',
-      leer: 'Solo tiene valor si mejora junto con grasa y visceral.',
-      hacer: 'Tómala como indicador secundario, no como meta principal.',
-    },
-  },
-  {
-    key: 'grasa_visceral', label: 'Grasa visceral', unit: '', color: '#f97316', yAxis: 'other', goodDir: 'down',
-    info: {
-      mide: 'Grasa alrededor de órganos internos. Escala del fabricante (1–59).',
-      leer: 'Más relevante que la grasa subcutánea para riesgo metabólico.',
-      hacer: 'Prioridad alta: revisar adherencia, alcohol y actividad diaria.',
-    },
-    classify: classifyVisceral,
-    refs: {
-      title: 'Grasa visceral',
-      rows: [
-        { range: '1 – 9', label: 'Saludable', color: '#22c55e' },
-        { range: '10 – 14', label: 'Alto', color: '#f59e0b' },
-        { range: '≥ 15', label: 'Muy alto', color: '#ef4444' },
-      ],
-    },
-  },
-]
-
-const DEFAULT_ACTIVE = new Set<string>(['peso', 'pct_grasa', 'pct_musculo'])
-
-// ── Form fields ──────────────────────────────────────────────────────────────
-
-const FORM_FIELDS = [
-  { name: 'fecha', label: 'Fecha', type: 'date', required: true },
-  { name: 'peso', label: 'Peso (kg)', type: 'number', step: '0.1' },
-  { name: 'pct_grasa', label: '% Grasa', type: 'number', step: '0.1' },
-  { name: 'pct_musculo', label: '% Músculo', type: 'number', step: '0.1' },
-  { name: 'imc', label: 'IMC', type: 'number', step: '0.1' },
-  { name: 'rmr', label: 'RMR (kcal)', type: 'number' },
-  { name: 'edad_corporal', label: 'Edad corporal', type: 'number' },
-  { name: 'grasa_visceral', label: 'Grasa visceral', type: 'number' },
-] as const
-
-// ── Gráfica: eje de tiempo real ──────────────────────────────────────────────
-// Las mediciones son irregulares (a veces semanales, a veces cada 4 meses): con un eje por posición,
-// un hueco de meses se dibujaba igual de ancho que uno de días y la pendiente mentía.
-
-const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
-const utcT = (d: string) => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))
-
-function fmtTick(t: number, corto: boolean) {
-  const d = new Date(t)
-  return corto ? `${d.getUTCDate()} ${MESES[d.getUTCMonth()]}` : `${MESES[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`
-}
-function fmtTooltipFecha(t: number) {
-  const d = new Date(t)
-  return `${d.getUTCDate()} ${MESES[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+/** ¿La persona pidió menos movimiento? Solo se llama desde efectos/eventos (nunca al renderizar: SSR). */
+function reducirMovimiento() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-/** Marcas del eje X: día 1 de cada mes (o cada 2, 3, 6… si el rango es largo) dentro de [min, max]. */
-function ticksMensuales(min: number, max: number, maxTicks = 7): number[] {
-  const a = new Date(min), b = new Date(max)
-  const meses = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + b.getUTCMonth() - a.getUTCMonth() + 1
-  const paso = Math.max(1, Math.ceil(meses / maxTicks))
-  const y = a.getUTCFullYear()
-  const m0 = Date.UTC(y, a.getUTCMonth(), 1) < min ? a.getUTCMonth() + 1 : a.getUTCMonth()
-  const out: number[] = []
-  for (let k = 0; ; k++) {
-    const t = Date.UTC(y, m0 + k * paso, 1)
-    if (t > max) break
-    out.push(t)
-  }
-  return out
+/** Foto de las mediciones al abrir el formulario, para saber si al cerrarlo hubo un guardado. PesoFormulario
+ *  llama a onCerrar igual al guardar que al cancelar, así que el guardado se deduce de los datos. */
+type SesionForm = { cerradaEn: number | null } & (
+  | { modo: 'nueva'; ids: Set<string> }
+  | { modo: 'editada'; id: string; antes: string }
+)
+/** Cuánto después de cerrar el formulario se sigue esperando a que lleguen del servidor las mediciones nuevas. */
+const VENTANA_GUARDADO_MS = 8000
+
+/** ¿Las mediciones actuales reflejan lo guardado? Nueva: apareció un id que no estaba. Editada: cambió la fila
+ *  editada. Así un borrado de otra fila (o un refresh sin cambios) nunca se confunde con un guardado. */
+function seGuardo(s: SesionForm, datos: PesoRecord[]) {
+  if (s.modo === 'nueva') return datos.some(r => !s.ids.has(r.id))
+  const r = datos.find(x => x.id === s.id)
+  return !!r && JSON.stringify(r) !== s.antes
 }
 
-// Composición en kg, calculada (no es un campo de la báscula): comparte el eje de kg con el peso.
-const EXTRA_SERIES = [
-  { key: 'masa_grasa', label: 'Masa grasa (kg)', color: '#dc2626' },
-  { key: 'masa_magra', label: 'Masa magra (kg)', color: '#16a34a' },
-] as const
+type AvisoEstado = { texto: string; tipo: 'ok' | 'error' } | null
 
-const PRESETS: { label: string; value: number | 'todo' }[] = [
-  { label: '3 meses', value: 3 }, { label: '6 meses', value: 6 }, { label: '1 año', value: 12 }, { label: 'Todo', value: 'todo' },
-]
-
-// ── Main component ───────────────────────────────────────────────────────────
-
-export default function PesoClient({ initialData, initialPlan, initialAnalisis, persistencia, firma }: {
+type Props = {
   initialData: PesoRecord[]
   initialPlan: PesoPlan | null
   initialAnalisis: PesoAnalisisGuardado | null
   persistencia: boolean
   firma: string
+  planes?: PesoPlanMeta[]
+  planesDisponible?: boolean
+  /** La tabla de planes existe pero su lectura falló: `planes` llega vacío por eso, no porque no haya documentos. */
+  planesError?: string | null
+  tabInicial?: PesoTab
+  planInicial?: string | null
+}
+
+// ── Contenido de la pestaña activa ───────────────────────────────────────────
+// memo: abrir/cerrar el formulario o mostrar un aviso no debe repintar las secciones.
+
+const Contenido = memo(function Contenido({
+  tab, data, plan, analisis, persistencia, firma, planes, planesDisponible, planesError, planSel, deletingId,
+  onEdit, onDelete, onVerPlan, onIrAPlanes,
+}: {
+  tab: PesoTab
+  data: PesoRecord[]
+  plan: PesoPlan | null
+  analisis: PesoAnalisisGuardado | null
+  persistencia: boolean
+  firma: string
+  planes: PesoPlanMeta[]
+  planesDisponible: boolean
+  /** La lectura de planes falló: con la lista vacía, PesoPlanes y «Planes en uso» avisan en vez de pintar «aún no tienes rutinas». */
+  planesError: string | null
+  planSel: string | null
+  deletingId: string | null
+  onEdit: (r: PesoRecord) => void
+  onDelete: (r: PesoRecord) => void
+  onVerPlan: (id: string) => void
+  onIrAPlanes: () => void
 }) {
+  if (tab === 'progreso') return <PesoProgreso data={data} plan={plan} />
+  if (tab === 'historial') return <PesoHistorial data={data} onEdit={onEdit} onDelete={onDelete} deletingId={deletingId} />
+  if (tab === 'planes') {
+    return (
+      <>
+        <PesoPlanes inicial={planes} disponible={planesDisponible} data={data} plan={plan} seleccionInicial={planSel} error={planesError} />
+        <PesoPlanTexto plan={plan} />
+      </>
+    )
+  }
+  // Orden del Resumen: primero lo que más se consulta tras el peso (grasa, músculo, visceral con su cambio
+  // a 30 días; en móvil el hero solo muestra peso e IMC), luego la lectura de la IA y, al final, lo explicativo.
+  return (
+    <>
+      <PesoTiles data={data} />
+      <PesoIA firma={firma} inicial={analisis} persistencia={persistencia} nMediciones={data.length} />
+      {/* PlanesEnUso recibe TODOS los planes: él elige el activo de cada tipo y cuenta los guardados
+          para decidir entre "Elegir una en uso" y "Subir la primera". */}
+      {planesDisponible && <PlanesEnUso planes={planes} error={planesError} onVer={onVerPlan} onIrAPlanes={onIrAPlanes} />}
+      {/* El hero salta aquí cuando el siguiente paso es definir o ajustar la meta */}
+      <div id={ID_META} style={{ scrollMarginTop: MARGEN_BARRA }}>
+        <PesoMeta plan={plan} data={data} />
+      </div>
+      <PesoVisuales data={data} plan={plan} />
+    </>
+  )
+})
+
+// ── Aviso flotante (confirmación de guardado y errores de borrado) ────────────
+// El rol vive en el contenedor que lo envuelve (ver el render): "status" para el éxito, "alert" para el error.
+// El contenedor no captura toques (el aviso sí), para no tapar lo que queda debajo.
+
+const POS_AVISO = 'pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto max-w-md'
+
+function Aviso({ aviso, onCerrar }: { aviso: NonNullable<AvisoEstado>; onCerrar: () => void }) {
+  const ok = aviso.tipo === 'ok'
+  useEffect(() => {
+    // El éxito se va solo pronto (es solo una confirmación); el error se queda lo suficiente para leerlo.
+    const t = setTimeout(onCerrar, ok ? 4500 : 9000)
+    return () => clearTimeout(t)
+  }, [aviso, ok, onCerrar])
+  return (
+    <div className="pointer-events-auto animate-fade">
+      <div className="flex items-start gap-3 rounded-2xl px-4 py-3" style={{ background: COLOR.navy, color: COLOR.onDark, border: '1px solid rgba(255,255,255,0.12)', boxShadow: '0 18px 40px -16px rgba(15,35,64,0.7)' }}>
+        <span aria-hidden style={{ fontSize: 16, lineHeight: '22px', color: ok ? COLOR.goodOnDark : undefined, fontWeight: 800 }}>{ok ? '✓' : '⛔'}</span>
+        <p className="flex-1 min-w-0" style={{ fontSize: 13.5, lineHeight: 1.45, fontWeight: 600 }}>{aviso.texto}</p>
+        <button type="button" onClick={onCerrar} aria-label="Cerrar aviso" className="shrink-0 rounded-lg min-w-[40px] min-h-[40px] -mr-2 -my-1.5 flex items-center justify-center" style={{ color: COLOR.onDarkMuted, fontSize: 20 }}>
+          <span aria-hidden>×</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Título ───────────────────────────────────────────────────────────────────
+
+function Titulo({ children, subtitulo }: { children?: ReactNode; subtitulo: ReactNode }) {
+  return (
+    <div className="flex items-end justify-between flex-wrap gap-x-4 gap-y-3">
+      <div className="min-w-0">
+        <Eyebrow>Salud · composición corporal</Eyebrow>
+        <h1 className="serif mt-1" style={{ fontSize: 'clamp(32px, 9vw, 42px)', lineHeight: 1.04, fontWeight: 600, color: COLOR.navy }}>
+          Tracking de peso
+        </h1>
+        <p className="mt-1.5" style={{ fontSize: 13, color: COLOR.muted, lineHeight: 1.5 }}>{subtitulo}</p>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// ── Componente principal ─────────────────────────────────────────────────────
+
+export default function PesoClient({
+  initialData, initialPlan, initialAnalisis, persistencia, firma,
+  planes: planesServidor = SIN_PLANES, planesDisponible: disponibleServidor = false, planesError = null, tabInicial = 'resumen', planInicial = null,
+}: Props) {
+  const router = useRouter()
+
+  // Lista de planes: arranca con lo del servidor y la pestaña "Rutinas y dietas" la mantiene al día
+  // con el evento PLANES_EVENTO (subir, editar, marcar en uso, borrar), así el contador de la pestaña y
+  // "Planes en uso" del Resumen no esperan al router.refresh(). Un evento solo se emite tras una
+  // operación exitosa contra la tabla, o sea que si llega es que la tabla ya existe.
+  const [planes, setPlanes] = useState<PesoPlanMeta[]>(planesServidor)
+  const [planesDisponible, setPlanesDisponible] = useState(disponibleServidor)
+  const [errorPlanes, setErrorPlanes] = useState<string | null>(planesError)
+  useEffect(() => {
+    setErrorPlanes(planesError)
+    // Si la lectura falló, la lista llega vacía por eso (no porque no haya planes): no se pisa la que ya había.
+    if (planesError) return
+    setPlanes(planesServidor); setPlanesDisponible(disponibleServidor)
+  }, [planesServidor, disponibleServidor, planesError])
+  useEffect(() => {
+    const alCambiar = (e: Event) => {
+      const lista = (e as CustomEvent<PesoPlanMeta[]>).detail
+      if (!Array.isArray(lista)) return
+      setPlanes(lista)
+      setPlanesDisponible(true)
+      setErrorPlanes(null)   // si llega una lista es que la consulta ya funciona
+    }
+    window.addEventListener(PLANES_EVENTO, alCambiar)
+    return () => window.removeEventListener(PLANES_EVENTO, alCambiar)
+  }, [])
+
+  const [tab, setTab] = useState<PesoTab>(tabInicial)
+  const tabRef = useRef<PesoTab>(tabInicial)              // la versión "síncrona" de tab para los callbacks estables
+  const [planSel, setPlanSel] = useState<string | null>(planInicial)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<PesoRecord | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [activeMetrics, setActiveMetrics] = useState<Set<string>>(DEFAULT_ACTIVE)
-  const firstDate = initialData[0]?.fecha ?? ''
-  const lastDate = initialData[initialData.length - 1]?.fecha ?? ''
+  const [aviso, setAviso] = useState<AvisoEstado>(null)
+  const [hoy, setHoy] = useState(hoyMX)
+  const [scrollReq, setScrollReq] = useState<{ n: number; forzar: boolean; destino?: string } | null>(null)
+  const [retorno, setRetorno] = useState<{ n: number; fila: string } | null>(null)
 
-  // Rango único para la gráfica, el análisis de tendencia y la proyección de la meta. Por defecto el
-  // último año: con 4 meses sólo quedaban 3 mediciones y cualquier pendiente era ruido.
-  const [preset, setPreset] = useState<number | 'todo' | 'custom'>(12)
-  const [customFrom, setCustomFrom] = useState('')
-  const [customTo, setCustomTo] = useState('')
-  const trendFrom = preset === 'custom' ? customFrom : preset === 'todo' ? firstDate : lastDate ? addMonths(lastDate, -preset) : ''
-  const trendTo = preset === 'custom' ? customTo : lastDate
-  function editarRango(from: string, to: string) { setCustomFrom(from); setCustomTo(to); setPreset('custom') }
+  const contenidoRef = useRef<HTMLDivElement>(null)
+  const formWrapRef = useRef<HTMLDivElement>(null)
+  const nuevaBtnRef = useRef<HTMLButtonElement>(null)
+  const datosRef = useRef(initialData)                    // las mediciones más recientes, para los callbacks estables
+  const sesionRef = useRef<SesionForm | null>(null)       // el formulario abierto, para confirmar el guardado al cerrarlo
+  const filaRef = useRef<string | null>(null)             // etiqueta del botón «Editar» de la fila abierta desde el Historial
 
-  // Chart data — filter RMR outlier (17775). peso_ma = promedio móvil de peso en ventana de 14
-  // días (no de N mediciones: el cadence es irregular, así que una ventana de TIEMPO es la que
-  // de verdad filtra el ruido de agua/sal/glucógeno del que ya avisa el texto de "Qué mide").
-  // Se calcula sobre TODO el historial: la ventana de las primeras mediciones del rango puede caer antes de él.
-  const chartAll = useMemo(() => {
-    return initialData.map(r => {
-      const windowStartStr = addDays(r.fecha, -13)
-      const windowVals = initialData
-        .filter(x => x.fecha <= r.fecha && x.fecha >= windowStartStr && x.peso != null)
-        .map(x => x.peso as number)
-      const peso_ma = windowVals.length >= 2 ? windowVals.reduce((s, v) => s + v, 0) / windowVals.length : null
-      return {
-        t: utcT(r.fecha),
-        iso: r.fecha,
-        peso: r.peso,
-        peso_ma: peso_ma != null ? Math.round(peso_ma * 10) / 10 : null,
-        pct_grasa: r.pct_grasa,
-        pct_musculo: r.pct_musculo,
-        imc: r.imc,
-        rmr: r.rmr && r.rmr < 5000 ? r.rmr : null,
-        edad_corporal: r.edad_corporal,
-        grasa_visceral: r.grasa_visceral,
-        masa_grasa: masaGrasa(r),
-        masa_magra: masaMagra(r),
-      }
-    })
-  }, [initialData])
+  // ── Pestañas ───────────────────────────────────────────────────────────────
 
-  const chartData = useMemo(
-    () => chartAll.filter(d => d.iso >= trendFrom && d.iso <= trendTo),
-    [chartAll, trendFrom, trendTo],
-  )
-  const ticks = chartData.length >= 2 ? ticksMensuales(chartData[0].t, chartData[chartData.length - 1].t) : []
-  const rangoCorto = chartData.length >= 2 && chartData[chartData.length - 1].t - chartData[0].t < 120 * 86_400_000
+  const cambiarTab = useCallback((t: PesoTab, o: { scroll?: 'no' | 'auto' | 'forzar'; destino?: string } = {}) => {
+    const previa = tabRef.current
+    if (t !== previa) {
+      tabRef.current = t
+      setTab(t)
+      if (t !== 'planes') setPlanSel(null)
+      // Al salir de "Rutinas y dietas" pudo haber subidas, cambios de "en uso" o borrados: se
+      // refresca el servidor para que el contador y "Planes en uso" del Resumen no queden viejos.
+      if (previa === 'planes') router.refresh()
+      sincronizarUrl(t)
+    }
+    const modo = o.scroll ?? 'auto'
+    if (modo !== 'no') setScrollReq(r => ({ n: (r?.n ?? 0) + 1, forzar: modo === 'forzar', destino: o.destino }))
+  }, [router])
 
-  // Range data for trend analysis
-  const inRange = useMemo(() =>
-    initialData.filter(r => r.fecha >= trendFrom && r.fecha <= trendTo),
-    [initialData, trendFrom, trendTo]
-  )
-  const rangeFirst = inRange[0] ?? null
-  const rangeLast = inRange[inRange.length - 1] ?? null
+  // Tras pintar la pestaña nueva: si el contenido quedó escondido bajo la barra pegajosa (venías
+  // scrolleado), se lleva el scroll a su inicio; si ya se ve completo no se mueve nada.
+  useEffect(() => {
+    if (!scrollReq) return
+    const el = (scrollReq.destino ? document.getElementById(scrollReq.destino) : null) ?? contenidoRef.current
+    if (!el) return
+    const barra = document.getElementById('peso-tabs')?.offsetHeight ?? 0
+    if (scrollReq.forzar || el.getBoundingClientRect().top < barra + 8) el.scrollIntoView({ block: 'start', behavior: 'auto' })
+  }, [scrollReq])
 
-  // History newest-first (for the table + interval calc)
-  const historyRows = useMemo(() => [...initialData].reverse(), [initialData])
+  // Al abrir: el #hash manda (enlaces como /peso#planes). Mientras está abierto: responde a hashchange.
+  useEffect(() => {
+    const leer = () => {
+      const h = window.location.hash.slice(1)
+      return esTab(h) ? h : null
+    }
+    const h0 = leer()
+    if (h0 && h0 !== tabRef.current) cambiarTab(h0, { scroll: 'no' })
+    const alCambiarHash = () => { const h = leer(); if (h && h !== tabRef.current) cambiarTab(h, { scroll: 'no' }) }
+    window.addEventListener('hashchange', alCambiarHash)
+    return () => window.removeEventListener('hashchange', alCambiarHash)
+  }, [cambiarTab])
 
-  function toggleMetric(key: string) {
-    setActiveMetrics(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) {
-        if (next.size > 1) next.delete(key)
-      } else {
-        next.add(key)
-      }
-      return next
-    })
-  }
+  // Si dejas la pestaña abierta de un día para otro, "hoy" se actualiza al volver a ella.
+  useEffect(() => {
+    const actualizar = () => { if (document.visibilityState === 'visible') setHoy(hoyMX()) }
+    document.addEventListener('visibilitychange', actualizar)
+    window.addEventListener('focus', actualizar)
+    return () => { document.removeEventListener('visibilitychange', actualizar); window.removeEventListener('focus', actualizar) }
+  }, [])
 
-  const hasPeso = activeMetrics.has('peso')
-  const hasKg = hasPeso || EXTRA_SERIES.some(s => activeMetrics.has(s.key))
-  const hasPct = activeMetrics.has('pct_grasa') || activeMetrics.has('pct_musculo')
-  const hasOther = METRICS.filter(m => m.yAxis === 'other').some(m => activeMetrics.has(m.key))
+  // ── Formulario ─────────────────────────────────────────────────────────────
 
-  const hoy = hoyMX()
+  const editingId = editing?.id ?? null
 
-  function openAdd() {
-    setEditing(null)
-    setShowForm(v => !v)
-  }
-  function medirHoy() {
-    setEditing(null)
-    setShowForm(true)
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-  function openEdit(r: PesoRecord) {
+  const abrirNueva = useCallback(() => { filaRef.current = null; setEditing(null); setShowForm(v => !v) }, [])
+  const medirHoy = useCallback(() => { filaRef.current = null; setEditing(null); setShowForm(true) }, [])
+  // La etiqueta es la misma que PesoHistorial pone en su botón «Editar»: sirve para volver a esa fila al cerrar.
+  const abrirEditar = useCallback((r: PesoRecord) => {
+    filaRef.current = `Editar la medición del ${fmtFecha(r.fecha)}`
     setEditing(r)
     setShowForm(true)
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-  function closeForm() {
+  }, [])
+
+  // Las mediciones nuevas pueden haber llegado ya cuando se cierra el formulario (se confirma en `cerrar`) o
+  // llegar un instante después (lo confirma este efecto, dentro de VENTANA_GUARDADO_MS).
+  const confirmarGuardado = useCallback((modo: SesionForm['modo']) => {
+    sesionRef.current = null
+    setAviso({ texto: modo === 'editada' ? 'Medición actualizada' : 'Medición guardada', tipo: 'ok' })
+  }, [])
+  useEffect(() => {
+    datosRef.current = initialData
+    const s = sesionRef.current
+    if (!s || s.cerradaEn == null) return
+    if (Date.now() - s.cerradaEn > VENTANA_GUARDADO_MS) { sesionRef.current = null; return }
+    if (seGuardo(s, initialData)) confirmarGuardado(s.modo)
+  }, [initialData, confirmarGuardado])
+
+  /** `volver`: tras editar desde el Historial, regresar a la fila editada (el formulario está arriba de la
+   *  página y, al cerrarse, te dejaba lejos de la tabla). Al borrar la fila abierta no se mueve el scroll. */
+  const cerrar = useCallback((volver: boolean) => {
     setShowForm(false)
     setEditing(null)
-  }
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const fd = new FormData(e.currentTarget)
-    const fecha = String(fd.get('fecha') ?? '')
-    if (!editing && initialData.some(r => r.fecha === fecha) &&
-        !window.confirm(`Ya hay una medición del ${fmtDate(fecha)}. ¿Agregar otra el mismo día?`)) return
-    setSaving(true)
-    try {
-      const r = editing ? await updateRegistro(fd) : await addRegistro(fd)
-      if (!r.ok) { window.alert(`No se pudo guardar la medición: ${r.error}`); return }
-      closeForm()
-    } catch {
-      window.alert('No se pudo guardar la medición. Revisa tu conexión e intenta de nuevo.')
-    } finally {
-      setSaving(false)
+    const s = sesionRef.current
+    if (s) {
+      if (seGuardo(s, datosRef.current)) confirmarGuardado(s.modo)
+      else s.cerradaEn = Date.now()
     }
-  }
+    const fila = filaRef.current
+    filaRef.current = null
+    if (volver && fila && tabRef.current === 'historial') setRetorno(r => ({ n: (r?.n ?? 0) + 1, fila }))
+    // El formulario desaparece con el foco dentro: se devuelve al botón que lo abre.
+    else requestAnimationFrame(() => nuevaBtnRef.current?.focus({ preventScroll: true }))
+  }, [confirmarGuardado])
+  const cerrarForm = useCallback(() => cerrar(true), [cerrar])
 
-  async function handleDelete(r: PesoRecord) {
-    if (typeof window !== 'undefined' &&
-        !window.confirm(`¿Borrar la medición del ${fmtDate(r.fecha)}? Esta acción no se puede deshacer.`)) return
+  // Al abrirlo (sobre todo desde "Medirme hoy" o al editar desde el historial, lejos del tope) se
+  // trae a la vista; si ya se ve, no se mueve nada. Aquí también arranca la "sesión" del formulario.
+  useEffect(() => {
+    if (!showForm) return
+    const base = datosRef.current
+    sesionRef.current = editingId
+      ? { cerradaEn: null, modo: 'editada', id: editingId, antes: JSON.stringify(base.find(r => r.id === editingId) ?? null) }
+      : { cerradaEn: null, modo: 'nueva', ids: new Set(base.map(r => r.id)) }
+    const el = formWrapRef.current
+    if (!el) return
+    const top = el.getBoundingClientRect().top
+    if (top < 0 || top > window.innerHeight * 0.5) el.scrollIntoView({ block: 'start', behavior: reducirMovimiento() ? 'auto' : 'smooth' })
+  }, [showForm, editingId])
+
+  // Tras cerrar la edición de una fila del Historial: se vuelve a ella y se le devuelve el foco. Si ya no se
+  // encuentra (cambiaste su fecha y la etiqueta cambió), se queda al inicio del panel con el foco en su pestaña.
+  useEffect(() => {
+    if (!retorno) return
+    const boton = Array.from(contenidoRef.current?.querySelectorAll<HTMLElement>('button[aria-label]') ?? [])
+      .find(b => b.getAttribute('aria-label') === retorno.fila)
+    if (boton) {
+      boton.scrollIntoView({ block: 'center', behavior: 'auto' })
+      boton.focus({ preventScroll: true })
+    } else {
+      contenidoRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' })
+      document.getElementById(tabId(tabRef.current))?.focus({ preventScroll: true })
+    }
+  }, [retorno])
+
+  // ── Borrado ────────────────────────────────────────────────────────────────
+
+  const borrar = useCallback(async (r: PesoRecord) => {
+    if (!window.confirm(`¿Borrar la medición del ${fmtFecha(r.fecha)}? Esta acción no se puede deshacer.`)) return
     setDeletingId(r.id)
+    setAviso(null)
     try {
       const res = await deleteRegistro(r.id)
-      if (!res.ok) window.alert(`No se pudo borrar la medición: ${res.error}`)
+      if (!res.ok) setAviso({ texto: `No se pudo borrar la medición: ${res.error}`, tipo: 'error' })
+      else if (editingId === r.id) cerrar(false)   // no dejar abierto el formulario de una fila que ya no existe
     } catch {
-      window.alert('No se pudo borrar la medición. Revisa tu conexión e intenta de nuevo.')
+      setAviso({ texto: 'No se pudo borrar la medición. Revisa tu conexión e intenta de nuevo.', tipo: 'error' })
     } finally {
       setDeletingId(null)
     }
-  }
+  }, [editingId, cerrar])
 
-  const first = initialData[0]
-  const latest = initialData[initialData.length - 1]
+  // ── Enlaces entre pestañas ─────────────────────────────────────────────────
 
-  const formulario = (showForm || !initialData.length) && (
-    <form key={editing?.id ?? 'new'} onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 animate-fade">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-[var(--ink-950)]">
-          {editing ? `Editar medición · ${fmtDate(editing.fecha)}` : 'Nueva medición'}
-        </h2>
-        {editing ? (
-          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[var(--blue-500)]/10 text-[var(--blue-600)]">Editando</span>
-        ) : latest?.peso != null ? (
-          <span className="text-xs text-[var(--ink-700)]">Última: {latest.peso} kg · {fmtDate(latest.fecha)}</span>
-        ) : null}
-      </div>
-      {editing && <input type="hidden" name="id" value={editing.id} />}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {FORM_FIELDS.map(f => (
-          <div key={f.name}>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">{f.label}</label>
-            <input
-              name={f.name} type={f.type}
-              step={'step' in f ? f.step : undefined}
-              required={'required' in f ? f.required : false}
-              max={f.name === 'fecha' ? hoy : undefined}
-              inputMode={f.type === 'number' ? 'decimal' : undefined}
-              autoFocus={!editing && f.name === 'peso'}
-              defaultValue={editing ? (editing[f.name] ?? '') as string | number : f.name === 'fecha' ? hoy : ''}
-              className="w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20"
-            />
-          </div>
-        ))}
-      </div>
-      <div className="flex justify-end gap-2 pt-4">
-        {initialData.length > 0 && (
-          <button type="button" onClick={closeForm}
-            className="text-sm font-medium px-4 py-2 rounded-xl border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors"
-          >
-            Cancelar
-          </button>
-        )}
-        <button type="submit" disabled={saving}
-          className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--blue-600)] transition-colors shadow-sm"
-        >
-          {saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Guardar'}
-        </button>
-      </div>
-    </form>
+  const irDesdeHero = useCallback((t: PesoTab) => {
+    cambiarTab(t, { scroll: 'forzar', destino: t === 'resumen' ? ID_META : undefined })
+  }, [cambiarTab])
+  const verPlan = useCallback((id: string) => { setPlanSel(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
+  const irAPlanes = useCallback(() => { setPlanSel(null); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
+  const cerrarAviso = useCallback(() => setAviso(null), [])
+
+  // ── Derivados ──────────────────────────────────────────────────────────────
+
+  const n = initialData.length
+  const planesSinLeer = !!errorPlanes && !planes.length   // sin lista fiable: no se muestra un contador de 0
+  const contadores = useMemo<Partial<Record<PesoTab, number>>>(
+    () => ({ historial: n, ...(planesDisponible && !planesSinLeer ? { planes: planes.length } : {}) }),
+    [n, planesDisponible, planesSinLeer, planes.length],
   )
+  const etapa = useMemo(() => etapaActual(initialData), [initialData])
 
-  if (!initialData.length) {
+  // ── Estado vacío: aún no hay mediciones ────────────────────────────────────
+
+  if (!n) {
     return (
       <>
         <SiteHeader title="Peso" subtitle="Salud · ADVL" />
-        <div className="px-4 py-8 max-w-5xl mx-auto space-y-6">
-          <div>
-            <h1 className="text-3xl font-bold text-[var(--ink-950)]">Tracking de Peso</h1>
-            <p className="text-sm text-[var(--ink-700)] mt-1">Aún no hay mediciones. Registra la primera para empezar a ver tu progreso y el análisis con IA.</p>
+        <main className="peso-root px-4 pt-6 pb-16 max-w-3xl mx-auto space-y-6">
+          <Titulo subtitulo="Aún no hay mediciones. Registra la primera para empezar a ver tu progreso, el análisis con IA y tus rutinas y dietas." />
+          <PesoFormulario data={initialData} hoy={hoy} editando={null} primera onCerrar={cerrarForm} />
+          <div className="grid gap-4 sm:grid-cols-3">
+            {[
+              { icono: '📈', t: 'Tendencia y proyección', d: 'Tu curva, el ritmo de tus últimos 90 días y cuándo llegarías a tu meta.' },
+              { icono: '🧠', t: 'Análisis con IA', d: 'Una lectura de tu composición: qué subió, qué bajó y qué hacer al respecto.' },
+              { icono: '🏋️', t: 'Rutinas y dietas', d: 'Sube tus planes en HTML y revísalos aquí, bien explicados y a mano.' },
+            ].map(c => (
+              <Panel key={c.t} eyebrow="Lo que vas a ver" icon={c.icono} title={c.t}>
+                <p style={{ fontSize: 13, lineHeight: 1.5, color: COLOR.muted }}>{c.d}</p>
+              </Panel>
+            ))}
           </div>
-          {formulario}
-        </div>
+        </main>
       </>
     )
   }
 
+  const primera = initialData[0]
+  const ultima = initialData[n - 1]
+
   return (
     <>
       <SiteHeader title="Peso" subtitle="Salud · ADVL" />
-      <div className="px-4 py-8 max-w-5xl mx-auto space-y-6">
-
-      {/* ── Título de sección ── */}
-      <div>
-        <div className="flex items-end justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-3xl font-bold text-[var(--ink-950)]">Tracking de Peso</h1>
-            <p className="text-sm text-[var(--ink-700)] mt-1">
-              {initialData.length} mediciones · {fmtDate(first.fecha)} → {fmtDate(latest.fecha)}
-            </p>
-          </div>
-          <button
-            onClick={openAdd}
-            className="bg-[var(--blue-500)] hover:bg-[var(--blue-600)] text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors shadow-sm"
+      {/* peso-root: ancla de reglas de estilo propias de /peso (p. ej. cifras serif alineadas en globals.css). */}
+      <main className="peso-root px-4 pt-6 pb-20 max-w-5xl mx-auto flex flex-col">
+        <div className="space-y-5 mb-6">
+          <Titulo
+            subtitulo={
+              <>
+                {n} {n === 1 ? 'medición' : 'mediciones'} · {fmtFecha(primera.fecha)} → {fmtFecha(ultima.fecha)}
+                {etapa.length < n && <span> · etapa actual desde {fmtFecha(etapa[0].fecha)}</span>}
+              </>
+            }
           >
-            {showForm ? 'Cancelar' : '+ Nueva medición'}
-          </button>
-        </div>
-      </div>
+            <button
+              ref={nuevaBtnRef} type="button" onClick={abrirNueva}
+              aria-expanded={showForm} aria-controls="peso-formulario"
+              className={`${BTN.base} ${showForm ? 'px-5 py-2.5 text-sm border text-[var(--ink-700)] bg-white hover:border-[var(--gold-500)]' : BTN.gold} min-h-[46px]`}
+              style={showForm ? { borderColor: COLOR.lineStrong } : undefined}
+            >
+              {showForm ? 'Cancelar' : '+ Nueva medición'}
+            </button>
+          </Titulo>
 
-      {/* ── Add / edit form ── */}
-      {formulario}
-
-      {/* ── Estado de hoy ── */}
-      <PesoHero data={initialData} plan={initialPlan} onMedir={medirHoy} />
-
-      {/* ── Análisis con IA ── */}
-      <PesoIA firma={firma} inicial={initialAnalisis} persistencia={persistencia} nMediciones={initialData.length} />
-
-      {/* ── Resultados esperados (meta + proyección) ── */}
-      <MetaSection plan={initialPlan} latest={latest} rangeFirst={rangeFirst} rangeLast={rangeLast} firstEver={first} />
-
-      {/* ── Plan: rutina y dieta ── */}
-      <PlanSection plan={initialPlan} />
-
-      {/* ── Summary tiles ── */}
-      <SummaryTiles data={initialData} />
-
-      {/* ── Range selector ── */}
-      <div className="glass rounded-2xl px-4 sm:px-6 py-4">
-        <div className="flex items-center flex-wrap gap-x-4 gap-y-3">
-          <div className="shrink-0 w-full sm:w-auto">
-            <span className="text-sm font-semibold text-[var(--ink-950)] block">Rango</span>
-            <span className="text-[11px] text-[var(--ink-700)]">Aplica a la gráfica, al análisis de tendencia y a la proyección de tu meta.</span>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
-            <label className="text-xs text-[var(--ink-700)]">Desde</label>
-            <input type="date" value={trendFrom} onChange={e => editarRango(e.target.value, trendTo)}
-              className="flex-1 sm:flex-none min-w-0 border border-[var(--line)] rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)]"
-            />
-            <label className="text-xs text-[var(--ink-700)]">Hasta</label>
-            <input type="date" value={trendTo} onChange={e => editarRango(trendFrom, e.target.value)}
-              className="flex-1 sm:flex-none min-w-0 border border-[var(--line)] rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)]"
-            />
-          </div>
-          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-            {PRESETS.map(({ label, value }) => {
-              const on = preset === value
-              return (
-                <button key={label} onClick={() => setPreset(value)} aria-pressed={on}
-                  className={`flex-1 sm:flex-none whitespace-nowrap text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                    on ? 'border-[var(--blue-500)] bg-[var(--blue-500)]/10 text-[var(--blue-600)] font-semibold'
-                       : 'border-[var(--line)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] text-[var(--ink-700)]'
-                  }`}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Combined chart ── */}
-      <div className="glass rounded-2xl p-6 animate-fade">
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-          <h2 className="text-base font-semibold text-[var(--ink-950)]">Evolución</h2>
-          <div className="flex flex-wrap gap-2">
-            {METRICS.map(m => (
-              <button
-                key={m.key}
-                onClick={() => toggleMetric(m.key)}
-                className="text-xs font-medium px-3 py-1.5 rounded-full border transition-all"
-                style={activeMetrics.has(m.key)
-                  ? { background: m.color, color: '#fff', borderColor: m.color }
-                  : { background: 'transparent', color: '#3E5C86', borderColor: 'rgba(15,35,64,0.28)' }
-                }
-              >
-                {m.label}
-              </button>
-            ))}
-            {EXTRA_SERIES.map(s => (
-              <button
-                key={s.key}
-                onClick={() => toggleMetric(s.key)}
-                title="Calculado: peso × % de grasa"
-                className="text-xs font-medium px-3 py-1.5 rounded-full border transition-all"
-                style={activeMetrics.has(s.key)
-                  ? { background: s.color, color: '#fff', borderColor: s.color }
-                  : { background: 'transparent', color: '#3E5C86', borderColor: 'rgba(15,35,64,0.28)' }
-                }
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {hasOther && !hasPct && !hasKg && (
-          <p className="text-xs text-[var(--ink-700)] mb-2">
-            ⚠ RMR, IMC, edad corporal y grasa visceral se muestran en el eje derecho con escala automática.
-          </p>
-        )}
-
-        {chartData.length === 0 ? (
-          <p className="text-sm text-[var(--ink-700)] py-16 text-center">No hay mediciones en este rango. Amplíalo arriba para verlas.</p>
-        ) : (
-        <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={chartData} margin={{ top: 4, right: 12, bottom: 4, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(22,54,95,0.07)" />
-            <XAxis
-              dataKey="t" type="number" scale="time" domain={['dataMin', 'dataMax']}
-              ticks={ticks.length >= 2 ? ticks : undefined}
-              tickFormatter={(t: number) => fmtTick(t, rangoCorto)}
-              tick={{ fontSize: 10, fill: '#5278ab' }}
-            />
-
-            {/* Left axis: peso y masas (kg) */}
-            {hasKg && (
-              <YAxis yAxisId="kg" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#5278ab' }} unit=" kg" width={54} />
-            )}
-            {/* Right axis: percentages */}
-            {hasPct && (
-              <YAxis yAxisId="pct" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#5278ab' }} unit="%" width={38} />
-            )}
-            {/* Right axis: other metrics (IMC, RMR, edad, visceral) */}
-            {hasOther && (
-              <YAxis yAxisId="other" orientation={hasPct ? 'left' : 'right'} domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#5278ab' }} width={44} />
-            )}
-
-            <Tooltip
-              labelFormatter={(t) => fmtTooltipFecha(Number(t))}
-              contentStyle={{ fontSize: 12, borderRadius: 10, border: '1px solid rgba(22,54,95,0.1)', boxShadow: '0 4px 12px rgba(15,35,64,0.08)' }}
-            />
-            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 12 }} />
-
-            {/* Referencias del peso: tu meta (amplía el eje para que se vea) y el umbral de IMC 25 (sólo si cae en el rango). */}
-            {hasPeso && initialPlan?.meta_peso != null && (
-              <ReferenceLine yAxisId="kg" y={initialPlan.meta_peso} stroke="#16a34a" strokeDasharray="6 4" ifOverflow="extendDomain"
-                label={{ value: `Meta ${initialPlan.meta_peso} kg`, position: 'insideBottomRight', fontSize: 10, fill: '#16a34a' }} />
-            )}
-            {hasPeso && (
-              <ReferenceLine yAxisId="kg" y={PESO_IMC_25} stroke="#d97706" strokeDasharray="2 4" ifOverflow="discard"
-                label={{ value: 'IMC 25', position: 'insideTopRight', fontSize: 10, fill: '#b45309' }} />
-            )}
-
-            {METRICS.map(m => activeMetrics.has(m.key) && (
-              <Line
-                key={m.key}
-                yAxisId={m.yAxis === 'kg' ? 'kg' : m.yAxis === 'pct' ? 'pct' : 'other'}
-                type="monotone"
-                dataKey={m.key}
-                name={m.label}
-                stroke={m.color}
-                strokeWidth={2.5}
-                dot={{ r: 3, fill: m.color }}
-                activeDot={{ r: 5 }}
-                connectNulls
-              />
-            ))}
-            {EXTRA_SERIES.map(s => activeMetrics.has(s.key) && (
-              <Line
-                key={s.key} yAxisId="kg" type="monotone" dataKey={s.key} name={s.label}
-                stroke={s.color} strokeWidth={2.5} dot={{ r: 3, fill: s.color }} activeDot={{ r: 5 }} connectNulls
-              />
-            ))}
-            {/* Tendencia de peso (promedio móvil 14 días) — el propio texto de "Cómo leer" pide
-                fijarse en tendencia, no en un solo día; antes la gráfica sólo dibujaba el dato crudo. */}
-            {hasPeso && (
-              <Line
-                yAxisId="kg" type="monotone" dataKey="peso_ma" name="Peso · tendencia 14d"
-                stroke="#2d6cdf" strokeWidth={2} strokeDasharray="5 4" dot={false} activeDot={false}
-                connectNulls opacity={0.55}
-              />
-            )}
-          </LineChart>
-        </ResponsiveContainer>
-        )}
-        <p className="text-[11px] text-[var(--ink-700)] mt-2">
-          {chartData.length} de {initialData.length} mediciones · el eje horizontal respeta el tiempo real entre una y otra.
-        </p>
-      </div>
-
-      {/* ── Trend analysis ── */}
-      <div className="glass rounded-2xl overflow-hidden animate-fade">
-        <div className="px-6 pt-5 pb-4 border-b border-[var(--line)]">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="font-semibold text-[var(--ink-950)]">Análisis de tendencia</h2>
-            <span className="text-xs text-[var(--ink-700)]">
-              {fmtDate(rangeFirst?.fecha ?? trendFrom)} → {fmtDate(rangeLast?.fecha ?? trendTo)} · {inRange.length} mediciones
-            </span>
-          </div>
-          <p className="text-xs text-[var(--ink-700)]">
-            Cambios del primer al último valor del rango elegido arriba.
-          </p>
-        </div>
-
-        {inRange.length < 2 ? (
-          <div className="px-6 py-5 text-sm text-[var(--ink-700)]">
-            Selecciona un rango con al menos 2 mediciones para ver el análisis.
-          </div>
-        ) : (
-          <>
-            {/* OMS status — always visible */}
-            <OmsStatus record={inRange[inRange.length - 1]} />
-            {/* Trend summary — always visible */}
-            <TrendSummary rangeFirst={inRange[0]} rangeLast={inRange[inRange.length - 1]} />
-            {/* Detail — single collapsible */}
-            <DetailAccordion rangeFirst={inRange[0]} rangeLast={inRange[inRange.length - 1]} />
-          </>
-        )}
-      </div>
-
-      {/* ── History table ── */}
-      <div className="glass rounded-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-[var(--line)]">
-          <h2 className="text-base font-semibold text-[var(--ink-950)]">Historial completo</h2>
-          <p className="text-xs text-[var(--ink-700)] mt-0.5">«Intervalo» es el tiempo desde la medición anterior; «Δ peso», cuánto cambió contra ella.</p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-700)]">
-                {['Fecha', 'Intervalo', 'Peso', 'Δ peso', '% Grasa', '% Músculo', 'IMC', 'RMR', 'Edad corp.', 'Gr. visc.', ''].map((h, i) => (
-                  <th key={h || `act-${i}`} className={`px-4 py-3 border-b border-[var(--line)] ${i === 0 ? 'text-left' : 'text-right'}`}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {historyRows.map((r, i) => {
-                const older = historyRows[i + 1]
-                const dPeso = older && older.peso != null && r.peso != null ? Math.round((r.peso - older.peso) * 10) / 10 : null
-                return (
-                  <tr key={r.id} className={`border-b border-[var(--line)] last:border-0 hover:bg-blue-50/30 transition-colors ${i % 2 !== 0 ? 'bg-[var(--line)]/10' : ''}`}>
-                    <td className="px-4 py-3 font-medium tabular-nums whitespace-nowrap">{fmtDate(r.fecha)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap text-[var(--ink-700)]"
-                      title={older ? `${fmtGap(older.fecha, r.fecha)} desde la medición del ${fmtDate(older.fecha)}` : undefined}>
-                      {older ? fmtGap(older.fecha, r.fecha) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-[var(--blue-500)] tabular-nums">{r.peso ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap text-xs font-medium"
-                      style={{ color: dPeso == null || dPeso === 0 ? '#3E5C86' : dPeso < 0 ? '#16a34a' : '#dc2626' }}>
-                      {dPeso == null ? '—' : dPeso === 0 ? '=' : `${dPeso > 0 ? '+' : ''}${dPeso}`}
-                    </td>
-                    <td className="px-4 py-3 text-right text-red-500 tabular-nums">{r.pct_grasa ?? '—'}</td>
-                    <td className="px-4 py-3 text-right text-green-600 tabular-nums">{r.pct_musculo ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{r.imc ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{r.rmr ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{r.edad_corporal ?? '—'}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{r.grasa_visceral ?? '—'}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => openEdit(r)} title="Editar"
-                          className="text-xs font-medium px-2 py-1 rounded-md text-[var(--ink-700)] hover:text-[var(--blue-600)] hover:bg-blue-50 transition-colors">
-                          Editar
-                        </button>
-                        <button onClick={() => handleDelete(r)} disabled={deletingId === r.id} title="Borrar"
-                          className="text-xs font-medium px-2 py-1 rounded-md text-[var(--ink-700)] hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50">
-                          {deletingId === r.id ? '…' : 'Borrar'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      </div>
-    </>
-  )
-}
-
-// ── Summary tiles (panorama de un vistazo) ───────────────────────────────────
-
-const SUMMARY_KEYS: (keyof PesoRecord)[] = ['peso', 'pct_grasa', 'grasa_visceral', 'pct_musculo']
-
-type Tile = {
-  key: string; label: string; unit: string; color: string; goodDir: 'up' | 'down' | 'neutral'
-  cur: number | null; prev: (r: PesoRecord) => number | null; classify?: (v: number) => Classification
-  nota?: string
-}
-
-function SummaryTiles({ data }: { data: PesoRecord[] }) {
-  if (data.length < 1) return null
-
-  const latest = data[data.length - 1]
-  // Referencia: la medición más reciente con al menos ~30 días de antigüedad; si no hay, la primera.
-  const targetStr = addDays(latest.fecha, -30)
-  const reference = [...data].reverse().find(r => r.fecha <= targetStr && r.id !== latest.id) ?? data[0]
-  const spanDays = daysBetween(reference.fecha, latest.fecha)
-
-  // Los 4 de la báscula + la composición en kg (peso × % grasa): ahí se ve si lo que sube es grasa o masa magra.
-  const tiles: Tile[] = [
-    ...SUMMARY_KEYS.map(key => {
-      const def = METRICS.find(m => m.key === key)!
-      return { key: def.key, label: def.label, unit: def.unit, color: def.color, goodDir: def.goodDir,
-        cur: latest[key] as number | null, prev: (r: PesoRecord) => r[key] as number | null, classify: def.classify }
-    }),
-    { key: 'masa_grasa', label: 'Masa grasa', unit: 'kg', color: '#dc2626', goodDir: 'down' as const, cur: masaGrasa(latest), prev: masaGrasa, nota: 'peso × % grasa' },
-    { key: 'masa_magra', label: 'Masa magra', unit: 'kg', color: '#16a34a', goodDir: 'up' as const, cur: masaMagra(latest), prev: masaMagra, nota: 'peso − grasa' },
-  ]
-
-  return (
-    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-      {tiles.map(t => {
-        const cur = t.cur
-        const prev = t.prev(reference)
-        if (cur == null) return null
-
-        const delta = prev != null && spanDays > 0 ? Math.round((cur - prev) * 100) / 100 : null
-        const isGood = delta == null || t.goodDir === 'neutral'
-          ? null
-          : t.goodDir === 'down' ? delta <= 0 : delta >= 0
-        const arrow = delta == null ? '' : delta > 0 ? '↑' : delta < 0 ? '↓' : '→'
-        const deltaColor = isGood == null ? '#3E5C86' : isGood ? '#22c55e' : '#ef4444'
-        const deltaStr = delta == null ? null
-          : `${delta > 0 ? '+' : ''}${Number.isInteger(delta) ? delta : delta.toFixed(1)}${t.unit ? ' ' + t.unit : ''}`
-        const cls = t.classify ? t.classify(cur) : null
-
-        return (
-          <div key={t.key} className="glass rounded-2xl px-4 py-3.5">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: t.color }} />
-              <span className="text-xs font-medium text-[var(--ink-700)] truncate">{t.label}</span>
-              {t.nota && <span className="text-[10px] text-[var(--ink-700)]/60 truncate">· {t.nota}</span>}
+          {showForm && (
+            <div ref={formWrapRef} style={{ scrollMarginTop: 12 }}>
+              <PesoFormulario key={editing?.id ?? 'nueva'} data={initialData} hoy={hoy} editando={editing} primera={false} onCerrar={cerrarForm} />
             </div>
-            <div className="text-2xl font-bold tabular-nums leading-none" style={{ color: t.color }}>
-              {Number.isInteger(cur) ? cur : cur.toFixed(1)}{t.unit === '%' ? '%' : t.unit === 'kg' && t.key !== 'peso' ? ' kg' : ''}
-            </div>
-            {cls && (
-              <div className="text-xs font-medium mt-1" style={{ color: cls.color }}>{cls.label}</div>
-            )}
-            <div className="text-xs mt-1.5 tabular-nums" style={{ color: deltaColor }}>
-              {deltaStr
-                ? <>{arrow} {deltaStr} <span className="text-[var(--ink-700)]">· {fmtGap(reference.fecha, latest.fecha)}</span></>
-                : <span className="text-[var(--ink-700)]">Sin dato previo</span>}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
+          )}
 
-// ── OMS status block ─────────────────────────────────────────────────────────
-
-function OmsStatus({ record }: { record: PesoRecord }) {
-  const items: { label: string; value: string; cls: Classification }[] = []
-
-  if (record.imc != null) {
-    const c = classifyIMC(record.imc)
-    items.push({ label: 'IMC', value: `${record.imc}`, cls: c })
-  }
-  if (record.pct_grasa != null) {
-    const c = classifyFat(record.pct_grasa)
-    items.push({ label: '% Grasa', value: `${record.pct_grasa}%`, cls: c })
-  }
-  if (record.pct_musculo != null) {
-    const c = classifyMuscle(record.pct_musculo)
-    items.push({ label: '% Músculo', value: `${record.pct_musculo}%`, cls: c })
-  }
-  if (record.grasa_visceral != null) {
-    const c = classifyVisceral(record.grasa_visceral)
-    items.push({ label: 'Gr. visceral', value: `${record.grasa_visceral}`, cls: c })
-  }
-
-  // Headline summary text
-  const imcLabel = record.imc != null ? classifyIMC(record.imc).label : null
-  const grasaLabel = record.pct_grasa != null ? classifyFat(record.pct_grasa).label : null
-  const muscLabel = record.pct_musculo != null ? classifyMuscle(record.pct_musculo).label : null
-
-  const headline = [imcLabel, grasaLabel, muscLabel ? `músculo ${muscLabel.toLowerCase()}` : null]
-    .filter(Boolean).join(' · ')
-
-  const worstLevel = items.reduce<Level>((acc, i) => {
-    if (i.cls.level === 'alert') return 'alert'
-    if (i.cls.level === 'warn' && acc === 'good') return 'warn'
-    return acc
-  }, 'good')
-
-  const overallColor = worstLevel === 'good' ? '#22c55e' : worstLevel === 'warn' ? '#f59e0b' : '#ef4444'
-
-  return (
-    <div className="px-6 py-4 border-b border-[var(--line)]">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-xs font-bold uppercase tracking-wider text-[var(--ink-700)]">Cómo estás según referencias</span>
-      </div>
-      {headline && (
-        <p className="text-sm font-semibold mb-3" style={{ color: overallColor }}>{headline}</p>
-      )}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {items.map(item => (
-          <div key={item.label}
-            className="rounded-xl px-3 py-2.5 border"
-            style={{ background: `${item.cls.color}0d`, borderColor: `${item.cls.color}30` }}
-          >
-            <div className="text-xs text-[var(--ink-700)] mb-0.5">{item.label}</div>
-            <div className="text-base font-bold tabular-nums" style={{ color: item.cls.color }}>{item.value}</div>
-            <div className="text-xs font-medium mt-0.5" style={{ color: item.cls.color }}>{item.cls.label}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── Detail accordion (single toggle for all metrics) ─────────────────────────
-
-function DetailAccordion({ rangeFirst, rangeLast }: { rangeFirst: PesoRecord; rangeLast: PesoRecord }) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <div className="border-t border-[var(--line)]">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between px-6 py-3.5 hover:bg-blue-50/20 transition-colors text-left"
-      >
-        <span className="text-sm font-medium text-[var(--ink-800)]">Ver detalle por métrica</span>
-        <span className="text-xs text-[var(--ink-700)]">{open ? '▲ Cerrar' : '▼ Abrir'}</span>
-      </button>
-      {open && (
-        <div className="border-t border-[var(--line)]">
-          <TrendRows rangeFirst={rangeFirst} rangeLast={rangeLast} />
-          <GeneralRec rangeFirst={rangeFirst} rangeLast={rangeLast} />
+          <PesoHero data={initialData} plan={initialPlan} onMedir={medirHoy} onIrA={irDesdeHero} hoy={hoy} />
         </div>
-      )}
-    </div>
-  )
-}
 
-// ── Trend summary (always visible) ───────────────────────────────────────────
+        <PesoTabs tab={tab} onChange={cambiarTab} contadores={contadores} />
 
-function TrendSummary({ rangeFirst, rangeLast }: { rangeFirst: PesoRecord; rangeLast: PesoRecord }) {
-  const get = (key: keyof PesoRecord) => {
-    const f = rangeFirst[key] as number | null
-    const l = rangeLast[key] as number | null
-    if (f == null || l == null) return null
-    return { delta: l - f, first: f, last: l }
-  }
-
-  const peso = get('peso')
-  const grasa = get('pct_grasa')
-  const musculo = get('pct_musculo')
-  const imc = get('imc')
-  const visceral = get('grasa_visceral')
-  const edad = get('edad_corporal')
-
-  const imcClass = imc ? classifyIMC(imc.last) : null
-  const grasaClass = grasa ? classifyFat(grasa.last) : null
-  const muscClass = musculo ? classifyMuscle(musculo.last) : null
-  const visceralClass = visceral ? classifyVisceral(visceral.last) : null
-
-  // Build narrative sentences
-  const sentences: { text: string; good: boolean | null }[] = []
-
-  if (peso) {
-    const dir = peso.delta > 0 ? 'subió' : peso.delta < 0 ? 'bajó' : 'se mantuvo'
-    const isGood = peso.delta <= 0
-    sentences.push({
-      text: `El peso ${dir} ${peso.delta > 0 ? '+' : ''}${peso.delta.toFixed(1)} kg (${peso.first} → ${peso.last} kg)${imcClass ? `, IMC en ${imcClass.label.toLowerCase()}` : ''}.`,
-      good: isGood,
-    })
-  }
-
-  if (grasa) {
-    const dir = grasa.delta > 0 ? 'subió' : grasa.delta < 0 ? 'bajó' : 'se mantuvo'
-    const isGood = grasa.delta <= 0
-    sentences.push({
-      text: `La grasa ${dir} ${grasa.delta > 0 ? '+' : ''}${grasa.delta.toFixed(1)}% → actualmente ${grasa.last}%${grasaClass ? ` (${grasaClass.label.toLowerCase()})` : ''}.`,
-      good: isGood,
-    })
-  }
-
-  if (musculo) {
-    const dir = musculo.delta > 0 ? 'subió' : musculo.delta < 0 ? 'bajó' : 'se mantuvo'
-    const isGood = musculo.delta >= 0
-    sentences.push({
-      text: `El músculo ${dir} ${musculo.delta > 0 ? '+' : ''}${musculo.delta.toFixed(1)}% → ${musculo.last}%${muscClass ? ` (${muscClass.label.toLowerCase()})` : ''}.`,
-      good: isGood,
-    })
-  }
-
-  if (visceral) {
-    const dir = visceral.delta > 0 ? 'subió' : visceral.delta < 0 ? 'bajó' : 'se mantuvo'
-    const isGood = visceral.delta <= 0
-    sentences.push({
-      text: `Grasa visceral ${dir} a ${visceral.last}${visceralClass ? ` (${visceralClass.label.toLowerCase()})` : ''}.`,
-      good: isGood,
-    })
-  }
-
-  if (edad) {
-    const dir = edad.delta > 0 ? 'subió' : edad.delta < 0 ? 'bajó' : 'se mantuvo'
-    sentences.push({
-      text: `Edad corporal ${dir} ${edad.delta > 0 ? '+' : ''}${edad.delta} → ${edad.last} años.`,
-      good: edad.delta <= 0,
-    })
-  }
-
-  // Insight line
-  const recomp = peso && grasa && peso.delta > 0 && grasa.delta < 0
-  const deficit = peso && grasa && peso.delta < 0 && grasa.delta < 0
-  let insight: string | null = null
-  if (recomp) insight = 'Peso al alza con grasa bajando: posible recomposición corporal.'
-  else if (deficit) insight = 'Peso y grasa bajando juntos: déficit calórico funcionando.'
-  else if (grasa && grasa.delta < 0 && musculo && musculo.delta >= 0) insight = 'Grasa baja y músculo sostenido: buena dirección.'
-
-  const badCount = sentences.filter(s => s.good === false).length
-  const overallColor = badCount === 0 ? '#22c55e' : badCount <= 2 ? '#f59e0b' : '#ef4444'
-  const overallLabel = badCount === 0 ? 'Buena tendencia' : badCount <= 2 ? 'Tendencia mixta' : 'Tendencia de alerta'
-
-  return (
-    <div className="px-6 py-4 border-b border-[var(--line)]">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
-          style={{ background: `${overallColor}18`, color: overallColor }}>
-          {overallLabel}
-        </span>
-        <span className="text-xs text-[var(--ink-700)]">
-          {fmtDate(rangeFirst.fecha)} → {fmtDate(rangeLast.fecha)}
-        </span>
-      </div>
-      <ul className="space-y-1.5">
-        {sentences.map((s, i) => (
-          <li key={i} className="flex items-start gap-2 text-sm text-[var(--ink-900)]">
-            <span className="mt-0.5 text-xs" style={{ color: s.good === null ? '#5278ab' : s.good ? '#22c55e' : '#ef4444' }}>
-              {s.good === null ? '●' : s.good ? '↓' : '↑'}
-            </span>
-            <span>{s.text}</span>
-          </li>
-        ))}
-      </ul>
-      {insight && (
-        <div className="mt-3 text-xs text-[var(--ink-700)] bg-blue-50/60 rounded-lg px-3 py-2 italic">
-          {insight}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── OMS context thresholds per metric ────────────────────────────────────────
-
-function getOmsContext(key: string, val: number): { lines: { text: string; color: string }[] } {
-  const lines: { text: string; color: string }[] = []
-
-  if (key === 'peso') {
-    const imc = val / H2
-    const cls = classifyIMC(imc)
-    lines.push({ text: `Estás en: ${cls.label} (tu IMC actual es ${imc.toFixed(1)})`, color: cls.color })
-    if (imc >= 30) {
-      lines.push({ text: `Para salir de obesidad I: bajar de ${(30 * H2).toFixed(1)} kg (IMC < 30)`, color: '#f59e0b' })
-      lines.push({ text: `Para salir del sobrepeso: bajar de ${(25 * H2).toFixed(1)} kg (IMC < 25)`, color: '#22c55e' })
-    } else if (imc >= 25) {
-      lines.push({ text: `Para salir del sobrepeso: bajar de ${(25 * H2).toFixed(1)} kg (IMC < 25)`, color: '#22c55e' })
-      lines.push({ text: `Obesidad I empieza en ${(30 * H2).toFixed(1)} kg (IMC ≥ 30)`, color: '#ef4444' })
-    } else {
-      lines.push({ text: `Sobrepeso empieza en ${(25 * H2).toFixed(1)} kg (IMC ≥ 25)`, color: '#f59e0b' })
-    }
-  } else if (key === 'imc') {
-    const cls = classifyIMC(val)
-    lines.push({ text: `Estás en: ${cls.label} (IMC ${val.toFixed(1)})`, color: cls.color })
-    if (val >= 25) lines.push({ text: `Para salir del sobrepeso: IMC < 25 (${(25 * H2).toFixed(1)} kg)`, color: '#22c55e' })
-    if (val >= 30) lines.push({ text: `Para salir de obesidad I: IMC < 30 (${(30 * H2).toFixed(1)} kg)`, color: '#f59e0b' })
-    if (val < 25) lines.push({ text: `Sobrepeso empieza en IMC 25 (${(25 * H2).toFixed(1)} kg)`, color: '#f59e0b' })
-    if (val >= 25 && val < 30) lines.push({ text: `Obesidad I empieza en IMC 30 (${(30 * H2).toFixed(1)} kg)`, color: '#ef4444' })
-  } else if (key === 'pct_grasa') {
-    const cls = classifyFat(val)
-    lines.push({ text: `Estás en: ${cls.label} (${val}%)`, color: cls.color })
-    if (val >= 30) lines.push({ text: 'Para salir de obesidad grasa: bajar de 30%', color: '#f59e0b' })
-    if (val >= 25) lines.push({ text: 'Para llegar a promedio saludable: bajar de 25%', color: '#84cc16' })
-    if (val >= 20) lines.push({ text: 'Fitness saludable: entre 15–19%', color: '#22c55e' })
-    if (val < 30 && val >= 25) lines.push({ text: 'Obesidad grasa empieza en 30%', color: '#ef4444' })
-  } else if (key === 'pct_musculo') {
-    const cls = classifyMuscle(val)
-    lines.push({ text: `Estás en: ${cls.label} (${val}%)`, color: cls.color })
-    if (val < 33) lines.push({ text: `Para llegar a "Bueno": ≥ 33% (te faltan ${(33 - val).toFixed(1)}%)`, color: '#22c55e' })
-    if (val < 36 && val >= 33) lines.push({ text: `Para llegar a "Atlético": ≥ 36% (te faltan ${(36 - val).toFixed(1)}%)`, color: '#2d6cdf' })
-    if (val < 30) lines.push({ text: `Para llegar a "Normal": ≥ 30% (te faltan ${(30 - val).toFixed(1)}%)`, color: '#84cc16' })
-  } else if (key === 'grasa_visceral') {
-    const cls = classifyVisceral(val)
-    lines.push({ text: `Estás en: ${cls.label} (nivel ${val})`, color: cls.color })
-    if (val >= 10) lines.push({ text: 'Para volver a saludable: bajar a ≤ 9', color: '#22c55e' })
-    if (val >= 15) lines.push({ text: 'Muy alto empieza en 15 — riesgo metabólico elevado', color: '#ef4444' })
-    if (val < 10) lines.push({ text: 'Alto empieza en 10 · Muy alto en 15', color: '#f59e0b' })
-  }
-
-  return { lines }
-}
-
-// ── Trend rows (always expanded, no per-metric toggle) ───────────────────────
-
-function TrendRows({ rangeFirst, rangeLast }: {
-  rangeFirst: PesoRecord
-  rangeLast: PesoRecord
-}) {
-  return (
-    <div className="divide-y divide-[var(--line)]">
-      {METRICS.map(def => {
-        const firstVal = rangeFirst[def.key] as number | null
-        const lastVal = rangeLast[def.key] as number | null
-        if (firstVal == null || lastVal == null) return null
-
-        const delta = lastVal - firstVal
-        const isGood = def.goodDir === 'neutral'
-          ? true
-          : def.goodDir === 'down' ? delta <= 0 : delta >= 0
-        const direction = delta > 0 ? 'Subiendo' : delta < 0 ? 'Bajando' : 'Estable'
-        const classification = def.classify ? def.classify(lastVal) : undefined
-        const deltaStr = `${delta > 0 ? '+' : ''}${Number.isInteger(delta) ? delta : delta.toFixed(1)}${def.unit ? ' ' + def.unit : ''}`
-        const omsCtx = getOmsContext(def.key, lastVal)
-
-        return (
-          <MetricRow
-            key={def.key}
-            def={def}
-            firstVal={firstVal}
-            lastVal={lastVal}
-            isGood={isGood}
-            direction={direction}
-            classification={classification}
-            deltaStr={deltaStr}
-            rangeFirstFecha={rangeFirst.fecha}
-            rangeLastFecha={rangeLast.fecha}
-            omsLines={omsCtx.lines}
+        <div
+          ref={contenidoRef}
+          id={panelId(tab)} role="tabpanel" aria-labelledby={tabId(tab)}
+          className="pt-5 space-y-5 min-h-[60vh] min-w-0"
+          style={{ scrollMarginTop: MARGEN_BARRA }}
+        >
+          <Contenido
+            tab={tab} data={initialData} plan={initialPlan} analisis={initialAnalisis} persistencia={persistencia} firma={firma}
+            planes={planes} planesDisponible={planesDisponible} planesError={errorPlanes}
+            planSel={planSel} deletingId={deletingId}
+            onEdit={abrirEditar} onDelete={borrar} onVerPlan={verPlan} onIrAPlanes={irAPlanes}
           />
-        )
-      })}
-    </div>
-  )
-}
-
-function MetricRow({
-  def, firstVal, lastVal, isGood, direction, classification, deltaStr,
-  rangeFirstFecha, rangeLastFecha, omsLines,
-}: {
-  def: MetricDef
-  firstVal: number
-  lastVal: number
-  isGood: boolean
-  direction: string
-  classification: Classification | undefined
-  deltaStr: string
-  rangeFirstFecha: string
-  rangeLastFecha: string
-  omsLines: { text: string; color: string }[]
-}) {
-  return (
-    <div className="px-6 py-4">
-      {/* Header row */}
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-sm font-semibold text-[var(--ink-950)]">{def.label}</span>
-          <span className={`text-xs font-medium ${isGood ? 'text-green-600' : 'text-orange-600'}`}>{direction}</span>
-          {classification && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-              style={{ background: `${classification.color}18`, color: classification.color }}>
-              {classification.label}
-            </span>
-          )}
         </div>
-        <div className="text-right shrink-0">
-          <div className="text-xl font-bold tabular-nums" style={{ color: isGood ? '#22c55e' : '#ef4444' }}>
-            {deltaStr}
-          </div>
-          <div className="text-xs text-[var(--ink-700)]">
-            {firstVal}{def.unit ? ' ' + def.unit : ''} → {lastVal}{def.unit ? ' ' + def.unit : ''}
-          </div>
-          <div className="text-xs text-[var(--ink-700)]">
-            {fmtDate(rangeFirstFecha)} → {fmtDate(rangeLastFecha)}
-          </div>
-        </div>
+      </main>
+      {/* Región viva siempre montada: un aviso que nace junto con su región no siempre lo anuncia el lector de pantalla. */}
+      <div role="status" aria-live="polite" className={POS_AVISO}>
+        {aviso?.tipo === 'ok' && <Aviso aviso={aviso} onCerrar={cerrarAviso} />}
       </div>
-
-      {/* Info */}
-      <div className="text-xs text-[var(--ink-700)] space-y-0.5 mb-3">
-        <div><span className="font-medium text-[var(--ink-800)]">Qué mide:</span> {def.info.mide}</div>
-        <div><span className="font-medium text-[var(--ink-800)]">Cómo leer:</span> {def.info.leer}</div>
-        <div><span className="font-medium text-[var(--ink-800)]">Qué hacer:</span> {def.info.hacer}</div>
-      </div>
-
-      {/* OMS context thresholds */}
-      {omsLines.length > 0 && (
-        <div className="rounded-xl border border-[var(--line)] overflow-hidden">
-          {omsLines.map((line, i) => (
-            <div key={i} className="flex items-start gap-2 px-3 py-2 text-xs border-b border-[var(--line)] last:border-0"
-              style={{ background: `${line.color}08` }}>
-              <span className="mt-0.5 shrink-0" style={{ color: line.color }}>●</span>
-              <span className="text-[var(--ink-900)]">{line.text}</span>
-            </div>
-          ))}
+      {aviso?.tipo === 'error' && (
+        <div role="alert" className={POS_AVISO}>
+          <Aviso aviso={aviso} onCerrar={cerrarAviso} />
         </div>
       )}
-
-      {/* Full reference table (always visible if refs exist) */}
-      {def.refs && (
-        <div className="mt-3 pt-3 border-t border-[var(--line)]/60">
-          <RefTable title={def.refs.title} note={def.refs.note} rows={def.refs.rows} currentVal={lastVal} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── General recommendation ───────────────────────────────────────────────────
-
-function GeneralRec({ rangeFirst, rangeLast }: { rangeFirst: PesoRecord; rangeLast: PesoRecord }) {
-  const get = (key: keyof PesoRecord) => {
-    const f = rangeFirst[key] as number | null
-    const l = rangeLast[key] as number | null
-    if (f == null || l == null) return null
-    return l - f
-  }
-  const fatD = get('pct_grasa')
-  const muscleD = get('pct_musculo')
-  const pesoD = get('peso')
-  const visceralLast = rangeLast.grasa_visceral
-
-  const bullets: string[] = []
-  if (fatD != null && fatD < 0) bullets.push('La grasa corporal muestra descenso neto.')
-  if (muscleD != null && muscleD > 0) bullets.push('El porcentaje de músculo sube en el periodo.')
-  if (pesoD != null && pesoD > 0 && fatD != null && fatD < 0) bullets.push('Peso al alza con grasa a la baja: posible recomposición.')
-  if (pesoD != null && pesoD < 0 && fatD != null && fatD < 0) bullets.push('Peso y grasa bajando juntos: buen déficit calórico.')
-  if (visceralLast != null && visceralLast >= 10) bullets.push('Grasa visceral alta: prioriza adherencia y reducción de alcohol.')
-
-  const alertCount = METRICS.filter(m => {
-    if (m.goodDir === 'neutral') return false
-    const d = get(m.key as keyof PesoRecord)
-    if (d == null) return false
-    return m.goodDir === 'down' ? d > 0 : d < 0
-  }).length
-  if (alertCount >= 2) bullets.push('Hay más de una métrica en alerta: conviene ajustar el plan esta semana.')
-
-  const summary = bullets.length === 0
-    ? 'Tendencia mixta, conviene sostener consistencia y revisar métricas clave.'
-    : null
-
-  return (
-    <div className="px-6 py-5 bg-blue-50/40 border-t border-[var(--line)]">
-      <div className="text-sm font-semibold text-[var(--ink-950)] mb-2">Recomendación general</div>
-      {summary
-        ? <p className="text-xs text-[var(--ink-700)] mb-3">{summary}</p>
-        : <ul className="space-y-1 mb-3">{bullets.map((b, i) => (
-            <li key={i} className="text-xs text-[var(--ink-800)] flex gap-1.5"><span>•</span><span>{b}</span></li>
-          ))}</ul>
-      }
-      <div className="text-xs font-semibold text-[var(--ink-950)] mb-1">Siguiente paso:</div>
-      <ul className="space-y-0.5 text-xs text-[var(--ink-700)] mb-4">
-        <li>• Mide siempre en horario y condiciones similares.</li>
-        <li>• Sostén fuerza 3–4 veces/semana y proteína 1.6–2.2 g/kg para preservar músculo.</li>
-        <li>• Si no mejoras en 2–3 semanas, recorta 150–250 kcal o sube 2 000–3 000 pasos diarios.</li>
-      </ul>
-
-      {/* Priority metrics explanation */}
-      <div className="rounded-xl bg-[var(--blue-400)]/8 border border-[var(--blue-400)]/20 px-4 py-3 space-y-2">
-        <div className="text-xs font-semibold text-[var(--ink-800)] mb-2">¿Qué métricas reflejan mejor la realidad?</div>
-        {[
-          { num: '1', label: '% Grasa corporal — el más honesto', desc: 'El IMC no distingue músculo de grasa. El % grasa te dice directamente cuánta masa no es metabólicamente útil.' },
-          { num: '2', label: 'Grasa visceral — el más crítico para salud', desc: 'Grasa alrededor de órganos = riesgo cardiovascular, resistencia a insulina y diabetes. Si eliges uno solo para vigilar, que sea este.' },
-          { num: '3', label: '% Músculo — el que confirma si vas bien', desc: 'Si bajas peso pero también pierdes músculo, vas mal. Si la grasa baja y el músculo se mantiene, vas bien aunque la báscula se mueva poco.' },
-          { num: '4', label: 'Peso (kg) — el más ruidoso', desc: 'Sube y baja 1–2 kg en un día por agua, sal y glucógeno. Solo tiene valor como tendencia de 3–4 semanas, nunca como dato único.' },
-          { num: '5', label: 'IMC — el menos útil a nivel individual', desc: 'Diseñado para poblaciones, no personas. Con masa muscular sobreestima el riesgo. Úsalo solo como referencia OMS, no para decisiones.' },
-        ].map(item => (
-          <div key={item.num} className="flex gap-2.5">
-            <span className="text-xs font-bold text-[var(--blue-500)] shrink-0 w-4">{item.num}.</span>
-            <div>
-              <span className="text-xs font-semibold text-[var(--ink-900)]">{item.label} </span>
-              <span className="text-xs text-[var(--ink-700)]">{item.desc}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── Plan: rutina y dieta ─────────────────────────────────────────────────────
-// Una sola fila en peso_plan (savePlan hace upsert de TODO el registro) — cada form manda los
-// campos del OTRO bloque como hidden para no borrarlos: PlanSection edita rutina/dieta/notas
-// pero también reenvía meta_*, y MetaSection al revés.
-
-function PlanSection({ plan }: { plan: PesoPlan | null }) {
-  const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setSaving(true)
-    try {
-      const r = await savePlan(new FormData(e.currentTarget))
-      if (!r.ok) { window.alert(`No se pudo guardar: ${r.error}`); return }
-      setEditing(false)
-    } catch {
-      window.alert('No se pudo guardar. Revisa tu conexión e intenta de nuevo.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const hasContent = !!(plan?.rutina || plan?.dieta || plan?.notas)
-  const inputCls = 'w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20'
-
-  if (editing) {
-    return (
-      <form onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 animate-fade">
-        <h2 className="text-base font-semibold text-[var(--ink-950)] mb-4">Editar plan</h2>
-        <input type="hidden" name="meta_peso" value={plan?.meta_peso ?? ''} />
-        <input type="hidden" name="meta_fecha" value={plan?.meta_fecha ?? ''} />
-        <input type="hidden" name="meta_grasa" value={plan?.meta_grasa ?? ''} />
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">🏋️ Rutina</label>
-            <textarea name="rutina" defaultValue={plan?.rutina ?? ''} rows={5} placeholder="Días, ejercicios, series/reps…" className={inputCls} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">🍽️ Dieta</label>
-            <textarea name="dieta" defaultValue={plan?.dieta ?? ''} rows={5} placeholder="Calorías objetivo, macros, comidas del día…" className={inputCls} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">Notas</label>
-            <textarea name="notas" defaultValue={plan?.notas ?? ''} rows={2} placeholder="Lo que quieras recordar…" className={inputCls} />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 pt-4">
-          <button type="button" onClick={() => setEditing(false)}
-            className="text-sm font-medium px-4 py-2 rounded-xl border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
-            Cancelar
-          </button>
-          <button type="submit" disabled={saving}
-            className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--blue-600)] transition-colors shadow-sm">
-            {saving ? 'Guardando…' : 'Guardar cambios'}
-          </button>
-        </div>
-      </form>
-    )
-  }
-
-  return (
-    <div className="glass rounded-2xl px-6 py-5 animate-fade">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-semibold text-[var(--ink-950)]">Plan actual</h2>
-        <button onClick={() => setEditing(true)}
-          className="text-xs font-medium px-3 py-1.5 rounded-lg border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
-          {hasContent ? 'Editar' : '+ Definir plan'}
-        </button>
-      </div>
-      {hasContent ? (
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div>
-            <div className="text-xs font-semibold text-[var(--blue-600)] uppercase tracking-wide mb-1.5">🏋️ Rutina</div>
-            <p className="text-sm text-[var(--ink-900)] whitespace-pre-wrap">{plan?.rutina || 'Sin definir.'}</p>
-          </div>
-          <div>
-            <div className="text-xs font-semibold text-[var(--blue-600)] uppercase tracking-wide mb-1.5">🍽️ Dieta</div>
-            <p className="text-sm text-[var(--ink-900)] whitespace-pre-wrap">{plan?.dieta || 'Sin definir.'}</p>
-          </div>
-          {plan?.notas && (
-            <div className="sm:col-span-2 pt-3 border-t border-[var(--line)]">
-              <div className="text-xs font-semibold text-[var(--ink-700)] mb-1">Notas</div>
-              <p className="text-sm text-[var(--ink-700)] whitespace-pre-wrap">{plan.notas}</p>
-            </div>
-          )}
-        </div>
-      ) : (
-        <p className="text-sm text-[var(--ink-700)]">Aún no defines qué rutina ni dieta vas a seguir. Agrégalo para tenerlo siempre a la vista.</p>
-      )}
-    </div>
-  )
-}
-
-// ── Resultados esperados: meta + proyección ──────────────────────────────────
-
-function MetaSection({ plan, latest, rangeFirst, rangeLast, firstEver }: {
-  plan: PesoPlan | null
-  latest: PesoRecord
-  rangeFirst: PesoRecord | null
-  rangeLast: PesoRecord | null
-  firstEver: PesoRecord
-}) {
-  const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const inputCls = 'w-full border border-[var(--line)] rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-[var(--blue-500)] focus:ring-1 focus:ring-[var(--blue-500)]/20'
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setSaving(true)
-    try {
-      const r = await savePlan(new FormData(e.currentTarget))
-      if (!r.ok) { window.alert(`No se pudo guardar: ${r.error}`); return }
-      setEditing(false)
-    } catch {
-      window.alert('No se pudo guardar. Revisa tu conexión e intenta de nuevo.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const hasMeta = plan?.meta_peso != null
-
-  if (editing) {
-    return (
-      <form onSubmit={handleSubmit} className="glass rounded-2xl px-6 py-5 animate-fade">
-        <h2 className="text-base font-semibold text-[var(--ink-950)] mb-4">Editar meta</h2>
-        <input type="hidden" name="rutina" value={plan?.rutina ?? ''} />
-        <input type="hidden" name="dieta" value={plan?.dieta ?? ''} />
-        <input type="hidden" name="notas" value={plan?.notas ?? ''} />
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">Peso meta (kg)</label>
-            <input name="meta_peso" type="number" step="0.1" defaultValue={plan?.meta_peso ?? ''} className={inputCls} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">Fecha meta</label>
-            <input name="meta_fecha" type="date" defaultValue={plan?.meta_fecha ?? ''} className={inputCls} />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-[var(--ink-700)] block mb-1">% Grasa meta</label>
-            <input name="meta_grasa" type="number" step="0.1" defaultValue={plan?.meta_grasa ?? ''} className={inputCls} />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 pt-4">
-          <button type="button" onClick={() => setEditing(false)}
-            className="text-sm font-medium px-4 py-2 rounded-xl border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
-            Cancelar
-          </button>
-          <button type="submit" disabled={saving}
-            className="bg-[var(--blue-500)] disabled:opacity-60 text-white text-sm font-medium px-6 py-2 rounded-xl hover:bg-[var(--blue-600)] transition-colors shadow-sm">
-            {saving ? 'Guardando…' : 'Guardar cambios'}
-          </button>
-        </div>
-      </form>
-    )
-  }
-
-  if (!hasMeta) {
-    return (
-      <div className="glass rounded-2xl px-6 py-5 animate-fade">
-        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-          <h2 className="text-base font-semibold text-[var(--ink-950)]">Resultados esperados</h2>
-          <button onClick={() => setEditing(true)}
-            className="text-xs font-medium px-3 py-1.5 rounded-lg border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
-            + Poner meta
-          </button>
-        </div>
-        <p className="text-sm text-[var(--ink-700)]">Define un peso y fecha meta para ver tu proyección calculada con tu ritmo actual.</p>
-      </div>
-    )
-  }
-
-  const metaPeso = plan!.meta_peso as number
-  const startPeso = firstEver.peso ?? latest.peso ?? metaPeso
-  const curPeso = latest.peso ?? metaPeso
-  const totalToChange = startPeso - metaPeso   // negativo si la meta es SUBIR de peso
-  const doneSoFar = startPeso - curPeso
-  const progressPct = totalToChange !== 0 ? Math.max(0, Math.min(100, Math.round((doneSoFar / totalToChange) * 100))) : 0
-  const reached = totalToChange >= 0 ? curPeso <= metaPeso : curPeso >= metaPeso
-
-  // Proyección: ritmo del MISMO rango elegido arriba en "Rango de análisis" (rangeFirst → rangeLast) —
-  // así la proyección se mueve con el mismo control que ya usa el resto de la página, sin uno nuevo.
-  let projText: string | null = null
-  let projColor = '#3E5C86'
-  if (!reached && rangeFirst && rangeLast && rangeFirst.peso != null && rangeLast.peso != null && rangeFirst.id !== rangeLast.id) {
-    const days = daysBetween(rangeFirst.fecha, rangeLast.fecha)
-    const kgPerDay = days > 0 ? (rangeLast.peso - rangeFirst.peso) / days : 0
-    const wantDown = metaPeso < curPeso
-    const movingRight = wantDown ? kgPerDay < -0.001 : kgPerDay > 0.001
-    if (!movingRight) {
-      projText = 'A tu ritmo actual no te estás acercando a la meta en el rango seleccionado — ajusta el plan.'
-      projColor = '#ef4444'
-    } else {
-      const daysToGoal = (metaPeso - curPeso) / kgPerDay
-      const projDateStr = addDays(latest.fecha, Math.round(daysToGoal))
-      const kgPerWeek = Math.abs(kgPerDay * 7)
-      if (plan!.meta_fecha) {
-        const onTrack = projDateStr <= plan!.meta_fecha
-        projText = onTrack
-          ? `Vas bien: a ${kgPerWeek.toFixed(2)} kg/semana llegarías el ${fmtDate(projDateStr)}, antes de tu meta (${fmtDate(plan!.meta_fecha)}).`
-          : `A ${kgPerWeek.toFixed(2)} kg/semana llegarías el ${fmtDate(projDateStr)} — después de tu meta (${fmtDate(plan!.meta_fecha)}). Acelera el ritmo o ajusta la fecha.`
-        projColor = onTrack ? '#22c55e' : '#f59e0b'
-      } else {
-        projText = `A tu ritmo actual (${kgPerWeek.toFixed(2)} kg/semana) llegarías el ${fmtDate(projDateStr)}.`
-        projColor = '#2d6cdf'
-      }
-    }
-  }
-
-  const daysLeft = plan!.meta_fecha ? daysBetween(latest.fecha, plan!.meta_fecha) : null
-
-  return (
-    <div className="glass rounded-2xl px-6 py-5 animate-fade">
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h2 className="text-base font-semibold text-[var(--ink-950)]">Resultados esperados</h2>
-        <button onClick={() => setEditing(true)}
-          className="text-xs font-medium px-3 py-1.5 rounded-lg border border-[var(--line)] text-[var(--ink-700)] hover:border-[var(--blue-500)] hover:text-[var(--blue-600)] transition-colors">
-          Editar meta
-        </button>
-      </div>
-
-      <div className="flex items-end justify-between gap-3 mb-3 flex-wrap">
-        <div>
-          <div className="text-2xl font-bold tabular-nums text-[var(--blue-500)]">{metaPeso} kg</div>
-          <div className="text-xs text-[var(--ink-700)]">
-            meta{plan!.meta_fecha ? ` para ${fmtDate(plan!.meta_fecha)}` : ''}{plan!.meta_grasa != null ? ` · ${plan!.meta_grasa}% grasa` : ''}
-          </div>
-        </div>
-        {daysLeft != null && !reached && (
-          <div className={`text-sm font-semibold tabular-nums ${daysLeft < 0 ? 'text-red-500' : 'text-[var(--ink-900)]'}`}>
-            {daysLeft < 0 ? `${Math.abs(daysLeft)} d de retraso` : `${daysLeft} d restantes`}
-          </div>
-        )}
-      </div>
-
-      {reached ? (
-        <div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm font-semibold text-green-700">✓ Meta alcanzada ({curPeso} kg).</div>
-      ) : (
-        <>
-          <div className="h-2.5 rounded-full bg-[var(--line)]/60 overflow-hidden mb-1.5">
-            <div className="h-full rounded-full transition-all" style={{ width: `${progressPct}%`, background: '#2d6cdf' }} />
-          </div>
-          <div className="flex items-center justify-between text-xs text-[var(--ink-700)] mb-3">
-            <span>{startPeso} kg</span>
-            <span className="font-semibold text-[var(--blue-600)]">{progressPct}% del camino · {curPeso} kg ahora</span>
-            <span>{metaPeso} kg</span>
-          </div>
-          {projText && (
-            <div className="text-xs font-medium rounded-lg px-3 py-2" style={{ background: `${projColor}12`, color: projColor }}>
-              {projText}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+    </>
   )
 }
