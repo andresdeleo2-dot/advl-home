@@ -4,7 +4,9 @@ import { memo, useId, useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { daysBetween, fmtFecha, hoyMX } from '@/lib/peso'
 import type { Level } from '@/lib/peso'
+import { tallaTxt } from '@/lib/peso-visuals'
 import { BTN, COLOR, Eyebrow, Panel } from './ui'
+import { usePerfil } from './perfil-context'
 import {
   calcularHero, fmtCorta, textoHace,
   type Cambio, type HeroCalc, type Paso, type ProgresoMeta, type Semaforo,
@@ -14,6 +16,7 @@ import type { PesoHeroProps } from './contratos'
 // Franja de estado al tope de /peso (siempre visible, encima de las pestañas): dónde estás hoy, cuánto
 // te falta, cómo viene tu curva y qué sigue. Todo se calcula en PesoHeroCalc.ts (puro y probado con
 // node); aquí solo se dibuja. Panel navy con la misma voz editorial que el resto de la página.
+// La estatura y el sexo del perfil (usePerfil) fijan el peso de IMC 25 y los cortes del % de grasa.
 
 const SEM_COLOR: Record<Semaforo, string> = { ok: COLOR.goodOnDark, warn: COLOR.warnOnDark, bad: COLOR.badOnDark }
 const NIVEL_COLOR: Record<Level, string> = { good: COLOR.goodOnDark, warn: COLOR.warnOnDark, alert: COLOR.badOnDark }
@@ -283,7 +286,8 @@ function SiguientePaso({ paso, onMedir, onIrA }: { paso: Paso; onMedir: () => vo
 
 function PesoHero({ data, plan, onMedir, onIrA, hoy }: PesoHeroProps & { hoy?: string }) {
   const dia = hoy ?? hoyMX()
-  const c = useMemo(() => calcularHero(data, plan, dia), [data, plan, dia])
+  const perfil = usePerfil()
+  const c = useMemo(() => calcularHero(data, plan, dia, perfil), [data, plan, dia, perfil])
 
   if (!c) {
     return (
@@ -347,6 +351,10 @@ function PesoHero({ data, plan, onMedir, onIrA, hoy }: PesoHeroProps & { hoy?: s
                   </span>
                 )}
               </div>
+              {/* El rango de IMC normal en kilos para la estatura del perfil: da contexto al IMC y al «Faltan X kg». */}
+              <p className="mt-2 tabular-nums" style={{ fontSize: 11.5, lineHeight: 1.35, color: COLOR.onDarkMuted }}>
+                Peso saludable a {tallaTxt(perfil)} m: {c.saludable.min.toFixed(1)}–{c.saludable.max.toFixed(1)} kg
+              </p>
             </div>
 
             {/* Anillo */}

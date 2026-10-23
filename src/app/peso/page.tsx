@@ -2,6 +2,8 @@ import { supabase } from '@/lib/supabase'
 import { firmaDatos, firmaBase, extraPlanes, type PesoRecord, type PesoPlan, type PesoAnalisisGuardado } from '@/lib/peso'
 import { listarPlanes } from '@/lib/peso-planes-server'
 import type { PlanesLista } from '@/lib/peso-planes'
+import { PERFIL_DEFAULT, extraAnalisis } from '@/lib/peso-perfil'
+import { cargarPerfil, ERROR_LECTURA_PERFIL, type PerfilCarga } from '@/lib/peso-perfil-server'
 import SiteHeader from '@/components/SiteHeader'
 import { PESO_TABS, type PesoTab } from './contratos'
 import PesoClient from './PesoClient'
@@ -65,16 +67,31 @@ async function getPlanes(): Promise<PlanesLista> {
   }
 }
 
+// Y con sql/peso-04-perfil.sql (estatura, sexo, edad y hábitos): sin la tabla todo se calcula con los datos supuestos de
+// siempre. cargarPerfil no lanza, pero un fallo aquí tampoco debe tumbar /peso, así que se envuelve igual. `error` NO
+// significa «falta la tabla» ni «aún no hay perfil»: es que la lectura falló y no se sabe qué hay guardado.
+async function getPerfil(): Promise<PerfilCarga> {
+  try {
+    return await cargarPerfil()
+  } catch {
+    return { perfil: PERFIL_DEFAULT, configurado: false, disponible: true, actualizado: null, error: ERROR_LECTURA_PERFIL }
+  }
+}
+
 // Huella que la página pasa al cliente para saber si el análisis guardado sigue vigente. Se arma igual que
-// la ruta del análisis: mediciones + meta + planes en uso (`extraPlanes`, la misma función en los dos lados).
-// Si la lectura de los planes falló (`planes.error`) no se sabe cuáles están en uso, y comparar contra «ninguno»
-// daría un «Desactualizado» falso y una llamada a la IA en cada visita mientras dure el fallo. En ese caso se
-// compara solo lo demás (`firmaBase`): si el análisis guardado coincide en mediciones y meta, se da por vigente.
+// la ruta del análisis: mediciones + meta + (planes en uso + perfil guardado). Lo último lo arma `extraAnalisis` con
+// `extraPlanes`, las MISMAS funciones que usa la ruta: no se arma a mano para que no puedan divergir.
+// Si la lectura de los planes (`planes.error`) o la del perfil (`perfil.error`) falló no se sabe qué hay en uso o
+// guardado, y comparar contra «ninguno» daría un «Desactualizado» falso y una llamada a la IA en cada visita mientras
+// dure el fallo. En ese caso se compara solo lo demás (`firmaBase`): si el análisis guardado coincide en mediciones y
+// meta, se da por vigente.
 function huellaAnalisis(
-  registros: PesoRecord[], plan: PesoPlan | null, planes: PlanesLista, analisis: PesoAnalisisGuardado | null,
+  registros: PesoRecord[], plan: PesoPlan | null, planes: PlanesLista, perfil: PerfilCarga, analisis: PesoAnalisisGuardado | null,
 ): string {
   if (!registros.length) return ''
-  if (!planes.error) return firmaDatos(registros, plan, extraPlanes(planes.planes))
+  if (!planes.error && !perfil.error) {
+    return firmaDatos(registros, plan, extraAnalisis(extraPlanes(planes.planes), perfil.perfil, perfil.configurado))
+  }
   const base = firmaDatos(registros, plan)
   return typeof analisis?.firma === 'string' && firmaBase(analisis.firma) === base ? analisis.firma : base
 }
@@ -105,7 +122,7 @@ function FalloLectura({ href }: { href: string }) {
           <div className="mt-4">
             {/* Recarga completa a propósito (no <Link>): garantiza una consulta nueva al servidor. */}
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-            <a href={href} className={`${BTN.base} ${BTN.gold} min-h-[46px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C2933A]`}>
+            <a href={href} className={`${BTN.base} ${BTN.gold} min-h-[46px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A6420]`}>
               Reintentar
             </a>
           </div>
@@ -122,7 +139,7 @@ const primero = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] :
 
 export default async function PesoPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
-  const [{ registros, fallo }, plan, { analisis, persistencia }, planes] = await Promise.all([getRegistros(), getPlan(), getAnalisis(), getPlanes()])
+  const [{ registros, fallo }, plan, { analisis, persistencia }, planes, perfil] = await Promise.all([getRegistros(), getPlan(), getAnalisis(), getPlanes(), getPerfil()])
 
   // ?plan=<uuid> abre directo ese plan en la pestaña de rutinas y dietas (si no se pidió otra pestaña).
   const planParam = primero(sp.plan)
@@ -146,10 +163,12 @@ export default async function PesoPage({ searchParams }: { searchParams: Promise
       initialPlan={plan}
       initialAnalisis={analisis}
       persistencia={persistencia}
-      firma={huellaAnalisis(registros, plan, planes, analisis)}
+      firma={huellaAnalisis(registros, plan, planes, perfil, analisis)}
       planes={planes.planes}
       planesDisponible={planes.disponible}
       planesError={planes.error ?? null}
+      perfil={{ perfil: perfil.perfil, configurado: perfil.configurado, disponible: perfil.disponible, actualizado: perfil.actualizado }}
+      perfilError={perfil.error}
       tabInicial={tabInicial}
       planInicial={planInicial}
     />

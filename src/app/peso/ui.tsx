@@ -107,7 +107,7 @@ export function Segmented<T extends string | number>({
         const on = o.value === value
         return (
           <button key={String(o.value)} type="button" aria-pressed={on} onClick={() => onChange(o.value)}
-            className="rounded-lg px-3 py-1.5 min-h-10 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#C2933A]"
+            className="rounded-lg px-3 py-1.5 min-h-10 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#8A6420]"
             style={on
               ? { background: dark ? COLOR.goldLight : '#fff', color: dark ? '#1B1305' : COLOR.navy, boxShadow: '0 1px 3px rgba(15,35,64,0.18)' }
               : { background: 'transparent', color: dark ? COLOR.onDarkMuted : COLOR.muted }}>
@@ -135,5 +135,7 @@ export const BTN = {
  *  (textareas monoespaciados). Se conserva la subcadena `px-3 py-2 text-sm` porque PesoFormulario
  *  la reemplaza con `.replace` para su variante de 44 px.
  *  El placeholder usa tinta al 64 % (4.8:1 sobre el fondo blanco del campo) en lugar de `var(--faint)` de globals.css
- *  (.34, ~2:1): globals.css lo comparten otras páginas, por eso el valor va aquí y no se cambia el token. */
-export const INPUT = 'w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm max-sm:text-base text-[var(--text)] placeholder:text-[rgba(20,35,61,0.64)] focus:outline-none focus:border-[var(--gold-500)] focus:ring-2 focus:ring-[var(--gold-500)]/20'
+ *  (.34, ~2:1): globals.css lo comparten otras páginas, por eso el valor va aquí y no se cambia el token.
+ *  El foco usa goldText (#8A6420, 5.35:1 sobre blanco) y no el dorado de marca (--gold-500, 2.8:1): un indicador de foco
+ *  debe llegar a 3:1 (WCAG 1.4.11), y el anillo al 20 % casi no se veía. */
+export const INPUT = 'w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm max-sm:text-base text-[var(--text)] placeholder:text-[rgba(20,35,61,0.64)] focus:outline-none focus:border-[#8A6420] focus:ring-2 focus:ring-[#8A6420]/40'

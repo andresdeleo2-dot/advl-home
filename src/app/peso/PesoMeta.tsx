@@ -1,9 +1,12 @@
 'use client'
 
 import { useMemo, useState, type ReactNode } from 'react'
-import { PESO_IMC_25, addDays, daysBetween, hoyMX, type PesoPlan } from '@/lib/peso'
+import { addDays, daysBetween, hoyMX, type PesoPlan } from '@/lib/peso'
+import { pesoParaIMC, tallaCuadrada } from '@/lib/peso-perfil'
+import { rangoSaludableTxt, tallaTxt } from '@/lib/peso-visuals'
 import type { PesoMetaProps } from './contratos'
 import { savePlan } from './actions'
+import { usePerfil } from './perfil-context'
 import { BTN, COLOR, Eyebrow, INPUT, Panel } from './ui'
 import {
   FOCO, LABEL_STYLE, calcularMeta, calcularMetaGrasa, fmtFechaCorta, fmtNum, fmtSigned, sugerenciasMeta, useHoy,
@@ -12,6 +15,7 @@ import {
 
 // Meta + proyección (pestaña Resumen). La proyección ya NO depende del rango del selector de la gráfica: usa el ritmo
 // de los últimos 90 días (o 180 / 365 si no alcanzan los datos) y dice cuál usó.
+// La estatura del perfil (usePerfil) fija el peso de IMC 25, el rango saludable y las sugerencias de meta.
 // savePlan hace upsert del registro COMPLETO (rutina, dieta, notas y meta): este formulario reenvía rutina/dieta/notas
 // como campos ocultos para no borrarlos, y PesoPlanTexto hace lo mismo con la meta.
 
@@ -165,6 +169,7 @@ function veredicto(c: CalculoMeta, metaFecha: string | null, hoy: string | null)
 function FormMeta({ plan, borrador, hayMeta, onCancel, onSaved }: {
   plan: PesoPlan | null; borrador: Borrador | null; hayMeta: boolean; onCancel: () => void; onSaved: () => void
 }) {
+  const perfil = usePerfil()
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmaQuitar, setConfirmaQuitar] = useState(false)
@@ -219,7 +224,9 @@ function FormMeta({ plan, borrador, hayMeta, onCancel, onSaved }: {
           <label htmlFor="meta-peso" className="mb-1 block" style={LABEL_STYLE}>Peso meta (kg)</label>
           <input id="meta-peso" name="meta_peso" type="number" step="0.1" min="35" max="250" inputMode="decimal" required defaultValue={dPeso}
             className={INPUT} style={{ minHeight: 44 }} autoFocus aria-describedby="meta-peso-ayuda" />
-          <p id="meta-peso-ayuda" className="mt-1 text-[11px]" style={{ color: COLOR.muted }}>IMC 25 = {PESO_IMC_25.toFixed(1)} kg</p>
+          <p id="meta-peso-ayuda" className="mt-1 text-[11px]" style={{ color: COLOR.muted }}>
+            IMC 25 = {pesoParaIMC(perfil, 25).toFixed(1)} kg · saludable: {rangoSaludableTxt(perfil)}
+          </p>
         </div>
         <div>
           <label htmlFor="meta-fecha" className="mb-1 block" style={LABEL_STYLE}>Fecha meta</label>
@@ -266,6 +273,7 @@ function FormMeta({ plan, borrador, hayMeta, onCancel, onSaved }: {
 
 export default function PesoMeta({ plan, data }: PesoMetaProps) {
   const hoy = useHoy()
+  const perfil = usePerfil()
   const [editando, setEditando] = useState(false)
   const [borrador, setBorrador] = useState<Borrador | null>(null)
   const [formKey, setFormKey] = useState(0)
@@ -276,7 +284,7 @@ export default function PesoMeta({ plan, data }: PesoMetaProps) {
 
   const calc = useMemo(() => (metaPeso != null ? calcularMeta(data, metaPeso, metaFecha, hoy) : null), [data, metaPeso, metaFecha, hoy])
   const grasa = useMemo(() => (plan?.meta_grasa != null ? calcularMetaGrasa(data, plan.meta_grasa) : null), [data, plan?.meta_grasa])
-  const sugerencias = useMemo(() => sugerenciasMeta(data), [data])
+  const sugerencias = useMemo(() => sugerenciasMeta(data, perfil), [data, perfil])
 
   function abrir(b: Borrador | null = null) {
     setBorrador(b)
@@ -306,6 +314,9 @@ export default function PesoMeta({ plan, data }: PesoMetaProps) {
               <div className="min-w-0">
                 <p className="text-sm" style={{ color: COLOR.ink }}>
                   Todavía no tienes una meta. Elige un peso (y, si quieres, una fecha) y la proyección parte de tu ritmo real.
+                </p>
+                <p className="mt-1.5 text-xs" style={{ color: COLOR.muted }}>
+                  Con tu estatura ({tallaTxt(perfil)} m), un peso saludable va de <strong className="tabular-nums" style={{ color: COLOR.ink }}>{rangoSaludableTxt(perfil)}</strong>.
                 </p>
                 <button type="button" onClick={() => abrir()} className={`${BTN.base} ${BTN.gold} mt-3 min-h-11 ${FOCO}`}>Poner meta</button>
               </div>
@@ -431,6 +442,10 @@ export default function PesoMeta({ plan, data }: PesoMetaProps) {
             </div>
           )}
 
+          {/* Dónde cae la meta respecto al rango de IMC normal de la estatura del perfil. */}
+          <p className="text-[11px] leading-relaxed" style={{ color: COLOR.muted }}>
+            Tu meta de {fmtNum(metaPeso)} kg equivale a un IMC de {(metaPeso / tallaCuadrada(perfil)).toFixed(1)}. Con tu estatura ({tallaTxt(perfil)} m), el rango de IMC normal es de {rangoSaludableTxt(perfil)}.
+          </p>
           <p className="text-[11px] leading-relaxed" style={{ color: COLOR.muted }}>
             La proyección es una línea recta con tu ritmo reciente; tu peso real sube y baja con el agua, la sal y la comida.
           </p>

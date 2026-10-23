@@ -331,6 +331,14 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
       )
       await sb.auth.signOut()
     } catch { /* noop */ }
+    // Defensa en profundidad: sin red, la navegación a /login no llega al servidor y el service worker no ve la respuesta
+    // que dispara su limpieza; así que aquí también se vacía Cache Storage. Si falla, el cierre de sesión sigue igual.
+    try {
+      if ('caches' in window) {
+        const ks = await caches.keys()
+        await Promise.all(ks.map(k => caches.delete(k)))
+      }
+    } catch { /* noop */ }
     window.location.href = '/login'
   }
 

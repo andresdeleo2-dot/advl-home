@@ -3,8 +3,10 @@
 import { useMemo, useState } from 'react'
 import { etapaActual, fmtFecha, hoyMX, mejorMarca } from '@/lib/peso'
 import { UMBRAL_HUECO } from '@/lib/peso-visuals'
+import { PERFIL_DEFAULT } from '@/lib/peso-perfil'
 import type { PesoHistorialProps } from './contratos'
 import { BTN, COLOR, Panel, Pill, Segmented } from './ui'
+import { usePerfil } from './perfil-context'
 import {
   DATO_COLOR, FOCO, TONO_COLOR, aniosDe, colorTexto, csvDeFilas, extremosPeso, filasHistorial, fmtGap, fmtSigned, tonoDelta,
 } from './metricas'
@@ -13,7 +15,7 @@ import {
 // filtro por año y exportación a CSV. Δ peso e Intervalo se calculan contra la medición anterior de TODO el
 // historial (ver filasHistorial), así que no cambian al filtrar.
 
-const COLUMNAS = ['Fecha', 'Intervalo', 'Peso', 'Δ peso', '% Grasa', '% Músculo', 'IMC', 'RMR', 'Edad corp.', 'Gr. visc.'] as const
+const COLUMNAS = ['Fecha', 'Intervalo', 'Peso', 'Δ peso', '% Grasa', '% Músculo', 'IMC (báscula)', 'RMR', 'Edad corp.', 'Gr. visc.'] as const
 
 // Fondos sólidos (no transparentes): la primera columna es sticky y no debe dejar ver lo que pasa por debajo al hacer scroll.
 const FONDO = {
@@ -31,6 +33,7 @@ const COLOR_PCT_GRASA = colorTexto(DATO_COLOR.pct_grasa)       // versión AA pa
 const COLOR_PCT_MUSCULO = colorTexto(DATO_COLOR.pct_musculo)
 
 export default function PesoHistorial({ data, onEdit, onDelete, deletingId }: PesoHistorialProps) {
+  const perfil = usePerfil()
   const [anio, setAnio] = useState('todos')
   const [aviso, setAviso] = useState<string | null>(null)
 
@@ -197,6 +200,11 @@ export default function PesoHistorial({ data, onEdit, onDelete, deletingId }: Pe
       <p className="px-5 py-3 text-xs sm:hidden" style={{ borderTop: `1px solid ${COLOR.line}`, color: COLOR.muted }}>
         Desliza la tabla hacia los lados: la fecha se queda fija.
       </p>
+      {perfil.estatura_cm !== PERFIL_DEFAULT.estatura_cm && (
+        <p className="px-5 py-3 text-xs" style={{ borderTop: `1px solid ${COLOR.line}`, color: COLOR.muted }}>
+          La columna «IMC (báscula)» es la que anotó tu báscula, con su propia estatura; en el resto de la página el IMC se calcula con tu estatura de {perfil.estatura_cm} cm.
+        </p>
+      )}
     </Panel>
   )
 }

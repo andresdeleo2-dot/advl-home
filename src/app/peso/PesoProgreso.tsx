@@ -4,13 +4,15 @@ import { useId, useMemo, useState, type ReactNode } from 'react'
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, getNiceTickValues,
 } from 'recharts'
-import { PESO_IMC_25, addMonths, etapaActual, fmtFecha, pendienteSemanal, type PesoRecord } from '@/lib/peso'
+import { addMonths, etapaActual, fmtFecha, pendienteSemanal, type PesoRecord } from '@/lib/peso'
+import { PROTEINA_G_KG, pesoParaIMC } from '@/lib/peso-perfil'
 import type { PesoProgresoProps } from './contratos'
+import { usePerfil } from './perfil-context'
 import { BTN, COLOR, Eyebrow, INPUT, Panel, Pill, Segmented } from './ui'
 import {
-  DATO_COLOR, DEFAULT_ACTIVE, EXTRA_SERIES, FOCO, METRICS, PRESETS, RefTable, TONO_COLOR,
+  DATO_COLOR, DEFAULT_ACTIVE, EXTRA_SERIES, FOCO, PRESETS, RefTable, TONO_COLOR,
   colorTexto, construirSerie, estadoOms, extremosMetrica, flecha, fmtNum, fmtSigned, fmtTick, fmtTooltipFecha, fmtValor,
-  getOmsContext, porFecha, recomendacionGeneral, resumenTendencia, ticksMensuales, tonoDelta, useReducirMovimiento,
+  getOmsContext, porFecha, recomendacionGeneral, resumenTendencia, ticksMensuales, tonoDelta, useMetricas, useReducirMovimiento,
   type MetricDef, type PuntoSerie,
 } from './metricas'
 
@@ -27,11 +29,12 @@ function dentro(f: string, from: string, to: string) {
   return (!from || f >= from) && (!to || f <= to)
 }
 
-/** ¿La línea de IMC 25 cabe en el eje de kg? La línea usa ifOverflow="discard" (si queda fuera del eje no se pinta; no
- *  queremos estirar el eje y aplastar la curva), así que la leyenda debe anunciarla solo cuando de verdad se dibuja.
+/** ¿La línea de IMC 25 (`pesoImc25` kg, según la estatura del perfil) cabe en el eje de kg? La línea usa ifOverflow="discard"
+ *  (si queda fuera del eje no se pinta; no queremos estirar el eje y aplastar la curva), así que la leyenda debe anunciarla
+ *  solo cuando de verdad se dibuja.
  *  Replica el dominio 'auto' de Recharts: extremos de las series de kg visibles (y la meta, que sí extiende el eje)
  *  redondeados a marcas "bonitas" con los mismos parámetros por defecto del YAxis (5 marcas, decimales, 'adaptive'). */
-function imcCabeEnEje(serie: readonly PuntoSerie[], activos: ReadonlySet<string>, metaPeso: number | null): boolean {
+export function imcCabeEnEje(serie: readonly PuntoSerie[], activos: ReadonlySet<string>, metaPeso: number | null, pesoImc25: number): boolean {
   const claves = ['peso', 'peso_ma', ...EXTRA_SERIES.filter(s => activos.has(s.key)).map(s => s.key)] as const
   const vals: number[] = []
   for (const d of serie) for (const k of claves) { const v = d[k]; if (v != null && Number.isFinite(v)) vals.push(v) }
@@ -42,7 +45,7 @@ function imcCabeEnEje(serie: readonly PuntoSerie[], activos: ReadonlySet<string>
   const lo = marcas.length ? Math.min(min, marcas[0]) : min
   const hi = marcas.length ? Math.max(max, marcas[marcas.length - 1]) : max
   const EPS = 1e-9   // tolera el ruido de coma flotante en los bordes
-  return PESO_IMC_25 >= lo - EPS && PESO_IMC_25 <= hi + EPS
+  return pesoImc25 >= lo - EPS && pesoImc25 <= hi + EPS
 }
 
 // ── Tooltip de la gráfica ────────────────────────────────────────────────────
@@ -89,7 +92,8 @@ function Kpi({ etiqueta, valor, sub, color }: { etiqueta: string; valor: string;
 }
 
 function OmsStatus({ rows }: { rows: PesoRecord[] }) {
-  const oms = estadoOms(rows)
+  const perfil = usePerfil()   // el sexo desplaza los cortes del % de grasa
+  const oms = estadoOms(rows, perfil)
   if (!oms.items.length) return null
   return (
     <div className="px-5 py-4 sm:px-6" style={{ borderTop: `1px solid ${COLOR.line}` }}>
@@ -114,7 +118,7 @@ function OmsStatus({ rows }: { rows: PesoRecord[] }) {
 }
 
 function TrendSummary({ rows }: { rows: PesoRecord[] }) {
-  const t = resumenTendencia(rows)
+  const t = resumenTendencia(rows, usePerfil())
   return (
     <div className="px-5 py-4 sm:px-6" style={{ borderTop: `1px solid ${COLOR.line}` }}>
       <div className="flex flex-wrap items-center gap-2">
@@ -149,6 +153,7 @@ function TrendSummary({ rows }: { rows: PesoRecord[] }) {
 }
 
 function MetricRow({ def, rows }: { def: MetricDef; rows: PesoRecord[] }) {
+  const perfil = usePerfil()
   const ex = extremosMetrica(rows, def.key)
   if (!ex) return null
   const { first, last } = ex
@@ -157,7 +162,7 @@ function MetricRow({ def, rows }: { def: MetricDef; rows: PesoRecord[] }) {
   const tono = tonoDelta(d, def.goodDir, 0.0001)
   const direccion = d > 0 ? 'Subiendo' : d < 0 ? 'Bajando' : 'Estable'
   const cls = def.classify ? def.classify(last.valor) : undefined
-  const { lines } = getOmsContext(def.key, last.valor)
+  const { lines } = getOmsContext(def.key, last.valor, perfil)
   const u = def.unit ? ` ${def.unit}` : ''
   const dec = def.decimals || 1
   const ancho = (v: number) => (def.decimals ? fmtNum(v, def.decimals) : String(Math.round(v)))
@@ -221,7 +226,8 @@ const MAS_REALES = [
 ]
 
 function GeneralRec({ rows }: { rows: PesoRecord[] }) {
-  const { bullets, resumen } = recomendacionGeneral(rows)
+  const { metricas } = useMetricas()
+  const { bullets, resumen } = recomendacionGeneral(rows, metricas)
   return (
     <div className="px-5 py-5 sm:px-6" style={{ borderTop: `1px solid ${COLOR.line}`, background: COLOR.card2 }}>
       <h3 className="serif" style={{ fontSize: 21, fontWeight: 600, color: COLOR.navy }}>Recomendación general</h3>
@@ -238,7 +244,7 @@ function GeneralRec({ rows }: { rows: PesoRecord[] }) {
       <div className="mt-4"><Eyebrow>Siguiente paso</Eyebrow></div>
       <ul className="mt-1.5 space-y-1 text-[13px]" style={{ color: COLOR.ink }}>
         <li className="flex gap-2"><span aria-hidden style={{ color: COLOR.gold }}>●</span>Mide siempre en horario y condiciones similares.</li>
-        <li className="flex gap-2"><span aria-hidden style={{ color: COLOR.gold }}>●</span>Sostén fuerza 3–4 veces/semana y proteína 1.6–2.2 g/kg para preservar músculo.</li>
+        <li className="flex gap-2"><span aria-hidden style={{ color: COLOR.gold }}>●</span>Sostén fuerza 3–4 veces/semana y proteína {PROTEINA_G_KG.min.toFixed(1)}–{PROTEINA_G_KG.max.toFixed(1)} g/kg para preservar músculo.</li>
         <li className="flex gap-2"><span aria-hidden style={{ color: COLOR.gold }}>●</span>Si no mejoras en 2–3 semanas, recorta 150–250 kcal o sube 2 000–3 000 pasos diarios.</li>
       </ul>
 
@@ -261,6 +267,7 @@ function GeneralRec({ rows }: { rows: PesoRecord[] }) {
 }
 
 function DetalleMetricas({ rows }: { rows: PesoRecord[] }) {
+  const { metricas } = useMetricas()
   const [abierto, setAbierto] = useState(false)
   const id = useId()
   return (
@@ -278,7 +285,7 @@ function DetalleMetricas({ rows }: { rows: PesoRecord[] }) {
       <div id={id} hidden={!abierto}>
         {abierto && (
           <>
-            {METRICS.map(def => <MetricRow key={def.key} def={def} rows={rows} />)}
+            {metricas.map(def => <MetricRow key={def.key} def={def} rows={rows} />)}
             <GeneralRec rows={rows} />
           </>
         )}
@@ -300,6 +307,9 @@ function Muestra({ color, trazo }: { color: string; trazo?: string }) {
 // ── Sección ──────────────────────────────────────────────────────────────────
 
 export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
+  const perfil = usePerfil()
+  const { metricas } = useMetricas()   // referencias en kg y cortes de % grasa según la estatura y el sexo del perfil
+  const pesoImc25 = pesoParaIMC(perfil, 25)
   const [preset, setPreset] = useState<Preset>(12)
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
@@ -335,10 +345,10 @@ export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
   const hasPeso = activos.has('peso')
   const hasKg = hasPeso || EXTRA_SERIES.some(s => activos.has(s.key))
   const hasPct = activos.has('pct_grasa') || activos.has('pct_musculo')
-  const hasOther = METRICS.filter(m => m.yAxis === 'other').some(m => activos.has(m.key))
+  const hasOther = metricas.filter(m => m.yAxis === 'other').some(m => activos.has(m.key))
   const metaPeso = plan?.meta_peso ?? null
   const metaGrasa = plan?.meta_grasa ?? null
-  const imcEnGrafica = hasPeso && imcCabeEnEje(chartData, activos, metaPeso)
+  const imcEnGrafica = hasPeso && imcCabeEnEje(chartData, activos, metaPeso, pesoImc25)
 
   // KPIs del rango (solo peso). El ritmo se calcula con la etapa actual: una regresión que cruza el hueco de años miente.
   const kpi = useMemo(() => {
@@ -360,7 +370,7 @@ export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
     )
   }
 
-  const activas = METRICS.filter(m => activos.has(m.key))
+  const activas = metricas.filter(m => activos.has(m.key))
   const descGrafica = `Gráfica de líneas con ${activas.map(m => m.corto).concat(EXTRA_SERIES.filter(s => activos.has(s.key)).map(s => s.corto)).join(', ')}: ${chartData.length} mediciones${chartData.length ? ` del ${fmtFecha(chartData[0].iso)} al ${fmtFecha(chartData[chartData.length - 1].iso)}` : ''}. Los mismos datos están en la pestaña Historial.`
 
   const chip = (key: string, label: string, color: string, title?: string): ReactNode => {
@@ -427,7 +437,7 @@ export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
         <div className="mt-4">
           <div className="mb-2"><Eyebrow>Qué graficar</Eyebrow></div>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Métricas en la gráfica">
-            {METRICS.map(m => chip(m.key, m.label, m.color))}
+            {metricas.map(m => chip(m.key, m.label, m.color))}
             {EXTRA_SERIES.map(s => chip(s.key, s.label, s.color, 'Calculado: peso × % de grasa'))}
           </div>
           {hasOther && !hasPct && !hasKg && (
@@ -477,7 +487,7 @@ export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
                       label={{ value: `Meta ${metaPeso} kg`, position: 'insideBottomRight', fontSize: 10.5, fill: '#15803d' }} />
                   )}
                   {hasPeso && (
-                    <ReferenceLine yAxisId="kg" y={PESO_IMC_25} stroke="#b45309" strokeDasharray="2 4" ifOverflow="discard"
+                    <ReferenceLine yAxisId="kg" y={pesoImc25} stroke="#b45309" strokeDasharray="2 4" ifOverflow="discard"
                       label={{ value: 'IMC 25', position: 'insideTopRight', fontSize: 10.5, fill: '#b45309' }} />
                   )}
                   {activos.has('pct_grasa') && hasPct && metaGrasa != null && (
@@ -485,7 +495,7 @@ export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
                       label={{ value: `Meta ${metaGrasa}% grasa`, position: 'insideBottomLeft', fontSize: 10.5, fill: '#15803d' }} />
                   )}
 
-                  {METRICS.map(m => activos.has(m.key) && (
+                  {metricas.map(m => activos.has(m.key) && (
                     <Line key={m.key} yAxisId={m.yAxis === 'kg' ? 'kg' : m.yAxis === 'pct' ? 'pct' : 'other'}
                       type="monotone" dataKey={m.key} name={m.label} stroke={m.color} strokeWidth={2.5} isAnimationActive={!reducir}
                       dot={{ r: 3, fill: m.color, stroke: '#fff', strokeWidth: 1.5 }} activeDot={{ r: 5.5, stroke: '#fff', strokeWidth: 2 }} connectNulls />
@@ -510,7 +520,7 @@ export default function PesoProgreso({ data, plan }: PesoProgresoProps) {
               {EXTRA_SERIES.filter(s => activos.has(s.key)).map(s => <li key={s.key} className="flex items-center gap-1.5"><Muestra color={s.color} />{s.label}</li>)}
               {hasPeso && <li className="flex items-center gap-1.5"><Muestra color={DATO_COLOR.peso} trazo="4 3" />Tendencia 14 d (promedio móvil)</li>}
               {hasPeso && metaPeso != null && <li className="flex items-center gap-1.5"><Muestra color="#15803d" trazo="5 3" />Tu meta</li>}
-              {imcEnGrafica && <li className="flex items-center gap-1.5"><Muestra color="#b45309" trazo="1.5 3" />IMC 25 ({PESO_IMC_25.toFixed(1)} kg)</li>}
+              {imcEnGrafica && <li className="flex items-center gap-1.5"><Muestra color="#b45309" trazo="1.5 3" />IMC 25 ({pesoImc25.toFixed(1)} kg)</li>}
             </ul>
           )}
         </div>

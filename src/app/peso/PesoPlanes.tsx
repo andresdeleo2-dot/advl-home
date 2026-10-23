@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { hoyMX } from '@/lib/peso'
 import { PLAN_TIPOS, buildPromptPlan, contextoPrompt, type PesoPlanMeta, type PlanTipo } from '@/lib/peso-planes'
 import type { PesoPlanesProps } from './contratos'
+import { usePerfil } from './perfil-context'
 import { COLOR, Panel, Segmented } from './ui'
 import { actualizarPlan, eliminarPlan, listarPlanes, type ErrorApi } from './planes/api'
 import Biblioteca from './planes/Biblioteca'
@@ -65,6 +66,7 @@ export default function PesoPlanes({ inicial, disponible: dispInicial, data, pla
   const [anuncio, setAnuncio] = useState('')
   const raiz = useRef<HTMLDivElement>(null)
   const hoy = useHoy()
+  const perfil = usePerfil()   // el prompt usa sus datos reales (edad, actividad, lesiones, restricciones...) en vez de supuestos
   const prompt = useCopiado()
 
   // ── Derivados ──────────────────────────────────────────────────────────────
@@ -204,7 +206,7 @@ export default function PesoPlanes({ inicial, disponible: dispInicial, data, pla
   // ── Prompt para Claude ─────────────────────────────────────────────────────
   /** El prompt con los datos de ahora. «Hoy» se toma AL ARMARLO (hoyMX, la misma fuente que useHoy y el resto de /peso)
    *  y no del estado `hoy`, que se fija al montar la pestaña y quedaría viejo si la dejas abierta de un día para otro. */
-  const generarPrompt = (t: PlanTipo) => buildPromptPlan(t, contextoPrompt(data, plan, hoyMX()))
+  const generarPrompt = (t: PlanTipo) => buildPromptPlan(t, contextoPrompt(data, plan, hoyMX(), perfil))
 
   async function copiarPrompt() {
     // Con el panel abierto este botón NO regenera el texto (se perdería lo que se editó): lleva el foco al cuadro,

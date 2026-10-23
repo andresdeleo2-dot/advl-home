@@ -16,7 +16,8 @@ const DORADO_TEXTO = COLOR.goldText
  *  dieta» (como el nombre de la pestaña), no «plan» ni «archivo». */
 function unidadContador(t: PesoTab, n: number): string {
   if (t === 'historial') return n === 1 ? ' medición' : ' mediciones'
-  return n === 1 ? ' rutina o dieta' : ' rutinas o dietas'
+  if (t === 'planes') return n === 1 ? ' rutina o dieta' : ' rutinas o dietas'
+  return ''   // Resumen, Progreso y Mi perfil no llevan contador
 }
 
 export const tabId = (t: PesoTab) => `peso-tab-${t}`
@@ -30,11 +31,14 @@ const CSS = `
 .peso-tab:focus-visible{outline:2px solid ${COLOR.gold};outline-offset:-2px;border-radius:12px}
 `
 
-export default function PesoTabs({ tab, onChange, contadores }: {
+export default function PesoTabs({ tab, onChange, contadores, avisos }: {
   tab: PesoTab
   onChange: (t: PesoTab) => void
   /** Número que va como insignia junto a la etiqueta (Historial N, Rutinas y dietas M). */
   contadores?: Partial<Record<PesoTab, number>>
+  /** Punto dorado junto a la etiqueta para algo pendiente (p. ej. «Mi perfil» sin completar). El texto se lee solo
+   *  con lector de pantalla: el punto es decorativo. */
+  avisos?: Partial<Record<PesoTab, string>>
 }) {
   const scRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -101,6 +105,7 @@ export default function PesoTabs({ tab, onChange, contadores }: {
       {PESO_TABS.map((t, i) => {
         const on = t.id === tab
         const n = contadores?.[t.id]
+        const aviso = avisos?.[t.id]
         return (
           <button
             key={t.id}
@@ -128,6 +133,12 @@ export default function PesoTabs({ tab, onChange, contadores }: {
               >
                 {n}<span className="sr-only">{unidadContador(t.id, n)}</span>
               </span>
+            )}
+            {aviso && (
+              <>
+                <span aria-hidden style={{ width: 7, height: 7, borderRadius: 99, background: COLOR.gold, marginLeft: -2 }} />
+                <span className="sr-only">, {aviso}</span>
+              </>
             )}
             {/* Indicador dorado de la pestaña activa */}
             <span

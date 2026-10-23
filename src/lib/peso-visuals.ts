@@ -2,12 +2,17 @@
 // Todo lo numérico sale de aquí, en código: la página solo dibuja. Sin React ni dependencias de
 // servidor, y con imports RELATIVOS para poder probarlo con node. Las fechas son 'YYYY-MM-DD' y se
 // manejan con las utilidades UTC de ./peso (nada de `new Date()` aquí: "hoy" llega como argumento).
+// La estatura y el sexo llegan en el parámetro `perfil`, OBLIGATORIO en las funciones que lo usan: así tsc avisa si un
+// llamador se olvida de pasarlo (con PERFIL_DEFAULT valen los números de antes de que existiera el perfil). De él salen
+// los kg de cada corte del IMC y los umbrales del % de grasa.
 
 import {
-  H2, PESO_IMC_25, classifyIMC, classifyFat, classifyVisceral,
+  classifyIMC, classifyFat, classifyVisceral, imcBasculaVigente,
   masaGrasa, masaMagra, daysBetween, addDays, addMonths, etapaActual, buildFacts,
 } from './peso'
 import type { PesoRecord, PesoPlan, Classification, Level } from './peso'
+import { desplazamientoGrasa, pesoParaIMC, pesoSaludable, tallaCuadrada } from './peso-perfil'
+import type { PesoPerfil } from './peso-perfil'
 
 // ── Utilidades ──────────────────────────────────────────────────────────────
 
@@ -25,6 +30,21 @@ function ultimoCon(sorted: PesoRecord[], key: 'peso' | 'pct_grasa' | 'grasa_visc
   for (let i = sorted.length - 1; i >= 0; i--) if (finito(sorted[i][key])) return sorted[i]
   return null
 }
+
+// ── Perfil: estatura y sexo ─────────────────────────────────────────────────
+
+/** Estatura para escribirla en un texto: "1.81" (o "1.705" si el perfil trae decimales en los centímetros). */
+export function tallaTxt(p: PesoPerfil) {
+  return (p.estatura_cm / 100).toFixed(Number.isInteger(p.estatura_cm) ? 2 : 3)
+}
+/** Rango de peso con IMC normal para la estatura del perfil, listo para un texto: "60.6 a 81.6 kg". */
+export function rangoSaludableTxt(p: PesoPerfil) {
+  const s = pesoSaludable(p)
+  return `${s.min.toFixed(1)} a ${s.max.toFixed(1)} kg`
+}
+/** IMC que reportó la báscula, solo si sigue valiendo para la estatura del perfil (si no, null y quien llama recalcula
+ *  peso / estatura²). Es el mismo de peso.ts: una sola definición, para que la franja, las escalas y la IA nunca difieran. */
+export const imcEquipo = imcBasculaVigente
 
 const MINUS = '−'
 /** Número con signo y decimales fijos ("+3.7", "−0.6"); el cero no lleva signo. */
@@ -81,11 +101,17 @@ export type Escala = {
   fuera: 'bajo' | 'alto' | null        // el valor se sale del eje: el marcador queda en el borde
   marcas: MarcaEje[]
   pasos: PasoEscala[]
+  /** Aclaración sobre los cortes de la escala (solo el % de grasa de una mujer, cuyos umbrales se desplazan). */
+  nota?: string
 }
 export type CalcEscalas = {
   ultimaFecha: string
   escalas: Escala[]
-  equivalencias: { tallaM: number; kgImc25: number; kgImc30: number; pesoKg: number | null; fechaPeso: string | null }
+  equivalencias: {
+    tallaM: number; kgImc25: number; kgImc30: number; pesoKg: number | null; fechaPeso: string | null
+    /** Pesos con IMC 18.5 y 24.9 para la estatura del perfil (el rango normal). */
+    saludable: { min: number; max: number }
+  }
 }
 
 type CfgEscala = {
@@ -98,22 +124,36 @@ type CfgEscala = {
   paso: number
   rangos: string[]
   clasificar: (v: number) => Classification
+  nota?: string                        // aclaración que se muestra bajo la escala
 }
 
-const CFG: Record<EscalaId, CfgEscala> = {
+/** Rangos en texto a partir de los cortes: [10, 15] → ['< 10', '10–15', '≥ 15']. */
+const rangosDe = (c: number[]) => [`< ${c[0]}`, ...c.slice(1).map((v, i) => `${c[i]}–${v}`), `≥ ${c[c.length - 1]}`]
+
+const CFG_BASE: Record<'imc' | 'visceral', CfgEscala> = {
   imc: {
     id: 'imc', titulo: 'IMC', sufijo: '', eje: [15, 40], cortes: [18.5, 25, 30, 35], inclusivo: false, desfase: 0,
     continuo: true, paso: 0.1, rangos: ['< 18.5', '18.5–24.9', '25–29.9', '30–34.9', '≥ 35'], clasificar: classifyIMC,
-  },
-  grasa: {
-    id: 'grasa', titulo: '% de grasa', sufijo: ' %', eje: [5, 40], cortes: [10, 15, 20, 25, 30], inclusivo: false, desfase: 0,
-    continuo: false, paso: 0.1, rangos: ['< 10', '10–15', '15–20', '20–25', '25–30', '≥ 30'], clasificar: classifyFat,
   },
   visceral: {
     id: 'visceral', titulo: 'Grasa visceral', sufijo: '', eje: [0.5, 20.5], cortes: [9, 14], inclusivo: true, desfase: 0.5,
     continuo: false, paso: 1, rangos: ['≤ 9', '10–14', '≥ 15'], clasificar: classifyVisceral,
   },
 }
+
+/** Escala del % de grasa: los cortes, el eje y la clasificación se desplazan por sexo (desplazamientoGrasa), así
+ *  que el marcador, las zonas y los «te faltan X puntos» hablan siempre del % de grasa real. Para hombre el
+ *  desplazamiento es 0 y queda la referencia de siempre. */
+function cfgGrasa(p: PesoPerfil): CfgEscala {
+  const d = desplazamientoGrasa(p)
+  const cortes = [10, 15, 20, 25, 30].map(c => c + d)
+  return {
+    id: 'grasa', titulo: '% de grasa', sufijo: ' %', eje: [5 + d, 40 + d], cortes, inclusivo: false, desfase: 0,
+    continuo: false, paso: 0.1, rangos: rangosDe(cortes), clasificar: v => classifyFat(v, d),
+    nota: d ? `Cortes ajustados para mujer: +${d} puntos sobre la referencia de hombre. Es una aproximación de las tablas habituales, no una norma clínica.` : undefined,
+  }
+}
+const cfgDe = (id: EscalaId, p: PesoPerfil): CfgEscala => (id === 'grasa' ? cfgGrasa(p) : CFG_BASE[id])
 
 function zonasDe(cfg: CfgEscala): ZonaEscala[] {
   const bordes = [cfg.eje[0], ...cfg.cortes.map(c => c + cfg.desfase), cfg.eje[1]]
@@ -141,7 +181,7 @@ function faltaSubir(cfg: CfgEscala, valor: number, corte: number) {
   return Math.max(cfg.paso, f)
 }
 
-type CtxEscala = { pesoKg: number | null; magraKg: number | null; pesoGrasaKg: number | null }
+type CtxEscala = { pesoKg: number | null; magraKg: number | null; pesoGrasaKg: number | null; perfil: PesoPerfil }
 
 const nTxt = (cfg: CfgEscala, n: number) => (cfg.paso >= 1 ? String(Math.round(n)) : n.toFixed(1))
 const unidadTxt = (cfg: CfgEscala, n: number) =>
@@ -159,7 +199,7 @@ function limiteSubir(cfg: CfgEscala, corte: number) {
 
 /** Los kilos que equivale cruzar un corte (IMC: peso para ese IMC con la talla; grasa: conservando la masa magra). */
 function kgHasta(cfg: CfgEscala, corte: number, ctx: CtxEscala): number | null {
-  if (cfg.id === 'imc' && ctx.pesoKg != null) return r1(ctx.pesoKg - corte * H2)
+  if (cfg.id === 'imc' && ctx.pesoKg != null) return r1(ctx.pesoKg - pesoParaIMC(ctx.perfil, corte))
   if (cfg.id === 'grasa' && ctx.magraKg != null && ctx.pesoGrasaKg != null) return r1(ctx.pesoGrasaKg - ctx.magraKg / (1 - corte / 100))
   return null
 }
@@ -174,7 +214,7 @@ function pasosDe(cfg: CfgEscala, valor: number, idx: number, zonas: ZonaEscala[]
     if (sig && sig.level !== 'good') {
       const corte = cfg.cortes[idx]
       const margen = cfg.inclusivo ? corte - valor : suelo1(corte - valor)
-      const kg = cfg.id === 'imc' && ctx.pesoKg != null ? r1(corte * H2 - ctx.pesoKg) : null
+      const kg = cfg.id === 'imc' && ctx.pesoKg != null ? r1(pesoParaIMC(ctx.perfil, corte) - ctx.pesoKg) : null
       const kgT = kg != null && kg > 0 ? ` (≈ ${kg.toFixed(1)} kg)` : ''
       out.push(margen > 0
         ? { tipo: 'margen', texto: `Estás en ${z.label}: te quedan ${nTxt(cfg, margen)} ${unidadTxt(cfg, margen)}${kgT} de margen antes de pasar a ${sig.label} (${limiteSubir(cfg, corte)}).` }
@@ -189,7 +229,7 @@ function pasosDe(cfg: CfgEscala, valor: number, idx: number, zonas: ZonaEscala[]
     // Por debajo de lo recomendable (bajo peso, grasa muy baja): el camino es hacia arriba.
     const corte = cfg.cortes[0]
     const f = faltaSubir(cfg, valor, corte)
-    const kg = cfg.id === 'imc' && ctx.pesoKg != null ? r1(corte * H2 - ctx.pesoKg) : null
+    const kg = cfg.id === 'imc' && ctx.pesoKg != null ? r1(pesoParaIMC(ctx.perfil, corte) - ctx.pesoKg) : null
     out.push({ tipo: 'subir', texto: `${faltaTxt(f)} ${nTxt(cfg, f)} ${unidadTxt(cfg, f)}${kg != null && kg > 0 ? ` (≈ ${kg.toFixed(1)} kg)` : ''} para llegar a ${zonas[1].label} (${limiteSubir(cfg, corte)}).` })
     return out
   }
@@ -200,7 +240,7 @@ function pasosDe(cfg: CfgEscala, valor: number, idx: number, zonas: ZonaEscala[]
   const kg = kgHasta(cfg, corte, ctx)
   let texto = `${faltaTxt(f)} ${nTxt(cfg, f)} ${unidadTxt(cfg, f)} para pasar a ${zonas[idx - 1].label} (${limiteBajar(cfg, corte)}).`
   if (cfg.id === 'imc' && kg != null && kg > 0) {
-    texto += ` Con tu talla de 1.81 m eso es pesar menos de ${r1(corte * H2).toFixed(1)} kg: ≈ ${kg.toFixed(1)} kg menos que hoy.`
+    texto += ` Con tu talla de ${tallaTxt(ctx.perfil)} m eso es pesar menos de ${r1(pesoParaIMC(ctx.perfil, corte)).toFixed(1)} kg: ≈ ${kg.toFixed(1)} kg menos que hoy.`
   }
   out.push({ tipo: 'bajar', texto })
 
@@ -225,10 +265,10 @@ function armarEscala(
   const marcas: MarcaEje[] = cfg.cortes.map(c => {
     const pos = (c + cfg.desfase - min) / (max - min)
     const texto = cfg.id === 'visceral' ? String(c + 1) : String(c)
-    const sub = cfg.id === 'imc' && (c === 25 || c === 30) ? `${r1(c * H2).toFixed(1)} kg` : undefined
+    const sub = cfg.id === 'imc' && (c === 25 || c === 30) ? `${r1(pesoParaIMC(ctx.perfil, c)).toFixed(1)} kg` : undefined
     return { pos, texto, sub }
   })
-  const base = { id: cfg.id, titulo: cfg.titulo, sufijo: cfg.sufijo, eje: { min, max }, zonas, marcas }
+  const base = { id: cfg.id, titulo: cfg.titulo, sufijo: cfg.sufijo, eje: { min, max }, zonas, marcas, ...(cfg.nota ? { nota: cfg.nota } : {}) }
   if (valor == null) {
     return { ...base, valor: null, valorTxt: '—', clasif: null, fecha: null, deOtraFecha: false, idx: -1, pos: null, fuera: null, pasos: [] }
   }
@@ -248,7 +288,7 @@ function armarEscala(
   }
 }
 
-export function calcEscalas(rows: PesoRecord[]): CalcEscalas | null {
+export function calcEscalas(rows: PesoRecord[], perfil: PesoPerfil): CalcEscalas | null {
   const s = ordenar(rows)
   if (!s.length) return null
   const ultima = s[s.length - 1]
@@ -256,21 +296,26 @@ export function calcEscalas(rows: PesoRecord[]): CalcEscalas | null {
   const rGrasa = ultimoCon(s, 'pct_grasa')
   const rVisc = ultimoCon(s, 'grasa_visceral')
 
-  // IMC igual que la franja de estado: el del equipo si el registro lo trae; si no (captura rápida
-  // con solo peso), peso / talla². Así los dos lugares de la página nunca se contradicen.
-  const imc = rPeso ? (finito(rPeso.imc) ? rPeso.imc : rPeso.peso! / H2) : null
+  // IMC igual que la franja de estado: el del equipo si el registro lo trae (y vale para la estatura del perfil,
+  // ver imcEquipo); si no (captura rápida con solo peso), peso / talla². Así los dos lugares nunca se contradicen.
+  const h2 = tallaCuadrada(perfil)
+  const imc = rPeso ? (imcEquipo(rPeso, perfil) ?? r1(rPeso.peso! / h2)) : null
   const pesoKg = rPeso?.peso ?? null
   const magraKg = rGrasa ? masaMagra(rGrasa) : null
-  const ctx: CtxEscala = { pesoKg, magraKg, pesoGrasaKg: rGrasa?.peso ?? null }
+  const ctx: CtxEscala = { pesoKg, magraKg, pesoGrasaKg: rGrasa?.peso ?? null, perfil }
+  const { min: kgMin, max: kgMax } = pesoSaludable(perfil)
 
   return {
     ultimaFecha: ultima.fecha,
     escalas: [
-      armarEscala(CFG.imc, imc, rPeso?.fecha ?? null, ultima.fecha, ctx),
-      armarEscala(CFG.grasa, rGrasa?.pct_grasa ?? null, rGrasa?.fecha ?? null, ultima.fecha, ctx),
-      armarEscala(CFG.visceral, rVisc?.grasa_visceral ?? null, rVisc?.fecha ?? null, ultima.fecha, ctx),
+      armarEscala(cfgDe('imc', perfil), imc, rPeso?.fecha ?? null, ultima.fecha, ctx),
+      armarEscala(cfgDe('grasa', perfil), rGrasa?.pct_grasa ?? null, rGrasa?.fecha ?? null, ultima.fecha, ctx),
+      armarEscala(cfgDe('visceral', perfil), rVisc?.grasa_visceral ?? null, rVisc?.fecha ?? null, ultima.fecha, ctx),
     ],
-    equivalencias: { tallaM: 1.81, kgImc25: r1(25 * H2), kgImc30: r1(30 * H2), pesoKg, fechaPeso: rPeso?.fecha ?? null },
+    equivalencias: {
+      tallaM: perfil.estatura_cm / 100, kgImc25: r1(pesoParaIMC(perfil, 25)), kgImc30: r1(pesoParaIMC(perfil, 30)),
+      pesoKg, fechaPeso: rPeso?.fecha ?? null, saludable: { min: kgMin, max: kgMax },
+    },
   }
 }
 
@@ -590,17 +635,21 @@ export function pesoActual(rows: PesoRecord[]): { peso: number; fecha: string } 
 
 export type ChipObjetivo = { id: 'imc25' | 'meta' | 'g25' | 'g20'; label: string; kg: number }
 
-/** Atajos de peso objetivo. Los de % de grasa asumen que se conserva la masa magra actual (la del último
- *  registro con % de grasa) y se omiten si ya estás en ese % o por debajo. */
-export function chipsObjetivo(rows: PesoRecord[], plan: PesoPlan | null): ChipObjetivo[] {
+/** Atajos de peso objetivo. El de IMC 25 sale de la estatura del perfil. Los de % de grasa asumen que se conserva
+ *  la masa magra actual (la del último registro con % de grasa; no depende de la estatura) y se omiten si ya estás
+ *  en ese % o por debajo; sus porcentajes (25 y 20 para hombre) se desplazan por sexo para caer en las mismas zonas. */
+export function chipsObjetivo(rows: PesoRecord[], plan: PesoPlan | null, perfil: PesoPerfil): ChipObjetivo[] {
   const s = ordenar(rows)
   const pa = ultimoCon(s, 'peso')
   const rg = ultimoCon(s, 'pct_grasa')
   const magra = rg ? masaMagra(rg) : null
-  const chips: ChipObjetivo[] = [{ id: 'imc25', label: `IMC 25 · ${r1(PESO_IMC_25).toFixed(1)} kg`, kg: r1(PESO_IMC_25) }]
+  const imc25 = r1(pesoParaIMC(perfil, 25))
+  const chips: ChipObjetivo[] = [{ id: 'imc25', label: `IMC 25 · ${imc25.toFixed(1)} kg`, kg: imc25 }]
   if (plan && finito(plan.meta_peso)) chips.push({ id: 'meta', label: `Meta · ${plan.meta_peso} kg`, kg: plan.meta_peso })
   if (magra != null && pa) {
-    for (const [id, p] of [['g25', 25], ['g20', 20]] as const) {
+    const desp = desplazamientoGrasa(perfil)
+    for (const [id, base] of [['g25', 25], ['g20', 20]] as const) {
+      const p = base + desp
       const kg = r1(magra / (1 - p / 100))
       if (pa.peso != null && kg < pa.peso - 0.05) chips.push({ id, label: `${p} % grasa · ${kg.toFixed(1)} kg`, kg })
     }
@@ -608,9 +657,9 @@ export function chipsObjetivo(rows: PesoRecord[], plan: PesoPlan | null): ChipOb
   return chips
 }
 
-/** Peso objetivo por defecto: la meta del plan si existe; si no, el peso de IMC 25. */
-export function objetivoPorDefecto(plan: PesoPlan | null): number {
-  return plan && finito(plan.meta_peso) ? plan.meta_peso : r1(PESO_IMC_25)
+/** Peso objetivo por defecto: la meta del plan si existe; si no, el peso de IMC 25 para la estatura del perfil. */
+export function objetivoPorDefecto(plan: PesoPlan | null, perfil: PesoPerfil): number {
+  return plan && finito(plan.meta_peso) ? plan.meta_peso : r1(pesoParaIMC(perfil, 25))
 }
 
 export function parsePeso(txt: string): { ok: true; kg: number } | { ok: false; msg: string } {
@@ -623,7 +672,8 @@ export function parsePeso(txt: string): { ok: true; kg: number } | { ok: false; 
   return { ok: true, kg: r1(n) }
 }
 
-export function calcEscenarios(pesoKg: number, objetivoKg: number, hoy: string | null): CalcEscenarios {
+export function calcEscenarios(pesoKg: number, objetivoKg: number, hoy: string | null, perfil: PesoPerfil): CalcEscenarios {
+  const h2 = tallaCuadrada(perfil)
   const kg = r1(Math.abs(pesoKg - objetivoKg))
   const direccion = kg < 0.05 ? 'igual' : objetivoKg < pesoKg ? 'bajar' : 'subir'
   const min = pesoKg * 0.0025, max = pesoKg * 0.01
@@ -638,12 +688,12 @@ export function calcEscenarios(pesoKg: number, objetivoKg: number, hoy: string |
       zona: ritmo < min - 1e-9 ? 'lento' : ritmo > max + 1e-9 ? 'agresivo' : 'sostenible',
     }
   })
-  const imcObjetivo = r1(objetivoKg / H2)
+  const imcObjetivo = r1(objetivoKg / h2)
   return {
     pesoKg, objetivoKg, direccion, kg,
     rango: { min: r2(min), max: r2(max) },
     filas, imcObjetivo,
-    avisoImc: objetivoKg > 0 && objetivoKg / H2 < 18.5
+    avisoImc: objetivoKg > 0 && objetivoKg / h2 < 18.5
       ? `Ese peso equivale a un IMC de ${imcObjetivo.toFixed(1)}, por debajo de 18.5 (bajo peso). Considera un objetivo más alto.`
       : null,
   }

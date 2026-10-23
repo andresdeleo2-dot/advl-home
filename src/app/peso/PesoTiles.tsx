@@ -1,12 +1,15 @@
 'use client'
 
 import { useMemo } from 'react'
-import { H2, classifyIMC, fmtFecha, masaGrasa, masaMagra, type Classification, type PesoRecord } from '@/lib/peso'
+import { classifyIMC, fmtFecha, masaGrasa, masaMagra, type PesoRecord } from '@/lib/peso'
+import { tallaCuadrada } from '@/lib/peso-perfil'
+import { imcEquipo } from '@/lib/peso-visuals'
 import type { PesoTilesProps } from './contratos'
+import { usePerfil } from './perfil-context'
 import { COLOR, Eyebrow, Panel } from './ui'
 import {
-  EXTRA_SERIES, METRIC_BY_KEY, TONO_COLOR, colorTexto, flecha, fmtGap, fmtNum, fmtSigned, referenciaAntigua, tonoDelta, valoresDe,
-  type SerieValor,
+  EXTRA_SERIES, METRIC_BY_KEY, TONO_COLOR, colorTexto, flecha, fmtGap, fmtNum, fmtSigned, referenciaAntigua, tonoDelta, useMetricas, valoresDe,
+  type MetricKey, type SerieValor,
 } from './metricas'
 
 // Las 6 tarjetas de métricas (pestaña Resumen): valor grande, clasificación, cambio contra hace ~30 días y una mini
@@ -21,7 +24,9 @@ type TileDef = {
   color: string
   goodDir: 'up' | 'down' | 'neutral'
   get: (r: PesoRecord) => number | null
-  clasifica?: (v: number) => Classification
+  /** Métrica cuya clasificación usa la tarjeta. Se resuelve con las métricas del PERFIL (useMetricas): el % de grasa
+   *  clasifica distinto según el sexo, así que no se puede fijar aquí a nivel de módulo. */
+  clasifica?: MetricKey
   nota?: string
 }
 
@@ -33,9 +38,9 @@ const colorExtra = (key: string) => EXTRA_SERIES.find(s => s.key === key)?.color
 const TILES: TileDef[] = [
   // Peso no trae clasificación propia: se lee como IMC (ver abajo) para que la tarjeta diga dónde estás.
   { key: 'peso', label: 'Peso', unit: 'kg', decimals: 1, color: METRIC_BY_KEY.peso.color, goodDir: 'down', get: r => r.peso },
-  { key: 'pct_grasa', label: '% Grasa', unit: '%', decimals: 1, color: METRIC_BY_KEY.pct_grasa.color, goodDir: 'down', get: r => r.pct_grasa, clasifica: METRIC_BY_KEY.pct_grasa.classify },
-  { key: 'grasa_visceral', label: 'Grasa visceral', unit: '', decimals: 0, color: METRIC_BY_KEY.grasa_visceral.color, goodDir: 'down', get: r => r.grasa_visceral, clasifica: METRIC_BY_KEY.grasa_visceral.classify },
-  { key: 'pct_musculo', label: '% Músculo', unit: '%', decimals: 1, color: METRIC_BY_KEY.pct_musculo.color, goodDir: 'up', get: r => r.pct_musculo, clasifica: METRIC_BY_KEY.pct_musculo.classify },
+  { key: 'pct_grasa', label: '% Grasa', unit: '%', decimals: 1, color: METRIC_BY_KEY.pct_grasa.color, goodDir: 'down', get: r => r.pct_grasa, clasifica: 'pct_grasa' },
+  { key: 'grasa_visceral', label: 'Grasa visceral', unit: '', decimals: 0, color: METRIC_BY_KEY.grasa_visceral.color, goodDir: 'down', get: r => r.grasa_visceral, clasifica: 'grasa_visceral' },
+  { key: 'pct_musculo', label: '% Músculo', unit: '%', decimals: 1, color: METRIC_BY_KEY.pct_musculo.color, goodDir: 'up', get: r => r.pct_musculo, clasifica: 'pct_musculo' },
   { key: 'masa_grasa', label: 'Masa grasa', unit: 'kg', decimals: 1, color: colorExtra('masa_grasa'), goodDir: 'down', get: masaGrasa, nota: 'peso × % grasa' },
   { key: 'masa_magra', label: 'Masa magra', unit: 'kg', decimals: 1, color: colorExtra('masa_magra'), goodDir: 'up', get: masaMagra, nota: 'peso − grasa' },
 ]
@@ -83,6 +88,9 @@ function Sparkline({ serie, color, etiqueta, unidad }: { serie: SerieValor[]; co
 }
 
 export default function PesoTiles({ data }: PesoTilesProps) {
+  const perfil = usePerfil()
+  const { byKey } = useMetricas()
+  const talla2 = tallaCuadrada(perfil)
   const tarjetas = useMemo(() => {
     const ultimaFecha = data.reduce((m, r) => (r.fecha > m ? r.fecha : m), '')
     return TILES.flatMap(def => {
@@ -91,12 +99,22 @@ export default function PesoTiles({ data }: PesoTilesProps) {
       const cur = serie[serie.length - 1]
       const ref = referenciaAntigua(serie)
       const delta = ref ? Math.round((cur.valor - ref.ref.valor) * 100) / 100 : null
-      // IMC del peso: el que anotó la báscula ese día (es el mismo número que muestra la franja de estado); si no hay, se calcula con la talla.
-      const imc = def.key === 'peso' ? (data.find(r => r.fecha === cur.fecha && r.peso === cur.valor && r.imc != null)?.imc ?? cur.valor / H2) : null
-      const cls = imc != null ? classifyIMC(imc) : def.clasifica ? def.clasifica(cur.valor) : null
+      // IMC del peso: el que anotó la báscula ese día, pero solo si sigue valiendo para la estatura del perfil (imcEquipo,
+      // la misma regla de la franja de estado: así los dos nunca se contradicen); si no hay o ya no vale, peso / talla² con la del perfil,
+      // redondeado a 1 decimal como en la franja: el número que se ve y la clasificación salen del mismo valor (24.96 se muestra 25.0 y es «Sobrepeso»).
+      let imc: number | null = null
+      if (def.key === 'peso') {
+        for (const r of data) {
+          if (r.fecha !== cur.fecha || r.peso !== cur.valor) continue
+          imc = imcEquipo(r, perfil)
+          if (imc != null) break
+        }
+        imc ??= Math.round((cur.valor / talla2) * 10) / 10
+      }
+      const cls = imc != null ? classifyIMC(imc) : def.clasifica ? byKey[def.clasifica].classify?.(cur.valor) ?? null : null
       return [{ def, serie, cur, ref, delta, imc, cls, desfasado: cur.fecha !== ultimaFecha }]
     })
-  }, [data])
+  }, [data, byKey, perfil, talla2])
 
   if (!tarjetas.length) return null
   const n = tarjetas.length

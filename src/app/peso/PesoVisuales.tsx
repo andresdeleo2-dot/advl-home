@@ -2,17 +2,19 @@
 
 import { Component, useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { H2, daysBetween, hoyMX } from '@/lib/peso'
+import { daysBetween, hoyMX } from '@/lib/peso'
 import type { PesoRecord, PesoPlan } from '@/lib/peso'
+import { desplazamientoGrasa } from '@/lib/peso-perfil'
 import {
   PERIODOS_COMP, UMBRAL_HUECO, MESES_VENTANA, KCAL_POR_KG,
   calcComposicion, calcConstancia, calcEscalas, calcEscenarios, chipsObjetivo,
   fmtCorta, fmtFechaLarga, fmtMesAnio, marcasMeses, mejorRachaBajada, objetivoPorDefecto, parsePeso,
-  pesoActual, plural, ritmoParaFecha, sg, ticksPeso,
+  pesoActual, plural, rangoSaludableTxt, ritmoParaFecha, sg, tallaTxt, ticksPeso,
 } from '@/lib/peso-visuals'
-import type { Escala, PeriodoComp, CalcComp, CalcEscalas, ZonaRitmo } from '@/lib/peso-visuals'
+import type { Escala, PeriodoComp, CalcComp, CalcEscalas, ChipObjetivo, ZonaRitmo } from '@/lib/peso-visuals'
 import { BTN, COLOR, Eyebrow, INPUT, Panel, Pill, Segmented } from './ui'
 import { DATO_COLOR } from './metricas'
+import { usePerfil } from './perfil-context'
 import type { PesoVisualesProps } from './contratos'
 
 // Bloque de gráficos explicativos de /peso (pestaña Resumen). Cuatro widgets, cada uno un Panel:
@@ -21,6 +23,7 @@ import type { PesoVisualesProps } from './contratos'
 //   3) LineaMediciones  — qué tan constante eres midiéndote y qué pasa con el peso
 //   4) Escenarios       — cuánto tardarías en llegar a un peso objetivo
 // Todos los números salen de código (src/lib/peso-visuals.ts, probado con node), nunca de la IA.
+// La estatura y el sexo vienen del perfil (usePerfil): de ahí salen los kg de cada corte del IMC y los umbrales del % de grasa.
 // Aquí solo se dibuja: SVG/divs a mano, sin librerías.
 
 // ── Tokens locales ───────────────────────────────────────────────────────────
@@ -159,6 +162,7 @@ function BarraEscala({ e }: { e: Escala }) {
 }
 
 function TarjetaEscala({ e, eq }: { e: Escala; eq: CalcEscalas['equivalencias'] }) {
+  const perfil = usePerfil()
   const col = e.clasif ? tinta(e.clasif.color) : TXT2
   return (
     <article className="flex flex-col rounded-2xl p-4" style={{ background: COLOR.card2, border: `1px solid ${COLOR.line}` }} aria-label={e.titulo}>
@@ -187,6 +191,8 @@ function TarjetaEscala({ e, eq }: { e: Escala; eq: CalcEscalas['equivalencias'] 
           </li>
         ))}
       </ul>
+      {/* Mujer: los cortes del % de grasa se desplazan; la aclaración evita que parezcan los de la referencia general. */}
+      {e.nota && <p className="mt-2 leading-snug" style={{ fontSize: 11, color: TXT2 }}>{e.nota}</p>}
 
       {e.id === 'imc' && eq.pesoKg != null && (
         <dl className="mt-3 grid grid-cols-3 gap-2">
@@ -197,6 +203,11 @@ function TarjetaEscala({ e, eq }: { e: Escala; eq: CalcEscalas['equivalencias'] 
             </div>
           ))}
         </dl>
+      )}
+      {e.id === 'imc' && (
+        <p className="mt-2 leading-snug" style={{ fontSize: 11.5, color: TXT2 }}>
+          Con tu estatura ({tallaTxt(perfil)} m), un IMC normal (18.5 a 24.9) es un peso de <strong className="tabular-nums" style={{ color: COLOR.ink }}>{rangoSaludableTxt(perfil)}</strong>.
+        </p>
       )}
 
       <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: COLOR.line }}>
@@ -214,7 +225,8 @@ function TarjetaEscala({ e, eq }: { e: Escala; eq: CalcEscalas['equivalencias'] 
 }
 
 export function EscalasActuales({ data }: { data: PesoRecord[] }) {
-  const calc = useMemo(() => calcEscalas(data), [data])
+  const perfil = usePerfil()
+  const calc = useMemo(() => calcEscalas(data, perfil), [data, perfil])
   if (!calc) {
     return (
       <Panel eyebrow="Dónde estás" icon="📍" title="Tu posición en cada escala">
@@ -515,13 +527,19 @@ export function Escenarios({ data, plan }: { data: PesoRecord[]; plan: PesoPlan 
   const hoy = useHoy()
   const inputId = useId()
   const ayudaId = `${inputId}-ayuda`
+  const perfil = usePerfil()
   const pa = useMemo(() => pesoActual(data), [data])
-  const chips = useMemo(() => chipsObjetivo(data, plan), [data, plan])
+  const chips = useMemo(() => chipsObjetivo(data, plan, perfil), [data, plan, perfil])
   const racha = useMemo(() => mejorRachaBajada(data), [data])
-  // null = Andrés no ha escrito nada: se muestra el objetivo por defecto (la meta del plan, o IMC 25).
+  // null = Andrés no ha escrito nada: se muestra el atajo elegido o, si no hay, el objetivo por defecto (la meta del
+  // plan, o IMC 25). El atajo se guarda por id y no por kilos: si cambia el perfil (estatura) o llega otra medición,
+  // el valor del campo lo sigue en vez de quedarse con los kilos de antes.
   const [txt, setTxt] = useState<string | null>(null)
-  const valorTxt = txt ?? String(objetivoPorDefecto(plan))
+  const [atajo, setAtajo] = useState<ChipObjetivo['id'] | null>(null)
+  const kgAtajo = atajo ? chips.find(c => c.id === atajo)?.kg : undefined
+  const valorTxt = txt ?? String(kgAtajo ?? objetivoPorDefecto(plan, perfil))
   const v = parsePeso(valorTxt)
+  const despGrasa = desplazamientoGrasa(perfil)
 
   if (!pa) {
     return (
@@ -531,7 +549,8 @@ export function Escenarios({ data, plan }: { data: PesoRecord[]; plan: PesoPlan 
     )
   }
 
-  const calc = v.ok ? calcEscenarios(pa.peso, v.kg, hoy) : null
+  // Con el perfil: el IMC del objetivo y el aviso de bajo peso dependen de tu estatura, no de la de fábrica.
+  const calc = v.ok ? calcEscenarios(pa.peso, v.kg, hoy, perfil) : null
   const maxSem = calc ? Math.max(1, ...calc.filas.map(f => f.semanas)) : 1
   const verbo = calc?.direccion === 'subir' ? 'subir' : 'bajar'
   const flujo = calc?.direccion === 'subir' ? 'superávit' : 'déficit'
@@ -558,14 +577,14 @@ export function Escenarios({ data, plan }: { data: PesoRecord[]; plan: PesoPlan 
           <div className="relative mt-1.5">
             <input
               id={inputId} type="text" inputMode="decimal" autoComplete="off" value={valorTxt}
-              onChange={e => setTxt(e.target.value)}
+              onChange={e => { setTxt(e.target.value); setAtajo(null) }}
               aria-invalid={!v.ok} aria-describedby={ayudaId}
               className={`${INPUT} tabular-nums`} style={{ fontSize: 20, fontWeight: 700, padding: '10px 44px 10px 14px', minHeight: 48, borderColor: v.ok ? undefined : COLOR.bad }}
             />
             <span aria-hidden className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2" style={{ fontSize: 13, color: TXT2 }}>kg</span>
           </div>
           <p id={ayudaId} className="mt-1.5" role={v.ok ? undefined : 'alert'} style={{ fontSize: 12, color: v.ok ? TXT2 : COLOR.bad }}>
-            {v.ok ? (calc?.avisoImc ?? `Equivale a un IMC de ${(v.kg / H2).toFixed(1)}.`) : v.msg}
+            {calc ? (calc.avisoImc ?? `Equivale a un IMC de ${calc.imcObjetivo.toFixed(1)}.`) : (!v.ok && v.msg)}
           </p>
 
           <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Atajos de peso objetivo">
@@ -573,7 +592,7 @@ export function Escenarios({ data, plan }: { data: PesoRecord[]; plan: PesoPlan 
               const on = v.ok && Math.abs(v.kg - c.kg) < 0.05
               return (
                 <button
-                  key={c.id} type="button" aria-pressed={on} onClick={() => setTxt(String(c.kg))}
+                  key={c.id} type="button" aria-pressed={on} onClick={() => { setAtajo(c.id); setTxt(null) }}
                   className={`rounded-full px-3.5 text-xs font-semibold transition-colors whitespace-nowrap ${FOCO}`}
                   style={{
                     minHeight: 40,
@@ -589,6 +608,7 @@ export function Escenarios({ data, plan }: { data: PesoRecord[]; plan: PesoPlan 
           {chips.some(c => c.id === 'g25' || c.id === 'g20') && (
             <p className="mt-2" style={{ fontSize: 11, color: TXT2 }}>
               Los atajos de % de grasa suponen que conservas tu masa magra actual y solo pierdes grasa.
+              {despGrasa > 0 && ` Para mujer los porcentajes suben ${despGrasa} puntos (${20 + despGrasa} % y ${25 + despGrasa} %) para caer en las mismas zonas de la escala.`}
             </p>
           )}
 

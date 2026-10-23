@@ -21,7 +21,7 @@ export function tipoInfo(t: PlanTipo) {
 }
 
 /** Anillo de foco visible para teclado (el reset de Tailwind quita el del navegador en algunos elementos). */
-export const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--gold-500)]'
+export const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A6420]'
 
 /** Botón de las primitivas de ui.tsx con objetivo táctil ≥ 40 px. */
 export const btn = (k: keyof Omit<typeof BTN, 'base'>) => `${BTN.base} ${BTN[k]} min-h-10 ${FOCO}`

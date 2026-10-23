@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { fmtFecha, type PesoAnalisisGuardado, type PesoInsight, type InsightTipo, type PesoMetrica } from '@/lib/peso'
 import type { PesoIAProps } from './contratos'
+import { usePerfil } from './perfil-context'
 import { Panel, Pill, Eyebrow, COLOR, BTN, INPUT, CARD_SHADOW } from './ui'
 
 // Análisis con IA del tracker de Peso (Gemini, el mismo motor que Noticias en el Panel). El servidor
@@ -295,8 +296,16 @@ function pedirRespuesta(texto: string, historial: Turno[]): Promise<Fallo | null
 
 // ── Componente ──────────────────────────────────────────────────────────────
 
-export default function PesoIA({ firma, inicial, persistencia, nMediciones }: PesoIAProps) {
+// `perfilConfigurado` = PerfilEstado.configurado: hay una fila guardada. Es el mismo criterio que usan la ruta del
+// análisis y la huella, así que el pie no puede contradecirlas. PesoClient siempre lo pasa (el contrato lo deja opcional
+// para pruebas): guardar los valores de fábrica sin tocarlos también cuenta como perfil completo (la IA recibe
+// perfil_configurado: true), y comparar por valor (esPerfilDeFabrica) no distingue ese caso de «nunca se guardó».
+// `perfilSinLeer`: la lectura del perfil falló; los datos que se ven son los supuestos, pero puede haber uno guardado, así
+// que el pie calla el fragmento del perfil en vez de afirmar algo que quizá no es cierto.
+export default function PesoIA({ firma, inicial, persistencia, nMediciones, perfilConfigurado = false, perfilSinLeer = false }: PesoIAProps) {
   const ses = useSyncExternalStore(suscribirSesion, leerSesion, leerSesionServidor)
+  const perfil = usePerfil()   // solo para decir en el pie con qué perfil se hizo el análisis (la ruta lo lee por su cuenta)
+  const configurado = perfilConfigurado
   const { local, respuestas } = ses
   const cargando = ses.generando
   const preguntando = ses.preguntando !== ''
@@ -647,6 +656,10 @@ export default function PesoIA({ firma, inicial, persistencia, nMediciones }: Pe
           {visible.fuente === 'ia' ? 'Gemini' : 'Lectura automática (la IA no respondió)'}
           {ahora != null ? ` · ${hace(visible.created_at, ahora)}` : ''}
           {` · con ${visible.n_registros} ${visible.n_registros === 1 ? 'medición' : 'mediciones'}${FECHA_ISO.test(visible.fecha_base) ? ` hasta el ${fmtFecha(visible.fecha_base)}` : ''}`}
+          {/* Solo si el análisis corresponde a los datos y al perfil actuales (la huella incluye el perfil guardado). */}
+          {vigente && !perfilSinLeer && (configurado
+            ? ` · basado en tu perfil (${perfil.sexo}, ${perfil.estatura_cm} cm)`
+            : ` · perfil sin completar: se usaron datos supuestos (${perfil.sexo}, ${perfil.estatura_cm} cm)`)}
           {' · Orientativo: no sustituye a un médico o nutriólogo.'}
         </p>
       )}

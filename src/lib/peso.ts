@@ -2,6 +2,12 @@
 // (/api/peso/analisis), así los números que ves y los que lee el análisis son los mismos.
 // Sin dependencias de servidor: se importa también desde componentes de cliente.
 
+import {
+  PERFIL_DEFAULT, ACTIVIDADES, EXPERIENCIAS, EQUIPOS, ALCOHOLES, MAX_TEXTO_PERFIL, PROTEINA_G_KG,
+  edadEn, numerosBase, pesoParaIMC, pesoSaludable, tallaCuadrada, tallaM, tmbMifflin, desplazamientoGrasa, desplazamientoMusculo,
+  type PesoPerfil,
+} from '@/lib/peso-perfil'
+
 export type PesoRecord = {
   id: string
   fecha: string
@@ -23,11 +29,6 @@ export type PesoPlan = {
   meta_fecha: string | null
   meta_grasa: number | null
 }
-
-export const HEIGHT_M = 1.81
-export const H2 = HEIGHT_M * HEIGHT_M
-/** Peso al que el IMC cruza 25 con la talla de Andrés. */
-export const PESO_IMC_25 = 25 * H2
 
 // ── Fechas 'YYYY-MM-DD' ─────────────────────────────────────────────────────
 // Aritmética en UTC: el resultado no depende de la zona horaria del servidor ni del navegador.
@@ -66,6 +67,25 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 export type Level = 'good' | 'warn' | 'alert'
 export type Classification = { label: string; color: string; level: Level }
 
+const finito = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+
+/** IMC que reportó la báscula, solo si sigue valiendo para el perfil. La báscula lo calculó con la estatura que
+ *  tenía configurada (la de siempre, PERFIL_DEFAULT): si Andrés guarda otra estatura, ese IMC contradiría los kg
+ *  de cada corte y la franja de estado, así que se devuelve null. peso-visuals.ts la reexporta como imcEquipo (la
+ *  definición vive aquí porque peso-visuals ya importa este módulo y al revés habría un ciclo). */
+export function imcBasculaVigente(r: Pick<PesoRecord, 'imc'>, p: PesoPerfil): number | null {
+  return finito(r.imc) && p.estatura_cm === PERFIL_DEFAULT.estatura_cm ? r.imc : null
+}
+
+/** IMC de un registro con la estatura del perfil: el de la báscula si sigue valiendo y, si no, peso / estatura²
+ *  a 1 decimal (igual que el hero y las escalas). null si el registro no trae peso ni un IMC válido. Es lo que
+ *  deben usar la IA, los prompts y las tarjetas en vez de leer `r.imc` a pelo. */
+export function imcVigente(r: Pick<PesoRecord, 'peso' | 'imc'>, p: PesoPerfil): number | null {
+  const b = imcBasculaVigente(r, p)
+  if (b != null) return b
+  return finito(r.peso) ? r1(r.peso / tallaCuadrada(p)) : null
+}
+
 export function classifyIMC(v: number): Classification {
   if (v < 18.5) return { label: 'Bajo peso', color: '#f59e0b', level: 'warn' }
   if (v < 25)   return { label: 'Normal', color: '#22c55e', level: 'good' }
@@ -73,18 +93,25 @@ export function classifyIMC(v: number): Classification {
   if (v < 35)   return { label: 'Obesidad I', color: '#ef4444', level: 'alert' }
   return         { label: 'Obesidad II+', color: '#dc2626', level: 'alert' }
 }
-export function classifyFat(v: number): Classification {
-  if (v < 10)  return { label: 'Muy bajo', color: '#f59e0b', level: 'warn' }
-  if (v < 15)  return { label: 'Atlético', color: '#22c55e', level: 'good' }
-  if (v < 20)  return { label: 'Fitness', color: '#22c55e', level: 'good' }
-  if (v < 25)  return { label: 'Saludable', color: '#84cc16', level: 'good' }
-  if (v < 30)  return { label: 'Alto', color: '#f59e0b', level: 'warn' }
+/** `desp` desplaza TODOS los umbrales (puntos de % de grasa): 0 para hombre (la referencia de siempre) y
+ *  desplazamientoGrasa(perfil) = 8 para mujer (src/lib/peso-perfil.ts). Con desp = 0 se comporta exactamente como antes. */
+export function classifyFat(v: number, desp = 0): Classification {
+  const x = v - desp
+  if (x < 10)  return { label: 'Muy bajo', color: '#f59e0b', level: 'warn' }
+  if (x < 15)  return { label: 'Atlético', color: '#22c55e', level: 'good' }
+  if (x < 20)  return { label: 'Fitness', color: '#22c55e', level: 'good' }
+  if (x < 25)  return { label: 'Saludable', color: '#84cc16', level: 'good' }
+  if (x < 30)  return { label: 'Alto', color: '#f59e0b', level: 'warn' }
   return        { label: 'Obesidad por grasa', color: '#ef4444', level: 'alert' }
 }
-export function classifyMuscle(v: number): Classification {
-  if (v < 30)  return { label: 'Bajo', color: '#ef4444', level: 'alert' }
-  if (v < 33)  return { label: 'Normal', color: '#84cc16', level: 'warn' }
-  if (v < 36)  return { label: 'Bueno', color: '#22c55e', level: 'good' }
+/** `desp` suma al valor antes de comparar con los cortes 30/33/36 (pensados para hombre): 0 para hombre y
+ *  desplazamientoMusculo(perfil) = 8 para mujer (src/lib/peso-perfil.ts; el músculo de la mujer es proporcionalmente menor).
+ *  Con desp = 0 se comporta exactamente como antes. */
+export function classifyMuscle(v: number, desp = 0): Classification {
+  const x = v + desp
+  if (x < 30)  return { label: 'Bajo', color: '#ef4444', level: 'alert' }
+  if (x < 33)  return { label: 'Normal', color: '#84cc16', level: 'warn' }
+  if (x < 36)  return { label: 'Bueno', color: '#22c55e', level: 'good' }
   return        { label: 'Atlético', color: '#2d6cdf', level: 'good' }
 }
 export function classifyVisceral(v: number): Classification {
@@ -154,8 +181,9 @@ function hash36(s: string) {
 
 /** Huella de los datos que alimentan el análisis: si cambia (medición nueva, editada o borrada, la
  *  meta o las rutinas/dietas "en uso"), el análisis guardado ya no corresponde y se vuelve a generar.
- *  `extra` es la huella de lo que no son mediciones ni meta (hoy: `extraPlanes`, los ids de los planes
- *  en uso); la página y la ruta del análisis deben armarla con la MISMA función.
+ *  `extra` es la huella de lo que no son mediciones ni meta: los ids de los planes en uso (`extraPlanes`) y, si
+ *  Andrés guardó su perfil, la huella de este (`extraAnalisis` de peso-perfil.ts); la página y la ruta del análisis
+ *  deben armarla con las MISMAS funciones.
  *  Formato: `<n>-<hash de mediciones y meta>` y, solo si hay `extra`, `+<hash del extra>`. La parte de los
  *  planes va aparte para que la página, cuando no pueda leerlos, compare solo lo demás (`firmaBase`); y sin
  *  extra la huella es idéntica a la de antes, así que los análisis ya guardados siguen vigentes. */
@@ -255,7 +283,53 @@ function mejorRacha(etapa: PesoRecord[], sentido: 'baja' | 'sube'): Racha | null
 
 type Tramos = { intervalos: number; dias_totales: number; kg_totales: number; kg_por_semana: number | null }
 
-export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: string) {
+/** Texto libre del perfil (lesiones, restricciones...) listo para ir DENTRO del JSON que lee la IA: sin caracteres
+ *  de control y con espacios simples. Sigue siendo un dato, no una instrucción: el prompt lo dice, y al ir como
+ *  cadena JSON sus comillas y saltos de línea quedan escapados. */
+function textoPerfil(s: string | null | undefined): string | null {
+  if (typeof s !== 'string') return null
+  const t = s.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return t ? t.slice(0, MAX_TEXTO_PERFIL) : null
+}
+
+/** Bloque `perfil` de los hechos: lo que Andrés declaró sobre sí. Con `configurado` en false son los valores por
+ *  defecto (los de siempre), o sea SUPUESTOS: así lo dice `perfil_configurado` y el prompt lo trata como tal. */
+function hechosPerfil(perfil: PesoPerfil, hoy: string) {
+  const act = ACTIVIDADES.find(a => a.value === perfil.actividad)
+  return {
+    sexo: perfil.sexo,
+    edad_anios: edadEn(perfil.fecha_nacimiento, hoy),   // null = no registró su fecha de nacimiento: no se estima
+    estatura_cm: perfil.estatura_cm,
+    talla_m: tallaM(perfil),
+    // Los umbrales de % de grasa de clasificacion_actual.grasa ya llevan este ajuste (0 para hombre, 8 puntos para mujer).
+    desplazamiento_grasa_pct_puntos: desplazamientoGrasa(perfil),
+    // Igual para clasificacion_actual.musculo: a la mujer se le SUMAN estos puntos al % de la báscula antes de clasificarlo.
+    desplazamiento_musculo_pct_puntos: desplazamientoMusculo(perfil),
+    // factor_gasto es SOLO el de la actividad fuera del entrenamiento: el entrenamiento se suma aparte (numeros_base).
+    actividad_diaria_fuera_del_entrenamiento: act ? { nivel: act.label, descripcion: act.detalle, factor_gasto: act.factor } : null,
+    dias_entrenamiento_por_semana: perfil.dias_entrenamiento,
+    experiencia_entrenando: EXPERIENCIAS.find(e => e.value === perfil.experiencia)?.label ?? null,
+    equipo_disponible: EQUIPOS.find(e => e.value === perfil.equipo)?.label ?? null,
+    comidas_al_dia: perfil.comidas_dia,
+    alcohol: ALCOHOLES.find(a => a.value === perfil.alcohol)?.label ?? null,
+    sueno_horas_promedio: perfil.sueno_horas,
+    // Texto libre escrito por él: DATOS, nunca instrucciones.
+    lesiones: textoPerfil(perfil.lesiones),
+    restricciones_alimentarias: textoPerfil(perfil.restricciones),
+    preferencias: textoPerfil(perfil.preferencias),
+    notas_salud: textoPerfil(perfil.notas_salud),
+  }
+}
+
+/** `perfil` (estatura, sexo, edad, actividad...) sale de peso-perfil.ts; sin él valen los de siempre (PERFIL_DEFAULT) y
+ *  los números no cambian. `configurado` dice si ese perfil lo guardó Andrés (true) o son valores supuestos (false); por
+ *  omisión se deduce de si se pasó un perfil distinto del de fábrica, pero la ruta del análisis lo pasa explícito. */
+export function buildFacts(
+  rows: PesoRecord[], plan: PesoPlan | null, hoy: string,
+  perfil: PesoPerfil = PERFIL_DEFAULT, configurado: boolean = perfil !== PERFIL_DEFAULT,
+) {
+  const pesoImc25 = pesoParaIMC(perfil, 25)
+  const desp = desplazamientoGrasa(perfil)
   const sorted = [...rows].sort((a, b) => a.fecha.localeCompare(b.fecha))
   const ultima = sorted[sorted.length - 1]
   const primera = sorted[0]
@@ -269,8 +343,10 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
   const ultimaMusculo = ultimoQue(sorted, r => r.pct_musculo != null)
   const ultimaVisceral = ultimoQue(sorted, r => r.grasa_visceral != null)
 
+  // El IMC de la báscula se calculó con SU estatura de siempre: si el perfil trae otra, ese número contradiría los kg de
+  // IMC 25 y 30 y la clasificación, así que se recalcula con la del perfil (imcVigente). Sin IMC en el registro sigue null.
   const compacta = (r: PesoRecord) => ({
-    fecha: r.fecha, kg: r.peso, grasa_pct: r.pct_grasa, musculo_pct: r.pct_musculo, imc: r.imc,
+    fecha: r.fecha, kg: r.peso, grasa_pct: r.pct_grasa, musculo_pct: r.pct_musculo, imc: r.imc != null ? imcVigente(r, perfil) : null,
     rmr: r.rmr && r.rmr < 5000 ? r.rmr : null,   // 17775 en la base es un error de captura conocido
     edad_corporal: r.edad_corporal, grasa_visceral: r.grasa_visceral,
     masa_grasa_kg: masaGrasa(r), masa_magra_kg: masaMagra(r),
@@ -367,15 +443,21 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
   // bioimpedancia, que puede ser anterior a un registro rápido de solo peso).
   const magra = ultimaBio ? masaMagra(ultimaBio) : null
   const peso = ultimaPeso.peso
-  const aPerder = peso != null ? r1(peso - PESO_IMC_25) : null
+  const saludable = pesoSaludable(perfil)
+  const aPerder = peso != null ? r1(peso - pesoImc25) : null
   const hayQueBajar = aPerder != null && aPerder > 0
   const semanasA = (kg: number, ritmo: number) => Math.ceil(kg / ritmo)
   const s025 = hayQueBajar ? semanasA(aPerder, 0.25) : null
   const s05 = hayQueBajar ? semanasA(aPerder, 0.5) : null
   const s075 = hayQueBajar ? semanasA(aPerder, 0.75) : null
   const fechaEn = (semanas: number | null) => (semanas != null ? addDays(hoy, semanas * 7) : null)
+  // Los pesos «con 20 % / 25 % de grasa» se desplazan por sexo igual que la escala de la página (28 % y 33 % en mujer):
+  // así caen en las mismas zonas (fitness / saludable) que ve en pantalla. Con desp = 0 son los números de siempre.
+  const pctGrasaA = 20 + desp, pctGrasaB = 25 + desp
   const escenarios = {
-    peso_imc_25_kg: r1(PESO_IMC_25),
+    peso_imc_25_kg: saludable.imc25,
+    // Rango de peso con IMC normal (18.5 a 24.9) para su estatura: la meta nunca debe quedar por debajo del mínimo.
+    rango_peso_saludable_kg: { minimo: saludable.min, maximo: saludable.max },
     kg_para_imc_25: hayQueBajar ? aPerder : 0,
     semanas_a_0_25_kg_sem: s025,
     semanas_a_0_5_kg_sem: s05,
@@ -387,8 +469,11 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
     fecha_estimada_a_0_75_kg_sem: fechaEn(s075),
     partiendo_del_peso_kg: peso,
     peso_medido_el: peso != null ? ultimaPeso.fecha : null,
-    peso_con_20_pct_grasa_kg: magra != null ? r1(magra / 0.8) : null,
-    peso_con_25_pct_grasa_kg: magra != null ? r1(magra / 0.75) : null,
+    // Las claves conservan «20» y «25» por compatibilidad; el % de grasa que realmente usan va en los dos campos de abajo.
+    peso_con_20_pct_grasa_kg: magra != null ? r1(magra / (1 - pctGrasaA / 100)) : null,
+    peso_con_25_pct_grasa_kg: magra != null ? r1(magra / (1 - pctGrasaB / 100)) : null,
+    pct_grasa_usado_en_peso_con_20_pct_grasa_kg: pctGrasaA,
+    pct_grasa_usado_en_peso_con_25_pct_grasa_kg: pctGrasaB,
     masa_magra_base_medida_el: magra != null && ultimaBio ? ultimaBio.fecha : null,
   }
 
@@ -412,8 +497,17 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
     }
   }
 
+  // «Números base»: mismo criterio que la pestaña Mi perfil (último peso; RMR más reciente que sea creíble). La fórmula
+  // de Mifflin se evalúa con el peso de la medición que dio ese RMR, para que compararlos no mezcle fechas distintas.
+  const filaRmr = ultimoQue(sorted, r => r.rmr != null && r.rmr > 800 && r.rmr < 5000)
+  const nb = numerosBase(perfil, hoy, peso, filaRmr?.rmr ?? null)
+  const pesoParaTmb = filaRmr?.peso ?? peso
+  const tmbComparable = pesoParaTmb != null ? tmbMifflin(perfil, pesoParaTmb, hoy) : null
   const recortar = (s: string | null) => (s && s.trim() ? s.trim().slice(0, 1200) : null)
   const mejorPeso = mejorMarca(etapa, 'peso')
+  // IMC del último peso con la estatura del perfil (el de la báscula solo si ella usó esa misma estatura): lo comparten
+  // `imc.ultimo` y `clasificacion_actual.imc`, y coincide con el de la franja de estado de la página.
+  const imcUltimo = ultimaPeso.peso != null ? imcVigente(ultimaPeso, perfil) : null
 
   // Calidad del dato.
   const nSoloPeso = sorted.filter(esSoloPeso).length
@@ -435,7 +529,30 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
       en_1_semana: addDays(hoy, 7), en_2_semanas: addDays(hoy, 14), en_4_semanas: addDays(hoy, 28),
       en_8_semanas: addDays(hoy, 56), en_12_semanas: addDays(hoy, 84),
     },
-    perfil: { sexo: 'hombre', talla_m: HEIGHT_M, rango_edad: '30-40 años' },
+    // Lo que Andrés declaró sobre sí (sexo, edad, estatura, actividad, lesiones...). Con perfil_configurado en false
+    // son valores supuestos (los de fábrica), no confirmados por él.
+    perfil: hechosPerfil(perfil, hoy),
+    perfil_configurado: configurado,
+    // Los mismos «números base» que muestra la pestaña Mi perfil, para que la IA y la página no digan cosas distintas.
+    // Se omiten la edad, la talla y el peso saludable (ya están en `perfil` y `escenarios`) y la proteína (la referencia
+    // de proteína es `proteina_g_por_dia_orientativa`: dos rangos distintos confundirían al modelo).
+    numeros_base: {
+      peso_base_kg: peso,
+      tmb_mifflin_kcal: tmbComparable,
+      rmr_bascula_kcal: nb.rmr_bascula,
+      factor_actividad: nb.factor_actividad,
+      // gasto_diario_kcal = gasto_sin_entrenamiento_kcal + entrenamiento_kcal_dia (los días de entrenamiento ya están contados ahí).
+      gasto_sin_entrenamiento_kcal: nb.gasto_sin_entrenamiento,
+      entrenamiento_kcal_dia: nb.entrenamiento_kcal_dia,
+      gasto_diario_kcal: nb.gasto_diario,
+      agua_litros: nb.agua_litros,
+    },
+    // IMC con su estatura (no con la de fábrica): el último IMC y los kg a los que cruza 25 y 30.
+    imc: {
+      ultimo: imcUltimo != null ? r1(imcUltimo) : null,
+      peso_imc_25_kg: saludable.imc25,
+      peso_imc_30_kg: r1(pesoParaIMC(perfil, 30)),
+    },
     n_mediciones: sorted.length,
     primera_medicion: primera.fecha,
     ultima_medicion: ultima.fecha,
@@ -451,9 +568,9 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
     },
     // Clasificación con el último dato conocido de cada métrica (la fecha de cada uno está en *_medido_el).
     clasificacion_actual: {
-      imc: ultimaPeso.peso != null ? classifyIMC(ultimaPeso.imc ?? ultimaPeso.peso / H2).label : null,
-      grasa: ultimaGrasa?.pct_grasa != null ? classifyFat(ultimaGrasa.pct_grasa).label : null,
-      musculo: ultimaMusculo?.pct_musculo != null ? classifyMuscle(ultimaMusculo.pct_musculo).label : null,
+      imc: imcUltimo != null ? classifyIMC(imcUltimo).label : null,
+      grasa: ultimaGrasa?.pct_grasa != null ? classifyFat(ultimaGrasa.pct_grasa, desp).label : null,
+      musculo: ultimaMusculo?.pct_musculo != null ? classifyMuscle(ultimaMusculo.pct_musculo, desplazamientoMusculo(perfil)).label : null,
       grasa_visceral: ultimaVisceral?.grasa_visceral != null ? classifyVisceral(ultimaVisceral.grasa_visceral).label : null,
       grasa_medido_el: ultimaGrasa?.fecha ?? null,
       musculo_medido_el: ultimaMusculo?.fecha ?? null,
@@ -483,8 +600,10 @@ export function buildFacts(rows: PesoRecord[], plan: PesoPlan | null, hoy: strin
     gasto_energetico_estimado_kcal: ultimaBio?.rmr && ultimaBio.rmr < 5000
       ? { rmr: ultimaBio.rmr, sedentario: Math.round(ultimaBio.rmr * 1.2), actividad_ligera: Math.round(ultimaBio.rmr * 1.375), actividad_moderada: Math.round(ultimaBio.rmr * 1.55), nota: 'estimación orientativa; un déficit de 500 kcal/día equivale a ~0.45 kg/semana' }
       : null,
-    // Referencia general de nutrición deportiva (1.6–2.0 g por kg) para no pedirle al modelo que multiplique.
-    proteina_g_por_dia_orientativa: peso != null ? { minimo: Math.round(peso * 1.6), maximo: Math.round(peso * 2.0), base: '1.6 a 2.0 g por kg del último peso registrado' } : null,
+    // Referencia general de nutrición deportiva (PROTEINA_G_KG, la misma que muestra «Mi perfil») para no pedirle al modelo que multiplique.
+    proteina_g_por_dia_orientativa: peso != null
+      ? { minimo: Math.round(peso * PROTEINA_G_KG.min), maximo: Math.round(peso * PROTEINA_G_KG.max), base: `${PROTEINA_G_KG.min.toFixed(1)} a ${PROTEINA_G_KG.max.toFixed(1)} g por kg del último peso registrado` }
+      : null,
     meta,
     plan: plan ? { rutina: recortar(plan.rutina), dieta: recortar(plan.dieta), notas: recortar(plan.notas) } : null,
     mediciones: sorted.slice(-80).map(compacta),   // todo el historial reciente; 80 sobran para años de datos
@@ -665,7 +784,8 @@ export function analisisPorReglas(f: PesoFacts): PesoAnalisis {
 
   // 4) Riesgo: grasa visceral y % de grasa. Es el único lugar donde se menciona al médico.
   const visAlta = visceralAct != null && visceralAct >= 10
-  const grasaAlta = grasaAct != null && grasaAct >= 30
+  // El umbral de «grasa alta» se desplaza con el sexo (30 % en hombre, 38 % en mujer), igual que classifyFat.
+  const grasaAlta = grasaAct != null && grasaAct >= 30 + f.perfil.desplazamiento_grasa_pct_puntos
   if (visAlta || grasaAlta) {
     const piezas: string[] = []
     if (visceralAct != null) {
@@ -757,9 +877,11 @@ export function analisisPorReglas(f: PesoFacts): PesoAnalisis {
     })
   } else {
     const prot = f.proteina_g_por_dia_orientativa
+    // Con el perfil guardado y alguna lesión anotada se avisa de adaptar los ejercicios, sin repetir el texto de la lesión.
+    const adaptar = f.perfil_configurado && f.perfil.lesiones ? ' Adapta los ejercicios a las lesiones o limitaciones que anotaste en tu perfil.' : ''
     acciones.push({
       accion: `Haz fuerza 3 veces por semana${prot ? ` y apunta a ${prot.minimo}–${prot.maximo} g de proteína al día` : ''} hasta el ${fmtFecha(fechas.en_8_semanas)}`,
-      porque: `Protege tu masa magra mientras bajas grasa${prot ? ' (la proteína es una referencia general, no una receta)' : ''}.`,
+      porque: `Protege tu masa magra mientras bajas grasa${prot ? ' (la proteína es una referencia general, no una receta)' : ''}.${adaptar}`,
     })
   }
 

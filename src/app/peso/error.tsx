@@ -12,7 +12,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { BTN, COLOR, Eyebrow, Panel } from './ui'
 
-const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C2933A]'
+const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A6420]'
 
 export default function PesoError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   // Solo al log del navegador/servidor; el mensaje técnico nunca se muestra en pantalla.

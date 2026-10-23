@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import type { ReactNode } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
@@ -10,8 +10,10 @@ import {
   type PesoRecord, type PesoPlan, type PesoAnalisisGuardado,
 } from '@/lib/peso'
 import type { PesoPlanMeta } from '@/lib/peso-planes'
+import { PERFIL_DEFAULT, type PerfilEstado, type PesoPerfil as PerfilDatos } from '@/lib/peso-perfil'
 import { deleteRegistro } from './actions'
 import { PESO_TABS, type PesoTab } from './contratos'
+import { PerfilProvider } from './perfil-context'
 import { BTN, COLOR, Eyebrow, Panel } from './ui'
 import PesoHero from './PesoHero'
 import PesoFormulario from './PesoFormulario'
@@ -22,8 +24,11 @@ import PesoMeta from './PesoMeta'
 import PesoTiles from './PesoTiles'
 import PesoHistorial from './PesoHistorial'
 import PesoPlanTexto from './PesoPlanTexto'
+import PesoPerfil from './PesoPerfil'
+import InvitacionPerfil from './perfil/Invitacion'
 import PlanesEnUso from './planes/EnUso'
 import { PLANES_EVENTO } from './planes/util'
+import { conImcDelPerfil } from './perfil/util'
 
 // Shell de /peso: título, formulario, franja de estado (siempre visible) y pestañas. Solo la pestaña
 // activa monta su contenido: las gráficas necesitan el ancho real de su contenedor, y así la página
@@ -38,6 +43,11 @@ const esTab = (v: string): v is PesoTab => PESO_TABS.some(t => t.id === v)
 
 // Constante a nivel de módulo: un `= []` en los parámetros crearía un arreglo nuevo en cada render.
 const SIN_PLANES: PesoPlanMeta[] = []
+// Igual para el perfil: sin la prop (pruebas, páginas de carga) se usa lo que valía antes de que existiera el perfil.
+const PERFIL_ESTADO_INICIAL: PerfilEstado = { perfil: PERFIL_DEFAULT, configurado: false, disponible: false, actualizado: null }
+
+/** Instante ISO → milisegundos; -1 si no hay (o no se entiende). Sirve para saber qué estado del perfil es más nuevo. */
+const marcaDe = (e: PerfilEstado) => { const t = e.actualizado ? Date.parse(e.actualizado) : NaN; return Number.isFinite(t) ? t : -1 }
 
 /** Mientras baja el código de una pestaña pesada. Alto fijo para que la página no brinque al llegar. */
 function CargandoPestana({ nombre }: { nombre: string }) {
@@ -107,6 +117,10 @@ type Props = {
   planesDisponible?: boolean
   /** La tabla de planes existe pero su lectura falló: `planes` llega vacío por eso, no porque no haya documentos. */
   planesError?: string | null
+  /** Perfil personal (estatura, sexo, edad, hábitos) que cargó el servidor; sin él se usan los datos supuestos de siempre. */
+  perfil?: PerfilEstado
+  /** La lectura del perfil falló (no es lo mismo que «aún no hay perfil»): la pestaña bloquea el formulario para no pisarlo. */
+  perfilError?: string | null
   tabInicial?: PesoTab
   planInicial?: string | null
 }
@@ -115,11 +129,14 @@ type Props = {
 // memo: abrir/cerrar el formulario o mostrar un aviso no debe repintar las secciones.
 
 const Contenido = memo(function Contenido({
-  tab, data, plan, analisis, persistencia, firma, planes, planesDisponible, planesError, planSel, deletingId,
-  onEdit, onDelete, onVerPlan, onIrAPlanes,
+  tab, data, datosVista, plan, analisis, persistencia, firma, planes, planesDisponible, planesError, planSel, deletingId,
+  perfilEstado, perfilError, onEdit, onDelete, onVerPlan, onIrAPlanes, onIrAPerfil, onPerfilGuardado,
 }: {
   tab: PesoTab
+  /** Las mediciones tal como están guardadas (lo que marcó la báscula): Historial, formulario y números base. */
   data: PesoRecord[]
+  /** Las mismas, con el IMC puesto al día para la estatura del perfil (conImcDelPerfil): tarjetas, Progreso, Meta y visuales. */
+  datosVista: PesoRecord[]
   plan: PesoPlan | null
   analisis: PesoAnalisisGuardado | null
   persistencia: boolean
@@ -130,12 +147,17 @@ const Contenido = memo(function Contenido({
   planesError: string | null
   planSel: string | null
   deletingId: string | null
+  perfilEstado: PerfilEstado
+  perfilError: string | null
   onEdit: (r: PesoRecord) => void
   onDelete: (r: PesoRecord) => void
   onVerPlan: (id: string) => void
   onIrAPlanes: () => void
+  onIrAPerfil: () => void
+  onPerfilGuardado: (perfil: PerfilDatos, estado?: PerfilEstado) => void
 }) {
-  if (tab === 'progreso') return <PesoProgreso data={data} plan={plan} />
+  if (tab === 'perfil') return <PesoPerfil estado={perfilEstado} data={data} onGuardado={onPerfilGuardado} error={perfilError} />
+  if (tab === 'progreso') return <PesoProgreso data={datosVista} plan={plan} />
   if (tab === 'historial') return <PesoHistorial data={data} onEdit={onEdit} onDelete={onDelete} deletingId={deletingId} />
   if (tab === 'planes') {
     return (
@@ -149,19 +171,52 @@ const Contenido = memo(function Contenido({
   // a 30 días; en móvil el hero solo muestra peso e IMC), luego la lectura de la IA y, al final, lo explicativo.
   return (
     <>
-      <PesoTiles data={data} />
-      <PesoIA firma={firma} inicial={analisis} persistencia={persistencia} nMediciones={data.length} />
+      <PesoTiles data={datosVista} />
+      {/* Debajo de las tarjetas y no encima: aparece tras montar (lee localStorage) y así no empuja lo que ya se está leyendo. */}
+      {!perfilEstado.configurado && !perfilError && <InvitacionPerfil onCompletar={onIrAPerfil} />}
+      <PesoIA
+        firma={firma} inicial={analisis} persistencia={persistencia} nMediciones={data.length}
+        perfilConfigurado={perfilEstado.configurado} perfilSinLeer={!!perfilError && !perfilEstado.configurado}
+      />
       {/* PlanesEnUso recibe TODOS los planes: él elige el activo de cada tipo y cuenta los guardados
           para decidir entre "Elegir una en uso" y "Subir la primera". */}
       {planesDisponible && <PlanesEnUso planes={planes} error={planesError} onVer={onVerPlan} onIrAPlanes={onIrAPlanes} />}
       {/* El hero salta aquí cuando el siguiente paso es definir o ajustar la meta */}
       <div id={ID_META} style={{ scrollMarginTop: MARGEN_BARRA }}>
-        <PesoMeta plan={plan} data={data} />
+        <PesoMeta plan={plan} data={datosVista} />
       </div>
-      <PesoVisuales data={data} plan={plan} />
+      <PesoVisuales data={datosVista} plan={plan} />
     </>
   )
 })
+
+// ── Aviso de perfil sin leer ──────────────────────────────────────────────────
+// Si la lectura del perfil falló, el servidor manda los datos supuestos (PERFIL_DEFAULT) y el hero, las escalas y las
+// tablas los usan sin que nada lo diga fuera de «Mi perfil». Esta franja vive en el armazón (se ve en todas las
+// pestañas menos esa, que ya trae su propio panel). A propósito NO invita a completar el perfil: puede haber uno
+// guardado que solo no se pudo leer, y el formulario sigue bloqueado hasta que la lectura funcione.
+
+function AvisoPerfilSinLeer({ reintentando, onReintentar }: { reintentando: boolean; onReintentar: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="animate-fade flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl px-4 py-3 sm:px-5"
+      style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderLeft: `4px solid ${COLOR.warn}`, color: '#78350F' }}
+    >
+      <span aria-hidden style={{ fontSize: 18 }}>⚠️</span>
+      <p className="min-w-0 flex-1" style={{ flexBasis: 220, fontSize: 13, lineHeight: 1.5 }}>
+        <strong style={{ fontWeight: 700 }}>No se pudo leer tu perfil.</strong>{' '}
+        Mientras tanto, el IMC, los rangos de grasa y el peso objetivo usan datos supuestos ({PERFIL_DEFAULT.estatura_cm} cm, {PERFIL_DEFAULT.sexo}). Lo que tengas guardado no se modificó.
+      </p>
+      <button
+        type="button" onClick={onReintentar} disabled={reintentando}
+        className={`${BTN.base} ${BTN.gold} min-h-[44px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A6420]`}
+      >
+        {reintentando ? 'Reintentando…' : 'Reintentar'}
+      </button>
+    </div>
+  )
+}
 
 // ── Aviso flotante (confirmación de guardado y errores de borrado) ────────────
 // El rol vive en el contenedor que lo envuelve (ver el render): "status" para el éxito, "alert" para el error.
@@ -210,7 +265,8 @@ function Titulo({ children, subtitulo }: { children?: ReactNode; subtitulo: Reac
 
 export default function PesoClient({
   initialData, initialPlan, initialAnalisis, persistencia, firma,
-  planes: planesServidor = SIN_PLANES, planesDisponible: disponibleServidor = false, planesError = null, tabInicial = 'resumen', planInicial = null,
+  planes: planesServidor = SIN_PLANES, planesDisponible: disponibleServidor = false, planesError = null,
+  perfil: perfilServidor = PERFIL_ESTADO_INICIAL, perfilError = null, tabInicial = 'resumen', planInicial = null,
 }: Props) {
   const router = useRouter()
 
@@ -238,6 +294,31 @@ export default function PesoClient({
     window.addEventListener(PLANES_EVENTO, alCambiar)
     return () => window.removeEventListener(PLANES_EVENTO, alCambiar)
   }, [])
+
+  // Perfil: arranca con lo del servidor y, al guardarlo, se actualiza al instante (todo lo que usa usePerfil se
+  // recalcula sin esperar al servidor). Cuando el servidor vuelve a mandar el perfil (router.refresh) solo se adopta si
+  // es MÁS NUEVO que el local (marca de tiempo de la base): un refresh que salió antes del guardado no debe devolver
+  // el perfil viejo. Con lectura fallida (`perfilError`) no se toca nada: el estado de la prop son los datos supuestos.
+  const [perfilEstado, setPerfilEstado] = useState<PerfilEstado>(perfilServidor)
+  useEffect(() => {
+    if (perfilError) return
+    setPerfilEstado(local => {
+      if (marcaDe(perfilServidor) > marcaDe(local) || (perfilServidor.disponible && !local.disponible)) return perfilServidor
+      // Simétrico: si la lectura falló con error (el servidor mandó disponible: true) y un «Reintentar» encuentra que la tabla
+      // no existe, el local se quedaba en disponible: true y no aparecía «Falta crear la tabla». Sin perfil guardado no hay
+      // nada que pisar, así que se adopta el aviso.
+      if (!perfilServidor.disponible && local.disponible && !local.configurado) return perfilServidor
+      return local
+    })
+  }, [perfilServidor, perfilError])
+  const alGuardarPerfil = useCallback((perfil: PerfilDatos, estado?: PerfilEstado) => {
+    setPerfilEstado({ perfil, configurado: true, disponible: true, actualizado: estado?.actualizado ?? new Date().toISOString() })
+    // El servidor recalcula la huella del análisis (incluye el perfil): sin esto «Análisis con IA» no notaría que cambió.
+    router.refresh()
+  }, [router])
+  // «Reintentar» del aviso de perfil sin leer: dentro de una transición, `reintentandoPerfil` dura hasta que el servidor responde.
+  const [reintentandoPerfil, iniciarReintentoPerfil] = useTransition()
+  const reintentarPerfil = useCallback(() => iniciarReintentoPerfil(() => router.refresh()), [router])
 
   const [tab, setTab] = useState<PesoTab>(tabInicial)
   const tabRef = useRef<PesoTab>(tabInicial)              // la versión "síncrona" de tab para los callbacks estables
@@ -403,6 +484,7 @@ export default function PesoClient({
   }, [cambiarTab])
   const verPlan = useCallback((id: string) => { setPlanSel(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
   const irAPlanes = useCallback(() => { setPlanSel(null); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
+  const irAPerfil = useCallback(() => cambiarTab('perfil', { scroll: 'forzar' }), [cambiarTab])
   const cerrarAviso = useCallback(() => setAviso(null), [])
 
   // ── Derivados ──────────────────────────────────────────────────────────────
@@ -414,15 +496,30 @@ export default function PesoClient({
     [n, planesDisponible, planesSinLeer, planes.length],
   )
   const etapa = useMemo(() => etapaActual(initialData), [initialData])
+  const avisosTabs = useMemo<Partial<Record<PesoTab, string>>>(
+    () => (!perfilEstado.configurado && !perfilError ? { perfil: 'pendiente de completar' } : {}),
+    [perfilEstado.configurado, perfilError],
+  )
+  // IMC unificado con la estatura del perfil: la franja, las tarjetas, Progreso (estado OMS, resumen de tendencia, métrica
+  // IMC y su tabla de referencia), Meta y los visuales leen este IMC y jamás se contradicen. El Historial y el formulario
+  // siguen con `initialData`: ahí se ve lo que marcó la báscula. Con la estatura de fábrica es la misma lista.
+  const datosVista = useMemo(() => conImcDelPerfil(initialData, perfilEstado.perfil), [initialData, perfilEstado.perfil])
+  // Lectura fallida Y sin un perfil bueno en memoria: los números salen de los datos supuestos. Si un refresh posterior
+  // falla pero ya había un perfil leído (o recién guardado), ese sigue vigente y no hay nada que avisar.
+  const perfilSinLeer = !!perfilError && !perfilEstado.configurado
+  const avisoPerfil = perfilSinLeer
+    ? <AvisoPerfilSinLeer reintentando={reintentandoPerfil} onReintentar={reintentarPerfil} />
+    : null
 
   // ── Estado vacío: aún no hay mediciones ────────────────────────────────────
 
   if (!n) {
     return (
-      <>
+      <PerfilProvider perfil={perfilEstado.perfil}>
         <SiteHeader title="Peso" subtitle="Salud · ADVL" />
         <main className="peso-root px-4 pt-6 pb-16 max-w-3xl mx-auto space-y-6">
           <Titulo subtitulo="Aún no hay mediciones. Registra la primera para empezar a ver tu progreso, el análisis con IA y tus rutinas y dietas." />
+          {avisoPerfil}
           <PesoFormulario data={initialData} hoy={hoy} editando={null} primera onCerrar={cerrarForm} />
           <div className="grid gap-4 sm:grid-cols-3">
             {[
@@ -436,15 +533,16 @@ export default function PesoClient({
             ))}
           </div>
         </main>
-      </>
+      </PerfilProvider>
     )
   }
 
   const primera = initialData[0]
   const ultima = initialData[n - 1]
 
+  // El proveedor envuelve TODO (hero, formulario, pestañas): estatura, sexo y edad ya no están fijos en el código.
   return (
-    <>
+    <PerfilProvider perfil={perfilEstado.perfil}>
       <SiteHeader title="Peso" subtitle="Salud · ADVL" />
       {/* peso-root: ancla de reglas de estilo propias de /peso (p. ej. cifras serif alineadas en globals.css). */}
       <main className="peso-root px-4 pt-6 pb-20 max-w-5xl mx-auto flex flex-col">
@@ -473,10 +571,13 @@ export default function PesoClient({
             </div>
           )}
 
-          <PesoHero data={initialData} plan={initialPlan} onMedir={medirHoy} onIrA={irDesdeHero} hoy={hoy} />
+          <PesoHero data={datosVista} plan={initialPlan} onMedir={medirHoy} onIrA={irDesdeHero} hoy={hoy} />
+
+          {/* En «Mi perfil» no: ahí el panel de error ya lo explica (y bloquea el formulario). */}
+          {tab !== 'perfil' && avisoPerfil}
         </div>
 
-        <PesoTabs tab={tab} onChange={cambiarTab} contadores={contadores} />
+        <PesoTabs tab={tab} onChange={cambiarTab} contadores={contadores} avisos={avisosTabs} />
 
         <div
           ref={contenidoRef}
@@ -485,10 +586,11 @@ export default function PesoClient({
           style={{ scrollMarginTop: MARGEN_BARRA }}
         >
           <Contenido
-            tab={tab} data={initialData} plan={initialPlan} analisis={initialAnalisis} persistencia={persistencia} firma={firma}
+            tab={tab} data={initialData} datosVista={datosVista} plan={initialPlan} analisis={initialAnalisis} persistencia={persistencia} firma={firma}
             planes={planes} planesDisponible={planesDisponible} planesError={errorPlanes}
-            planSel={planSel} deletingId={deletingId}
+            planSel={planSel} deletingId={deletingId} perfilEstado={perfilEstado} perfilError={perfilError}
             onEdit={abrirEditar} onDelete={borrar} onVerPlan={verPlan} onIrAPlanes={irAPlanes}
+            onIrAPerfil={irAPerfil} onPerfilGuardado={alGuardarPerfil}
           />
         </div>
       </main>
@@ -501,6 +603,6 @@ export default function PesoClient({
           <Aviso aviso={aviso} onCerrar={cerrarAviso} />
         </div>
       )}
-    </>
+    </PerfilProvider>
   )
 }

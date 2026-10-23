@@ -1,11 +1,14 @@
 // Cálculos puros de la franja de estado (PesoHero). Viven aparte del componente para poder probarlos
 // con node sin React: aquí NO hay JSX ni hooks, solo datos -> datos. Todo se deriva de src/lib/peso.ts,
-// así los números del hero son los mismos que lee el análisis con IA.
+// así los números del hero son los mismos que lee el análisis con IA. La estatura y el sexo vienen del perfil
+// (por defecto PERFIL_DEFAULT, lo que valía antes de que existiera): de ellos salen el peso de IMC 25 y los cortes del % de grasa.
 
 import {
-  H2, PESO_IMC_25, addDays, daysBetween, etapaActual, mejorMarca, pendienteSemanal, classifyIMC, classifyFat,
+  addDays, daysBetween, etapaActual, mejorMarca, pendienteSemanal, classifyIMC, classifyFat,
   type PesoRecord, type PesoPlan, type Classification,
 } from '@/lib/peso'
+import { PERFIL_DEFAULT, desplazamientoGrasa, pesoParaIMC, pesoSaludable, tallaCuadrada, type PesoPerfil } from '@/lib/peso-perfil'
+import { imcEquipo } from '@/lib/peso-visuals'
 import type { PesoTab } from './contratos'
 
 const r1 = (n: number) => Math.round(n * 10) / 10
@@ -97,6 +100,8 @@ export type HeroCalc = {
   historico: { valor: number; fecha: string } | null
   proxima: string
   paso: Paso
+  /** Rango de peso con IMC normal (18.5 a 24.9) para la estatura del perfil, más el peso de IMC 25. */
+  saludable: { min: number; max: number; imc25: number }
 }
 
 // ── Cálculo ──────────────────────────────────────────────────────────────────
@@ -123,7 +128,7 @@ function haceUnMes(rows: PesoRecord[], actual: PesoRecord): PesoRecord | undefin
   return mejor
 }
 
-function calcularMeta(peso: number, plan: PesoPlan | null, pesosEtapa: number[], hoy: string): ProgresoMeta {
+function calcularMeta(peso: number, plan: PesoPlan | null, pesosEtapa: number[], hoy: string, perfil: PesoPerfil): ProgresoMeta {
   const maxE = Math.max(peso, ...pesosEtapa)
   const minE = Math.min(peso, ...pesosEtapa)
   const metaKg = plan?.meta_peso ?? null
@@ -145,9 +150,11 @@ function calcularMeta(peso: number, plan: PesoPlan | null, pesosEtapa: number[],
     else rumbo = 'subir'
   } else {
     tipo = 'imc'
-    const bajoPeso = peso < 18.5 * H2
-    if (bajoPeso) { objetivoKg = r1(18.5 * H2); rumbo = 'subir' }
-    else { objetivoKg = r1(PESO_IMC_25); rumbo = 'bajar'; alcanzada = peso <= PESO_IMC_25 }
+    const kgImc185 = pesoParaIMC(perfil, 18.5)
+    const kgImc25 = pesoParaIMC(perfil, 25)
+    const bajoPeso = peso < kgImc185
+    if (bajoPeso) { objetivoKg = r1(kgImc185); rumbo = 'subir' }
+    else { objetivoKg = r1(kgImc25); rumbo = 'bajar'; alcanzada = peso <= kgImc25 }
   }
 
   const inicioKg = rumbo === 'bajar' ? maxE : minE
@@ -244,8 +251,9 @@ function elegirPaso(c: {
   }
 }
 
-/** Todo lo que pinta la franja de estado. `hoy` es 'YYYY-MM-DD' (hoyMX()). null si no hay ningún peso. */
-export function calcularHero(data: PesoRecord[], plan: PesoPlan | null, hoy: string): HeroCalc | null {
+/** Todo lo que pinta la franja de estado. `hoy` es 'YYYY-MM-DD' (hoyMX()). null si no hay ningún peso.
+ *  `perfil` aporta la estatura (IMC y peso objetivo) y el sexo (umbrales del % de grasa). */
+export function calcularHero(data: PesoRecord[], plan: PesoPlan | null, hoy: string, perfil: PesoPerfil = PERFIL_DEFAULT): HeroCalc | null {
   const rows = [...data].sort((a, b) => a.fecha.localeCompare(b.fecha))
   const ultima = rows[rows.length - 1]
   let conPeso: PesoRecord | undefined
@@ -267,7 +275,7 @@ export function calcularHero(data: PesoRecord[], plan: PesoPlan | null, hoy: str
 
   const etapaRows = etapaActual(rows)
   const puntos = etapaRows.filter(r => r.peso != null).map(r => ({ fecha: r.fecha, peso: r.peso as number }))
-  const meta = calcularMeta(peso, plan, puntos.map(p => p.peso), hoy)
+  const meta = calcularMeta(peso, plan, puntos.map(p => p.peso), hoy, perfil)
   const tendencia = calcularTendencia(rows, ultima, meta)
 
   const mejorReg = mejorMarca(etapaRows, 'peso', meta.rumbo === 'subir' ? 'max' : 'min')
@@ -275,8 +283,9 @@ export function calcularHero(data: PesoRecord[], plan: PesoPlan | null, hoy: str
   const hist = mejorMarca(rows, 'peso')
   const historico = meta.rumbo === 'bajar' && hist && mejorReg && hist.valor < mejorReg.valor && etapaRows.length < rows.length ? hist : null
 
-  const imc = conPeso.imc ?? r1(peso / H2)
-  const grasa = conPeso.pct_grasa != null ? { valor: conPeso.pct_grasa, cls: classifyFat(conPeso.pct_grasa) } : null
+  // El IMC de la báscula solo vale si la estatura del perfil es la que ella tenía (ver imcEquipo); si no, se recalcula.
+  const imc = imcEquipo(conPeso, perfil) ?? r1(peso / tallaCuadrada(perfil))
+  const grasa = conPeso.pct_grasa != null ? { valor: conPeso.pct_grasa, cls: classifyFat(conPeso.pct_grasa, desplazamientoGrasa(perfil)) } : null
   const proxima = addDays(ultima.fecha, 7) > hoy ? addDays(ultima.fecha, 7) : hoy
 
   return {
@@ -284,5 +293,6 @@ export function calcularHero(data: PesoRecord[], plan: PesoPlan | null, hoy: str
     etapa: { desde: etapaRows[0].fecha, n: etapaRows.length, puntos },
     mejor, historico, proxima,
     paso: elegirPaso({ diasSin, ultima, meta, plan, tendencia, proxima, hoy }),
+    saludable: pesoSaludable(perfil),
   }
 }

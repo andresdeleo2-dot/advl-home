@@ -4,20 +4,27 @@
 import type { PesoRecord, PesoPlan, PesoAnalisisGuardado } from '@/lib/peso'
 import type { PesoPlanMeta } from '@/lib/peso-planes'
 
-export type PesoTab = 'resumen' | 'progreso' | 'planes' | 'historial'
+export type PesoTab = 'resumen' | 'progreso' | 'planes' | 'historial' | 'perfil'
 
 export const PESO_TABS: { id: PesoTab; label: string; icon: string }[] = [
   { id: 'resumen', label: 'Resumen', icon: '📊' },
   { id: 'progreso', label: 'Progreso', icon: '📈' },
   { id: 'planes', label: 'Rutinas y dietas', icon: '🏋️' },
   { id: 'historial', label: 'Historial', icon: '🗂️' },
+  { id: 'perfil', label: 'Mi perfil', icon: '👤' },
 ]
 
 /** Franja de estado al tope (siempre visible, encima de las pestañas). */
 export type PesoHeroProps = { data: PesoRecord[]; plan: PesoPlan | null; onMedir: () => void; onIrA?: (tab: PesoTab) => void }
 
-/** Análisis con IA (pestaña Resumen). */
-export type PesoIAProps = { firma: string; inicial: PesoAnalisisGuardado | null; persistencia: boolean; nMediciones: number }
+/** Análisis con IA (pestaña Resumen). `perfilConfigurado` = PerfilEstado.configurado (hay una fila guardada; sin él se
+ *  trata como perfil sin completar). `perfilSinLeer` = la lectura del perfil falló y no hay uno bueno en memoria: el pie
+ *  no puede decir ni «basado en tu perfil» ni «perfil sin completar», porque no se sabe cuál de los dos es cierto. */
+export type PesoIAProps = {
+  firma: string; inicial: PesoAnalisisGuardado | null; persistencia: boolean; nMediciones: number
+  perfilConfigurado?: boolean
+  perfilSinLeer?: boolean
+}
 
 /** Bloque de gráficos explicativos calculados en código (pestaña Resumen). Default export de PesoVisuales.tsx. */
 export type PesoVisualesProps = { data: PesoRecord[]; plan: PesoPlan | null }
@@ -55,5 +62,20 @@ export type PlanesEnUsoProps = {
   onVer: (id: string) => void
   onIrAPlanes: () => void
   /** Mismo significado que en PesoPlanesProps: con lista vacía y error no se invita a «subir el primero». */
+  error?: string | null
+}
+
+/** Pestaña «Mi perfil»: formulario de los datos personales + «Tus números base» calculados.
+ *  `estado` es lo que cargó el servidor (o lo último que se guardó); al guardar, el componente avisa con `onGuardado`
+ *  para que PesoClient actualice el proveedor y todo se recalcule al instante. */
+import type { PerfilEstado, PesoPerfil } from '@/lib/peso-perfil'
+export type PesoPerfilProps = {
+  estado: PerfilEstado
+  data: PesoRecord[]
+  /** Se llama con el perfil ya guardado (para que PesoClient actualice el proveedor y todo se recalcule al instante).
+   *  `estado` es la respuesta del servidor (trae la marca de tiempo que puso la base). */
+  onGuardado: (perfil: PesoPerfil, estado?: PerfilEstado) => void
+  /** La lectura del perfil falló en el servidor (distinto de «aún no hay perfil»): `estado` trae los datos supuestos
+   *  y NO se sabe si hay uno guardado, así que el formulario se bloquea con «Reintentar» para no pisarlo. */
   error?: string | null
 }

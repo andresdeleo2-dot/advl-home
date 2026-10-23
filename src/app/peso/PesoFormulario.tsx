@@ -2,8 +2,11 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
-import { H2, addDays, daysBetween, fmtFecha, type PesoRecord } from '@/lib/peso'
+import { addDays, daysBetween, fmtFecha, type PesoRecord } from '@/lib/peso'
+import { tallaCuadrada } from '@/lib/peso-perfil'
 import { addRegistro, updateRegistro } from './actions'
+import { fmtTalla } from './metricas'
+import { usePerfil } from './perfil-context'
 import { BTN, COLOR, Eyebrow, INPUT, Panel, Pill } from './ui'
 
 // Formulario de alta/edición de una medición. Dos grupos: lo básico (fecha + peso, lo único que hace
@@ -87,6 +90,11 @@ export default function PesoFormulario({ data, hoy, editando, primera, onCerrar 
   onCerrar: () => void
 }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
+  // La estatura del perfil decide qué IMC es verosímil para un peso. Se pasa a los useMemo como valores primitivos
+  // (talla² y el texto de la talla), no como el objeto del perfil, para que dependan solo de lo que usan.
+  const perfil = usePerfil()
+  const talla2 = tallaCuadrada(perfil)
+  const tallaTxt = fmtTalla(perfil)
   const idDe = (k: Clave) => `${uid}-${k}`
 
   const [vals, setVals] = useState<Record<Clave, string>>(() => inicial(editando, hoy))
@@ -161,11 +169,11 @@ export default function PesoFormulario({ data, hoy, editando, primera, onCerrar 
     }
     const imc = leerNumero(vals.imc)
     if (peso != null && imc != null && !Number.isNaN(peso) && !Number.isNaN(imc) && !errores.imc && !errores.peso) {
-      const esperado = peso / H2
-      if (Math.abs(imc - esperado) > 1.5) a.imc = `Con ${peso} kg y 1.81 m, tu IMC rondaría ${esperado.toFixed(1)}. Revisa el dato.`
+      const esperado = peso / talla2
+      if (Math.abs(imc - esperado) > 1.5) a.imc = `Con ${peso} kg y ${tallaTxt} m, tu IMC rondaría ${esperado.toFixed(1)}. Revisa el dato.`
     }
     return a
-  }, [vals, referencia, errores])
+  }, [vals, referencia, errores, talla2, tallaTxt])
 
   // Diferencia en vivo contra la medición previa (pista bajo el peso).
   const deltaVivo = (() => {

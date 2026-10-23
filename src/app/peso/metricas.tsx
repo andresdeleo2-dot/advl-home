@@ -4,14 +4,19 @@
 // gráfica y los cálculos puros que comparten las secciones (Tiles, Meta, Progreso, Historial).
 // Los umbrales y clasificaciones viven en '@/lib/peso' (los lee también la ruta de IA): aquí NO se duplican.
 // Todo lo que no es JSX es una función pura y exportada para poder probarla con datos reales.
+// La estatura y el sexo NO están escritos aquí: vienen del perfil (src/lib/peso-perfil.ts). Lo que depende de ellos
+// (kg equivalentes a cada IMC, umbrales de % de grasa y de % de músculo) se arma por perfil con metricasPara(perfil) /
+// useMetricas(); las funciones puras reciben el perfil como último parámetro y, sin él, usan PERFIL_DEFAULT (lo que valía antes).
 
 import { useSyncExternalStore, type CSSProperties } from 'react'
 import {
-  H2, PESO_IMC_25, addDays, daysBetween, etapaActual, hoyMX, masaGrasa, masaMagra, pendienteSemanal,
+  addDays, daysBetween, etapaActual, hoyMX, masaGrasa, masaMagra, pendienteSemanal,
   classifyIMC, classifyFat, classifyMuscle, classifyVisceral,
   type Classification, type Level, type PesoRecord,
 } from '@/lib/peso'
+import { PERFIL_DEFAULT, PROTEINA_G_KG, desplazamientoGrasa, desplazamientoMusculo, edadEn, pesoParaIMC, tallaCuadrada, type PesoPerfil } from '@/lib/peso-perfil'
 import { COLOR } from './ui'
+import { usePerfil } from './perfil-context'
 
 // ── Formato ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +75,7 @@ export const NIVEL_COLOR: Record<Level, string> = { good: '#15803d', warn: '#b45
 /** Estilo de las etiquetas de formulario (versalitas chicas), compartido por Meta y Notas del plan. */
 export const LABEL_STYLE: CSSProperties = { font: '700 11px/1.2 var(--font-ui, system-ui)', letterSpacing: '.09em', textTransform: 'uppercase', color: COLOR.muted }
 /** Anillo de foco visible para los botones propios (los de BTN/Segmented usan el del navegador). */
-export const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C2933A]'
+export const FOCO = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A6420]'
 
 /** Fecha de hoy en CDMX, o null en el render del servidor y durante la hidratación (así no hay desajuste SSR/cliente). */
 const sinSuscripcion = () => () => {}
@@ -225,121 +230,200 @@ export type MetricDef = {
   refs?: { title: string; note?: string; rows: RefRow[] }
 }
 
-export const METRICS: MetricDef[] = [
-  {
-    key: 'peso', label: 'Peso (kg)', corto: 'Peso', unit: 'kg', decimals: 1, color: DATO_COLOR.peso, yAxis: 'kg', goodDir: 'down',
-    info: {
-      mide: 'Masa corporal total; incluye agua, glucógeno y contenido digestivo.',
-      leer: 'Usa tendencia de 2–4 semanas, no una sola mañana.',
-      hacer: 'Si también sube grasa, reduce 150–250 kcal y aumenta pasos diarios.',
-    },
-    refs: {
-      title: 'Clasificación OMS — por peso (talla 1.81 m)',
-      note: `Meta: bajar de ${(25 * H2).toFixed(1)} kg para IMC < 25 (salir de sobrepeso).`,
-      rows: [
-        filaRef(classifyIMC, 17, `< ${(18.5 * H2).toFixed(1)}`, { max: 18.5 * H2 }, 'IMC < 18.5'),
-        filaRef(classifyIMC, 22, `${(18.5 * H2).toFixed(1)} – ${(24.9 * H2).toFixed(1)}`, { min: 18.5 * H2, max: 25 * H2 }, 'IMC 18.5–24.9'),
-        filaRef(classifyIMC, 27, `${(25 * H2).toFixed(1)} – ${(29.9 * H2).toFixed(1)}`, { min: 25 * H2, max: 30 * H2 }, 'IMC 25–29.9'),
-        filaRef(classifyIMC, 32, `${(30 * H2).toFixed(1)} – ${(34.9 * H2).toFixed(1)}`, { min: 30 * H2, max: 35 * H2 }, 'IMC 30–34.9'),
-        filaRef(classifyIMC, 37, `≥ ${(35 * H2).toFixed(1)}`, { min: 35 * H2 }, 'IMC ≥ 35'),
-      ],
-    },
-  },
-  {
-    key: 'pct_grasa', label: '% Grasa', corto: '% Grasa', unit: '%', decimals: 1, color: DATO_COLOR.pct_grasa, yAxis: 'pct', goodDir: 'down',
-    info: {
-      mide: 'Proporción de grasa corporal estimada por bioimpedancia.',
-      leer: 'Baja sostenida es mejor señal que bajar peso sin contexto.',
-      hacer: 'Buena señal: conserva adherencia y evita recortes agresivos.',
-    },
-    classify: classifyFat,
-    refs: {
-      title: '% Grasa — hombres (30–40 años)',
-      // Los rangos se escriben con el decimal (14.9, no 14) porque el % de grasa se captura con un decimal: 14.5 existe.
-      rows: [
-        filaRef(classifyFat, 5, '< 10%', { max: 10 }),
-        filaRef(classifyFat, 12, '10 – 14.9%', { min: 10, max: 15 }),
-        filaRef(classifyFat, 17, '15 – 19.9%', { min: 15, max: 20 }),
-        filaRef(classifyFat, 22, '20 – 24.9%', { min: 20, max: 25 }),
-        filaRef(classifyFat, 27, '25 – 29.9%', { min: 25, max: 30 }),
-        filaRef(classifyFat, 35, '≥ 30%', { min: 30 }),
-      ],
-    },
-  },
-  {
-    key: 'pct_musculo', label: '% Músculo', corto: '% Músculo', unit: '%', decimals: 1, color: DATO_COLOR.pct_musculo, yAxis: 'pct', goodDir: 'up',
-    info: {
-      mide: 'Masa magra relativa; señal de si estás preservando músculo.',
-      leer: 'En déficit, mantener o subir es positivo.',
-      hacer: 'Mantén fuerza 3–4 veces/semana y proteína 1.6–2.2 g/kg.',
-    },
-    classify: classifyMuscle,
-    refs: {
-      title: '% Músculo (bioimpedancia)',
-      rows: [
-        filaRef(classifyMuscle, 25, '< 30%', { max: 30 }),
-        filaRef(classifyMuscle, 31, '30 – 32.9%', { min: 30, max: 33 }),
-        filaRef(classifyMuscle, 34, '33 – 35.9%', { min: 33, max: 36 }),
-        filaRef(classifyMuscle, 38, '≥ 36%', { min: 36 }),   // sin tope: classifyMuscle da «Atlético» a todo lo ≥ 36
-      ],
-    },
-  },
-  {
-    key: 'imc', label: 'IMC', corto: 'IMC', unit: '', decimals: 1, color: '#8b5cf6', yAxis: 'other', goodDir: 'down',
-    info: {
-      mide: 'Relación peso/altura. No distingue músculo de grasa.',
-      leer: 'Úsalo como contexto, no como único objetivo.',
-      hacer: 'Interprétalo siempre junto con % grasa y grasa visceral.',
-    },
-    classify: classifyIMC,
-    refs: {
-      title: 'IMC — Clasificación OMS',
-      note: `Tu talla: 1.81 m. IMC < 25 = ${(25 * H2).toFixed(1)} kg.`,
-      rows: [
-        filaRef(classifyIMC, 17, '< 18.5', { kg: `< ${(18.5 * H2).toFixed(1)} kg`, max: 18.5 }),
-        filaRef(classifyIMC, 22, '18.5 – 24.9', { kg: `${(18.5 * H2).toFixed(1)} – ${(24.9 * H2).toFixed(1)} kg`, min: 18.5, max: 25 }),
-        filaRef(classifyIMC, 27, '25.0 – 29.9', { kg: `${(25 * H2).toFixed(1)} – ${(29.9 * H2).toFixed(1)} kg`, min: 25, max: 30 }),
-        filaRef(classifyIMC, 32, '30.0 – 34.9', { kg: `${(30 * H2).toFixed(1)} – ${(34.9 * H2).toFixed(1)} kg`, min: 30, max: 35 }),
-        filaRef(classifyIMC, 37, '≥ 35', { kg: `≥ ${(35 * H2).toFixed(1)} kg`, min: 35 }),
-      ],
-    },
-  },
-  {
-    key: 'rmr', label: 'RMR (kcal)', corto: 'RMR', unit: 'kcal/día', decimals: 0, color: '#f59e0b', yAxis: 'other', goodDir: 'neutral',
-    info: {
-      mide: 'Calorías que quemas en reposo absoluto estimadas por la báscula.',
-      leer: 'Valora solo cambios sostenidos de varias semanas, no picos sueltos.',
-      hacer: 'Evalúa en bloques de 3–4 semanas; un dato solo no dice nada.',
-    },
-  },
-  {
-    key: 'edad_corporal', label: 'Edad corporal', corto: 'Edad corporal', unit: 'años', decimals: 0, color: '#06b6d4', yAxis: 'other', goodDir: 'down',
-    info: {
-      mide: 'Índice del fabricante basado en composición y metabolismo.',
-      leer: 'Solo tiene valor si mejora junto con grasa y visceral.',
-      hacer: 'Tómala como indicador secundario, no como meta principal.',
-    },
-  },
-  {
-    key: 'grasa_visceral', label: 'Grasa visceral', corto: 'Visceral', unit: '', decimals: 0, color: '#f97316', yAxis: 'other', goodDir: 'down',
-    info: {
-      mide: 'Grasa alrededor de órganos internos. Escala del fabricante (1–59).',
-      leer: 'Más relevante que la grasa subcutánea para riesgo metabólico.',
-      hacer: 'Prioridad alta: revisar adherencia, alcohol y actividad diaria.',
-    },
-    classify: classifyVisceral,
-    refs: {
-      title: 'Grasa visceral',
-      rows: [
-        filaRef(classifyVisceral, 5, '1 – 9', { max: 10 }),   // escala entera: «≤ 9» de classifyVisceral = «< 10»
-        filaRef(classifyVisceral, 12, '10 – 14', { min: 10, max: 15 }),
-        filaRef(classifyVisceral, 20, '≥ 15', { min: 15 }),
-      ],
-    },
-  },
-]
+/** Estatura como se dice en voz alta: 162 -> "1.62", 170 -> "1.70", 175.5 -> "1.755". Se arma desde los cm (con un decimal
+ *  como máximo, que es lo que guarda el perfil) para no arrastrar ruido de coma flotante. */
+export function fmtTalla(perfil: Pick<PesoPerfil, 'estatura_cm'> = PERFIL_DEFAULT): string {
+  return (Math.round(perfil.estatura_cm * 10) / 1000).toFixed(3).replace(/0$/, '')
+}
 
-export const METRIC_BY_KEY = Object.fromEntries(METRICS.map(m => [m.key, m])) as Record<MetricKey, MetricDef>
+/** Edades (años cumplidos) para las que sirve la referencia de % de grasa que usa la página. */
+const EDAD_REF_MIN = 30
+const EDAD_REF_MAX = 40
+
+/** Aviso cuando la edad del perfil cae fuera de la edad de la referencia de % de grasa («30–40 años»); null si está dentro,
+ *  si falta la fecha de nacimiento o si todavía no se conoce `hoy` (servidor e hidratación: así no hay desajuste). */
+export function avisoEdadReferencia(perfil: Pick<PesoPerfil, 'fecha_nacimiento'>, hoy: string | null): string | null {
+  const edad = hoy ? edadEn(perfil.fecha_nacimiento, hoy) : null
+  if (edad == null || (edad >= EDAD_REF_MIN && edad <= EDAD_REF_MAX)) return null
+  return `La referencia es para ${EDAD_REF_MIN}–${EDAD_REF_MAX} años y tu edad es ${edad}: tómala solo como guía.`
+}
+
+/** Métricas ya armadas para un perfil: lo único que depende del perfil son las referencias en kg de cada IMC (estatura),
+ *  la clasificación y la tabla del % de grasa y del % de músculo (sexo) y el aviso de edad de la tabla de grasa (fecha de
+ *  nacimiento). Lo demás (colores, ejes, textos «qué mide») es igual para todos. */
+export type MetricasPerfil = { metricas: MetricDef[]; byKey: Record<MetricKey, MetricDef> }
+
+function construirMetricas(perfil: PesoPerfil, avisoEdad: string | null): MetricasPerfil {
+  const kg = (imc: number) => pesoParaIMC(perfil, imc).toFixed(1)   // peso (kg, un decimal) con el que el IMC vale `imc`
+  const corte = (imc: number) => pesoParaIMC(perfil, imc)           // el mismo peso sin redondear, para los cortes de la tabla
+  const talla = fmtTalla(perfil)
+  const desp = desplazamientoGrasa(perfil)
+  const clasificaGrasa = (v: number) => classifyFat(v, desp)
+  // Puntos que bajan los cortes de % de músculo (30/33/36) para mujer; 0 para hombre. La suma al valor vive en
+  // classifyMuscle ('@/lib/peso'), así la tabla, la píldora, la IA y los avisos usan una sola regla.
+  const despM = desplazamientoMusculo(perfil)
+  const clasificaMus = (v: number) => classifyMuscle(v, despM)
+  // Rangos de la tabla de grasa (hombre: los de siempre; mujer: desplazados `desp` puntos). `n` evita «22.900000000000002».
+  const n = (v: number) => String(Math.round(v * 10) / 10)
+  const g = (v: number) => v + desp
+  const m = (v: number) => v - despM   // lo mismo para los cortes de músculo, que para mujer bajan
+
+  const metricas: MetricDef[] = [
+    {
+      key: 'peso', label: 'Peso (kg)', corto: 'Peso', unit: 'kg', decimals: 1, color: DATO_COLOR.peso, yAxis: 'kg', goodDir: 'down',
+      info: {
+        mide: 'Masa corporal total; incluye agua, glucógeno y contenido digestivo.',
+        leer: 'Usa tendencia de 2–4 semanas, no una sola mañana.',
+        hacer: 'Si también sube grasa, reduce 150–250 kcal y aumenta pasos diarios.',
+      },
+      refs: {
+        title: `Clasificación OMS — por peso (talla ${talla} m)`,
+        note: `Meta: bajar de ${kg(25)} kg para IMC < 25 (salir de sobrepeso).`,
+        rows: [
+          filaRef(classifyIMC, 17, `< ${kg(18.5)}`, { max: corte(18.5) }, 'IMC < 18.5'),
+          filaRef(classifyIMC, 22, `${kg(18.5)} – ${kg(24.9)}`, { min: corte(18.5), max: corte(25) }, 'IMC 18.5–24.9'),
+          filaRef(classifyIMC, 27, `${kg(25)} – ${kg(29.9)}`, { min: corte(25), max: corte(30) }, 'IMC 25–29.9'),
+          filaRef(classifyIMC, 32, `${kg(30)} – ${kg(34.9)}`, { min: corte(30), max: corte(35) }, 'IMC 30–34.9'),
+          filaRef(classifyIMC, 37, `≥ ${kg(35)}`, { min: corte(35) }, 'IMC ≥ 35'),
+        ],
+      },
+    },
+    {
+      key: 'pct_grasa', label: '% Grasa', corto: '% Grasa', unit: '%', decimals: 1, color: DATO_COLOR.pct_grasa, yAxis: 'pct', goodDir: 'down',
+      info: {
+        mide: 'Proporción de grasa corporal estimada por bioimpedancia.',
+        leer: 'Baja sostenida es mejor señal que bajar peso sin contexto.',
+        hacer: 'Buena señal: conserva adherencia y evita recortes agresivos.',
+      },
+      classify: clasificaGrasa,
+      refs: {
+        title: `% Grasa — ${perfil.sexo === 'mujer' ? 'mujeres' : 'hombres'} (30–40 años)`,
+        // Para mujer los cortes son los de hombre desplazados: es una aproximación, no una norma clínica, y la nota lo dice.
+        note: [
+          desp ? `Para mujeres son valores aproximados: los de hombres más ${desp} puntos. No son una norma clínica.` : null,
+          avisoEdad,   // la edad del perfil queda fuera de «30–40 años»: la tabla sigue diciendo para quién es
+        ].filter(Boolean).join(' ') || undefined,
+        // Los rangos se escriben con el decimal (14.9, no 14) porque el % de grasa se captura con un decimal: 14.5 existe.
+        rows: [
+          filaRef(clasificaGrasa, g(5), `< ${n(g(10))}%`, { max: g(10) }),
+          filaRef(clasificaGrasa, g(12), `${n(g(10))} – ${n(g(14.9))}%`, { min: g(10), max: g(15) }),
+          filaRef(clasificaGrasa, g(17), `${n(g(15))} – ${n(g(19.9))}%`, { min: g(15), max: g(20) }),
+          filaRef(clasificaGrasa, g(22), `${n(g(20))} – ${n(g(24.9))}%`, { min: g(20), max: g(25) }),
+          filaRef(clasificaGrasa, g(27), `${n(g(25))} – ${n(g(29.9))}%`, { min: g(25), max: g(30) }),
+          filaRef(clasificaGrasa, g(35), `≥ ${n(g(30))}%`, { min: g(30) }),
+        ],
+      },
+    },
+    {
+      key: 'pct_musculo', label: '% Músculo', corto: '% Músculo', unit: '%', decimals: 1, color: DATO_COLOR.pct_musculo, yAxis: 'pct', goodDir: 'up',
+      info: {
+        mide: 'Masa magra relativa; señal de si estás preservando músculo.',
+        leer: 'En déficit, mantener o subir es positivo.',
+        hacer: `Mantén fuerza 3–4 veces/semana y proteína ${PROTEINA_G_KG.min.toFixed(1)}–${PROTEINA_G_KG.max.toFixed(1)} g/kg.`,
+      },
+      classify: clasificaMus,
+      refs: {
+        title: despM ? '% Músculo — mujeres (bioimpedancia)' : '% Músculo (bioimpedancia)',
+        // Igual que en la grasa: para mujer son los cortes de hombre desplazados, una aproximación que la nota aclara.
+        note: despM ? `Para mujeres son valores aproximados: los de hombres menos ${despM} puntos. No son una norma clínica.` : undefined,
+        rows: [
+          filaRef(clasificaMus, m(25), `< ${n(m(30))}%`, { max: m(30) }),
+          filaRef(clasificaMus, m(31), `${n(m(30))} – ${n(m(33) - 0.1)}%`, { min: m(30), max: m(33) }),
+          filaRef(clasificaMus, m(34), `${n(m(33))} – ${n(m(36) - 0.1)}%`, { min: m(33), max: m(36) }),
+          filaRef(clasificaMus, m(38), `≥ ${n(m(36))}%`, { min: m(36) }),   // sin tope: classifyMuscle da «Atlético» a todo lo ≥ 36
+        ],
+      },
+    },
+    {
+      key: 'imc', label: 'IMC', corto: 'IMC', unit: '', decimals: 1, color: '#8b5cf6', yAxis: 'other', goodDir: 'down',
+      info: {
+        mide: 'Relación peso/altura. No distingue músculo de grasa.',
+        leer: 'Úsalo como contexto, no como único objetivo.',
+        hacer: 'Interprétalo siempre junto con % grasa y grasa visceral.',
+      },
+      classify: classifyIMC,
+      refs: {
+        title: 'IMC — Clasificación OMS',
+        note: `Tu talla: ${talla} m. IMC < 25 = ${kg(25)} kg.`,
+        rows: [
+          filaRef(classifyIMC, 17, '< 18.5', { kg: `< ${kg(18.5)} kg`, max: 18.5 }),
+          filaRef(classifyIMC, 22, '18.5 – 24.9', { kg: `${kg(18.5)} – ${kg(24.9)} kg`, min: 18.5, max: 25 }),
+          filaRef(classifyIMC, 27, '25.0 – 29.9', { kg: `${kg(25)} – ${kg(29.9)} kg`, min: 25, max: 30 }),
+          filaRef(classifyIMC, 32, '30.0 – 34.9', { kg: `${kg(30)} – ${kg(34.9)} kg`, min: 30, max: 35 }),
+          filaRef(classifyIMC, 37, '≥ 35', { kg: `≥ ${kg(35)} kg`, min: 35 }),
+        ],
+      },
+    },
+    {
+      key: 'rmr', label: 'RMR (kcal)', corto: 'RMR', unit: 'kcal/día', decimals: 0, color: '#f59e0b', yAxis: 'other', goodDir: 'neutral',
+      info: {
+        mide: 'Calorías que quemas en reposo absoluto estimadas por la báscula.',
+        leer: 'Valora solo cambios sostenidos de varias semanas, no picos sueltos.',
+        hacer: 'Evalúa en bloques de 3–4 semanas; un dato solo no dice nada.',
+      },
+    },
+    {
+      key: 'edad_corporal', label: 'Edad corporal', corto: 'Edad corporal', unit: 'años', decimals: 0, color: '#06b6d4', yAxis: 'other', goodDir: 'down',
+      info: {
+        mide: 'Índice del fabricante basado en composición y metabolismo.',
+        leer: 'Solo tiene valor si mejora junto con grasa y visceral.',
+        hacer: 'Tómala como indicador secundario, no como meta principal.',
+      },
+    },
+    {
+      key: 'grasa_visceral', label: 'Grasa visceral', corto: 'Visceral', unit: '', decimals: 0, color: '#f97316', yAxis: 'other', goodDir: 'down',
+      info: {
+        mide: 'Grasa alrededor de órganos internos. Escala del fabricante (1–59).',
+        leer: 'Más relevante que la grasa subcutánea para riesgo metabólico.',
+        hacer: 'Prioridad alta: revisar adherencia, alcohol y actividad diaria.',
+      },
+      classify: classifyVisceral,
+      refs: {
+        title: 'Grasa visceral',
+        rows: [
+          filaRef(classifyVisceral, 5, '1 – 9', { max: 10 }),   // escala entera: «≤ 9» de classifyVisceral = «< 10»
+          filaRef(classifyVisceral, 12, '10 – 14', { min: 10, max: 15 }),
+          filaRef(classifyVisceral, 20, '≥ 15', { min: 15 }),
+        ],
+      },
+    },
+  ]
+  return { metricas, byKey: Object.fromEntries(metricas.map(m => [m.key, m])) as Record<MetricKey, MetricDef> }
+}
+
+// Memoizado por lo único que cambia el resultado (estatura, sexo y el aviso de edad): así la identidad del arreglo es
+// estable entre renders y se puede usar en dependencias de useMemo. Pocas entradas bastan (un perfil, o dos si se está
+// editando); al consultar una entrada se vuelve a insertar al final, así lo que se está usando es lo último que se descarta.
+// `hoy` ('YYYY-MM-DD') solo sirve para el aviso de edad; sin él (null) no hay aviso, que es lo que pasa en el servidor
+// y en la hidratación. Con el perfil de fábrica (37 años) el aviso es null: nada cambia.
+const CACHE_METRICAS = new Map<string, MetricasPerfil>()
+export function metricasPara(perfil: PesoPerfil = PERFIL_DEFAULT, hoy: string | null = null): MetricasPerfil {
+  const aviso = avisoEdadReferencia(perfil, hoy)
+  const clave = `${perfil.estatura_cm}|${perfil.sexo}|${aviso ?? ''}`
+  let m = CACHE_METRICAS.get(clave)
+  if (m) CACHE_METRICAS.delete(clave)
+  else {
+    m = construirMetricas(perfil, aviso)
+    if (CACHE_METRICAS.size >= 8) CACHE_METRICAS.delete(CACHE_METRICAS.keys().next().value as string)
+  }
+  CACHE_METRICAS.set(clave, m)
+  return m
+}
+
+/** Las métricas del perfil vigente (el del contexto). Los componentes usan esto, no METRICS. La fecha de hoy llega
+ *  después de montar (useHoy es null en servidor e hidratación), así que el aviso de edad aparece sin desajuste. */
+export function useMetricas(): MetricasPerfil {
+  const perfil = usePerfil()
+  const hoy = useHoy()
+  return metricasPara(perfil, hoy)
+}
+
+// Versión con el perfil por defecto. Sirve para lo que NO depende del perfil (clave, color, etiqueta, eje, decimales,
+// unidad: PesoTiles y PesoVisuales los leen a nivel de módulo). Sus `refs` y el `classify` de % grasa y de % músculo SÍ
+// dependen de la estatura y el sexo: para mostrarlos o clasificar con ellos se usa useMetricas() / metricasPara(perfil).
+const METRICAS_DEFAULT = metricasPara(PERFIL_DEFAULT)
+export const METRICS: MetricDef[] = METRICAS_DEFAULT.metricas
+export const METRIC_BY_KEY = METRICAS_DEFAULT.byKey
 
 export const DEFAULT_ACTIVE: ReadonlySet<string> = new Set(['peso', 'pct_grasa', 'pct_musculo'])
 
@@ -367,43 +451,47 @@ export function fmtValor(key: string, v: number): string {
 
 // ── Contexto OMS por métrica ─────────────────────────────────────────────────
 
-export function getOmsContext(key: string, val: number): { lines: { text: string; color: string }[] } {
+export function getOmsContext(key: string, val: number, perfil: PesoPerfil = PERFIL_DEFAULT): { lines: { text: string; color: string }[] } {
   const lines: { text: string; color: string }[] = []
+  const kg = (imc: number) => pesoParaIMC(perfil, imc).toFixed(1)   // peso con el que el IMC vale `imc` a la estatura del perfil
 
   if (key === 'peso') {
-    const imc = val / H2
+    const imc = val / tallaCuadrada(perfil)
     const cls = classifyIMC(imc)
     lines.push({ text: `Estás en: ${cls.label} (tu IMC actual es ${imc.toFixed(1)})`, color: cls.color })
     if (imc >= 30) {
-      lines.push({ text: `Para salir de obesidad I: bajar de ${(30 * H2).toFixed(1)} kg (IMC < 30)`, color: '#f59e0b' })
-      lines.push({ text: `Para salir del sobrepeso: bajar de ${(25 * H2).toFixed(1)} kg (IMC < 25)`, color: '#22c55e' })
+      lines.push({ text: `Para salir de obesidad I: bajar de ${kg(30)} kg (IMC < 30)`, color: '#f59e0b' })
+      lines.push({ text: `Para salir del sobrepeso: bajar de ${kg(25)} kg (IMC < 25)`, color: '#22c55e' })
     } else if (imc >= 25) {
-      lines.push({ text: `Para salir del sobrepeso: bajar de ${(25 * H2).toFixed(1)} kg (IMC < 25)`, color: '#22c55e' })
-      lines.push({ text: `Obesidad I empieza en ${(30 * H2).toFixed(1)} kg (IMC ≥ 30)`, color: '#ef4444' })
+      lines.push({ text: `Para salir del sobrepeso: bajar de ${kg(25)} kg (IMC < 25)`, color: '#22c55e' })
+      lines.push({ text: `Obesidad I empieza en ${kg(30)} kg (IMC ≥ 30)`, color: '#ef4444' })
     } else {
-      lines.push({ text: `Sobrepeso empieza en ${(25 * H2).toFixed(1)} kg (IMC ≥ 25)`, color: '#f59e0b' })
+      lines.push({ text: `Sobrepeso empieza en ${kg(25)} kg (IMC ≥ 25)`, color: '#f59e0b' })
     }
   } else if (key === 'imc') {
     const cls = classifyIMC(val)
     lines.push({ text: `Estás en: ${cls.label} (IMC ${val.toFixed(1)})`, color: cls.color })
-    if (val >= 25) lines.push({ text: `Para salir del sobrepeso: IMC < 25 (${(25 * H2).toFixed(1)} kg)`, color: '#22c55e' })
-    if (val >= 30) lines.push({ text: `Para salir de obesidad I: IMC < 30 (${(30 * H2).toFixed(1)} kg)`, color: '#f59e0b' })
-    if (val < 25) lines.push({ text: `Sobrepeso empieza en IMC 25 (${(25 * H2).toFixed(1)} kg)`, color: '#f59e0b' })
-    if (val >= 25 && val < 30) lines.push({ text: `Obesidad I empieza en IMC 30 (${(30 * H2).toFixed(1)} kg)`, color: '#ef4444' })
+    if (val >= 25) lines.push({ text: `Para salir del sobrepeso: IMC < 25 (${kg(25)} kg)`, color: '#22c55e' })
+    if (val >= 30) lines.push({ text: `Para salir de obesidad I: IMC < 30 (${kg(30)} kg)`, color: '#f59e0b' })
+    if (val < 25) lines.push({ text: `Sobrepeso empieza en IMC 25 (${kg(25)} kg)`, color: '#f59e0b' })
+    if (val >= 25 && val < 30) lines.push({ text: `Obesidad I empieza en IMC 30 (${kg(30)} kg)`, color: '#ef4444' })
   } else if (key === 'pct_grasa') {
-    const cls = classifyFat(val)
+    const d = desplazamientoGrasa(perfil)   // los cortes se desplazan para mujer (0 para hombre)
+    const cls = classifyFat(val, d)
     lines.push({ text: `Estás en: ${cls.label} (${val}%)`, color: cls.color })
     // Mismos nombres que classifyFat (y que la tabla de referencia): «Obesidad por grasa», «Saludable», «Fitness».
-    if (val >= 30) lines.push({ text: 'Para salir de «Obesidad por grasa»: bajar de 30%', color: '#f59e0b' })
-    if (val >= 25) lines.push({ text: 'Para llegar a «Saludable»: bajar de 25%', color: '#84cc16' })
-    if (val >= 20) lines.push({ text: 'Para llegar a «Fitness»: bajar de 20%', color: '#22c55e' })
-    if (val < 30 && val >= 25) lines.push({ text: '«Obesidad por grasa» empieza en 30%', color: '#ef4444' })
+    if (val >= 30 + d) lines.push({ text: `Para salir de «Obesidad por grasa»: bajar de ${30 + d}%`, color: '#f59e0b' })
+    if (val >= 25 + d) lines.push({ text: `Para llegar a «Saludable»: bajar de ${25 + d}%`, color: '#84cc16' })
+    if (val >= 20 + d) lines.push({ text: `Para llegar a «Fitness»: bajar de ${20 + d}%`, color: '#22c55e' })
+    if (val < 30 + d && val >= 25 + d) lines.push({ text: `«Obesidad por grasa» empieza en ${30 + d}%`, color: '#ef4444' })
   } else if (key === 'pct_musculo') {
-    const cls = classifyMuscle(val)
+    const d = desplazamientoMusculo(perfil)   // los cortes bajan para mujer (0 para hombre)
+    const cls = classifyMuscle(val, d)
+    const normal = 30 - d, bueno = 33 - d, atletico = 36 - d
     lines.push({ text: `Estás en: ${cls.label} (${val}%)`, color: cls.color })
-    if (val < 33) lines.push({ text: `Para llegar a «Bueno»: ≥ 33% (te faltan ${(33 - val).toFixed(1)}%)`, color: '#22c55e' })
-    if (val < 36 && val >= 33) lines.push({ text: `Para llegar a «Atlético»: ≥ 36% (te faltan ${(36 - val).toFixed(1)}%)`, color: '#2d6cdf' })
-    if (val < 30) lines.push({ text: `Para llegar a «Normal»: ≥ 30% (te faltan ${(30 - val).toFixed(1)}%)`, color: '#84cc16' })
+    if (val < bueno) lines.push({ text: `Para llegar a «Bueno»: ≥ ${bueno}% (te faltan ${(bueno - val).toFixed(1)}%)`, color: '#22c55e' })
+    if (val < atletico && val >= bueno) lines.push({ text: `Para llegar a «Atlético»: ≥ ${atletico}% (te faltan ${(atletico - val).toFixed(1)}%)`, color: '#2d6cdf' })
+    if (val < normal) lines.push({ text: `Para llegar a «Normal»: ≥ ${normal}% (te faltan ${(normal - val).toFixed(1)}%)`, color: '#84cc16' })
   } else if (key === 'grasa_visceral') {
     const cls = classifyVisceral(val)
     lines.push({ text: `Estás en: ${cls.label} (nivel ${val})`, color: cls.color })
@@ -526,7 +614,7 @@ export type Frase = { texto: string; delta: number; bueno: boolean | null }
 const verbo = (d: number) => (d > 0 ? 'subió' : d < 0 ? 'bajó' : 'se mantuvo')
 
 /** Frases del resumen de tendencia + lectura global. Cada métrica usa sus PROPIOS primer y último dato del rango. */
-export function resumenTendencia(rows: PesoRecord[]) {
+export function resumenTendencia(rows: PesoRecord[], perfil: PesoPerfil = PERFIL_DEFAULT) {
   const ex = (k: MetricKey) => {
     const e = extremosMetrica(rows, k)
     return e ? { delta: e.last.valor - e.first.valor, first: e.first.valor, last: e.last.valor } : null
@@ -536,8 +624,8 @@ export function resumenTendencia(rows: PesoRecord[]) {
   const r1 = (n: number) => Math.round(n * 10) / 10   // se decide el verbo con el valor ya redondeado: nada de "subió 0.0"
 
   const imcClass = imc ? classifyIMC(imc.last) : null
-  const grasaClass = grasa ? classifyFat(grasa.last) : null
-  const muscClass = musculo ? classifyMuscle(musculo.last) : null
+  const grasaClass = grasa ? classifyFat(grasa.last, desplazamientoGrasa(perfil)) : null
+  const muscClass = musculo ? classifyMuscle(musculo.last, desplazamientoMusculo(perfil)) : null
   const visceralClass = visceral ? classifyVisceral(visceral.last) : null
 
   const frases: Frase[] = []
@@ -601,7 +689,7 @@ export function resumenTendencia(rows: PesoRecord[]) {
 }
 
 /** Viñetas de la "Recomendación general" a partir de los cambios del rango. */
-export function recomendacionGeneral(rows: PesoRecord[]) {
+export function recomendacionGeneral(rows: PesoRecord[], metricas: readonly MetricDef[] = METRICS) {
   const get = (k: MetricKey) => {
     const e = extremosMetrica(rows, k)
     return e ? e.last.valor - e.first.valor : null
@@ -616,7 +704,7 @@ export function recomendacionGeneral(rows: PesoRecord[]) {
   if (pesoD != null && pesoD < 0 && fatD != null && fatD < 0) bullets.push('Peso y grasa bajando juntos: buen déficit calórico.')
   if (visceralLast != null && visceralLast >= 10) bullets.push('Grasa visceral alta: prioriza adherencia y reducción de alcohol.')
 
-  const alertCount = METRICS.filter(m => {
+  const alertCount = metricas.filter(m => {
     if (m.goodDir === 'neutral') return false
     const d = get(m.key)
     if (d == null) return false
@@ -631,19 +719,21 @@ export function recomendacionGeneral(rows: PesoRecord[]) {
 }
 
 /** Estado "según referencias" con el último dato conocido de cada métrica clasificable. */
-export function estadoOms(rows: PesoRecord[]) {
+export function estadoOms(rows: PesoRecord[], perfil: PesoPerfil = PERFIL_DEFAULT) {
   const items: { label: string; value: string; cls: Classification }[] = []
   const imc = ultimoValor(rows, 'imc'), grasa = ultimoValor(rows, 'pct_grasa')
   const musc = ultimoValor(rows, 'pct_musculo'), visc = ultimoValor(rows, 'grasa_visceral')
+  const desp = desplazamientoGrasa(perfil)
+  const despM = desplazamientoMusculo(perfil)
   if (imc) items.push({ label: 'IMC', value: `${imc.valor}`, cls: classifyIMC(imc.valor) })
-  if (grasa) items.push({ label: '% Grasa', value: `${grasa.valor}%`, cls: classifyFat(grasa.valor) })
-  if (musc) items.push({ label: '% Músculo', value: `${musc.valor}%`, cls: classifyMuscle(musc.valor) })
+  if (grasa) items.push({ label: '% Grasa', value: `${grasa.valor}%`, cls: classifyFat(grasa.valor, desp) })
+  if (musc) items.push({ label: '% Músculo', value: `${musc.valor}%`, cls: classifyMuscle(musc.valor, despM) })
   if (visc) items.push({ label: 'Gr. visceral', value: `${visc.valor}`, cls: classifyVisceral(visc.valor) })
 
   const headline = [
     imc ? classifyIMC(imc.valor).label : null,
-    grasa ? classifyFat(grasa.valor).label : null,
-    musc ? `músculo ${classifyMuscle(musc.valor).label.toLowerCase()}` : null,
+    grasa ? classifyFat(grasa.valor, desp).label : null,
+    musc ? `músculo ${classifyMuscle(musc.valor, despM).label.toLowerCase()}` : null,
   ].filter(Boolean).join(' · ')
 
   const peor = items.reduce<Level>((acc, i) => {
@@ -841,8 +931,10 @@ export type SugerenciaMeta = {
 }
 
 /** Metas sugeridas, calculadas con el último peso y la última composición. El ritmo de referencia (0.5 kg/semana)
- *  es el que el análisis por reglas ya usa como "sostenible". */
-export function sugerenciasMeta(data: PesoRecord[]): SugerenciaMeta[] {
+ *  es el que el análisis por reglas ya usa como "sostenible". La estatura del perfil fija el peso con IMC 25 y el sexo
+ *  desplaza el % de grasa objetivo (20% en hombre, el inicio de «Saludable»; 28% en mujer). El `id` 'grasa20' se queda
+ *  como identificador aunque el porcentaje cambie: el contrato con PesoMeta es `grasa`, que lleva el valor real. */
+export function sugerenciasMeta(data: PesoRecord[], perfil: PesoPerfil = PERFIL_DEFAULT): SugerenciaMeta[] {
   const conPeso = porFecha(data).filter(r => r.peso != null)
   if (!conPeso.length) return []
   const w = conPeso[conPeso.length - 1].peso as number
@@ -852,9 +944,13 @@ export function sugerenciasMeta(data: PesoRecord[]): SugerenciaMeta[] {
   const r1 = (n: number) => Math.round(n * 10) / 10
   const sem = (kg: number) => Math.max(1, Math.ceil(kg / 0.5))
 
-  if (w > PESO_IMC_25 + 0.5) {
-    const peso = r1(PESO_IMC_25)
-    const grasaEq = magra != null ? Math.round((1 - magra / peso) * 100) : null
+  const pesoImc25 = pesoParaIMC(perfil, 25)
+  if (w > pesoImc25 + 0.5) {
+    const peso = r1(pesoImc25)
+    // Si el peso con IMC 25 queda casi igual a la masa magra, un «~3% de grasa» no es una referencia útil (ni alcanzable):
+    // por debajo de 8% no se menciona. Con los datos de siempre sale ~22%, así que no cambia nada.
+    const grasaEqCrudo = magra != null ? Math.round((1 - magra / peso) * 100) : null
+    const grasaEq = grasaEqCrudo != null && grasaEqCrudo >= 8 ? grasaEqCrudo : null
     out.push({
       id: 'imc25', peso, grasa: null, semanas: sem(w - peso),
       titulo: `${peso} kg · salir del sobrepeso`,
@@ -862,13 +958,14 @@ export function sugerenciasMeta(data: PesoRecord[]): SugerenciaMeta[] {
     })
   }
   const grasaAct = comp?.pct_grasa ?? null
-  if (magra != null && grasaAct != null && grasaAct >= 21) {
-    const peso = r1(magra / 0.8)
+  const objetivoGrasa = 20 + desplazamientoGrasa(perfil)
+  if (magra != null && grasaAct != null && grasaAct >= objetivoGrasa + 1) {
+    const peso = r1(magra / ((100 - objetivoGrasa) / 100))   // magra = (1 − grasa) × peso
     if (peso < w - 0.5) {
       out.push({
-        id: 'grasa20', peso, grasa: 20, semanas: sem(w - peso),
-        titulo: `20% de grasa · ${peso} kg`,
-        detalle: `Conservando tu masa magra de ${r1(magra)} kg pesarías ~${peso} kg, y con 20% de grasa estarías en el rango saludable.`,
+        id: 'grasa20', peso, grasa: objetivoGrasa, semanas: sem(w - peso),
+        titulo: `${objetivoGrasa}% de grasa · ${peso} kg`,
+        detalle: `Conservando tu masa magra de ${r1(magra)} kg pesarías ~${peso} kg, y con ${objetivoGrasa}% de grasa estarías en el rango saludable.`,
       })
     }
   }
