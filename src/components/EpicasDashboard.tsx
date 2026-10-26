@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { sanitizeHtml } from '@/lib/sanitize'
 import { sameTask, isAutoNote, fmtLogDate } from '@/lib/tareas'
@@ -316,7 +316,9 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [estEditKey, setEstEditKey] = useState<string | null>(null)     // fila con el selector de tiempo (chip ⏱) abierto
   const [waitEditKey, setWaitEditKey] = useState<string | null>(null)   // fila con el selector de "en espera / qué esperas" abierto
   const [waitTaskPickerKey, setWaitTaskPickerKey] = useState<string | null>(null)  // dentro de ese popover: eligiendo DE QUÉ TAREA depende
-  const [featureEditKey, setFeatureEditKey] = useState<string | null>(null)   // fila con el selector de Feature abierto (cambiarlo sin abrir la tarea)
+  const [featureEditKey, setFeatureEditKey] = useState<string | null>(null)   // fila con el selector de Feature + Iniciativa abierto (cambiarlos sin abrir la tarea)
+  const [ubicNuevo, setUbicNuevo] = useState<'feature' | 'iniciativa' | null>(null)   // dentro de ese popover: qué se está creando al vuelo
+  const [ubicNuevoNombre, setUbicNuevoNombre] = useState('')
   const [waitSince, setWaitSince] = useState<Record<string, string>>({}) // taskId → fecha en que se marcó "en espera" (para "llevas N días esperando")
   const [newComment, setNewComment] = useState('')                 // input de comentario nuevo en el detalle
   const [editingComment, setEditingComment] = useState<{ at: string; text: string } | null>(null)  // comentario en edición (at = su id) + borrador
@@ -1078,6 +1080,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             const restamp = (t: EpicaTask) => (t.id && stamps[t.id]) ? { ...t, updatedAt: stamps[t.id] } : t
             setEpics(list => list.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(restamp) }))
             epicsRef.current = epicsRef.current.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(restamp) })
+          }
+          // El server limpió la iniciativa de tareas que no cuadraban con su feature: que la pantalla lo refleje
+          if (Array.isArray(j.iniciativasLimpiadas) && j.iniciativasLimpiadas.length) {
+            const lim = new Set<string>(j.iniciativasLimpiadas)
+            const sinIni = (t: EpicaTask) => (t.id && lim.has(t.id) ? { ...t, iniciativaId: '' } : t)
+            setEpics(list => list.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(sinIni) }))
+            epicsRef.current = epicsRef.current.map(e => e.id !== id ? e : { ...e, tasks: e.tasks.map(sinIni) })
           }
           // Choque con otra pestaña: avisa y recarga con lo más fresco de la BD
           if (j.conflicts && j.conflicts.length) {
@@ -2635,25 +2644,39 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       else if (has) patchObjetivo(e.id, m.id, { taskIds: (m.taskIds || []).filter(id => id !== taskId) })
     }
   }
-  /** Liga (o quita) una tarea a un Feature de su propia épica. A diferencia de los objetivos,
-   *  el vínculo vive en la TAREA (featureId): una tarea pertenece a lo más a un Feature. */
-  const setTaskFeature = (e: Epica, ti: number, featureId: string | null) => {
+  /** ¿La Iniciativa cuelga de ESE Feature de la épica? La cascada es Épica → Feature → Iniciativa →
+   *  Tarea: una iniciativa de otro feature (o sin feature) no es una ubicación válida. */
+  const iniEsDelFeature = (e: Epica | undefined, featureId?: string | null, iniId?: string | null) =>
+    !!iniId && !!featureId && !!(e?.features || []).find(f => f.id === featureId)?.iniciativas?.some(i => i.id === iniId)
+  /** Escribe el Feature y la Iniciativa de una tarea en UNA sola escritura (un solo patchEpic).
+   *  Hacerlo en dos llamadas seguidas (setTaskFeature + setTaskIniciativa) clonaba dos veces las mismas
+   *  tareas del render y la segunda pisaba a la primera. Cada clave se toca sólo si viene en `cambio`:
+   *   · `featureId` presente → fija o (null) quita el Feature.
+   *   · `iniciativaId` presente → fija o (null) quita la Iniciativa.
+   *   · `iniciativaId` ausente → CONSERVA la que tenía mientras siga siendo del Feature resultante; si el
+   *     Feature cambió y ya no es suya, la limpia (antes quedaba colgando de un feature ajeno). */
+  const setTaskUbicacion = (e: Epica, ti: number, cambio: { featureId?: string | null; iniciativaId?: string | null }) => {
     const tasks = clone(e.tasks)
     const t = tasks[ti]; if (!t) return
-    if (featureId) { if (featuresReady.current) t.featureId = featureId }
-    else if (featuresReady.current || 'featureId' in t) t.featureId = ''   // '' → se manda null y limpia la columna
-    patchEpic(e.id, { tasks })
-    if (featureId && !featuresReady.current) showToast('Corre sql/epicas-12-features.sql para guardar el Feature', true)
-  }
-  /** Liga (o quita) una tarea a una Iniciativa DENTRO del Feature ya elegido (cascada: sin
-   *  Feature no hay Iniciativa que ofrecer — ver el selector, que sólo lista las del feature actual). */
-  const setTaskIniciativa = (e: Epica, ti: number, iniciativaId: string | null) => {
-    const tasks = clone(e.tasks)
-    const t = tasks[ti]; if (!t) return
-    if (iniciativaId) { if (iniciativaIdReady.current) t.iniciativaId = iniciativaId }
+    if ('featureId' in cambio) {
+      if (cambio.featureId) { if (featuresReady.current) t.featureId = cambio.featureId }
+      else if (featuresReady.current || 'featureId' in t) t.featureId = ''   // '' → se manda null y limpia la columna
+    }
+    const ini = 'iniciativaId' in cambio ? (cambio.iniciativaId || '') : (iniEsDelFeature(e, t.featureId, t.iniciativaId) ? t.iniciativaId! : '')
+    if (ini) { if (iniciativaIdReady.current) t.iniciativaId = ini }
     else if (iniciativaIdReady.current || 'iniciativaId' in t) t.iniciativaId = ''
     patchEpic(e.id, { tasks })
-    if (iniciativaId && !iniciativaIdReady.current) showToast('Corre sql/epicas-21-tarea-iniciativa.sql para guardar la iniciativa', true)
+    if (cambio.featureId && !featuresReady.current) showToast('Corre sql/epicas-12-features.sql para guardar el Feature', true)
+    if (cambio.iniciativaId && !iniciativaIdReady.current) showToast('Corre sql/epicas-21-tarea-iniciativa.sql para guardar la iniciativa', true)
+  }
+  /** Liga (o quita) una tarea a un Feature de su propia épica. A diferencia de los objetivos,
+   *  el vínculo vive en la TAREA (featureId): una tarea pertenece a lo más a un Feature. */
+  const setTaskFeature = (e: Epica, ti: number, featureId: string | null) => setTaskUbicacion(e, ti, { featureId })
+  /** Liga (o quita) una tarea a una Iniciativa. Si la tarea aún no tiene Feature (o tiene otro), se
+   *  muda al Feature dueño de esa iniciativa: así elegir sólo la iniciativa deja la ubicación completa. */
+  const setTaskIniciativa = (e: Epica, ti: number, iniciativaId: string | null) => {
+    const padre = iniciativaId ? (e.features || []).find(f => (f.iniciativas || []).some(i => i.id === iniciativaId)) : undefined
+    setTaskUbicacion(e, ti, padre ? { featureId: padre.id, iniciativaId } : { iniciativaId })
   }
   /** Responsable: texto libre (yo, abogado, contador, nombre…). Mismo gate que Iniciativa (misma migración). */
   const setTaskResponsable = (e: Epica, ti: number, responsable: string) => {
@@ -2695,8 +2718,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
    *  fire-and-forget: onPick necesita el id de vuelta YA (antes de cualquier round-trip), por eso
    *  el POST no se espera aquí — /api/features hace upsert por id, así que aunque la tarea ya haya
    *  guardado su featureId antes de que este POST termine, no hay condición de choque real. */
-  const commitQuickFeature = (epicaId: string, onPick: (featureId: string) => void) => {
-    const name = featQuickName.trim()
+  const commitQuickFeature = (epicaId: string, onPick: (featureId: string) => void, nombre?: string) => {
+    const name = (nombre ?? featQuickName).trim()
     setFeatQuickAdd(false); setFeatQuickName('')
     if (!name) return
     const e = epics.find(x => x.id === epicaId); if (!e) return
@@ -2956,10 +2979,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo eliminar el objetivo') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo eliminar el objetivo'))
   }
-  /** Crea una Iniciativa dentro de un Feature directo desde "Objetivos", sin el editor completo. */
-  const commitQuickIniciativa = (epicaId: string, featureId: string, name: string) => {
+  /** Crea una Iniciativa dentro de un Feature directo desde "Objetivos" o desde el chip de ubicación de
+   *  una tarea, sin el editor completo. Devuelve el id nuevo (o null) para poder asignarla de una vez. */
+  const commitQuickIniciativa = (epicaId: string, featureId: string, name: string): string | null => {
     const nombre = name.trim()
-    if (!nombre) return
+    if (!nombre) return null
     const ni: Iniciativa = { id: uid(), featureId, epicaId, nombre, estado: 'pendiente' }
     setEpics(list => list.map(e => (e.id !== epicaId ? e : {
       ...e, features: (e.features || []).map(f => (f.id === featureId ? { ...f, iniciativas: [...(f.iniciativas || []), ni] } : f)),
@@ -2968,6 +2992,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     fetch('/api/iniciativas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: ni.id, featureId, epicaId, nombre }) })
       .then(r => r.json()).then(j => { if (!j.ok) revertYAvisa(epicaId, revert, 'No se pudo crear la iniciativa') })
       .catch(() => revertYAvisa(epicaId, revert, 'No se pudo crear la iniciativa'))
+    return ni.id
   }
   /** Actualiza UNA Iniciativa por su id — mismo patrón optimista que patchObjetivo. */
   const patchIniciativa = (epicaId: string, featureId: string, iniciativaId: string, patch: Partial<Iniciativa>) => {
@@ -4403,12 +4428,15 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <GripIcon />
           </span>
         )}
-        <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ flexShrink: 0, marginTop: 1, cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
-          {PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        {/* Columna de ubicación: el estado arriba y, debajo, Feature e Iniciativa (cambiables sin abrir la tarea) */}
+        <div style={{ flexShrink: 0, marginTop: 1, width: 112, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <select value={t.status} onChange={e => setTaskStatus(featured, t._i, e.target.value)} title="Cambiar estado" style={{ width: '100%', cursor: 'pointer', border: `1px solid ${ts.c}44`, background: ts.bg, color: ts.c, borderRadius: 8, padding: '4px 6px', fontSize: 11, fontWeight: 700, outline: 'none' }}>
+            {PICK_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {rowUbicacion('row:' + t.id, featured, t._i, t)}
+        </div>
         <div {...clickable(() => setTaskView({ eId: featured.id, tid: t.id! }), `Ver tarea: ${t.t}`)} title="Ver tarea" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: done ? 'rgba(20,35,61,0.4)' : '#16365F', textDecoration: done ? 'line-through' : 'none' }}>{t.t}</div>
-          {(featured.features || []).length > 0 && <div style={{ marginTop: 3 }}>{rowFeatureChip('row:' + t.id, featured, t._i, t)}</div>}
           {(subs.length > 0 || typeof t.progress === 'number') && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
               {subs.length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: subsDone === subs.length ? '#2E6E6E' : 'rgba(20,35,61,0.5)' }}>☑ {subsDone}/{subs.length} · {Math.round((subsDone / subs.length) * 100)}%</span>}
@@ -4740,34 +4768,133 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
-  /** Cambiar el Feature de una tarea SIN abrir el editor — mismo patrón que rowWaitChip
-   *  (chip que abre un popover al tocarlo). Sólo tiene sentido si la épica ya tiene Features. */
-  const rowFeatureChip = (key: string, e: Epica, i: number, t: EpicaTask, align: 'left' | 'right' = 'left') => {
-    if (!(e.features || []).length) return null
-    const feat = (e.features || []).find(f => f.id === t.featureId)
+  /** Ubicación de la tarea en la cascada Feature → Iniciativa, editable SIN abrir la ficha. Son dos
+   *  chips compactos (uno por nivel) que van debajo del estado y comparten UN popover (mismo patrón que
+   *  rowWaitChip): elegir el Feature lo deja abierto para pasar directo a su Iniciativa; elegir la
+   *  Iniciativa lo cierra. Sin Feature, las iniciativas se listan agrupadas por feature y elegir una
+   *  asigna los DOS niveles de un toque. Ambos niveles se pueden crear al vuelo. Una referencia que ya
+   *  no resuelve (feature/iniciativa borrados) se trata como "sin asignar". Todo escribe por
+   *  setTaskUbicacion: una sola escritura, así que feature e iniciativa nunca quedan desfasados. */
+  const rowUbicacion = (key: string, e: Epica, i: number, t: EpicaTask) => {
+    const feats = e.features || []
+    if (!feats.length) return null
+    const feat = feats.find(f => f.id === t.featureId)
     const fc = feat?.color || '#5B6B86'
+    const inisFeat = feat?.iniciativas || []
+    const ini = inisFeat.find(x => x.id === t.iniciativaId)
+    const epicaConInis = feats.some(f => (f.iniciativas || []).length > 0)
     const open = featureEditKey === key
-    return (
-      <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }} onClick={ev => ev.stopPropagation()}>
-        <button data-pop onClick={ev => { ev.stopPropagation(); setChipMenuRect(ev.currentTarget.getBoundingClientRect()); setWaitEditKey(null); setWaitTaskPickerKey(null); setFeatureEditKey(open ? null : key) }} onPointerDown={ev => ev.stopPropagation()}
-          title={feat ? `Feature: ${feat.t} · toca para cambiar o quitar` : 'Sin Feature · toca para asignar'}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', font: '800 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 9px',
-            border: feat ? `1px solid ${hexA(fc, 0.6)}` : '1px dashed rgba(15,35,64,0.3)',
-            background: open ? hexA(fc, feat ? 0.22 : 0.1) : feat ? hexA(fc, 0.14) : 'rgba(15,35,64,0.03)', color: feat ? fc : 'rgba(20,35,61,0.55)' }}>
-          {feat ? <><span style={{ width: 6, height: 6, borderRadius: 99, background: fc, flexShrink: 0 }} />{feat.t}</> : '+ feature'}
+    const abrir = (ev: ReactMouseEvent<HTMLButtonElement>) => {
+      ev.stopPropagation()
+      setChipMenuRect(ev.currentTarget.getBoundingClientRect()); setWaitEditKey(null); setWaitTaskPickerKey(null)
+      setUbicNuevo(null); setUbicNuevoNombre('')
+      setFeatureEditKey(open ? null : key)
+    }
+    const cerrar = () => { setFeatureEditKey(null); setUbicNuevo(null); setUbicNuevoNombre('') }
+    // Escribe y avisa con «Deshacer» (la fila puede salir de la lista si hay un filtro por feature/iniciativa
+    // activo: sin el aviso parecería que la tarea desapareció). Si la columna aún no existe, el toast de
+    // "corre el SQL" de setTaskUbicacion es el que manda.
+    const aplicar = (cambio: { featureId?: string | null; iniciativaId?: string | null }, msg: string) => {
+      const snaps = snapshot([e.id])
+      setTaskUbicacion(e, i, cambio)
+      if ((!cambio.featureId || featuresReady.current) && (!cambio.iniciativaId || iniciativaIdReady.current)) undoToast(msg, snaps)
+    }
+    const chip: CSSProperties = { display: 'flex', alignItems: 'center', gap: 4, width: '100%', minWidth: 0, boxSizing: 'border-box', cursor: 'pointer', font: '700 10.5px var(--font-ui)', borderRadius: 99, padding: '3px 8px', textAlign: 'left' }
+    const txt: CSSProperties = { minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+    const caret = <span aria-hidden style={{ flexShrink: 0, fontSize: 8, opacity: 0.55 }}>▾</span>
+    const eb: CSSProperties = { flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)' }
+    const pick: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', maxWidth: '100%' }
+    const nuevoBtn: CSSProperties = { cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: '1px dashed rgba(15,35,64,0.28)', background: '#fff', color: 'rgba(20,35,61,0.55)' }
+    // Alta al vuelo: nombre + Enter/✓ crea y asigna, Esc/✕ cancela.
+    const nuevoRow = (placeholder: string, crear: (nombre: string) => void) => (
+      <span style={{ flexBasis: '100%', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <input autoFocus value={ubicNuevoNombre} onChange={ev => setUbicNuevoNombre(ev.target.value)} placeholder={placeholder}
+          onKeyDown={ev => { if (ev.key === 'Enter') crear(ubicNuevoNombre); if (ev.key === 'Escape') { ev.stopPropagation(); setUbicNuevo(null); setUbicNuevoNombre('') } }}
+          style={{ flex: 1, minWidth: 0, border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '5px 10px', fontSize: 12, outline: 'none' }} />
+        <button type="button" title="Crear y asignar" onClick={() => crear(ubicNuevoNombre)} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '6px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+        <button type="button" title="Cancelar" onClick={() => { setUbicNuevo(null); setUbicNuevoNombre('') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
+      </span>
+    )
+    const crearFeature = (nombre: string) => {
+      if (!nombre.trim()) return
+      commitQuickFeature(e.id, id => aplicar({ featureId: id }, `Feature «${nombre.trim()}» creado y asignado`), nombre)
+      setUbicNuevo(null); setUbicNuevoNombre('')
+    }
+    const crearIniciativa = (nombre: string) => {
+      if (!feat || !nombre.trim()) return
+      const id = commitQuickIniciativa(e.id, feat.id, nombre)
+      if (id) aplicar({ featureId: feat.id, iniciativaId: id }, `Iniciativa «${nombre.trim()}» creada y asignada`)
+      cerrar()
+    }
+    const iniChip = (f: EpicaFeature, x: Iniciativa) => {
+      const sel = t.iniciativaId === x.id
+      return (
+        <button key={x.id} type="button" onClick={ev => { ev.stopPropagation(); aplicar(sel ? { iniciativaId: null } : { featureId: f.id, iniciativaId: x.id }, sel ? 'Sin iniciativa' : `Ahora en «${f.t} › ${x.nombre}»`); cerrar() }}
+          style={{ ...pick, border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? '#10233F' : '#fff', color: sel ? '#fff' : '#16365F' }}>
+          <span style={txt}>{x.nombre}</span>{sel && <span aria-hidden>✓</span>}
         </button>
+      )
+    }
+    return (
+      <>
+        <button data-pop type="button" onClick={abrir} onPointerDown={ev => ev.stopPropagation()} aria-haspopup="dialog" aria-expanded={open}
+          aria-label={feat ? `Feature: ${feat.t}. Cambiar` : 'Asignar un feature'}
+          title={feat ? `Feature: ${feat.t} · toca para cambiar o quitar` : 'Sin Feature · toca para asignar'}
+          style={{ ...chip, border: feat ? `1px solid ${hexA(fc, 0.6)}` : '1px dashed rgba(15,35,64,0.3)', background: open ? hexA(fc, feat ? 0.22 : 0.1) : feat ? hexA(fc, 0.14) : 'rgba(15,35,64,0.03)', color: feat ? fc : 'rgba(20,35,61,0.55)' }}>
+          {feat && <span aria-hidden style={{ width: 6, height: 6, borderRadius: 99, background: fc, flexShrink: 0 }} />}
+          <span style={txt}>{feat ? feat.t : '+ Feature'}</span>{caret}
+        </button>
+        {(feat || epicaConInis) && (
+          <button data-pop type="button" onClick={abrir} onPointerDown={ev => ev.stopPropagation()} aria-haspopup="dialog" aria-expanded={open}
+            aria-label={ini ? `Iniciativa: ${ini.nombre}. Cambiar` : 'Asignar una iniciativa'}
+            title={ini ? `Iniciativa: ${ini.nombre} · toca para cambiar o quitar` : 'Sin Iniciativa · toca para asignar'}
+            style={{ ...chip, border: ini ? '1px solid rgba(15,35,64,0.22)' : '1px dashed rgba(194,147,58,0.55)', background: open ? 'rgba(15,35,64,0.1)' : ini ? 'rgba(15,35,64,0.05)' : 'rgba(194,147,58,0.07)', color: ini ? '#16365F' : '#A87A2C' }}>
+            {ini && <span aria-hidden style={{ flexShrink: 0, opacity: 0.6 }}>↳</span>}
+            <span style={txt}>{ini ? ini.nombre : '+ Iniciativa'}</span>{caret}
+          </button>
+        )}
         {open && createPortal(
-          <div data-pop onClick={ev => ev.stopPropagation()} style={{ ...popoverStyle(chipMenuRect, 200, 160), display: 'flex', flexWrap: 'wrap', gap: 5, padding: 9, background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
-            <span style={{ flexBasis: '100%', font: '700 9px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(20,35,61,0.5)', marginBottom: 1 }}>Feature</span>
-            {(e.features || []).map(f => { const sel = t.featureId === f.id; const c = f.color || '#5B6B86'; return (
-              <button key={f.id} onClick={ev => { ev.stopPropagation(); setTaskFeature(e, i, sel ? null : f.id); setFeatureEditKey(null) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', borderRadius: 8, padding: '5px 9px', font: '700 11.5px var(--font-ui)', border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? c : '#fff', color: sel ? '#fff' : '#16365F' }}><span style={{ width: 6, height: 6, borderRadius: 99, background: sel ? '#fff' : c, flexShrink: 0 }} />{f.t}</button>
-            )})}
-            {feat && <button onClick={ev => { ev.stopPropagation(); setTaskFeature(e, i, null); setFeatureEditKey(null) }} style={{ flexBasis: '100%', marginTop: 2, cursor: 'pointer', borderRadius: 8, padding: '6px 9px', font: '800 11.5px var(--font-ui)', border: 'none', background: '#2E6E6E', color: '#fff' }}>✓ Quitar Feature</button>}
-            {!featuresReady.current && <span style={{ flexBasis: '100%', fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-12-features.sql para guardarlo.</span>}
+          <div data-pop role="dialog" aria-label="Feature e iniciativa de la tarea" onClick={ev => ev.stopPropagation()}
+            style={{ ...popoverStyle(chipMenuRect, 268, 300), display: 'flex', flexDirection: 'column', gap: 10, padding: 10, boxSizing: 'border-box', background: '#fff', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 12, boxShadow: '0 20px 38px -18px rgba(15,35,64,0.62)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              <span style={eb}>Feature</span>
+              {feats.map(f => { const sel = t.featureId === f.id; const c = f.color || '#5B6B86'; return (
+                <button key={f.id} type="button" onClick={ev => { ev.stopPropagation(); aplicar({ featureId: sel ? null : f.id }, sel ? 'Sin feature' : `Movida a «${f.t}»`); setUbicNuevo(null); setUbicNuevoNombre('') }}
+                  style={{ ...pick, border: sel ? 'none' : '1px solid rgba(15,35,64,0.14)', background: sel ? c : '#fff', color: sel ? '#fff' : '#16365F' }}>
+                  <span aria-hidden style={{ width: 6, height: 6, borderRadius: 99, background: sel ? '#fff' : c, flexShrink: 0 }} /><span style={txt}>{f.t}</span>
+                </button>
+              ) })}
+              {ubicNuevo === 'feature' ? nuevoRow('Nombre del feature', crearFeature)
+                : <button type="button" onClick={() => { setUbicNuevo('feature'); setUbicNuevoNombre('') }} style={nuevoBtn}>+ Nuevo</button>}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              <span style={eb}>Iniciativa{feat ? ` · ${feat.t}` : ''}</span>
+              {feat ? (<>
+                {inisFeat.map(x => iniChip(feat, x))}
+                {!inisFeat.length && ubicNuevo !== 'iniciativa' && <span style={{ flexBasis: '100%', fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>Este feature aún no tiene iniciativas.</span>}
+                {ubicNuevo === 'iniciativa' ? nuevoRow('Nombre de la iniciativa', crearIniciativa)
+                  : <button type="button" onClick={() => { setUbicNuevo('iniciativa'); setUbicNuevoNombre('') }} style={nuevoBtn}>+ Nueva</button>}
+              </>) : (<>
+                {feats.filter(f => (f.iniciativas || []).length > 0).map(f => (
+                  <div key={f.id} style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: f.color || '#5B6B86', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <span aria-hidden style={{ width: 6, height: 6, borderRadius: 99, background: f.color || '#5B6B86' }} />{f.t}
+                    </span>
+                    {(f.iniciativas || []).map(x => iniChip(f, x))}
+                  </div>
+                ))}
+                <span style={{ flexBasis: '100%', fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>
+                  {epicaConInis ? 'Elegir una iniciativa también asigna su feature.' : 'Elige un feature para crear su primera iniciativa.'}
+                </span>
+              </>)}
+            </div>
+            {!featuresReady.current && <span style={{ fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-12-features.sql para guardar el Feature.</span>}
+            {!iniciativaIdReady.current && <span style={{ fontSize: 9.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/epicas-21-tarea-iniciativa.sql para guardar la Iniciativa.</span>}
+            <button type="button" onClick={ev => { ev.stopPropagation(); cerrar() }} style={{ alignSelf: 'flex-end', cursor: 'pointer', borderRadius: 8, padding: '4px 12px', font: '700 11px var(--font-ui)', border: 'none', background: '#10233F', color: '#fff' }}>Listo</button>
           </div>,
           document.body
         )}
-      </span>
+      </>
     )
   }
 
@@ -11137,7 +11264,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 {target && (
                   <div style={{ marginBottom: 16 }}>
                     <label style={lbl}>Feature</label>
-                    {renderFeatureChips(target.id, taskDraft.featureId, id => setTaskDraft(d => ({ ...d, featureId: id || undefined })))}
+                    {renderFeatureChips(target.id, taskDraft.featureId, id => setTaskDraft(d => ({ ...d, featureId: id || undefined, ...(d.iniciativaId && !iniEsDelFeature(target, id, d.iniciativaId) ? { iniciativaId: undefined } : {}) })))}
                   </div>
                 )}
 

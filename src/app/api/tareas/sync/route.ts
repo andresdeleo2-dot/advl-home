@@ -5,6 +5,34 @@ import type { EpicaTask } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
+/** Coherencia de la cascada Feature → Iniciativa → Tarea. Hay varias superficies que escriben una tarea
+ *  (peek y ficha de Épicas, Tiempo), así que la regla vive AQUÍ y no sólo en cada cliente: una tarea no
+ *  puede quedar en una iniciativa que (a) cuelga de OTRO feature, (b) es de OTRA épica, o (c) se queda sin
+ *  feature. En esos casos se limpia SÓLO la iniciativa (el feature es el nivel de arriba y se respeta).
+ *  Sólo actúa con evidencia: si la iniciativa todavía no existe en la BD (alta al vuelo cuyo POST va en
+ *  paralelo) o falla la consulta (tabla sin migrar), no toca nada. Devuelve los ids que limpió. */
+async function sanearIniciativas(rows: Record<string, unknown>[]): Promise<string[]> {
+  const limpiadas: string[] = []
+  try {
+    const conIni = rows.filter(r => typeof r.iniciativa_id === 'string' && r.iniciativa_id)
+    if (!conIni.length) return limpiadas
+    const ids = [...new Set(conIni.map(r => r.iniciativa_id as string))]
+    const { data, error } = await supabase.from('iniciativas').select('id,feature_id,epica_id').in('id', ids)
+    if (error) return limpiadas
+    const porId = new Map((data || []).map(r => [r.id as string, r as { feature_id: string | null; epica_id: string | null }]))
+    for (const r of conIni) {
+      const ini = porId.get(r.iniciativa_id as string)
+      // La fila sólo trae feature_id si el cliente lo manda (gate de la migración): sin la clave, no hay con qué comparar.
+      const traeFeature = 'feature_id' in r
+      const sinFeature = traeFeature && !r.feature_id
+      const otroFeature = !!ini && traeFeature && !!r.feature_id && ini.feature_id !== r.feature_id
+      const otraEpica = !!ini && !!ini.epica_id && ini.epica_id !== r.epica_id
+      if (sinFeature || otroFeature || otraEpica) { r.iniciativa_id = null; limpiadas.push(r.id as string) }
+    }
+  } catch { /* sin red de seguridad no se rompe el guardado: se escribe como vino */ }
+  return limpiadas
+}
+
 /** Aplica un diff de tareas de UNA épica: sólo lo que cambió.
  *  Además detecta choques entre pestañas: si una tarea que vas a actualizar fue
  *  modificada en otro lado desde que la cargaste (su updated_at es más nuevo que
@@ -20,6 +48,7 @@ export async function POST(req: Request) {
     let update: EpicaTask[] = Array.isArray(body.update) ? body.update : []
     const remove: string[] = Array.isArray(body.remove) ? body.remove : []
     const conflicts: string[] = []
+    const iniciativasLimpiadas: string[] = []   // tareas cuya iniciativa no cuadraba con su feature (ver sanearIniciativas)
 
     // Choque: comparar el updated_at que trae el cliente contra el de la BD. Se aplica a UPDATE y
     // también a CREATE (mover una tarea entre épicas viaja como create con su updatedAt): así una
@@ -52,11 +81,15 @@ export async function POST(req: Request) {
     if (create.length) {
       // upsert (no insert plano) para ser IDEMPOTENTE: si el id ya existe (mover tarea entre épicas
       // o reintento tras fallo parcial) no choca la PK; reasigna epica_id.
-      const { error } = await supabase.from('tareas').upsert(create.map(t => taskToRow(t, epicaId)), { onConflict: 'id' })
+      const rows = create.map(t => taskToRow(t, epicaId))
+      iniciativasLimpiadas.push(...await sanearIniciativas(rows))
+      const { error } = await supabase.from('tareas').upsert(rows, { onConflict: 'id' })
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
     if (update.length) {
-      const { error } = await supabase.from('tareas').upsert(update.map(t => taskToRow(t, epicaId)), { onConflict: 'id' })
+      const rows = update.map(t => taskToRow(t, epicaId))
+      iniciativasLimpiadas.push(...await sanearIniciativas(rows))
+      const { error } = await supabase.from('tareas').upsert(rows, { onConflict: 'id' })
       if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     }
     if (remove.length) {
@@ -73,7 +106,7 @@ export async function POST(req: Request) {
       for (const r of data || []) stamps[r.id as string] = r.updated_at as string
     }
 
-    return NextResponse.json({ ok: true, conflicts, stamps })
+    return NextResponse.json({ ok: true, conflicts, stamps, iniciativasLimpiadas })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e) }, { status: 400 })
   }

@@ -5646,6 +5646,11 @@ function TaskDetail({ info, epicas, allTasks, resumenReady, remindReady, comenta
   const features = (epicas.find(e => e.id === epId)?.features) || []
   const feat = features.find(f => f.id === t.featureId)
   const featKpis = feat?.kpis || []
+  // Cambiar de Feature NO debe dejar la Iniciativa colgando del anterior (la cascada es Feature → Iniciativa):
+  // sólo se toca la clave si la tarea ya tenía una (implica que la columna existe → no rompe el sync sin migrar). Se limpia con ''
+  // y NO con undefined: JSON.stringify tira las claves undefined, así que el server jamás se enteraba y la columna conservaba el valor.
+  const sinIniAjena = (p: EpicaTask, featureId?: string): Partial<EpicaTask> =>
+    p.iniciativaId && !(featureId && (features.find(f => f.id === featureId)?.iniciativas || []).some(x => x.id === p.iniciativaId)) ? { iniciativaId: '' } : {}
   const linkedFeatureObjId = featKpis.find(k => (k.taskIds || []).includes(t.id!))?.id || ''
   const addSubQuick = () => { const v = newSub.trim(); if (!v) return; setT(p => ({ ...p, subtasks: [...(p.subtasks || []), { id: uid(), t: v, done: false }] })); setNewSub('') }
   const setLog = (fn: (a: EpicaProgressEntry[]) => EpicaProgressEntry[]) => setT(p => ({ ...p, progressLog: fn(p.progressLog || []) }))
@@ -5751,7 +5756,7 @@ function TaskDetail({ info, epicas, allTasks, resumenReady, remindReady, comenta
               const on = t.featureId === f.id
               const fc = f.color || '#5B6B86'
               return (
-                <button key={f.id} type="button" onClick={() => setT(p => ({ ...p, featureId: on ? undefined : f.id }))}
+                <button key={f.id} type="button" onClick={() => setT(p => ({ ...p, featureId: on ? '' : f.id, ...sinIniAjena(p, on ? undefined : f.id) }))}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderRadius: 99, padding: '7px 12px', fontSize: 12, fontWeight: 700, border: on ? `1.5px solid ${fc}` : '1px solid rgba(15,35,64,0.14)', background: on ? hexA(fc, 0.12) : '#fff', color: on ? fc : 'rgba(20,35,61,0.6)' }}>
                   <span style={{ width: 8, height: 8, borderRadius: 99, background: fc, flexShrink: 0 }} />{f.t}
                 </button>
@@ -5761,11 +5766,11 @@ function TaskDetail({ info, epicas, allTasks, resumenReady, remindReady, comenta
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <input autoFocus value={featQuickName} onChange={e => setFeatQuickName(e.target.value)}
                   onKeyDown={e => {
-                    if (e.key === 'Enter') { const id = onCreateFeature(epId, featQuickName); if (id) setT(p => ({ ...p, featureId: id })); setFeatQuickAdd(false); setFeatQuickName('') }
+                    if (e.key === 'Enter') { const id = onCreateFeature(epId, featQuickName); if (id) setT(p => ({ ...p, featureId: id, ...sinIniAjena(p, id) })); setFeatQuickAdd(false); setFeatQuickName('') }
                     if (e.key === 'Escape') { setFeatQuickAdd(false); setFeatQuickName('') }
                   }}
                   placeholder="Nombre del feature" style={{ border: '1px solid rgba(15,35,64,0.2)', borderRadius: 99, padding: '6px 11px', fontSize: 12, outline: 'none', width: 140 }} />
-                <button type="button" title="Crear" onClick={() => { const id = onCreateFeature(epId, featQuickName); if (id) setT(p => ({ ...p, featureId: id })); setFeatQuickAdd(false); setFeatQuickName('') }} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
+                <button type="button" title="Crear" onClick={() => { const id = onCreateFeature(epId, featQuickName); if (id) setT(p => ({ ...p, featureId: id, ...sinIniAjena(p, id) })); setFeatQuickAdd(false); setFeatQuickName('') }} style={{ cursor: 'pointer', border: 'none', borderRadius: 99, padding: '7px 10px', fontSize: 12, fontWeight: 800, background: '#10233F', color: '#fff' }}>✓</button>
                 <button type="button" title="Cancelar" onClick={() => { setFeatQuickAdd(false); setFeatQuickName('') }} style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>✕</button>
               </span>
             ) : (
@@ -5778,7 +5783,7 @@ function TaskDetail({ info, epicas, allTasks, resumenReady, remindReady, comenta
               columna existente como sí hace el GET de /api/epicas. */}
           {feat && (feat.iniciativas || []).length > 0 && (<>
             <NLbl>Iniciativa</NLbl>
-            <select disabled={!iniciativaIdReady} value={t.iniciativaId || ''} onChange={e => { if (iniciativaIdReady) setT(p => ({ ...p, iniciativaId: e.target.value || undefined })) }} style={{ ...nf, width: '100%', fontWeight: 600, color: t.iniciativaId ? '#16365F' : 'rgba(20,35,61,0.5)', marginBottom: 4, opacity: iniciativaIdReady ? 1 : .6 }}>
+            <select disabled={!iniciativaIdReady} value={t.iniciativaId || ''} onChange={e => { if (iniciativaIdReady) setT(p => ({ ...p, iniciativaId: e.target.value })) }} style={{ ...nf, width: '100%', fontWeight: 600, color: t.iniciativaId ? '#16365F' : 'rgba(20,35,61,0.5)', marginBottom: 4, opacity: iniciativaIdReady ? 1 : .6 }}>
               <option value="">— Ninguna —</option>
               {(feat.iniciativas || []).map(ini => <option key={ini.id} value={ini.id}>{ini.nombre}</option>)}
             </select>
