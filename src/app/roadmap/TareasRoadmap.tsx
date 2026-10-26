@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import type { Epica, EpicaTask } from '@/lib/supabase'
 import { ARCHIVED, PrioBars, WEEK_EST_MIN, hexA, plazoLabel, taskStyle } from '@/components/epicas/core'
 import { enOrden, mover } from '@/lib/ordenTareas'
+import { compararPorModo, type ModoOrden } from '@/lib/planTarea'
 import { alcanceDe } from '@/lib/alcanceTareas'
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -79,6 +80,12 @@ export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilte
     if (to === from) return
     const t = abiertas[from]
     onOrdenar(ep.id, mover(ids, from, to), msgPos(t, to))
+  }
+  /** Ordena las visibles por prioridad o entrega y lo GUARDA como su orden (las demás de la épica no se mueven). */
+  const ordenarPor = (modo: Exclude<ModoOrden, 'manual'>) => {
+    if (!ep) return
+    const nuevo = [...abiertas].sort((a, b) => compararPorModo(a, b, modo)).map(t => t.id!)
+    onOrdenar(ep.id, nuevo, modo === 'prioridad' ? 'Ordenadas por prioridad: alta primero' : 'Ordenadas por fecha de entrega')
   }
   const fin = () => { dragRef.current = null; setDragId(null); setDropTo(null) }
   const onDown = (ev: ReactPointerEvent<HTMLButtonElement>, id: string) => {
@@ -215,6 +222,17 @@ export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilte
           ? <>El 1 va primero. Arrastra ⠿ o usa ↑ ↓ ⤒. {fuera > 0 ? `Las otras ${fuera} abiertas de la épica conservan su lugar. ` : ''}Es el mismo orden que «Orden manual» en Épicas.</>
           : <span style={{ color: '#B0522E' }}>Corre <code>sql/epicas-04-orden-tareas.sql</code> en Supabase: sin esa columna el orden no se puede guardar.</span>}
       </div>
+
+      {abiertas.length > 1 && (
+        <div className="rm-noprint" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          <span style={eb}>Ordenar</span>
+          <button type="button" disabled={!puede} onClick={() => ordenarPor('prioridad')} title="Alta primero; a igual prioridad, la entrega más cercana"
+            style={{ cursor: puede ? 'pointer' : 'not-allowed', border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.10)', borderRadius: 99, padding: '3px 11px', fontSize: 11.5, fontWeight: 700, color: '#A87A2C', fontFamily: 'var(--font-ui)' }}>▲ Por prioridad</button>
+          <button type="button" disabled={!puede} onClick={() => ordenarPor('entrega')} title="La fecha de entrega más cercana primero"
+            style={{ cursor: puede ? 'pointer' : 'not-allowed', border: '1px solid rgba(194,147,58,0.45)', background: 'rgba(194,147,58,0.10)', borderRadius: 99, padding: '3px 11px', fontSize: 11.5, fontWeight: 700, color: '#A87A2C', fontFamily: 'var(--font-ui)' }}>⚑ Por entrega</button>
+          <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.45)' }}>guarda ese orden; luego puedes ajustarlo arrastrando</span>
+        </div>
+      )}
 
       <div ref={listRef} style={{ marginTop: 8 }}>
         {abiertas.length === 0 && (

@@ -14,7 +14,7 @@ import { LinkPillRow } from '@/components/epicas/FeatureLinks'
 import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } from '@/components/epicas/SiguientePaso'
 import { mapaFaltaPaso, tareaPrimerPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 import { enOrden, ordenAlFinal, reordenarSubconjunto } from '@/lib/ordenTareas'
-import { parcheInverso, type ParcheTarea } from '@/lib/planTarea'
+import { parcheAgendar, parcheInverso, type ParcheTarea } from '@/lib/planTarea'
 import TareasRoadmap from './TareasRoadmap'
 import CalendarioRoadmap, { type ZoomCal } from './CalendarioRoadmap'
 
@@ -1094,14 +1094,14 @@ export default function RoadmapClient() {
     const ep = epicasRef.current?.find(e => e.id === epicaId)
     if (!ep) return
     const cambios = reordenarSubconjunto(ep.tasks || [], ids)
-    if (!cambios.size) return
+    if (!cambios.size) { if (msg) showToast('Ya estaban en ese orden'); return }
     patchTareasLote([...cambios].map(([taskId, orden]) => ({ epicaId, taskId, patch: { orden } })), msg)
   }, [gates, showToast, patchTareasLote])
 
   /** Alta de una tarea desde la vista "Tareas": ya colgada del feature/iniciativa filtrados y al FINAL
    *  del orden de la épica. Optimista; si el servidor la rechaza, se quita con aviso y «Reintentar».
    *  Va en la misma cola por tarea que patchTarea (una edición inmediata espera al alta). */
-  const crearTareaAqui = useCallback((epicaId: string, titulo: string, featureId: string | null, iniciativaId: string | null): boolean => {
+  const crearTareaAqui = useCallback((epicaId: string, titulo: string, featureId: string | null, iniciativaId: string | null, extra?: { plan: string; planOrder: number }): boolean => {
     const v = titulo.trim()
     const ep = epicasRef.current?.find(e => e.id === epicaId)
     if (!v || !ep) return false
@@ -1114,6 +1114,8 @@ export default function RoadmapClient() {
     }
     const orden = gates.ordenReady ? ordenAlFinal(ep.tasks || []) : undefined
     if (orden !== undefined) nueva.orden = orden
+    // Creada desde un día del calendario: ya nace agendada (mismas reglas que al arrastrar: «En curso» si es para hoy).
+    if (extra) Object.assign(nueva, parcheAgendar(nueva, extra.plan, { hoy: todayISO(), planOrder: extra.planOrder, prioPorDefecto: 'media', guardarHistorial: false }))
     const taskId = nueva.id!
     const tocar = (fn: (ts: EpicaTask[]) => EpicaTask[]) => {
       const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: fn(e.tasks || []) }))
@@ -1130,7 +1132,7 @@ export default function RoadmapClient() {
         .then(r => r.json()).catch(() => null) as { ok?: boolean; stamps?: Record<string, string> } | null
       if (!j?.ok) {
         tocar(ts => ts.filter(t => t.id !== taskId))
-        showToast(`No se pudo crear «${nueva.t}»`, { err: true, undo: () => crearTareaAqui(epicaId, titulo, featureId, iniciativaId), undoLbl: 'Reintentar' })
+        showToast(`No se pudo crear «${nueva.t}»`, { err: true, undo: () => crearTareaAqui(epicaId, titulo, featureId, iniciativaId, extra), undoLbl: 'Reintentar' })
         return
       }
       const sello = j.stamps?.[taskId]
@@ -1209,13 +1211,23 @@ export default function RoadmapClient() {
       }
       if (ev.key === 'Escape') { setSel(null); setNuevo(null); return }
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return
+      if (vista === 'calendario') {
+        // ← → mueven el periodo (día/semana/mes según la escala) y T vuelve a hoy
+        if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+          ev.preventDefault()
+          const d = ev.key === 'ArrowLeft' ? -1 : 1
+          setCalAncla(a => (calZoom === 'dia' ? addDays(a, d) : calZoom === 'semana' ? addDays(a, 7 * d) : addMonths(a.slice(0, 7) + '-01', d)))
+        } else if (ev.key === 't' || ev.key === 'T') { ev.preventDefault(); setCalAncla(todayISO()) }
+        return
+      }
+      if (vista === 'tareas') return
       if (ev.key === 'ArrowLeft') { ev.preventDefault(); setWinStart(w => w - 1) }
       else if (ev.key === 'ArrowRight') { ev.preventDefault(); setWinStart(w => w + 1) }
       else if (ev.key === 't' || ev.key === 'T') { ev.preventDefault(); setWinStart(bucketOf(todayISO(), zoom)) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoom])
+  }, [zoom, vista, calZoom])
 
   /** Cambiar de zoom conserva la ventana: se traduce la fecha de inicio visible a la otra escala. */
   const cambiarZoom = (z: Zoom) => {
@@ -2017,7 +2029,7 @@ export default function RoadmapClient() {
                     <input type="checkbox" checked={val} onChange={ev => set(ev.target.checked)} />{lbl}
                   </label>
                 ))}
-                {vista === 'tablero' && <span style={{ color: 'rgba(20,35,61,0.35)', fontSize: 11.5 }}>← → cambian de ventana · T vuelve a hoy · Esc cierra</span>}
+                {vista !== 'tareas' && <span style={{ color: 'rgba(20,35,61,0.35)', fontSize: 11.5 }}>← → cambian de {vista === 'calendario' ? 'periodo' : 'ventana'} · T vuelve a hoy · Esc cierra</span>}
               </div>
             </div>
 
@@ -2030,7 +2042,8 @@ export default function RoadmapClient() {
             {vista === 'calendario' && (
               <CalendarioRoadmap epicas={epicas} lista={listaEpicas} epicaFilter={epicaFilter} featureFilter={featureFilter} iniFilter={iniFilter}
                 today={today} planHistReady={gates.planHistReady} zoom={calZoom} setZoom={setCalZoom} ancla={calAncla} setAncla={setCalAncla}
-                narrow={narrow} onAbrir={(eId, tid) => setTareaPeek({ eId, tid })} onAplicar={patchTareasLote} />
+                narrow={narrow} onAbrir={(eId, tid) => setTareaPeek({ eId, tid })} onAplicar={patchTareasLote}
+                onCrear={crearTareaAqui} onAviso={msg => showToast(msg)} />
             )}
 
             {vista === 'tablero' && (

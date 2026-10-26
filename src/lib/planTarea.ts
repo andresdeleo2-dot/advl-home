@@ -122,3 +122,42 @@ export function ubicarEnDia(dia: EntradaDia[], mover: string, antesDe: string | 
   final.forEach((k, i) => { const o = (i + 1) * PASO_PLAN; if (k === mover || actual.get(k) !== o) out.set(k, o) })
   return out
 }
+
+/* ─── Orden por prioridad / entrega ──────────────────────────────────────── */
+/** Cómo se ordena lo que se ve: `manual` = el orden que fijaste (planOrder / orden); `prioridad` = alta → baja;
+ *  `entrega` = la fecha de vencimiento más cercana primero. */
+export type ModoOrden = 'manual' | 'prioridad' | 'entrega'
+
+/** alta 0 · media 1 (también la que no tiene prioridad) · baja 2. */
+export const rangoPrio = (p?: string): number => (p === 'alta' ? 0 : p === 'baja' ? 2 : 1)
+
+/** Comparador de tareas por modo. En `manual` devuelve 0: el `sort` (estable) deja el orden en que vienen.
+ *  Prioridad desempata por entrega; entrega, por prioridad. Sin fecha de entrega va al final. */
+export function compararPorModo(a: EpicaTask, b: EpicaTask, modo: ModoOrden): number {
+  if (modo === 'manual') return 0
+  const due = (t: EpicaTask) => t.due || '9999-12-31'
+  const porPrio = rangoPrio(a.priority) - rangoPrio(b.priority)
+  const porDue = due(a).localeCompare(due(b))
+  return modo === 'prioridad' ? (porPrio || porDue) : (porDue || porPrio)
+}
+
+/** Siguiente prioridad al tocar el medidor: alta → media → baja → alta. */
+export const siguientePrio = (p?: string): Prio => (p === 'alta' ? 'media' : p === 'baja' ? 'alta' : 'baja')
+
+/** FIJA el orden de un día: `dia` = TODAS las abiertas de ese día (de todas las épicas) en su orden actual y
+ *  `nuevo` = las que se ven (un subconjunto) en el orden deseado. Los lugares que el subconjunto ocupaba se
+ *  reparten entre sus miembros —las que el filtro esconde no se mueven— y se renumera el día (1000, 2000…).
+ *  Devuelve sólo lo que cambia; vacío = ya estaba así. */
+export function reordenarDia(dia: EntradaDia[], nuevo: string[]): Map<string, number> {
+  const keys = dia.map(x => x.key)
+  const enSub = new Set(nuevo.filter(k => keys.includes(k)))
+  const posiciones = keys.map((k, i) => (enSub.has(k) ? i : -1)).filter(i => i >= 0)
+  const secuencia = nuevo.filter(k => enSub.has(k)).filter((k, i, a) => a.indexOf(k) === i)
+  if (secuencia.length !== posiciones.length) return new Map()
+  const final = keys.slice()
+  posiciones.forEach((pos, i) => { final[pos] = secuencia[i] })
+  const actual = new Map(dia.map(x => [x.key, x.planOrder]))
+  const out = new Map<string, number>()
+  final.forEach((k, i) => { const o = (i + 1) * PASO_PLAN; if (actual.get(k) !== o) out.set(k, o) })
+  return out
+}
