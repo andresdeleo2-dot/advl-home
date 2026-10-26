@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import type { Epica, EpicaTask } from '@/lib/supabase'
 import { ARCHIVED, PrioBars, WEEK_EST_MIN, hexA, plazoLabel, taskStyle } from '@/components/epicas/core'
 import { enOrden, mover } from '@/lib/ordenTareas'
+import { alcanceDe } from '@/lib/alcanceTareas'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    /roadmap · vista "Tareas" — el último escalón de Épica → Feature → Iniciativa → TAREA.
@@ -48,22 +49,13 @@ export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilte
 
   const ep = epicas.find(e => e.id === epicaFilter)
   const feats = useMemo(() => ep?.features || [], [ep])
-  const featSel = featureFilter !== 'todas' && featureFilter !== 'sin' ? feats.find(f => f.id === featureFilter) : undefined
-  const featKey = featureFilter === 'sin' ? 'sin' : featSel ? featSel.id : 'todas'
-  const inis = useMemo(() => featSel?.iniciativas || [], [featSel])
-  const iniSel = featSel && iniFilter !== 'todas' && iniFilter !== 'sin' ? inis.find(i => i.id === iniFilter) : undefined
-  const iniKey = !featSel ? 'todas' : iniFilter === 'sin' ? 'sin' : iniSel ? iniSel.id : 'todas'
+  // El filtro de feature/iniciativa es el MISMO de la vista de calendario (lib/alcanceTareas).
+  const alcance_ = useMemo(() => alcanceDe(ep, featureFilter, iniFilter), [ep, featureFilter, iniFilter])
+  const { featKey, iniKey, featSel, iniSel } = alcance_
+  const pasaFiltro = alcance_.pasa
 
   // Todas las de la épica en su orden actual: la lista visible es un recorte de ésta.
   const enOrdenEp = useMemo(() => enOrden(ep?.tasks || []).filter(t => !!t.id), [ep])
-  const pasaFiltro = useCallback((t: EpicaTask) => {
-    const featOk = t.featureId && feats.some(f => f.id === t.featureId)   // un feature borrado cuenta como "sin feature"
-    if (featKey === 'sin') { if (featOk) return false }
-    else if (featKey !== 'todas' && t.featureId !== featKey) return false
-    if (iniKey === 'sin') return !t.iniciativaId || !inis.some(i => i.id === t.iniciativaId)
-    if (iniKey !== 'todas') return t.iniciativaId === iniKey
-    return true
-  }, [feats, inis, featKey, iniKey])
   const abiertas = useMemo(() => enOrdenEp.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && pasaFiltro(t)), [enOrdenEp, pasaFiltro])
   const terminadas = useMemo(() => enOrdenEp.filter(t => t.status === 'Terminada' && pasaFiltro(t)), [enOrdenEp, pasaFiltro])
   const fuera = useMemo(() => enOrdenEp.filter(t => t.status !== 'Terminada' && t.status !== ARCHIVED && !pasaFiltro(t)).length, [enOrdenEp, pasaFiltro])

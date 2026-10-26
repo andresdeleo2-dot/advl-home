@@ -14,7 +14,9 @@ import { LinkPillRow } from '@/components/epicas/FeatureLinks'
 import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } from '@/components/epicas/SiguientePaso'
 import { mapaFaltaPaso, tareaPrimerPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 import { enOrden, ordenAlFinal, reordenarSubconjunto } from '@/lib/ordenTareas'
+import { parcheInverso, type ParcheTarea } from '@/lib/planTarea'
 import TareasRoadmap from './TareasRoadmap'
+import CalendarioRoadmap, { type ZoomCal } from './CalendarioRoadmap'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    /roadmap — TABLERO CUANTIZADO
@@ -474,7 +476,7 @@ const cuerpoHito = (s: 'pendiente' | 'en_curso' | 'logrado', hoy: string): Recor
 
 export default function RoadmapClient() {
   const [epicas, setEpicas] = useState<Epica[] | null>(null)
-  const [gates, setGates] = useState({ roadmapReady: true, featuresTableReady: true, objetivosTableReady: true, iniciativasTableReady: true, featuresReady: true, iniciativaIdReady: true, ordenReady: true })
+  const [gates, setGates] = useState({ roadmapReady: true, featuresTableReady: true, objetivosTableReady: true, iniciativasTableReady: true, featuresReady: true, iniciativaIdReady: true, ordenReady: true, planHistReady: true })
   const [err, setErr] = useState('')
   const [today, setToday] = useState<string>(todayISO())
   const [mounted, setMounted] = useState(false)
@@ -486,7 +488,10 @@ export default function RoadmapClient() {
   const [epicaFilter, setEpicaFilter] = useState('todas')
   const [featureFilter, setFeatureFilter] = useState('todas')
   // 'tablero' = la rejilla de tiempo de siempre; 'tareas' = filtrar por épica/feature/iniciativa y ordenar sus tareas.
-  const [vista, setVista] = useState<'tablero' | 'tareas'>('tablero')
+  // 'calendario' = las mismas tareas sobre un calendario (día · semana · mes) para arrastrarlas a su fecha.
+  const [vista, setVista] = useState<'tablero' | 'tareas' | 'calendario'>('tablero')
+  const [calZoom, setCalZoom] = useState<ZoomCal>('mes')
+  const [calAncla, setCalAncla] = useState<string>(() => todayISO())   // un día cualquiera de la semana/mes que se ve
   const [iniFilter, setIniFilter] = useState('todas')   // sólo en la vista de tareas, y sólo con un feature concreto
   const [verIniciativas, setVerIniciativas] = useState(true)
   const [verHitos, setVerHitos] = useState(true)
@@ -550,6 +555,7 @@ export default function RoadmapClient() {
       featuresReady: j.featuresReady !== false,
       iniciativaIdReady: j.iniciativaIdReady !== false,
       ordenReady: j.ordenReady !== false,
+      planHistReady: j.planHistReady !== false,
     })
     setEpicas(rows)
     return rows
@@ -659,7 +665,12 @@ export default function RoadmapClient() {
     setWinStart(w && /^-?\d+$/.test(w) ? +w : bucketOf(todayISO(), z0))
     if (ep) setEpicaFilter(ep)
     if (f) setFeatureFilter(f)
-    if (p.get('v') === 'tareas') setVista('tareas')
+    const vv = p.get('v')
+    if (vv === 'tareas' || vv === 'calendario') setVista(vv)
+    const cz = p.get('cz')
+    if (cz === 'dia' || cz === 'semana' || cz === 'mes') setCalZoom(cz)
+    const cd = p.get('d')
+    if (cd && ISO_RE.test(cd)) setCalAncla(cd)
     const ini = p.get('ini')
     if (ini) setIniFilter(ini)
   }, [])
@@ -671,10 +682,11 @@ export default function RoadmapClient() {
     p.set('z', zoom); p.set('w', String(winStart))
     if (epicaFilter === 'todas') p.delete('ep'); else p.set('ep', epicaFilter)
     if (featureFilter === 'todas') p.delete('f'); else p.set('f', featureFilter)
-    if (vista === 'tareas') p.set('v', 'tareas'); else p.delete('v')
-    if (vista === 'tareas' && iniFilter !== 'todas') p.set('ini', iniFilter); else p.delete('ini')
+    if (vista !== 'tablero') p.set('v', vista); else p.delete('v')
+    if (vista !== 'tablero' && iniFilter !== 'todas') p.set('ini', iniFilter); else p.delete('ini')
+    if (vista === 'calendario') { p.set('cz', calZoom); p.set('d', calAncla) } else { p.delete('cz'); p.delete('d') }
     window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`)
-  }, [mounted, zoom, winStart, epicaFilter, featureFilter, vista, iniFilter, verHitos, verIniciativas, verCerradas, incluirArchivadas])
+  }, [mounted, zoom, winStart, epicaFilter, featureFilter, vista, iniFilter, calZoom, calAncla, verHitos, verIniciativas, verCerradas, incluirArchivadas])
 
   /* ─── Escritura optimista ──────────────────────────────────────────────── */
   /** Aplica el cambio en el árbol YA y devuelve el revert con el valor previo capturado.
@@ -998,63 +1010,93 @@ export default function RoadmapClient() {
     }
   }, [nuevo, nuevoTxt, zoom, gates, showToast, flash])
 
-  /** Persiste un nuevo orden para un SUBCONJUNTO de las tareas de una épica (las de un feature, de una
-   *  iniciativa…): `ids` = esas tareas en el orden deseado. Las demás conservan su lugar (ver
-   *  lib/ordenTareas) y por eso sólo viajan las que cambian de `orden`. Optimista, en UNA sola
-   *  escritura a /api/tareas/sync, encolada detrás de las ediciones en vuelo de cada tarea (así el
-   *  `updated_at` que se manda ya es el sellado por la anterior y no choca consigo mismo). Si falla o
-   *  alguna cambió en otro lado, regresa SÓLO lo que ella tocó. `msg` = aviso con «Deshacer». */
+  /** ESCRITOR POR LOTES de tareas (orden, fecha del calendario…): aplica varios parches a tareas de una o
+   *  varias épicas con UN solo POST por épica a /api/tareas/sync. Optimista; cada tarea se encola detrás
+   *  de sus ediciones en vuelo (así el `updated_at` que se manda ya es el sellado por la anterior y no
+   *  choca consigo mismo). Si falla, o una tarea cambió en otro lado, regresa SÓLO las claves que este
+   *  lote tocó y que nadie volvió a mover. Un parche con valor `undefined` BORRA el campo (viaja como null).
+   *  `msg` = aviso inmediato con «Deshacer», que es otro lote con los valores de antes. */
+  const patchTareasLote = useCallback((lote: ParcheTarea[], msg?: string) => {
+    // Un parche por tarea (si se repite, el último gana clave por clave) y sólo de tareas que existen.
+    const porId = new Map<string, ParcheTarea>()
+    lote.forEach(it => { const a = porId.get(it.taskId); porId.set(it.taskId, a ? { ...it, patch: { ...a.patch, ...it.patch } } : it) })
+    const previos = new Map<string, EpicaTask>()
+    const validos: ParcheTarea[] = []
+    porId.forEach(it => {
+      const t = epicasRef.current?.find(e => e.id === it.epicaId)?.tasks?.find(x => x.id === it.taskId)
+      if (t) { previos.set(it.taskId, t); validos.push(it) }
+    })
+    if (!validos.length) return
+    const parche = new Map(validos.map(it => [it.taskId, it.patch]))
+    const siguiente = new Map(validos.map(it => [it.taskId, { ...previos.get(it.taskId)!, ...it.patch } as EpicaTask]))
+    const tocar = (fn: (x: EpicaTask, id: string) => EpicaTask, ids: Set<string>) => {
+      const mapear = (list: Epica[] | null) => (list || []).map(e => ((e.tasks || []).some(x => x.id && ids.has(x.id))
+        ? { ...e, tasks: (e.tasks || []).map(x => (x.id && ids.has(x.id) ? fn(x, x.id) : x)) } : e))
+      epicasRef.current = mapear(epicasRef.current)
+      setEpicas(mapear)
+    }
+    const todos = new Set(parche.keys())
+    // Con la cola vacía, lo que había en pantalla es lo último que confirmó el servidor (misma regla que patchTarea).
+    previos.forEach((t, id) => { const k = `tarea:${id}`; if (!writeChain.current.has(k)) tareaConfirmada.current.set(k, t) })
+    tocar((x, id) => ({ ...x, ...parche.get(id) }), todos)
+    if (msg) {
+      const inverso: ParcheTarea[] = validos.map(it => ({ epicaId: it.epicaId, taskId: it.taskId, patch: parcheInverso(previos.get(it.taskId)!, it.patch) }))
+      showToast(msg, { undo: () => patchTareasLote(inverso), undoLbl: 'Deshacer' })
+    }
+    // Regresa lo de ESTAS tareas, clave por clave, sólo si nadie las volvió a tocar desde entonces.
+    const revertir = (quienes: string[], aviso: string) => {
+      const set = new Set(quienes)
+      tocar((x, id) => {
+        const base = (tareaConfirmada.current.get(`tarea:${id}`) || previos.get(id)) as unknown as Record<string, unknown>
+        const sig = siguiente.get(id) as unknown as Record<string, unknown>
+        const y: Record<string, unknown> = { ...x }
+        Object.keys(parche.get(id) || {}).forEach(k => { if ((x as unknown as Record<string, unknown>)[k] === sig[k]) y[k] = base[k] })
+        return y as unknown as EpicaTask
+      }, set)
+      showToast(aviso, { err: true })
+    }
+    const porEpica = new Map<string, ParcheTarea[]>()
+    validos.forEach(it => porEpica.set(it.epicaId, [...(porEpica.get(it.epicaId) || []), it]))
+    porEpica.forEach((its, epicaId) => {
+      const ids = its.map(i => i.taskId)
+      const claves = ids.map(id => `tarea:${id}`)
+      claves.forEach(k => inflight.current.add(k))
+      escrituras.current++
+      let choque = false
+      const anteriores = claves.map(k => writeChain.current.get(k) || Promise.resolve())
+      const run = Promise.all(anteriores.map(a => a.catch(() => { }))).then(async () => {
+        const vivas = epicasRef.current?.find(e => e.id === epicaId)?.tasks || []
+        const enviar = ids.map(id => vivas.find(x => x.id === id)).filter((x): x is EpicaTask => !!x).map(x => ({ ...x, ...parche.get(x.id!) }))
+        if (!enviar.length) return
+        const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: enviar }) })
+          .then(r => r.json()).catch(() => null) as { ok?: boolean; conflicts?: string[]; stamps?: Record<string, string> } | null
+        if (!j?.ok) { revertir(ids, 'No se pudo guardar el cambio'); return }
+        const choques = (j.conflicts || []).filter(id => parche.has(id))
+        if (choques.length) { choque = true; revertir(choques, 'Alguna tarea cambió o se borró en otro lado: ese cambio NO se guardó') }
+        const sellos = j.stamps || {}
+        tocar((x, id) => (sellos[id] ? { ...x, updatedAt: sellos[id] } : x), new Set(ids))
+        enviar.forEach(x => { if (x.id && sellos[x.id]) tareaConfirmada.current.set(`tarea:${x.id}`, { ...x, updatedAt: sellos[x.id] }) })
+      }).finally(() => {
+        claves.forEach(k => {
+          if (writeChain.current.get(k) === run) { inflight.current.delete(k); writeChain.current.delete(k); tareaConfirmada.current.delete(k) }
+        })
+        if (choque || relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+      })
+      claves.forEach(k => writeChain.current.set(k, run))
+    })
+  }, [showToast, revalidar])
+
+  /** Nuevo orden (`tareas.orden`) para un SUBCONJUNTO de las tareas de una épica (las de un feature, de una
+   *  iniciativa…): `ids` = esas tareas en el orden deseado. Las demás conservan su lugar (ver lib/ordenTareas),
+   *  y por eso sólo viajan las que cambian. */
   const reordenarTareas = useCallback((epicaId: string, ids: string[], msg?: string) => {
     if (!gates.ordenReady) { showToast('Corre sql/epicas-04-orden-tareas.sql para guardar el orden', { err: true }); return }
     const ep = epicasRef.current?.find(e => e.id === epicaId)
     if (!ep) return
     const cambios = reordenarSubconjunto(ep.tasks || [], ids)
     if (!cambios.size) return
-    const previo = enOrden(ep.tasks || []).map(t => t.id!).filter(id => ids.includes(id))
-    const previos = new Map<string, number | undefined>()
-    cambios.forEach((_, id) => previos.set(id, (ep.tasks || []).find(t => t.id === id)?.orden))
-    const claves = [...cambios.keys()].map(id => `tarea:${id}`)
-    const tocar = (fn: (x: EpicaTask) => EpicaTask) => {
-      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id && cambios.has(x.id) ? fn(x) : x)) }))
-      epicasRef.current = mapear(epicasRef.current)
-      setEpicas(mapear)
-    }
-    // Con la cola vacía, lo que había en pantalla es lo último que confirmó el servidor (misma regla que patchTarea).
-    ;(ep.tasks || []).forEach(t => { const k = `tarea:${t.id}`; if (t.id && cambios.has(t.id) && !writeChain.current.has(k)) tareaConfirmada.current.set(k, t) })
-    tocar(x => ({ ...x, orden: cambios.get(x.id!) }))
-    if (msg) showToast(msg, { undo: () => reordenarTareas(epicaId, previo), undoLbl: 'Deshacer' })
-    // Regresa el `orden` de ESTAS tareas sólo si nadie lo volvió a mover desde entonces.
-    const revertir = (quienes: string[], aviso: string) => {
-      const set = new Set(quienes)
-      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id && set.has(x.id) && x.orden === cambios.get(x.id) ? { ...x, orden: previos.get(x.id) } : x)) }))
-      epicasRef.current = mapear(epicasRef.current)
-      setEpicas(mapear)
-      showToast(aviso, { err: true })
-    }
-    claves.forEach(k => inflight.current.add(k))
-    escrituras.current++
-    let choque = false
-    const anteriores = claves.map(k => writeChain.current.get(k) || Promise.resolve())
-    const run = Promise.all(anteriores.map(a => a.catch(() => { }))).then(async () => {
-      const vivas = epicasRef.current?.find(e => e.id === epicaId)?.tasks || []
-      const enviar = [...cambios.keys()].map(id => vivas.find(x => x.id === id)).filter((x): x is EpicaTask => !!x).map(x => ({ ...x, orden: cambios.get(x.id!) }))
-      if (!enviar.length) return
-      const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: enviar }) })
-        .then(r => r.json()).catch(() => null) as { ok?: boolean; conflicts?: string[]; stamps?: Record<string, string> } | null
-      if (!j?.ok) { revertir([...cambios.keys()], 'No se pudo guardar el orden'); return }
-      const choques = (j.conflicts || []).filter(id => cambios.has(id))
-      if (choques.length) { choque = true; revertir(choques, 'Alguna tarea cambió o se borró en otro lado: el orden NO se guardó completo') }
-      const sellos = j.stamps || {}
-      tocar(x => (x.id && sellos[x.id] ? { ...x, updatedAt: sellos[x.id] } : x))
-      enviar.forEach(x => { if (x.id && sellos[x.id]) tareaConfirmada.current.set(`tarea:${x.id}`, { ...x, updatedAt: sellos[x.id] }) })
-    }).finally(() => {
-      claves.forEach(k => {
-        if (writeChain.current.get(k) === run) { inflight.current.delete(k); writeChain.current.delete(k); tareaConfirmada.current.delete(k) }
-      })
-      if (choque || relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
-    })
-    claves.forEach(k => writeChain.current.set(k, run))
-  }, [gates, showToast, revalidar])
+    patchTareasLote([...cambios].map(([taskId, orden]) => ({ epicaId, taskId, patch: { orden } })), msg)
+  }, [gates, showToast, patchTareasLote])
 
   /** Alta de una tarea desde la vista "Tareas": ya colgada del feature/iniciativa filtrados y al FINAL
    *  del orden de la épica. Optimista; si el servidor la rechaza, se quita con aviso y «Reintentar».
@@ -1876,6 +1918,8 @@ export default function RoadmapClient() {
             <div style={{ fontSize: 13.5, color: 'rgba(20,35,61,0.55)', marginTop: 4 }}>
               {vista === 'tareas'
                 ? 'Elige épica, feature e iniciativa y ordena sus tareas: el 1 va primero.'
+                : vista === 'calendario'
+                ? 'Arrastra las tareas a su día; suéltalas entre otras para fijar el orden. Cámbialo entre día, semana y mes.'
                 : <>Cada columna es un {zoom === 'trimestre' ? 'trimestre' : 'mes'}; cada carril, una épica. Toca cualquier pieza para editar sus fechas.</>}
             </div>
           </div>
@@ -1905,7 +1949,7 @@ export default function RoadmapClient() {
             {/* ── Barra de mando ── */}
             <div className="rm-noprint" style={{ ...card, padding: '10px 12px', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div role="tablist" aria-label="Vista del roadmap" style={{ display: 'inline-flex', alignSelf: 'flex-start', gap: 2, background: 'rgba(15,35,64,0.05)', borderRadius: 99, padding: 3 }}>
-                {([['tablero', '🗺️ Tablero'], ['tareas', '✅ Tareas y prioridad']] as const).map(([v, lbl]) => (
+                {([['tablero', '🗺️ Tablero'], ['calendario', '📅 Calendario'], ['tareas', '✅ Prioridad']] as const).map(([v, lbl]) => (
                   <button key={v} role="tab" aria-selected={vista === v} onClick={() => setVista(v)} style={{ ...chipBtn(vista === v), padding: '5px 14px', fontSize: 12 }}>{lbl}</button>
                 ))}
               </div>
@@ -1946,12 +1990,12 @@ export default function RoadmapClient() {
                   {featuresDeFiltro.map(f => (
                     <button key={f.id} onClick={() => { setFeatureFilter(f.id); setIniFilter('todas') }} style={{ ...chipBtn(featureFilter === f.id), padding: '4px 10px', fontSize: 11.5 }}>{f.t}</button>
                   ))}
-                  <button onClick={() => { setFeatureFilter('sin'); setIniFilter('todas') }} style={{ ...chipBtn(featureFilter === 'sin'), padding: '4px 10px', fontSize: 11.5 }}>{vista === 'tareas' ? 'Sin feature' : 'Sólo la épica'}</button>
+                  <button onClick={() => { setFeatureFilter('sin'); setIniFilter('todas') }} style={{ ...chipBtn(featureFilter === 'sin'), padding: '4px 10px', fontSize: 11.5 }}>{vista !== 'tablero' ? 'Sin feature' : 'Sólo la épica'}</button>
                 </div>
               )}
 
-              {/* Iniciativa: un escalón más de la cascada, sólo en la vista de tareas y con un feature concreto */}
-              {vista === 'tareas' && epicaFilter !== 'todas' && inisDeFiltro.length > 0 && (
+              {/* Iniciativa: un escalón más de la cascada, sólo en las vistas de tareas y con un feature concreto */}
+              {vista !== 'tablero' && epicaFilter !== 'todas' && inisDeFiltro.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <span style={eb}>Iniciativa</span>
                   <button onClick={() => setIniFilter('todas')} style={{ ...chipBtn(iniFilter === 'todas'), padding: '4px 10px', fontSize: 11.5 }}>Todas</button>
@@ -1981,6 +2025,12 @@ export default function RoadmapClient() {
               <TareasRoadmap lista={listaEpicas} epicas={epicas} epicaFilter={epicaFilter} featureFilter={featureFilter} iniFilter={iniFilter}
                 setEpicaFilter={id => { setEpicaFilter(id); setFeatureFilter('todas'); setIniFilter('todas') }} today={today} ordenReady={gates.ordenReady}
                 onAbrir={(eId, tid) => setTareaPeek({ eId, tid })} onOrdenar={reordenarTareas} onCrear={crearTareaAqui} />
+            )}
+
+            {vista === 'calendario' && (
+              <CalendarioRoadmap epicas={epicas} lista={listaEpicas} epicaFilter={epicaFilter} featureFilter={featureFilter} iniFilter={iniFilter}
+                today={today} planHistReady={gates.planHistReady} zoom={calZoom} setZoom={setCalZoom} ancla={calAncla} setAncla={setCalAncla}
+                narrow={narrow} onAbrir={(eId, tid) => setTareaPeek({ eId, tid })} onAplicar={patchTareasLote} />
             )}
 
             {vista === 'tablero' && (
