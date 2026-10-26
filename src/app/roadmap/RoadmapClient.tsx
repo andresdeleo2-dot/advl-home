@@ -13,6 +13,8 @@ import {
 import { LinkPillRow } from '@/components/epicas/FeatureLinks'
 import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } from '@/components/epicas/SiguientePaso'
 import { mapaFaltaPaso, tareaPrimerPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
+import { enOrden, ordenAlFinal, reordenarSubconjunto } from '@/lib/ordenTareas'
+import TareasRoadmap from './TareasRoadmap'
 
 /* ═══════════════════════════════════════════════════════════════════════════
    /roadmap — TABLERO CUANTIZADO
@@ -472,7 +474,7 @@ const cuerpoHito = (s: 'pendiente' | 'en_curso' | 'logrado', hoy: string): Recor
 
 export default function RoadmapClient() {
   const [epicas, setEpicas] = useState<Epica[] | null>(null)
-  const [gates, setGates] = useState({ roadmapReady: true, featuresTableReady: true, objetivosTableReady: true, iniciativasTableReady: true, featuresReady: true, iniciativaIdReady: true })
+  const [gates, setGates] = useState({ roadmapReady: true, featuresTableReady: true, objetivosTableReady: true, iniciativasTableReady: true, featuresReady: true, iniciativaIdReady: true, ordenReady: true })
   const [err, setErr] = useState('')
   const [today, setToday] = useState<string>(todayISO())
   const [mounted, setMounted] = useState(false)
@@ -483,6 +485,9 @@ export default function RoadmapClient() {
   const [winStart, setWinStart] = useState<number>(() => bucketOf(todayISO(), 'trimestre'))
   const [epicaFilter, setEpicaFilter] = useState('todas')
   const [featureFilter, setFeatureFilter] = useState('todas')
+  // 'tablero' = la rejilla de tiempo de siempre; 'tareas' = filtrar por épica/feature/iniciativa y ordenar sus tareas.
+  const [vista, setVista] = useState<'tablero' | 'tareas'>('tablero')
+  const [iniFilter, setIniFilter] = useState('todas')   // sólo en la vista de tareas, y sólo con un feature concreto
   const [verIniciativas, setVerIniciativas] = useState(true)
   const [verHitos, setVerHitos] = useState(true)
   const [verCerradas, setVerCerradas] = useState(false)
@@ -544,6 +549,7 @@ export default function RoadmapClient() {
       iniciativasTableReady: j.iniciativasTableReady !== false,
       featuresReady: j.featuresReady !== false,
       iniciativaIdReady: j.iniciativaIdReady !== false,
+      ordenReady: j.ordenReady !== false,
     })
     setEpicas(rows)
     return rows
@@ -653,6 +659,9 @@ export default function RoadmapClient() {
     setWinStart(w && /^-?\d+$/.test(w) ? +w : bucketOf(todayISO(), z0))
     if (ep) setEpicaFilter(ep)
     if (f) setFeatureFilter(f)
+    if (p.get('v') === 'tareas') setVista('tareas')
+    const ini = p.get('ini')
+    if (ini) setIniFilter(ini)
   }, [])
 
   useEffect(() => {
@@ -662,8 +671,10 @@ export default function RoadmapClient() {
     p.set('z', zoom); p.set('w', String(winStart))
     if (epicaFilter === 'todas') p.delete('ep'); else p.set('ep', epicaFilter)
     if (featureFilter === 'todas') p.delete('f'); else p.set('f', featureFilter)
+    if (vista === 'tareas') p.set('v', 'tareas'); else p.delete('v')
+    if (vista === 'tareas' && iniFilter !== 'todas') p.set('ini', iniFilter); else p.delete('ini')
     window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`)
-  }, [mounted, zoom, winStart, epicaFilter, featureFilter, verHitos, verIniciativas, verCerradas, incluirArchivadas])
+  }, [mounted, zoom, winStart, epicaFilter, featureFilter, vista, iniFilter, verHitos, verIniciativas, verCerradas, incluirArchivadas])
 
   /* ─── Escritura optimista ──────────────────────────────────────────────── */
   /** Aplica el cambio en el árbol YA y devuelve el revert con el valor previo capturado.
@@ -987,6 +998,111 @@ export default function RoadmapClient() {
     }
   }, [nuevo, nuevoTxt, zoom, gates, showToast, flash])
 
+  /** Persiste un nuevo orden para un SUBCONJUNTO de las tareas de una épica (las de un feature, de una
+   *  iniciativa…): `ids` = esas tareas en el orden deseado. Las demás conservan su lugar (ver
+   *  lib/ordenTareas) y por eso sólo viajan las que cambian de `orden`. Optimista, en UNA sola
+   *  escritura a /api/tareas/sync, encolada detrás de las ediciones en vuelo de cada tarea (así el
+   *  `updated_at` que se manda ya es el sellado por la anterior y no choca consigo mismo). Si falla o
+   *  alguna cambió en otro lado, regresa SÓLO lo que ella tocó. `msg` = aviso con «Deshacer». */
+  const reordenarTareas = useCallback((epicaId: string, ids: string[], msg?: string) => {
+    if (!gates.ordenReady) { showToast('Corre sql/epicas-04-orden-tareas.sql para guardar el orden', { err: true }); return }
+    const ep = epicasRef.current?.find(e => e.id === epicaId)
+    if (!ep) return
+    const cambios = reordenarSubconjunto(ep.tasks || [], ids)
+    if (!cambios.size) return
+    const previo = enOrden(ep.tasks || []).map(t => t.id!).filter(id => ids.includes(id))
+    const previos = new Map<string, number | undefined>()
+    cambios.forEach((_, id) => previos.set(id, (ep.tasks || []).find(t => t.id === id)?.orden))
+    const claves = [...cambios.keys()].map(id => `tarea:${id}`)
+    const tocar = (fn: (x: EpicaTask) => EpicaTask) => {
+      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id && cambios.has(x.id) ? fn(x) : x)) }))
+      epicasRef.current = mapear(epicasRef.current)
+      setEpicas(mapear)
+    }
+    // Con la cola vacía, lo que había en pantalla es lo último que confirmó el servidor (misma regla que patchTarea).
+    ;(ep.tasks || []).forEach(t => { const k = `tarea:${t.id}`; if (t.id && cambios.has(t.id) && !writeChain.current.has(k)) tareaConfirmada.current.set(k, t) })
+    tocar(x => ({ ...x, orden: cambios.get(x.id!) }))
+    if (msg) showToast(msg, { undo: () => reordenarTareas(epicaId, previo), undoLbl: 'Deshacer' })
+    // Regresa el `orden` de ESTAS tareas sólo si nadie lo volvió a mover desde entonces.
+    const revertir = (quienes: string[], aviso: string) => {
+      const set = new Set(quienes)
+      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: (e.tasks || []).map(x => (x.id && set.has(x.id) && x.orden === cambios.get(x.id) ? { ...x, orden: previos.get(x.id) } : x)) }))
+      epicasRef.current = mapear(epicasRef.current)
+      setEpicas(mapear)
+      showToast(aviso, { err: true })
+    }
+    claves.forEach(k => inflight.current.add(k))
+    escrituras.current++
+    let choque = false
+    const anteriores = claves.map(k => writeChain.current.get(k) || Promise.resolve())
+    const run = Promise.all(anteriores.map(a => a.catch(() => { }))).then(async () => {
+      const vivas = epicasRef.current?.find(e => e.id === epicaId)?.tasks || []
+      const enviar = [...cambios.keys()].map(id => vivas.find(x => x.id === id)).filter((x): x is EpicaTask => !!x).map(x => ({ ...x, orden: cambios.get(x.id!) }))
+      if (!enviar.length) return
+      const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, update: enviar }) })
+        .then(r => r.json()).catch(() => null) as { ok?: boolean; conflicts?: string[]; stamps?: Record<string, string> } | null
+      if (!j?.ok) { revertir([...cambios.keys()], 'No se pudo guardar el orden'); return }
+      const choques = (j.conflicts || []).filter(id => cambios.has(id))
+      if (choques.length) { choque = true; revertir(choques, 'Alguna tarea cambió o se borró en otro lado: el orden NO se guardó completo') }
+      const sellos = j.stamps || {}
+      tocar(x => (x.id && sellos[x.id] ? { ...x, updatedAt: sellos[x.id] } : x))
+      enviar.forEach(x => { if (x.id && sellos[x.id]) tareaConfirmada.current.set(`tarea:${x.id}`, { ...x, updatedAt: sellos[x.id] }) })
+    }).finally(() => {
+      claves.forEach(k => {
+        if (writeChain.current.get(k) === run) { inflight.current.delete(k); writeChain.current.delete(k); tareaConfirmada.current.delete(k) }
+      })
+      if (choque || relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+    })
+    claves.forEach(k => writeChain.current.set(k, run))
+  }, [gates, showToast, revalidar])
+
+  /** Alta de una tarea desde la vista "Tareas": ya colgada del feature/iniciativa filtrados y al FINAL
+   *  del orden de la épica. Optimista; si el servidor la rechaza, se quita con aviso y «Reintentar».
+   *  Va en la misma cola por tarea que patchTarea (una edición inmediata espera al alta). */
+  const crearTareaAqui = useCallback((epicaId: string, titulo: string, featureId: string | null, iniciativaId: string | null): boolean => {
+    const v = titulo.trim()
+    const ep = epicasRef.current?.find(e => e.id === epicaId)
+    if (!v || !ep) return false
+    // Sin la columna, la tarea nacería suelta y no aparecería donde se creó (el filtro la ocultaría).
+    if (featureId && !gates.featuresReady) { showToast('Corre sql/epicas-12-features.sql para ligar tareas a un feature', { err: true }); return false }
+    if (iniciativaId && !gates.iniciativaIdReady) { showToast('Corre sql/epicas-21-tarea-iniciativa.sql para ligar tareas a iniciativas', { err: true }); return false }
+    const nueva: EpicaTask = {
+      id: uid(), t: v, status: 'Por hacer', due: '', note: '', createdAt: todayISO(),
+      ...(featureId ? { featureId } : {}), ...(iniciativaId ? { iniciativaId } : {}),
+    }
+    const orden = gates.ordenReady ? ordenAlFinal(ep.tasks || []) : undefined
+    if (orden !== undefined) nueva.orden = orden
+    const taskId = nueva.id!
+    const tocar = (fn: (ts: EpicaTask[]) => EpicaTask[]) => {
+      const mapear = (list: Epica[] | null) => (list || []).map(e => (e.id !== epicaId ? e : { ...e, tasks: fn(e.tasks || []) }))
+      epicasRef.current = mapear(epicasRef.current)
+      setEpicas(mapear)
+    }
+    tocar(ts => [...ts, nueva])
+    const key = `tarea:${taskId}`
+    inflight.current.add(key)
+    escrituras.current++
+    const anterior = writeChain.current.get(key) || Promise.resolve()
+    const run = anterior.catch(() => { }).then(async () => {
+      const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId, create: [nueva] }) })
+        .then(r => r.json()).catch(() => null) as { ok?: boolean; stamps?: Record<string, string> } | null
+      if (!j?.ok) {
+        tocar(ts => ts.filter(t => t.id !== taskId))
+        showToast(`No se pudo crear «${nueva.t}»`, { err: true, undo: () => crearTareaAqui(epicaId, titulo, featureId, iniciativaId), undoLbl: 'Reintentar' })
+        return
+      }
+      const sello = j.stamps?.[taskId]
+      if (sello) tocar(ts => ts.map(t => (t.id === taskId ? { ...t, updatedAt: sello } : t)))
+    }).finally(() => {
+      if (writeChain.current.get(key) === run) {
+        inflight.current.delete(key); writeChain.current.delete(key)
+        if (relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+      }
+    })
+    writeChain.current.set(key, run)
+    return true
+  }, [gates, showToast, revalidar])
+
   /* ─── Derivados ────────────────────────────────────────────────────────── */
   const nCols = narrow ? 1 : zoom === 'trimestre' ? Q_COLS : M_COLS
   const railW = narrow ? 0 : RAIL_W
@@ -1016,6 +1132,9 @@ export default function RoadmapClient() {
     const e = (epicas || []).find(x => x.id === epicaFilter)
     return (e?.features || [])
   }, [epicas, epicaFilter])
+
+  // Iniciativas del feature filtrado (la cascada Épica → Feature → Iniciativa de la vista de tareas).
+  const inisDeFiltro = useMemo(() => featuresDeFiltro.find(f => f.id === featureFilter)?.iniciativas || [], [featuresDeFiltro, featureFilter])
 
   const selObj = useMemo(() => (sel ? buscar(epicas, sel) : null), [epicas, sel])
   // Iniciativas abiertas sin tarea abierta (sin siguiente paso, o bloqueadas por otra abierta), por id.
@@ -1532,7 +1651,7 @@ export default function RoadmapClient() {
       if (sel.kind === 'feature') {
         const f = selObj as EpicaFeature
         const inis = f.iniciativas || []
-        const tareas = (ep?.tasks || []).filter(t => t.featureId === f.id && t.status !== ARCHIVED)
+        const tareas = enOrden(ep?.tasks || []).filter(t => t.featureId === f.id && t.status !== ARCHIVED)
         const desal = tablero.riesgos.desalineados.filter(r => r.id === f.id)
         const sinPropias = !isoOf(f.roadmapStart) && !isoOf(f.roadmapEnd)
         return (
@@ -1621,7 +1740,7 @@ export default function RoadmapClient() {
         const dep = tablero.riesgos.dependencias.filter(r => r.id === i.id)
         // Antes esta pieza no mostraba NADA de trabajo real — para ver qué tareas trae había que
         // salir del todo a Épicas. Mismo patrón que la lista de "Tareas" del feature, de arriba.
-        const tareas = (ep?.tasks || []).filter(t => t.iniciativaId === i.id && t.status !== ARCHIVED)
+        const tareas = enOrden(ep?.tasks || []).filter(t => t.iniciativaId === i.id && t.status !== ARCHIVED)
         const paso = renderPaso(i.id, { style: { marginBottom: 8 } })
         return (
           <>
@@ -1755,7 +1874,9 @@ export default function RoadmapClient() {
           <div>
             <div className="serif" style={{ fontSize: 26, fontWeight: 600, color: '#10233F' }}>🗺️ Roadmap</div>
             <div style={{ fontSize: 13.5, color: 'rgba(20,35,61,0.55)', marginTop: 4 }}>
-              Cada columna es un {zoom === 'trimestre' ? 'trimestre' : 'mes'}; cada carril, una épica. Toca cualquier pieza para editar sus fechas.
+              {vista === 'tareas'
+                ? 'Elige épica, feature e iniciativa y ordena sus tareas: el 1 va primero.'
+                : <>Cada columna es un {zoom === 'trimestre' ? 'trimestre' : 'mes'}; cada carril, una épica. Toca cualquier pieza para editar sus fechas.</>}
             </div>
           </div>
           {/* Se cierra el panel antes de imprimir (además del rm-noprint, por si el navegador
@@ -1783,6 +1904,12 @@ export default function RoadmapClient() {
           <>
             {/* ── Barra de mando ── */}
             <div className="rm-noprint" style={{ ...card, padding: '10px 12px', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div role="tablist" aria-label="Vista del roadmap" style={{ display: 'inline-flex', alignSelf: 'flex-start', gap: 2, background: 'rgba(15,35,64,0.05)', borderRadius: 99, padding: 3 }}>
+                {([['tablero', '🗺️ Tablero'], ['tareas', '✅ Tareas y prioridad']] as const).map(([v, lbl]) => (
+                  <button key={v} role="tab" aria-selected={vista === v} onClick={() => setVista(v)} style={{ ...chipBtn(vista === v), padding: '5px 14px', fontSize: 12 }}>{lbl}</button>
+                ))}
+              </div>
+              {vista === 'tablero' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <button onClick={() => setWinStart(w => w - 1)} style={navBtn} aria-label="Ventana anterior">◀</button>
                 <button onClick={() => setWinStart(bucketOf(today, zoom))} style={{ ...navBtn, fontWeight: 800 }}>Hoy</button>
@@ -1800,11 +1927,12 @@ export default function RoadmapClient() {
                 {fueraAntes > 0 && <button onClick={() => setWinStart(w => w - nCols)} style={ghostBtn}>‹ {fueraAntes} antes</button>}
                 {fueraDespues > 0 && <button onClick={() => setWinStart(w => w + nCols)} style={ghostBtn}>{fueraDespues} después ›</button>}
               </div>
+              )}
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <button onClick={() => { setEpicaFilter('todas'); setFeatureFilter('todas') }} style={chipBtn(epicaFilter === 'todas')}>Todas las épicas</button>
+                <button onClick={() => { setEpicaFilter('todas'); setFeatureFilter('todas'); setIniFilter('todas') }} style={chipBtn(epicaFilter === 'todas')}>Todas las épicas</button>
                 {listaEpicas.map(e => (
-                  <button key={e.id} onClick={() => { setEpicaFilter(e.id); setFeatureFilter('todas') }}
+                  <button key={e.id} onClick={() => { setEpicaFilter(e.id); setFeatureFilter('todas'); setIniFilter('todas') }}
                     style={{ ...chipBtn(epicaFilter === e.id), display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <span aria-hidden style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
                   </button>
@@ -1814,11 +1942,23 @@ export default function RoadmapClient() {
               {epicaFilter !== 'todas' && featuresDeFiltro.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <span style={eb}>Feature</span>
-                  <button onClick={() => setFeatureFilter('todas')} style={{ ...chipBtn(featureFilter === 'todas'), padding: '4px 10px', fontSize: 11.5 }}>Todos</button>
+                  <button onClick={() => { setFeatureFilter('todas'); setIniFilter('todas') }} style={{ ...chipBtn(featureFilter === 'todas'), padding: '4px 10px', fontSize: 11.5 }}>Todos</button>
                   {featuresDeFiltro.map(f => (
-                    <button key={f.id} onClick={() => setFeatureFilter(f.id)} style={{ ...chipBtn(featureFilter === f.id), padding: '4px 10px', fontSize: 11.5 }}>{f.t}</button>
+                    <button key={f.id} onClick={() => { setFeatureFilter(f.id); setIniFilter('todas') }} style={{ ...chipBtn(featureFilter === f.id), padding: '4px 10px', fontSize: 11.5 }}>{f.t}</button>
                   ))}
-                  <button onClick={() => setFeatureFilter('sin')} style={{ ...chipBtn(featureFilter === 'sin'), padding: '4px 10px', fontSize: 11.5 }}>Sólo la épica</button>
+                  <button onClick={() => { setFeatureFilter('sin'); setIniFilter('todas') }} style={{ ...chipBtn(featureFilter === 'sin'), padding: '4px 10px', fontSize: 11.5 }}>{vista === 'tareas' ? 'Sin feature' : 'Sólo la épica'}</button>
+                </div>
+              )}
+
+              {/* Iniciativa: un escalón más de la cascada, sólo en la vista de tareas y con un feature concreto */}
+              {vista === 'tareas' && epicaFilter !== 'todas' && inisDeFiltro.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={eb}>Iniciativa</span>
+                  <button onClick={() => setIniFilter('todas')} style={{ ...chipBtn(iniFilter === 'todas'), padding: '4px 10px', fontSize: 11.5 }}>Todas</button>
+                  {inisDeFiltro.map(i => (
+                    <button key={i.id} onClick={() => setIniFilter(i.id)} style={{ ...chipBtn(iniFilter === i.id), padding: '4px 10px', fontSize: 11.5 }}>{i.nombre}</button>
+                  ))}
+                  <button onClick={() => setIniFilter('sin')} style={{ ...chipBtn(iniFilter === 'sin'), padding: '4px 10px', fontSize: 11.5 }}>Sin iniciativa</button>
                 </div>
               )}
 
@@ -1828,15 +1968,23 @@ export default function RoadmapClient() {
                   ['Hitos', verHitos, setVerHitos],
                   ['Cerradas', verCerradas, setVerCerradas],
                   ['Archivadas', incluirArchivadas, setIncluirArchivadas],
-                ] as [string, boolean, (v: boolean) => void][]).map(([lbl, val, set]) => (
+                ] as [string, boolean, (v: boolean) => void][]).filter(([lbl]) => vista === 'tablero' || lbl === 'Archivadas').map(([lbl, val, set]) => (
                   <label key={lbl} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                     <input type="checkbox" checked={val} onChange={ev => set(ev.target.checked)} />{lbl}
                   </label>
                 ))}
-                <span style={{ color: 'rgba(20,35,61,0.35)', fontSize: 11.5 }}>← → cambian de ventana · T vuelve a hoy · Esc cierra</span>
+                {vista === 'tablero' && <span style={{ color: 'rgba(20,35,61,0.35)', fontSize: 11.5 }}>← → cambian de ventana · T vuelve a hoy · Esc cierra</span>}
               </div>
             </div>
 
+            {vista === 'tareas' && (
+              <TareasRoadmap lista={listaEpicas} epicas={epicas} epicaFilter={epicaFilter} featureFilter={featureFilter} iniFilter={iniFilter}
+                setEpicaFilter={id => { setEpicaFilter(id); setFeatureFilter('todas'); setIniFilter('todas') }} today={today} ordenReady={gates.ordenReady}
+                onAbrir={(eId, tid) => setTareaPeek({ eId, tid })} onOrdenar={reordenarTareas} onCrear={crearTareaAqui} />
+            )}
+
+            {vista === 'tablero' && (
+            <>
             {/* ── Tira de revisión ── */}
             {(riesgos.vencidos.length > 0 || riesgos.proximos14.length > 0 || riesgos.dependencias.length > 0 || riesgos.desalineados.length > 0 || sinFecha.length > 0) && (
               <div className="rm-noprint" style={{ ...card, padding: '10px 12px', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1944,6 +2092,9 @@ export default function RoadmapClient() {
                 Algunas capas están apagadas por migraciones pendientes; lo demás se sigue pudiendo editar.
               </div>
             )}
+            </>
+            )}
+
             <div style={{ height: 96 }} />
           </>
         )}

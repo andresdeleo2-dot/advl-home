@@ -5,6 +5,20 @@ import type { EpicaTask } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
+/** `.in('id', ids)` viaja en la URL: con cientos de ids (renumerar el orden de una épica grande) pasa del límite
+ *  y PostgREST/el proxy lo rechaza. Se consulta por lotes. Un lote que falla devuelve su error (antes se ignoraba:
+ *  sin sellos, TODA la edición se descartaba en silencio como "borrada en otra pestaña"). */
+const LOTE = 80
+async function sellosDe(ids: string[]): Promise<{ sellos: Map<string, string>; error?: string }> {
+  const sellos = new Map<string, string>()
+  for (let i = 0; i < ids.length; i += LOTE) {
+    const { data, error } = await supabase.from('tareas').select('id,updated_at').in('id', ids.slice(i, i + LOTE))
+    if (error) return { sellos, error: error.message }
+    for (const r of data || []) sellos.set(r.id as string, r.updated_at as string)
+  }
+  return { sellos }
+}
+
 /** Coherencia de la cascada Feature → Iniciativa → Tarea. Hay varias superficies que escriben una tarea
  *  (peek y ficha de Épicas, Tiempo), así que la regla vive AQUÍ y no sólo en cada cliente: una tarea no
  *  puede quedar en una iniciativa que (a) cuelga de OTRO feature, (b) es de OTRA épica, o (c) se queda sin
@@ -54,10 +68,11 @@ export async function POST(req: Request) {
     // también a CREATE (mover una tarea entre épicas viaja como create con su updatedAt): así una
     // edición reciente en otra pestaña no se pisa con la versión vieja del que mueve.
     const allIds = [...create, ...update].map(t => t.id).filter(Boolean) as string[]
-    const dbStamp = new Map<string, string>()
+    let dbStamp = new Map<string, string>()
     if (allIds.length) {
-      const { data: cur } = await supabase.from('tareas').select('id,updated_at').in('id', allIds)
-      for (const r of cur || []) dbStamp.set(r.id as string, r.updated_at as string)
+      const lectura = await sellosDe(allIds)
+      if (lectura.error) return NextResponse.json({ ok: false, error: lectura.error }, { status: 500 })
+      dbStamp = lectura.sellos
     }
     // La BD tiene una versión MÁS NUEVA que la base del cliente → otra pestaña ganó.
     const staleClash = (t: EpicaTask) => { const db = t.id ? dbStamp.get(t.id) : undefined; return !!(db && t.updatedAt && new Date(db).getTime() > new Date(t.updatedAt).getTime()) }
@@ -102,8 +117,8 @@ export async function POST(req: Request) {
     const touched = [...create.map(t => t.id), ...update.map(t => t.id)].filter(Boolean) as string[]
     const stamps: Record<string, string> = {}
     if (touched.length) {
-      const { data } = await supabase.from('tareas').select('id,updated_at').in('id', touched)
-      for (const r of data || []) stamps[r.id as string] = r.updated_at as string
+      const lectura = await sellosDe(touched)
+      lectura.sellos.forEach((v, k) => { stamps[k] = v })   // si falla, lo ya escrito queda escrito y sólo faltan los sellos: la próxima edición de esa tarea chocará una vez y el cliente se relee
     }
 
     return NextResponse.json({ ok: true, conflicts, stamps, iniciativasLimpiadas })
