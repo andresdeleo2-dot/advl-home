@@ -185,7 +185,7 @@ function insertarViewport(s: string): string {
  *  hace el scroll, sin barra interna). Reglas:
  *  - Mide el documento (no el viewport): así un plan corto SÍ encoge el iframe.
  *  - Throttle de 100 ms con borde final (nunca se queda sin avisar aunque el contenido cambie sin parar)
- *    y se ignoran cambios menores a 4 px; tope de 20 000 px.
+ *    y se ignoran cambios menores a 4 px; tope de 60 000 px (un plan largo con ilustraciones mide ~38 000 px en el teléfono).
  *  - Anti-bucle de 100vh: un documento con `min-height:100vh` + padding mide "viewport + padding";
  *    al agrandar el iframe vuelve a crecer, y así sin fin. Se distingue de un documento normal porque
  *    crece EXACTAMENTE lo que creció el viewport (Δalto ≈ Δviewport); si pasa dos vueltas seguidas se
@@ -210,7 +210,7 @@ function scriptAlto(id: string): string {
   const tipoAnclaJs = JSON.stringify(PLAN_MSG_ANCLA)
   return `<script data-peso-plan-embed>(function(){try{
 if(window.parent===window)return;
-var ID=${idJs},TIPO=${tipoJs},TIPOA=${tipoAnclaJs},MAX=20000,MIN=4;
+var ID=${idJs},TIPO=${tipoJs},TIPOA=${tipoAnclaJs},MAX=60000,MIN=4;
 var rep=0,ih=window.innerHeight,iw=window.innerWidth,tRep=0,seguidos=0,congelado=0,vhC=0,timer=0;
 function alto(){
 var de=document.documentElement,b=document.body;

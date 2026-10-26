@@ -16,7 +16,8 @@ import { BTN_ICONO, EnUsoBadge, FOCO, Icono, Spinner, TIPO_COLOR, btn, tipoInfo 
 import { fechaRelativa, fmtBytes } from './util'
 
 const ALTO_MIN = 320
-const ALTO_MAX = 20_000
+// Un plan con 24 ilustraciones mide entre ~21 000 y ~38 000 px según el ancho del teléfono: con 20 000 se cortaba y quedaba doble scroll.
+const ALTO_MAX = 60_000
 const ESPERA_ALTO_MS = 4000
 /** Mensajes seguidos y siempre creciendo (cada <500 ms) a partir de los cuales se asume un bucle
  *  (p. ej. un body con min-height:100vh más margen, que crece cada vez que el iframe crece). */
