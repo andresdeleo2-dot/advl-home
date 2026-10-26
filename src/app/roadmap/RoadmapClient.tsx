@@ -15,6 +15,7 @@ import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } fr
 import { mapaFaltaPaso, tareaPrimerPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 import { enOrden, ordenAlFinal, reordenarSubconjunto } from '@/lib/ordenTareas'
 import { parcheAgendar, parcheInverso, type ParcheTarea } from '@/lib/planTarea'
+import { iniEsDelFeature, planMoverTarea } from '@/lib/ordenRoadmap'
 import TareasRoadmap from './TareasRoadmap'
 import CalendarioRoadmap, { type ZoomCal } from './CalendarioRoadmap'
 
@@ -1147,6 +1148,89 @@ export default function RoadmapClient() {
     return true
   }, [gates, showToast, revalidar])
 
+  /** MOVER una tarea a OTRA épica (desde el popup de la tarea). Optimista: sale de la épica de origen y entra AL FINAL
+   *  de la destino al instante; `planMoverTarea` decide qué pasa con Feature, Iniciativa y orden (son de la épica vieja:
+   *  se limpian). Va UN solo POST a la épica destino: `create` con la tarea (el upsert le reasigna epica_id y la de
+   *  origen NO se borra, así un fallo no la pierde) + `update` de las que hubo que renumerar. La tarea espera su cola
+   *  (y manda el updated_at que dejó la última escritura). Si falla o choca, vuelve a su épica. `restaurar` = deshacer. */
+  const moverTareaAEpica = useCallback((deId: string, taskId: string, aId: string, restaurar?: Pick<EpicaTask, 'featureId' | 'iniciativaId' | 'orden'>): boolean => {
+    if (deId === aId) return false
+    const lista = epicasRef.current || []
+    const origen = lista.find(e => e.id === deId), destino = lista.find(e => e.id === aId)
+    const tarea = origen?.tasks?.find(x => x.id === taskId)
+    if (!origen || !destino || !tarea) return false
+    const { movida, renumeradas } = planMoverTarea(destino, tarea, { ordenReady: gates.ordenReady, restaurar })
+    const posOrigen = (origen.tasks || []).findIndex(x => x.id === taskId)
+    const ordenAntes = new Map<string, number | undefined>()
+    renumeradas.forEach((_, id) => ordenAntes.set(id, (destino.tasks || []).find(x => x.id === id)?.orden))
+    const aplicar = (fn: (list: Epica[]) => Epica[]) => {
+      epicasRef.current = fn(epicasRef.current || [])
+      setEpicas(prev => fn(prev || []))
+    }
+    aplicar(list => list.map(e => {
+      if (e.id === deId) return { ...e, tasks: (e.tasks || []).filter(x => x.id !== taskId) }
+      if (e.id === aId) return { ...e, tasks: [...(e.tasks || []).map(x => (x.id && renumeradas.has(x.id) ? { ...x, orden: renumeradas.get(x.id) } : x)), movida] }
+      return e
+    }))
+    const ids = [taskId, ...renumeradas.keys()]
+    const claves = ids.map(id => `tarea:${id}`)
+    // Con la cola vacía, lo que había en pantalla es lo último que confirmó el servidor (misma regla que patchTarea).
+    claves.forEach(k => { if (!writeChain.current.has(k)) { const id = k.slice(6); const t = id === taskId ? tarea : (destino.tasks || []).find(x => x.id === id); if (t) tareaConfirmada.current.set(k, t) } })
+    // Regresa todo: la tarea a su lugar de origen y el orden de las renumeradas, si nadie lo volvió a tocar.
+    const revertir = (soloOrden: boolean) => {
+      if (!soloOrden) setTareaPeek(p => (p && p.tid === taskId && p.eId === aId ? { eId: deId, tid: taskId } : p))   // el popup la sigue de vuelta
+      aplicar(list => list.map(e => {
+        if (e.id === aId) {
+          const sinMovida = soloOrden ? (e.tasks || []) : (e.tasks || []).filter(x => x.id !== taskId)
+          return { ...e, tasks: sinMovida.map(x => (x.id && renumeradas.has(x.id) && x.orden === renumeradas.get(x.id) ? { ...x, orden: ordenAntes.get(x.id) } : x)) }
+        }
+        if (e.id === deId && !soloOrden) {
+          const ts = (e.tasks || []).filter(x => x.id !== taskId); ts.splice(Math.max(0, Math.min(posOrigen, ts.length)), 0, tarea)
+          return { ...e, tasks: ts }
+        }
+        return e
+      }))
+    }
+    claves.forEach(k => inflight.current.add(k))
+    escrituras.current++
+    let choque = false
+    const anteriores = claves.map(k => writeChain.current.get(k) || Promise.resolve())
+    const run = Promise.all(anteriores.map(a => a.catch(() => { }))).then(async () => {
+      const dest = (epicasRef.current || []).find(e => e.id === aId)
+      const crear = dest?.tasks?.find(x => x.id === taskId)
+      if (!dest || !crear) return   // ya no está ahí (se borró o se movió de nuevo): no hay nada que escribir
+      const sello = tareaConfirmada.current.get(`tarea:${taskId}`)?.updatedAt || crear.updatedAt
+      const enviar: EpicaTask = sello ? { ...crear, updatedAt: sello } : crear
+      const actualizar = [...renumeradas.keys()].map(id => (dest.tasks || []).find(x => x.id === id)).filter((x): x is EpicaTask => !!x)
+        .map(x => { const f = tareaConfirmada.current.get(`tarea:${x.id}`)?.updatedAt || x.updatedAt; return f ? { ...x, updatedAt: f } : x })
+      const j = await fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId: aId, create: [enviar], update: actualizar }) })
+        .then(r => r.json()).catch(() => null) as { ok?: boolean; conflicts?: string[]; stamps?: Record<string, string> } | null
+      choque = true   // en cualquier fallo se vuelve a leer del servidor, que es quien sabe qué quedó escrito
+      if (!j?.ok) { revertir(false); showToast(`No se pudo mover «${crear.t}»`, { err: true }); return }
+      const choques = j.conflicts || []
+      if (choques.includes(taskId)) { revertir(false); showToast('Esa tarea cambió o se borró en otro lado: NO se movió', { err: true }); return }
+      if (choques.length) { revertir(true); showToast('El orden de otra tarea cambió en otro lado y no se guardó', { err: true }) }
+      else choque = false
+      const sellos = j.stamps || {}
+      const ponerSello = (list: Epica[]) => list.map(e => ((e.tasks || []).some(x => x.id && sellos[x.id]) ? { ...e, tasks: (e.tasks || []).map(x => (x.id && sellos[x.id] ? { ...x, updatedAt: sellos[x.id] } : x)) } : e))
+      aplicar(ponerSello)
+      ids.forEach(id => { const x = (epicasRef.current || []).flatMap(e => e.tasks || []).find(t => t.id === id); if (x && sellos[id]) tareaConfirmada.current.set(`tarea:${id}`, { ...x, updatedAt: sellos[id] }) })
+    }).finally(() => {
+      claves.forEach(k => {
+        if (writeChain.current.get(k) === run) { inflight.current.delete(k); writeChain.current.delete(k); tareaConfirmada.current.delete(k) }
+      })
+      if (choque || relecturaPendiente.current) { relecturaPendiente.current = false; void revalidar(true) }
+    })
+    claves.forEach(k => writeChain.current.set(k, run))
+    setTareaPeek(p => (p && p.tid === taskId ? { eId: aId, tid: taskId } : p))
+    if (!restaurar) {
+      showToast(`«${tarea.t || 'Tarea'}» movida a ${destino.name}${tarea.featureId || tarea.iniciativaId ? ' · sin feature ni iniciativa (son de la otra épica)' : ''}`, {
+        undo: () => { moverTareaAEpica(aId, taskId, deId, { featureId: tarea.featureId, iniciativaId: tarea.iniciativaId, orden: tarea.orden }) }, undoLbl: 'Deshacer',
+      })
+    }
+    return true
+  }, [gates, showToast, revalidar])
+
   /* ─── Derivados ────────────────────────────────────────────────────────── */
   const nCols = narrow ? 1 : zoom === 'trimestre' ? Q_COLS : M_COLS
   const railW = narrow ? 0 : RAIL_W
@@ -1551,7 +1635,8 @@ export default function RoadmapClient() {
    *  lo demás (subtareas, nota, estimado…) manda a Épicas, no intenta ser el editor completo. */
   const renderTareaPeek = () => {
     if (!tareaPeek) return null
-    const ep = (epicas || []).find(e => e.id === tareaPeek.eId)
+    // La tarea puede haber cambiado de épica (la movieron aquí, o desde otra pestaña): se busca por id si ya no está donde se abrió.
+    const ep = (epicas || []).find(e => e.id === tareaPeek.eId && e.tasks?.some(x => x.id === tareaPeek.tid)) || (epicas || []).find(e => e.tasks?.some(x => x.id === tareaPeek.tid))
     const t = ep?.tasks?.find(x => x.id === tareaPeek.tid)
     if (!ep || !t) return null
     const cerrar = () => { setTareaPeek(null); setFechaTecleo(null) }
@@ -1577,6 +1662,27 @@ export default function RoadmapClient() {
           style={{ ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4 }} />
       )
     }
+    // Ubicación Épica › Feature › Iniciativa. Feature e Iniciativa son DE LA ÉPICA: al cambiar de feature la
+    // iniciativa se limpia si no cuelga del nuevo, y al cambiar de épica se limpian las dos (en la nueva no existen).
+    const feats = ep.features || []
+    const featId = t.featureId && feats.some(f => f.id === t.featureId) ? t.featureId : ''
+    const inis = feats.find(f => f.id === featId)?.iniciativas || []
+    const iniId = iniEsDelFeature(ep, featId, t.iniciativaId) ? t.iniciativaId! : ''
+    const epicasDestino = (epicas || []).filter(e => !e.archived || e.id === ep.id)
+    const ubicar = (cambio: { featureId?: string; iniciativaId?: string }) => {
+      if (cambio.featureId && !gates.featuresReady) { showToast('Corre sql/epicas-12-features.sql para ligar tareas a un feature', { err: true }); return }
+      if (cambio.iniciativaId && !gates.iniciativaIdReady) { showToast('Corre sql/epicas-21-tarea-iniciativa.sql para ligar tareas a iniciativas', { err: true }); return }
+      const featureId = 'featureId' in cambio ? (cambio.featureId || '') : featId
+      let iniciativaId = 'iniciativaId' in cambio ? (cambio.iniciativaId || '') : iniId
+      if (!iniEsDelFeature(ep, featureId, iniciativaId)) iniciativaId = ''
+      const patch: Partial<EpicaTask> = {}
+      if (featureId !== (t.featureId || '')) patch.featureId = featureId       // '' limpia la columna
+      if (iniciativaId !== (t.iniciativaId || '')) patch.iniciativaId = iniciativaId
+      if (!Object.keys(patch).length) return
+      const nf = feats.find(f => f.id === featureId)?.t, ni = inis.find(i => i.id === iniciativaId)?.nombre
+      patchTareasLote([{ epicaId: ep.id, taskId: t.id!, patch }], nf ? `Ubicación: ${nf}${ni ? ` › ${ni}` : ''}` : 'Quitada del feature')
+    }
+    const selUbic: CSSProperties = { ...field, display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, cursor: 'pointer' }
     return createPortal(
       <>
         <div onClick={cerrar} className="rm-noprint" style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,64,0.4)', zIndex: 98, backdropFilter: 'blur(2px)' }} />
@@ -1595,6 +1701,32 @@ export default function RoadmapClient() {
               return <button key={s} onClick={() => patchTarea(ep.id, t.id!, { status: s })}
                 style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: on ? '#fff' : st.c, background: on ? st.c : st.bg, border: `1px solid ${on ? st.c : 'transparent'}` }}>{st.label}</button>
             })}
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <label style={{ display: 'block' }}>
+              <span style={eb}>Épica</span>
+              <select value={ep.id} aria-label="Épica de la tarea" onChange={ev => { if (ev.target.value !== ep.id) moverTareaAEpica(ep.id, t.id!, ev.target.value) }} style={selUbic}>
+                {epicasDestino.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+            </label>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+              <label style={{ display: 'block', flex: '1 1 150px' }}>
+                <span style={eb}>Feature</span>
+                <select value={featId} aria-label="Feature de la tarea" disabled={!gates.featuresReady} title={gates.featuresReady ? undefined : 'Corre sql/epicas-12-features.sql'}
+                  onChange={ev => ubicar({ featureId: ev.target.value })} style={selUbic}>
+                  <option value="">{feats.length ? 'Sin feature' : 'Esta épica no tiene features'}</option>
+                  {feats.map(f => <option key={f.id} value={f.id}>{f.t}{f.estado === 'cerrado' ? ' (cerrado)' : ''}</option>)}
+                </select>
+              </label>
+              <label style={{ display: 'block', flex: '1 1 150px' }}>
+                <span style={eb}>Iniciativa</span>
+                <select value={iniId} aria-label="Iniciativa de la tarea" disabled={!featId || !gates.iniciativaIdReady} title={!featId ? 'Elige primero un feature' : undefined}
+                  onChange={ev => ubicar({ iniciativaId: ev.target.value })} style={selUbic}>
+                  <option value="">{!featId ? 'Elige un feature' : inis.length ? 'Sin iniciativa' : 'Este feature no tiene iniciativas'}</option>
+                  {inis.map(i => <option key={i.id} value={i.id}>{i.nombre}{i.estado === 'cerrada' || i.estado === 'cancelada' ? ` (${i.estado})` : ''}</option>)}
+                </select>
+              </label>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>
             <label style={{ display: 'block', flex: '1 1 150px' }}>

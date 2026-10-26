@@ -87,6 +87,8 @@ export function parcheInverso(t: EpicaTask, parche: Partial<EpicaTask>): Partial
   const inv: Record<string, unknown> = {}
   const src = t as unknown as Record<string, unknown>
   Object.keys(parche).forEach(k => { inv[k] = src[k] })
+  // Estas dos se LIMPIAN mandando '' (con undefined la clave se pierde en el JSON y la columna se quedaría con el valor nuevo).
+  ;(['featureId', 'iniciativaId'] as const).forEach(k => { if (k in inv && inv[k] === undefined) inv[k] = '' })
   return inv as Partial<EpicaTask>
 }
 

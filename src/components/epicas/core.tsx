@@ -643,11 +643,11 @@ export type Prefs = {
   sortBy: 'Pendientes' | 'Progreso' | 'Nombre'
   compact: boolean; showRowKpi: boolean
   estadoFilter: 'activas' | 'archivadas' | 'todas'; catFilter: string
-  planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'
+  planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica' | 'roadmap' | 'feature'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance' | 'estancada' | 'multidia' | 'arrastre'
   planMode: 'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen' | 'agenda' | 'detalle'
   weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; boardView: 'tablero' | 'tabla'; epicView: 'lista' | 'tabla'; dayCapacity: number
-  epicSort: 'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'
+  epicSort: 'grupo' | 'manual' | 'feature' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre' | 'creada'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
   backlogView: 'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'

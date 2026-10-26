@@ -17,6 +17,7 @@ import { todayISO } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { fotoSrc, edadEnFecha, colorTipo, diffFechas, formatDiff } from '@/lib/vida'
 import { useTodayResumen, hmm } from '@/lib/useTodayResumen'
+import { cmpRoadmap, cmpFeature } from '@/lib/ordenRoadmap'
 
 const SERIF = 'var(--epica-serif, Georgia, serif)'
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -76,6 +77,8 @@ function SectionTitle({ icon, children, href, cta, external }: { icon?: string; 
     </div>
   )
 }
+type EnfOrden = 'importancia' | 'mio' | 'roadmap' | 'feature' | 'entrega'
+const ENF_ORDENES: [EnfOrden, string][] = [['importancia', 'Importancia'], ['mio', 'Mi orden del día'], ['roadmap', 'Orden Roadmap'], ['feature', 'Feature › iniciativa'], ['entrega', 'Entrega']]
 export default function PanelClient() {
   const { epics, today, todayTasks, routines, routinesDone, dueSoon, workedMin, runningName } = useTodayResumen()
   const [now, setNow] = useState<Date | null>(null)
@@ -91,6 +94,11 @@ export default function PanelClient() {
   >(null)
   const [enfEpic, setEnfEpic] = useState<string>('todas')   // filtro por épica en Actividades
   const [enfAll, setEnfAll] = useState(false)               // ver TODAS las actividades del día
+  // Cómo se ordenan las actividades de hoy. 'importancia' = el de siempre (prioridad → vence → mi orden del día);
+  // 'mio' = el orden del día que fijas en Épicas/Roadmap; 'roadmap' = el de Roadmap › Prioridad. Se recuerda en este navegador.
+  const [enfOrden, setEnfOrden] = useState<EnfOrden>('importancia')
+  useEffect(() => { try { const v = localStorage.getItem('panel.enfoque.orden.v1'); if (ENF_ORDENES.some(([k]) => k === v)) setEnfOrden(v as EnfOrden) } catch { /* noop */ } }, [])
+  const cambiarEnfOrden = (v: EnfOrden) => { setEnfOrden(v); setEnfAll(false); try { localStorage.setItem('panel.enfoque.orden.v1', v) } catch { /* noop */ } }
   const [fotoIdx, setFotoIdx] = useState(0)                 // carrusel de fotos en el popup de momento
   useEffect(() => { setFotoIdx(0) }, [peek])
   const [personaDetail, setPersonaDetail] = useState<{ persona: Persona; recuerdos: Vida[] } | null>(null)  // ficha completa de mi-vida (en el sitio)
@@ -115,7 +123,15 @@ export default function PanelClient() {
 
   // Épicas presentes en las tareas de hoy (para el filtro) + tareas filtradas.
   const enfEpics = useMemo(() => { const seen = new Map<string, Epica>(); todayTasks.forEach(({ e }) => { if (!seen.has(e.id)) seen.set(e.id, e) }); return [...seen.values()] }, [todayTasks])
-  const filteredTasks = useMemo(() => enfEpic === 'todas' ? todayTasks : todayTasks.filter(x => x.e.id === enfEpic), [todayTasks, enfEpic])
+  const filteredTasks = useMemo(() => {
+    const base = enfEpic === 'todas' ? todayTasks : todayTasks.filter(x => x.e.id === enfEpic)
+    if (enfOrden === 'importancia') return base
+    // sort estable: lo que empata conserva el orden de importancia
+    const due = (x: { t: EpicaTask }) => x.t.due || '9999-99-99'
+    return [...base].sort(enfOrden === 'mio' ? (a, b) => (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
+      : enfOrden === 'roadmap' ? cmpRoadmap : enfOrden === 'feature' ? cmpFeature
+      : (a, b) => due(a).localeCompare(due(b)))
+  }, [todayTasks, enfEpic, enfOrden])
 
   const cumples = useMemo(() => {
     const hoy = new Date(); hoy.setHours(12, 0, 0, 0)
@@ -235,6 +251,12 @@ export default function PanelClient() {
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
                   <span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E5A9E' }}>Actividades · {filteredTasks.length}</span>
+                  {todayTasks.length > 1 && (
+                    <select value={enfOrden} onChange={ev => cambiarEnfOrden(ev.target.value as EnfOrden)} aria-label="Ordenar las actividades de hoy" title="Ordenar las actividades de hoy"
+                      style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 7px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 170 }}>
+                      {ENF_ORDENES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                    </select>
+                  )}
                 </div>
                 {enfEpics.length > 1 && (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>

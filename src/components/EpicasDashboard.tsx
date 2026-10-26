@@ -20,6 +20,8 @@ import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } fr
 import RevisionSemanal, { type RevFeature, type RevIni, type RevObjetivo, type RevSinFeature, type RevSinPaso, type RevTarea } from './epicas/RevisionSemanal'
 import { domingoDeSemana, mapaFaltaPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 import { MAX_FEATURE_LINKS } from '@/lib/features'
+import { iniEsDelFeature, cmpRoadmap, cmpFeature } from '@/lib/ordenRoadmap'
+import { reordenarSubconjunto } from '@/lib/ordenTareas'
 import { fechasClave, fechasClavePorDia, fechasClaveVisibles, plazoFechaClave, tonoFechaClave, ICONO_FECHA_CLAVE, type FechaClave } from '@/lib/hitos'
 import { parseCaptura, quitarToken, escaparToken, etiquetaFecha, normalizar, ICONO_TOKEN, type TokenCaptura, type Captura, type CapturaEpica } from '@/lib/captura'
 import SectionNav from './SectionNav'
@@ -161,11 +163,11 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null)  // ancla del popover (⋯ o prioridad) abierto
   const [chipMenuRect, setChipMenuRect] = useState<DOMRect | null>(null)  // ancla del popover de "en espera" o Feature (chip de fila)
   const [doneOpen, setDoneOpen] = useState(true)
-  const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica'>('plan')  // orden del enfoque
+  const [planSort, setPlanSort] = useState<'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica' | 'roadmap' | 'feature'>('plan')  // orden del enfoque ('roadmap' = el de Roadmap › Prioridad)
   const [planFilter, setPlanFilter] = useState<'todas' | 'alta' | 'vencidas' | 'avance' | 'estancada' | 'multidia' | 'arrastre'>('todas')          // filtro del enfoque
   const [dayEpica, setDayEpica] = useState<string>('todas')                                                // filtro por épica en el enfoque de día
   const [tasksExpanded, setTasksExpanded] = useState(false)   // ver todas las tareas activas de la épica destacada
-  const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre'>('grupo')
+  const [epicSort, setEpicSort] = useState<'grupo' | 'manual' | 'feature' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre' | 'creada'>('grupo')
   const [epicFilter, setEpicFilter] = useState<'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'>('todas')
   const [epicObjFilter, setEpicObjFilter] = useState<string>('todas')  // filtro por objetivo dentro de la épica
   const [epicFeatureFilter, setEpicFeatureFilter] = useState<string>('todas')  // filtro por Feature dentro de la épica
@@ -2547,6 +2549,19 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (ordenReady.current) full.forEach((t, k) => { const idx = tasks.findIndex(x => x.id === t.id); if (idx >= 0) tasks[idx].orden = k * 10 })
     patchEpic(e.id, { tasks })
   }
+  /** Fija como el orden del Roadmap (`tareas.orden`) el orden con que se ve la lista: `ids` = las tareas visibles
+   *  en ese orden. Las que el filtro esconde no se mueven (se reparten SUS lugares entre las visibles). */
+  const fijarOrdenEpica = (e: Epica, ids: string[]) => {
+    if (!ordenReady.current) { showToast('Corre sql/epicas-04-orden-tareas.sql para guardar el orden', true); return }
+    const cambios = reordenarSubconjunto(e.tasks, ids)
+    if (!cambios.size) { showToast('Ya estaban en ese orden'); return }
+    const snaps = snapshot([e.id])
+    const tasks = clone(e.tasks)
+    tasks.forEach(t => { const o = t.id ? cambios.get(t.id) : undefined; if (o !== undefined) t.orden = o })
+    patchEpic(e.id, { tasks })
+    setEpicSort('manual')
+    undoToast(`Orden fijado · ${ids.length} ${ids.length === 1 ? 'tarea' : 'tareas'}`, snaps)
+  }
   // Drag por manija (pointer events) en el panel de la épica
   const onEpicGripDown = (ev: React.PointerEvent, id: string) => {
     ev.preventDefault(); ev.stopPropagation()
@@ -2644,10 +2659,6 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       else if (has) patchObjetivo(e.id, m.id, { taskIds: (m.taskIds || []).filter(id => id !== taskId) })
     }
   }
-  /** ¿La Iniciativa cuelga de ESE Feature de la épica? La cascada es Épica → Feature → Iniciativa →
-   *  Tarea: una iniciativa de otro feature (o sin feature) no es una ubicación válida. */
-  const iniEsDelFeature = (e: Epica | undefined, featureId?: string | null, iniId?: string | null) =>
-    !!iniId && !!featureId && !!(e?.features || []).find(f => f.id === featureId)?.iniciativas?.some(i => i.id === iniId)
   /** Escribe el Feature y la Iniciativa de una tarea en UNA sola escritura (un solo patchEpic).
    *  Hacerlo en dos llamadas seguidas (setTaskFeature + setTaskIniciativa) clonaba dos veces las mismas
    *  tareas del render y la segunda pisaba a la primera. Cada clave se toca sólo si viene en `cambio`:
@@ -4381,6 +4392,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     if (epicSort === 'hacer') return (a.plan || '9999-99').localeCompare(b.plan || '9999-99')
     if (epicSort === 'progreso') return (b.progress || 0) - (a.progress || 0)
     if (epicSort === 'manual') return (a.orden ?? 1e9) - (b.orden ?? 1e9) || a._i - b._i
+    if (epicSort === 'feature') return cmpFeature({ e: featured, t: a, i: a._i }, { e: featured, t: b, i: b._i })
+    if (epicSort === 'creada') return (b.createdAt || '').localeCompare(a.createdAt || '') || b._i - a._i
     return a.t.localeCompare(b.t, 'es')
   }
   const flatActive = epicSort === 'grupo' ? [] : [...filteredActive].sort(epicSortCmp)
@@ -5159,6 +5172,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
       if (planSort === 'avance') return (b.t.progress || 0) - (a.t.progress || 0)
       if (planSort === 'epica') return a.e.name.localeCompare(b.e.name, 'es')
+      if (planSort === 'roadmap') return cmpRoadmap(a, b)
+      if (planSort === 'feature') return cmpFeature(a, b)
       return (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
     }
 
@@ -5174,6 +5189,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <option value="entrega">Entrega</option>
             <option value="avance">Avance</option>
             <option value="epica">Épica</option>
+            <option value="roadmap">Orden Roadmap</option>
+            <option value="feature">Feature › iniciativa</option>
           </select>
         )}
         {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
@@ -5766,6 +5783,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
       if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
       if (planSort === 'avance') return (b.t.progress || 0) - (a.t.progress || 0)
       if (planSort === 'epica') return a.e.name.localeCompare(b.e.name, 'es')
+      if (planSort === 'roadmap') return cmpRoadmap(a, b)
+      if (planSort === 'feature') return cmpFeature(a, b)
       return (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
     }
     const cols = weekMondays.map(mon => {
@@ -5794,6 +5813,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             <option value="entrega">Entrega</option>
             <option value="avance">Avance</option>
             <option value="epica">Épica</option>
+            <option value="roadmap">Orden Roadmap</option>
+            <option value="feature">Feature › iniciativa</option>
           </select>
         )}
         {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
@@ -7409,6 +7430,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                   if (planSort === 'entrega') return (a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')
                   if (planSort === 'avance') return (b.t.progress || 0) - (a.t.progress || 0)
                   if (planSort === 'epica') return a.e.name.localeCompare(b.e.name, 'es')
+                  if (planSort === 'roadmap') return cmpRoadmap(a, b)
+                  if (planSort === 'feature') return cmpFeature(a, b)
                   return 0
                 }
                 const manual = planSort === 'plan'
@@ -7434,6 +7457,8 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                             <option value="entrega">Entrega</option>
                             <option value="avance">Avance</option>
                             <option value="epica">Épica</option>
+                            <option value="roadmap">Orden Roadmap</option>
+                            <option value="feature">Feature › iniciativa</option>
                           </select>
                         )}
                         {([['todas', 'Todas'], ['alta', 'Alta'], ['vencidas', 'Vencidas'], ['avance', 'Con avance'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof planFilter, string][]).map(([k, label]) => {
@@ -8160,7 +8185,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
             {/* Ordenar (no filtrar) lo que ya estás viendo — Tabla lo hace con clic en el encabezado;
                 Tarjetas no tiene columnas, así que aquí van los mismos criterios como chips.
                 (Detalle trae su propia fila de chips, compartida con la del Enfoque — renderMasterDetail). */}
-            {backlogView === 'tarjetas' && (
+            {(backlogView === 'tarjetas' || backlogView === 'tabla') && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
                 <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)' }}>Ordenar por</span>
                 {SORT_KEYS.map(([key, label]) => {
@@ -10590,11 +10615,13 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 11, flexWrap: 'wrap' }}>
                   <select value={epicSort} onChange={e => setEpicSort(e.target.value as typeof epicSort)} title="Ordenar tareas" style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '4px 8px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none' }}>
                     <option value="grupo">Por estado</option>
-                    <option value="manual">Orden manual</option>
+                    <option value="manual">Orden Roadmap (mi orden)</option>
+                    <option value="feature">Por feature › iniciativa</option>
                     <option value="prioridad">Prioridad</option>
                     <option value="entrega">Entrega</option>
                     <option value="hacer">Cuándo hacer</option>
                     <option value="progreso">Avance</option>
+                    <option value="creada">Más recientes</option>
                     <option value="nombre">Nombre</option>
                   </select>
                   {([['todas', 'Todas'], ['planeadas', 'Planeadas'], ['sinplan', 'Sin plan'], ['vencidas', 'Vencidas'], ['alta', 'Alta'], ['estancada', '🐌 Estancadas'], ['multidia', '⧗ Varios días'], ['arrastre', '⏳ Anteriores']] as [typeof epicFilter, string][]).map(([k, label]) => {
@@ -10681,7 +10708,14 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
                 const insLine2 = <div style={{ height: 2, background: '#C2933A', borderRadius: 99, margin: '2px 0' }} />
                 return (
                   <>
-                    {dragEnabled && flatActive.length > 1 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 6 }}>Arrastra la manija para reordenar.</div>}
+                    {dragEnabled && flatActive.length > 1 && <div style={{ fontSize: 11.5, color: 'rgba(20,35,61,0.55)', marginBottom: 6 }}>Arrastra la manija para reordenar · es el mismo orden de <Link href={`/roadmap?v=tareas&ep=${featured.id}${epicFeatureFilter !== 'todas' && epicFeatureFilter !== 'sin' ? `&f=${epicFeatureFilter}` : ''}`} style={{ color: '#A87A2C', fontWeight: 700, textDecoration: 'none' }}>Roadmap › Prioridad ↗</Link></div>}
+                    {!dragEnabled && epicSort !== 'manual' && flatActive.length > 1 && ordenReady.current && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                        <button onClick={() => fijarOrdenEpica(featured, flatActive.map(x => x.id!).filter(Boolean))} title="Guarda el orden que ves como tu orden del Roadmap (las tareas que el filtro esconde no se mueven)"
+                          style={{ cursor: 'pointer', border: '1px solid rgba(194,147,58,0.4)', background: 'rgba(194,147,58,0.10)', color: '#A87A2C', borderRadius: 8, padding: '4px 10px', fontSize: 11, fontWeight: 700 }}>⤓ Fijar este orden</button>
+                        <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>lo guarda como tu orden de Roadmap</span>
+                      </div>
+                    )}
                     <div ref={epicListRef} style={{ display: 'flex', flexDirection: 'column', marginBottom: 8 }}>
                       {show.map((t, pos) => (
                         <div key={t._i}>
@@ -12775,7 +12809,8 @@ type SortSpec = { key: string; dir: 'asc' | 'desc' }
 // "Hacer" primero: es la fecha que de verdad se usa en toda la app (el 📅 de cada fila ES esta). El
 // otro campo de fecha se llama "Vence" (no "Fecha") para que no se confundan — son cosas distintas
 // y "Vence" casi nunca se llena, así que ordenar por ahí parece "no hacer nada" si no sabes cuál es cuál.
-const SORT_KEYS: [string, string][] = [['plan', 'Hacer'], ['due', 'Vence'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance']]
+// "Roadmap" = el orden que fijaste en Roadmap › Prioridad (épica → orden); "Feature" agrupa épica → feature → iniciativa.
+const SORT_KEYS: [string, string][] = [['plan', 'Hacer'], ['due', 'Vence'], ['priority', 'Prioridad'], ['estMin', 'Tiempo'], ['progress', 'Avance'], ['roadmap', 'Roadmap'], ['feature', 'Feature']]
 const nextSort = (cur: SortSpec, key: string): SortSpec => cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }
 function sortRows<T extends { e: Epica; t: EpicaTask }>(rows: T[], sort: SortSpec): T[] {
   const dirMul = sort.dir === 'asc' ? 1 : -1
@@ -12788,6 +12823,8 @@ function sortRows<T extends { e: Epica; t: EpicaTask }>(rows: T[], sort: SortSpe
     else if (k === 'progress') r = ((a.t.progress || 0) - (b.t.progress || 0)) * dirMul
     else if (k === 'estMin') r = (estMinOf(a.t) - estMinOf(b.t)) * dirMul
     else if (k === 'manual') return 0   // "Manual": se deja el orden que ya traía la lista (planOrder u otro)
+    else if (k === 'roadmap') return cmpRoadmap(a, b) * dirMul   // el orden de Roadmap › Prioridad
+    else if (k === 'feature') return cmpFeature(a, b) * dirMul   // épica → feature → iniciativa → orden
     else {
       // 'plan' (Hacer) y el default 'due' (Fecha/Vence): las SIN esa fecha van SIEMPRE al final,
       // sea ascendente o descendente (no se multiplican por dirMul, a diferencia de todo lo demás).
