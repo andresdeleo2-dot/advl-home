@@ -126,13 +126,18 @@ import {
 // Paleta para el color auto-asignado de un Feature nuevo (misma paleta que las épicas semilla).
 const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '#B07A56']
 
-export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[] }) {
+/** Modo «ficha»: el Roadmap monta este mismo componente SÓLO para mostrar el popup de una tarea (idéntico al de Épicas,
+ *  con todas sus acciones). Sin la página, sin preferencias ni URL ni recordatorios: nada de lo que hace Épicas por su
+ *  cuenta toca al Roadmap. `onClose` se llama cuando ya no queda ficha ni editor abiertos (o la tarea dejó de existir). */
+export type FichaEmbebida = { eId: string; tid: string; onClose: () => void }
+
+export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics: Epica[]; ficha?: FichaEmbebida }) {
   const [epics, setEpics] = useState<Epica[]>(initialEpics.map(normalize))
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [today, setToday] = useState<string>(todayISO())
   const todayRef = useRef(today)
-  const [featuredId, setFeaturedId] = useState<string | null>(initialEpics[0]?.id ?? null)
+  const [featuredId, setFeaturedId] = useState<string | null>(ficha?.eId ?? initialEpics[0]?.id ?? null)
   const [editing, setEditing] = useState<EpicDraft | null>(null)
   const [editMode, setEditMode] = useState<'new' | 'edit' | null>(null)
   const [toast, setToast] = useState<{ msg: string; error?: boolean; action?: { label: string; fn: () => void } } | null>(null)
@@ -147,7 +152,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Épica DESTINO del editor. Se guarda aparte de taskEdit.epicId (que es la de origen)
   // porque el índice de la tarea sólo tiene sentido dentro del array de su épica actual.
   const [taskEditTarget, setTaskEditTarget] = useState<string>('')
-  const [taskView, setTaskView] = useState<{ eId: string; tid: string } | null>(null) // vista de tarea (solo lectura)
+  const [taskView, setTaskView] = useState<{ eId: string; tid: string } | null>(ficha ? { eId: ficha.eId, tid: ficha.tid } : null) // vista de tarea (solo lectura)
   const [taskDraft, setTaskDraft] = useState<EpicaTask>({ t: '', status: 'Por hacer', due: '', note: '', links: [] })
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -389,7 +394,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Deep-link ?e=<epicaId>&t=<taskId> (usado por Panel y la búsqueda ⌘K): abre esa tarea al llegar.
   // Antes el link existía (Panel ya lo mandaba) pero esta página nunca lo leía — no hacía nada.
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (typeof window === 'undefined' || ficha) return
     const p = new URLSearchParams(window.location.search)
     const eId = p.get('e'), tid = p.get('t')
     if (eId && tid) {
@@ -491,6 +496,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // limpia el recordatorio (una sola vez). remindedRef evita repetirlo en la sesión.
   const remindedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
+    if (ficha) return   // los recordatorios los atiende Épicas; el Roadmap no dispara notificaciones
     const check = () => {
       const now = Date.now()
       epicsRef.current.forEach(e => (e.tasks || []).forEach(t => {
@@ -516,6 +522,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // initializer de useState provocaría un desajuste de hidratación con el SSR).
   const prefsReady = useRef(false)
   useEffect(() => {
+    if (ficha) return   // sin preferencias de vista: ni se leen ni se guardan (prefsReady queda en false)
     const p = loadPrefs()
     setSortBy(p.sortBy); setCompact(p.compact); setShowRowKpi(p.showRowKpi)
     setEstadoFilter(p.estadoFilter); setCatFilter(p.catFilter)
@@ -558,6 +565,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
   // Permite abrir el editor de una tarea desde otra sección (Tiempo) por deep-link (?e=&t=).
   const openTaskEditRef = useRef<((epicId: string, tid: string) => void) | null>(null)
   useEffect(() => {
+    if (ficha) return   // la URL es del Roadmap: este componente no la lee ni la reescribe (urlReady queda en false)
     const MODES = ['dia', 'semana', 'ajuste', '2sem', '3sem', 'mes', 'calendario', 'timeline', 'resumen', 'agenda', 'detalle']
     const applyFromUrl = () => {
       const q = new URLSearchParams(window.location.search)
@@ -9736,10 +9744,18 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
     )
   }
 
+  // Modo ficha: al cerrar el popup (y su editor) o si la tarea ya no existe, se avisa al Roadmap para que se desmonte.
+  const fichaCerrada = useRef(false)
+  useEffect(() => {
+    if (!ficha || fichaCerrada.current) return
+    if (!taskEdit && (!taskView || !findTask(taskView.eId, taskView.tid))) { fichaCerrada.current = true; ficha.onClose() }
+  }, [ficha, taskView, taskEdit, epics])
+
   return (
     <div style={{ minHeight: '100%' }}>
       {/* Envoltura sin caja: la Revisión semanal la oculta en pantallas donde taparía su pie. */}
       <div className="ep-focus-card" style={{ display: 'contents' }}>{focus.card}</div>
+      {!ficha && <>
       <TopBar sourceCount={sourceCount} onNew={openNew} />
       <BirthdayCelebration />
 
@@ -10905,6 +10921,7 @@ export default function EpicasDashboard({ initialEpics }: { initialEpics: Epica[
         </div>
         )}
       </div>
+      </>}
 
       {editing && !editInline && renderEditor()}
 

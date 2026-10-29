@@ -381,6 +381,7 @@ body {
 }
 @media print {
   .rm-noprint { display: none !important; }
+  .rm-printonly { display: inline-flex !important; }
   .rm-board { max-height: none !important; overflow: visible !important; }
   .rm-lane { break-inside: avoid; }
   body { padding-bottom: 0 !important; background: #fff !important; }
@@ -443,3 +444,6 @@ body {
    sueltas del tablero (Meta, KPIs, Escenarios, Escalas, anillo del hero) se ven desparejas. `lnum` las alinea.
    Acotado a /peso (PesoClient pone `peso-root` en su contenedor) para no cambiar el resto del sitio. */
 .peso-root .serif { font-feature-settings: "lnum" 1; }
+
+/* Roadmap: lo que sólo se imprime (los selectores de la pantalla se sustituyen por su texto). */
+.rm-printonly { display: none; }

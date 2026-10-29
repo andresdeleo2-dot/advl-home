@@ -25,8 +25,13 @@ type Props = {
   setEpicaFilter: (id: string) => void
   today: string
   ordenReady: boolean
-  /** Abre el popup de la tarea (el mismo de las listas del panel). */
+  /** Abre el popup de la tarea (el mismo de Épicas). */
   onAbrir: (epicaId: string, taskId: string) => void
+  /** Cambia el Feature y/o la Iniciativa de una tarea desde su fila (ver `ubicarTarea` en RoadmapClient). */
+  onUbicar: (epicaId: string, taskId: string, cambio: { featureId?: string; iniciativaId?: string }) => void
+  /** Las columnas feature_id / iniciativa_id existen (si no, los selectores se deshabilitan). */
+  featuresReady: boolean
+  iniciativaIdReady: boolean
   /** Persiste el nuevo orden del subconjunto (ids en el orden deseado). `msg` = aviso con «Deshacer». */
   onOrdenar: (epicaId: string, ids: string[], msg?: string) => void
   /** Crea una tarea ya colgada del feature/iniciativa elegidos, al final del orden. false = no se pudo (falta una migración): el texto se conserva. */
@@ -39,7 +44,7 @@ const mini: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,6
 const estMinDe = (t: EpicaTask): number => (typeof t.estMin === 'number' ? t.estMin : WEEK_EST_MIN(t.difficulty))
 const fmtHoras = (min: number): string => { const h = min / 60; return `${h >= 10 ? Math.round(h) : Math.round(h * 10) / 10} h` }
 
-export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilter, iniFilter, setEpicaFilter, today, ordenReady, onAbrir, onOrdenar, onCrear }: Props) {
+export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilter, iniFilter, setEpicaFilter, today, ordenReady, onAbrir, onUbicar, featuresReady, iniciativaIdReady, onOrdenar, onCrear }: Props) {
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropTo, setDropTo] = useState<number | null>(null)
   const [nueva, setNueva] = useState('')
@@ -174,6 +179,45 @@ export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilte
       </span>
     )
   }
+  /** Feature e Iniciativa de la fila, editables AHÍ MISMO con dos selectores en forma de chip (sin popup). Con un feature
+   *  elegido, la iniciativa ofrece las suyas; sin feature, las de toda la épica agrupadas por feature y elegir una
+   *  asigna los DOS niveles. Cambiar de feature limpia la iniciativa si no cuelga del nuevo (lo decide `ubicarTarea`). */
+  const selChip = (tono: string, vacio: boolean): CSSProperties => ({
+    appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer', maxWidth: 170, fontFamily: 'var(--font-ui)', fontSize: 10.5, fontWeight: 700, lineHeight: 1.4,
+    padding: '1px 20px 1px 9px', borderRadius: 99, textOverflow: 'ellipsis',
+    color: vacio ? 'rgba(20,35,61,0.45)' : tono, backgroundColor: vacio ? 'transparent' : hexA(tono, 0.12),
+    border: vacio ? '1px dashed rgba(15,35,64,0.28)' : `1px solid ${hexA(tono, 0.4)}`,
+    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%2314233D' stroke-opacity='.45' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E")`,
+    backgroundRepeat: 'no-repeat', backgroundPosition: 'right 7px center',
+  })
+  const ubicacion = (t: EpicaTask) => {
+    if (!feats.length) return null
+    const f = feats.find(x => x.id === t.featureId)
+    const inis = f?.iniciativas || []
+    const iniOk = !!f && inis.some(x => x.id === t.iniciativaId)
+    const epicaConInis = feats.some(x => (x.iniciativas || []).length > 0)
+    const fc = f?.color || '#5B6B86'
+    return (
+      <span className="rm-noprint" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0, flexWrap: 'wrap' }}>
+        <select value={f?.id || ''} disabled={!featuresReady} aria-label={`Feature de «${t.t}»`} title={featuresReady ? 'Cambiar el feature' : 'Falta sql/epicas-12-features.sql'}
+          onChange={ev => onUbicar(ep.id, t.id!, { featureId: ev.target.value })} style={selChip(fc, !f)}>
+          <option value="">{f ? 'Sin feature' : '＋ Feature'}</option>
+          {feats.map(x => <option key={x.id} value={x.id}>{x.t}{x.estado === 'cerrado' ? ' (cerrado)' : ''}</option>)}
+        </select>
+        {epicaConInis && (f ? inis.length > 0 : true) && (
+          <select value={iniOk ? t.iniciativaId! : ''} disabled={!iniciativaIdReady} aria-label={`Iniciativa de «${t.t}»`} title={iniciativaIdReady ? 'Cambiar la iniciativa' : 'Falta sql/epicas-21-tarea-iniciativa.sql'}
+            onChange={ev => onUbicar(ep.id, t.id!, { iniciativaId: ev.target.value })} style={selChip('#5B6B86', !iniOk)}>
+            <option value="">{iniOk ? 'Sin iniciativa' : '＋ Iniciativa'}</option>
+            {f
+              ? inis.map(x => <option key={x.id} value={x.id}>{x.nombre}</option>)
+              : feats.filter(x => (x.iniciativas || []).length > 0).map(x => (
+                <optgroup key={x.id} label={x.t}>{(x.iniciativas || []).map(i => <option key={i.id} value={i.id}>{i.nombre}</option>)}</optgroup>
+              ))}
+          </select>
+        )}
+      </span>
+    )
+  }
   const fila = (t: EpicaTask, pos: number) => {
     const st = taskStyle(t.status)
     const pz = t.due ? plazoLabel(t.due, today, { hecho: false, verbo: 'seco' }) : null
@@ -194,7 +238,8 @@ export default function TareasRoadmap({ lista, epicas, epicaFilter, featureFilte
         <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 800, borderRadius: 99, padding: '2px 8px', background: st.bg, color: st.c }}>{st.label}</span>
         <button type="button" onClick={() => onAbrir(ep.id, t.id!)} title={`Abrir «${t.t}»`}
           style={{ flex: '1 1 200px', minWidth: 0, border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left', padding: '2px 0', fontSize: 13, fontWeight: 600, color: '#16365F', fontFamily: 'var(--font-ui)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</button>
-        {ctxChip(t)}
+        <span className="rm-printonly">{ctxChip(t)}</span>
+        {ubicacion(t)}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span title={`Prioridad ${t.priority || 'media'}`} style={{ display: 'flex' }}><PrioBars p={t.priority} size={13} /></span>
           {pz && <span style={{ fontSize: 10.5, fontWeight: 700, color: pz.c }} title={t.due ? `Vence ${t.due}` : undefined}>{pz.corto}</span>}
