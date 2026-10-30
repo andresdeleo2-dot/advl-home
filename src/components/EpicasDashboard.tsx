@@ -20,7 +20,7 @@ import SiguientePaso, { MarcaSinPaso, SiguientePasoStyles, useRecienCreadas } fr
 import RevisionSemanal, { type RevFeature, type RevIni, type RevObjetivo, type RevSinFeature, type RevSinPaso, type RevTarea } from './epicas/RevisionSemanal'
 import { domingoDeSemana, mapaFaltaPaso, type CuandoPaso, type FaltaPaso } from '@/lib/siguientePaso'
 import { MAX_FEATURE_LINKS } from '@/lib/features'
-import { iniEsDelFeature, cmpRoadmap, cmpFeature } from '@/lib/ordenRoadmap'
+import { iniEsDelFeature, cmpRoadmap, cmpFeature, ordenAlSoltar } from '@/lib/ordenRoadmap'
 import { reordenarSubconjunto } from '@/lib/ordenTareas'
 import { fechasClave, fechasClavePorDia, fechasClaveVisibles, plazoFechaClave, tonoFechaClave, ICONO_FECHA_CLAVE, type FechaClave } from '@/lib/hitos'
 import { parseCaptura, quitarToken, escaparToken, etiquetaFecha, normalizar, ICONO_TOKEN, type TokenCaptura, type Captura, type CapturaEpica } from '@/lib/captura'
@@ -234,6 +234,8 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
   const [cpAgOpen, setCpAgOpen] = useState(false)                   // drop-down "Agendadas" del panel
   const [boardDrag, setBoardDrag] = useState<string | null>(null)      // key de la tarjeta arrastrada
   const [boardOverCol, setBoardOverCol] = useState<string | null>(null)
+  const [boardDropIdx, setBoardDropIdx] = useState(0)                  // cuántas tarjetas de la misma épica quedan arriba al soltar
+  const [boardSort, setBoardSort] = useState<'roadmap' | 'prioridad'>('roadmap')   // orden dentro de cada columna del tablero
   const boardDragRef = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null)
   const [backlogSel, setBacklogSel] = useState<Set<string>>(new Set())
   const [backlogEdit, setBacklogEdit] = useState(false)        // edición inline tipo Excel en el backlog
@@ -518,6 +520,9 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
     return () => { clearInterval(id); clearTimeout(t0) }
   }, [])
 
+  // Orden del tablero del backlog: 'roadmap' = el de Roadmap › Prioridad (`tareas.orden`, se acomoda arrastrando).
+  useEffect(() => { try { const v = localStorage.getItem('epicas.board.orden.v1'); if (v === 'roadmap' || v === 'prioridad') setBoardSort(v) } catch { /* noop */ } }, [])
+  const elegirBoardSort = (v: 'roadmap' | 'prioridad') => { setBoardSort(v); try { localStorage.setItem('epicas.board.orden.v1', v) } catch { /* noop */ } }
   // Preferencias de vista: se aplican DESPUÉS de montar (leer localStorage en el
   // initializer de useState provocaría un desajuste de hidratación con el SSR).
   const prefsReady = useRef(false)
@@ -1871,20 +1876,52 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
       d.moved = true; setBoardDrag(d.key)
     }
     const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
-    setBoardOverCol((el?.closest('[data-col]') as HTMLElement | null)?.dataset.col ?? null)
+    const colEl = el?.closest('[data-col]') as HTMLElement | null
+    setBoardOverCol(colEl?.dataset.col ?? null)
+    if (colEl) {
+      // Lugar dentro de la columna: cuántas tarjetas de la MISMA épica (sin contar la arrastrada) quedan por encima del puntero.
+      const eId = d.key.slice(0, d.key.lastIndexOf(':'))
+      const mias = (Array.from(colEl.querySelectorAll('[data-card]')) as HTMLElement[]).filter(c => c.dataset.eid === eId && c.dataset.card !== d.key)
+      setBoardDropIdx(mias.filter(c => { const r = c.getBoundingClientRect(); return ev.clientY > r.top + r.height / 2 }).length)
+    }
   }
-  const onCardUp = (ev: React.PointerEvent, x: { e: Epica; t: EpicaTask; i: number }) => {
+  /** `columna(estado)` = las tarjetas que se ven en esa columna, en su orden (la da renderBoard). */
+  const onCardUp = (ev: React.PointerEvent, x: { e: Epica; t: EpicaTask; i: number }, columna?: (estado: string) => { e: Epica; t: EpicaTask; i: number }[]) => {
     const d = boardDragRef.current
     boardDragRef.current = null
-    const col = boardOverCol
+    const col = boardOverCol, idx = boardDropIdx
     setBoardDrag(null); setBoardOverCol(null)
     if (!d) return
     if (!d.moved) { setTaskView({ eId: x.e.id, tid: x.t.id! }); return }   // fue un clic
-    if (!col || col === x.t.status) return
+    if (!col) return
+    const cambia = col !== x.t.status
     // Soltar en "Terminada" pasa por el mismo camino que el check del plan,
     // para que una tarea recurrente se reprograme en vez de terminarse.
-    if (col === 'Terminada') completeFromPlan(x.e, x.i)
-    else setTaskStatus(x.e, x.i, col)
+    if (col === 'Terminada') { if (cambia) completeFromPlan(x.e, x.i); return }
+    // Acomodar: con el orden "Mi orden" la tarjeta queda donde se suelta y eso se guarda en `tareas.orden`,
+    // el mismo de Roadmap › Prioridad. Cambiar de columna y acomodar es UNA sola escritura.
+    const acomoda = boardSort === 'roadmap' && !!columna && !!x.t.id && x.t.status !== 'Terminada'
+    if (!cambia && !acomoda) { if (boardSort !== 'roadmap') showToast('Para acomodarlas a mano, elige «Mi orden»'); return }
+    const fresh = epicsRef.current.find(e => e.id === x.e.id) || x.e
+    const tasks = clone(fresh.tasks)
+    const ti = x.t.id ? tasks.findIndex(t => t.id === x.t.id) : x.i
+    if (ti < 0 || !tasks[ti]) return
+    const msgRec = cambia ? applyTaskStatus(tasks[ti], col) : null
+    let acomodada = false
+    if (acomoda) {
+      if (!ordenReady.current) { if (!cambia) { showToast('Corre sql/epicas-04-orden-tareas.sql para guardar el orden', true); return } }
+      else {
+        const ids = ordenAlSoltar(columna!(col).map(y => ({ eId: y.e.id, id: y.t.id || '' })), { eId: fresh.id, id: x.t.id! }, idx)
+        const cambios = reordenarSubconjunto(tasks, ids)
+        tasks.forEach(t => { const o = t.id ? cambios.get(t.id) : undefined; if (o !== undefined) t.orden = o })
+        acomodada = cambios.size > 0
+      }
+    }
+    if (!cambia && !acomodada) { showToast('Ya estaba en ese lugar'); return }
+    const snaps = snapshot([fresh.id])
+    patchEpic(fresh.id, { tasks })
+    if (msgRec) showToast(msgRec)
+    else if (acomodada) undoToast(cambia ? `→ ${col} · acomodada` : 'Acomodada · mismo orden que Roadmap › Prioridad', snaps)
     void ev
   }
   const onCardCancel = () => { boardDragRef.current = null; setBoardDrag(null); setBoardOverCol(null) }
@@ -7807,20 +7844,50 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
    *  aquí porque las columnas SON los estados. */
   const renderBoard = (rows: { e: Epica; t: EpicaTask; i: number }[]) => {
     const DONE_CAP = 12
+    // Orden de cada columna. "Mi orden" = el de Roadmap › Prioridad (`tareas.orden`), el que se acomoda arrastrando;
+    // "Prioridad y entrega" = el de antes. Las terminadas se acumulan sin fin: se muestran las más recientes.
+    const porEstado = new Map<string, { e: Epica; t: EpicaTask; i: number }[]>()
+    TASK_STATUSES.forEach(status => {
+      const all = rows.filter(x => x.t.status === status)
+      porEstado.set(status, status === 'Terminada'
+        ? [...all].sort((a, b) => (b.t.doneAt || '').localeCompare(a.t.doneAt || ''))
+        : boardSort === 'roadmap'
+          ? [...all].sort(cmpRoadmap)
+          : [...all].sort((a, b) =>
+              (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) ||
+              ((a.t.due || '9999-99').localeCompare(b.t.due || '9999-99'))))
+    })
+    const columnaDe = (estado: string) => porEstado.get(estado) || []
+    const dragEId = boardDrag ? boardDrag.slice(0, boardDrag.lastIndexOf(':')) : ''
+    const roadmap = boardSort === 'roadmap'
     return (
+      <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 17px 10px', flexWrap: 'wrap' }}>
+        <span style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.45)' }}>Orden</span>
+        {([['roadmap', 'Mi orden (Roadmap)'], ['prioridad', 'Prioridad y entrega']] as const).map(([v, label]) => {
+          const on = boardSort === v
+          return <button key={v} onClick={() => elegirBoardSort(v)} aria-pressed={on} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', font: '700 11px var(--font-ui)', border: on ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.14)', background: on ? '#10233F' : '#fff', color: on ? '#fff' : 'rgba(20,35,61,0.6)' }}>{label}</button>
+        })}
+        <span style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>{roadmap ? 'Arrastra una tarjeta arriba o abajo para acomodarla · es el mismo orden de Roadmap › Prioridad' : 'Ordenadas por prioridad y entrega · para acomodarlas a mano elige «Mi orden»'}</span>
+      </div>
       <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '2px 17px 18px', alignItems: 'flex-start' }}>
         {TASK_STATUSES.map(status => {
           const ts = taskStyle(status)
-          const all = rows.filter(x => x.t.status === status)
+          const sorted = columnaDe(status)
+          const all = sorted
           const isDone = status === 'Terminada'
-          // Las terminadas se acumulan sin fin: se muestran las más recientes.
-          const sorted = isDone
-            ? [...all].sort((a, b) => (b.t.doneAt || '').localeCompare(a.t.doneAt || ''))
-            : [...all].sort((a, b) =>
-                (PRIO_RANK[a.t.priority || 'media'] - PRIO_RANK[b.t.priority || 'media']) ||
-                ((a.t.due || '9999-99').localeCompare(b.t.due || '9999-99')))
           const shown = isDone ? sorted.slice(0, DONE_CAP) : sorted
           const over = boardOverCol === status && !!boardDrag
+          // Raya dorada del lugar donde caería la tarjeta: entre las tarjetas de SU épica (las de otras no cuentan).
+          let raya: { k: string; pos: 'antes' | 'despues' } | null = null
+          if (over && roadmap && !isDone) {
+            const grupo = shown.filter(y => y.e.id === dragEId && (y.e.id + ':' + y.i) !== boardDrag)
+            const actual = shown.filter(y => y.e.id === dragEId).findIndex(y => (y.e.id + ':' + y.i) === boardDrag)
+            if (grupo.length && boardDropIdx !== actual) {
+              const kk = (y: typeof grupo[number]) => y.e.id + ':' + y.i
+              raya = boardDropIdx < grupo.length ? { k: kk(grupo[boardDropIdx]), pos: 'antes' } : { k: kk(grupo[grupo.length - 1]), pos: 'despues' }
+            }
+          }
 
           return (
             <div key={status} data-col={status}
@@ -7849,11 +7916,12 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
                   const ps = prioStyle(t.priority)
                   const subs = t.subtasks || []
                   return (
-                    <div key={k}
+                    <div key={k} data-card={k} data-eid={e.id}
                       onPointerDown={ev => onCardDown(ev, k)} onPointerMove={onCardMove}
-                      onPointerUp={ev => onCardUp(ev, x)} onPointerCancel={onCardCancel}
-                      title={`${t.t} — arrastra para cambiar de estado`}
+                      onPointerUp={ev => onCardUp(ev, x, columnaDe)} onPointerCancel={onCardCancel}
+                      title={`${t.t} — arrastra para cambiar de estado${roadmap ? ' o para acomodarla' : ''}`}
                       style={{ position: 'relative', background: '#fff', border: '1px solid rgba(15,35,64,0.09)', borderLeft: `3px solid ${ps.accent}`, borderRadius: 11, padding: '10px 11px', cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none', userSelect: 'none', boxShadow: dragging ? '0 18px 30px -16px rgba(15,35,64,0.5)' : '0 1px 2px rgba(15,35,64,0.04)', opacity: boardDrag && !dragging ? 0.55 : 1, transform: dragging ? 'rotate(-1.2deg)' : 'none', transition: 'opacity .15s, box-shadow .15s' }}>
+                      {raya && raya.k === k && <span aria-hidden data-raya={raya.pos} style={{ position: 'absolute', left: 4, right: 4, height: 3, borderRadius: 99, background: '#C2933A', pointerEvents: 'none', ...(raya.pos === 'antes' ? { top: -6 } : { bottom: -6 }) }} />}
                       <div style={{ fontSize: 13, fontWeight: 600, color: t.status === 'Terminada' ? 'rgba(20,35,61,0.5)' : '#16365F', textDecoration: t.status === 'Terminada' ? 'line-through' : 'none', lineHeight: 1.3 }}>{t.t}</div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
@@ -7889,6 +7957,7 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
           )
         })}
       </div>
+      </>
     )
   }
 

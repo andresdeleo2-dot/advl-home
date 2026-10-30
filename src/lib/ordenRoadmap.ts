@@ -38,3 +38,14 @@ export function cmpFeature(a: Fila, b: Fila): number {
   const [fa, ia] = posicion(a.e, a.t), [fb, ib] = posicion(b.e, b.t)
   return (fa - fb) || (ia - ib) || cmpRoadmap(a, b)
 }
+
+/** Orden de las tareas de UNA épica al soltar una tarjeta del tablero en un lugar de una columna.
+ *  `columna` = las tarjetas que se ven en esa columna, en su orden; `mover` = la que se suelta (puede venir de
+ *  otra columna); `idx` = cuántas tarjetas de SU MISMA épica (sin contar la suelta) quedan arriba de ella.
+ *  Las tarjetas de otras épicas no cuentan: la épica ya fija su lugar en la columna. Devuelve los ids de las
+ *  tarjetas de esa épica en el orden nuevo, listos para `reordenarSubconjunto`. */
+export function ordenAlSoltar(columna: { eId: string; id: string }[], mover: { eId: string; id: string }, idx: number): string[] {
+  const grupo = columna.filter(c => c.eId === mover.eId && c.id !== mover.id).map(c => c.id)
+  const k = Math.max(0, Math.min(Number.isFinite(idx) ? Math.floor(idx) : grupo.length, grupo.length))
+  return [...grupo.slice(0, k), mover.id, ...grupo.slice(k)]
+}
