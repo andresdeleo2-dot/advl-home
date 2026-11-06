@@ -14,6 +14,8 @@ import {
 import { COLOR, Eyebrow, INPUT, Panel, Segmented } from '../ui'
 import { BTN_ICONO, EnUsoBadge, FOCO, Icono, Spinner, TIPO_COLOR, btn, tipoInfo } from './comun'
 import { fechaRelativa, fmtBytes } from './util'
+import AvisoSinVista from './AvisoSinVista'
+import { useViaMarco } from './useViaMarco'
 
 const ALTO_MIN = 320
 // Un plan con 24 ilustraciones mide entre ~21 000 y ~38 000 px según el ancho del teléfono: con 20 000 se cortaba y quedaba doble scroll.
@@ -56,7 +58,6 @@ function Esqueleto() {
 function MarcoHtml({ plan }: { plan: PesoPlanMeta }) {
   const ref = useRef<HTMLIFrameElement>(null)
   const [alto, setAlto] = useState<number | null>(null)
-  const [cargado, setCargado] = useState(false)
   const [sinAviso, setSinAviso] = useState(false)     // pasó la espera y no llegó ningún alto
   const [desbocado, setDesbocado] = useState(false)   // el alto crecía sin parar → se fija y se hace scroll adentro
   // El iframe se crea hasta DESPUÉS de registrar el listener. Si viniera en el HTML del servidor (recarga
@@ -65,6 +66,8 @@ function MarcoHtml({ plan }: { plan: PesoPlanMeta }) {
   const [montado, setMontado] = useState(false)
   const altoRef = useRef<number | null>(null)
   const racha = useRef({ n: 0, t: 0 })
+  // Respaldo si el navegador no deja cargar el iframe por URL (ver useViaMarco). El primer aviso de alto es la señal de vida.
+  const { via, srcDoc, cargado, setCargado, intento, sinVista, reintentar } = useViaMarco(plan.id, alto != null || desbocado, montado)
 
   useEffect(() => {
     function alMensaje(e: MessageEvent) {
@@ -112,10 +115,12 @@ function MarcoHtml({ plan }: { plan: PesoPlanMeta }) {
     // tenga dónde pintarse y no haya salto de layout al montarlo.
     <div className="relative" aria-busy={fase === 'esperando' && !cargado} style={montado ? undefined : { height: altoCss }}>
       {fase === 'esperando' && !cargado && <Esqueleto />}
+      {sinVista && <AvisoSinVista plan={plan} onReintentar={reintentar} />}
       {montado && (
         <iframe
+          key={`${via}-${intento}`}
           ref={ref}
-          src={planHtmlUrl(plan.id, { embed: true })}
+          {...(via === 'srcdoc' && srcDoc != null ? { srcDoc } : { src: planHtmlUrl(plan.id, { embed: true }) })}
           title={`${tipoInfo(plan.tipo).label}: ${plan.titulo}`}
           sandbox={PLAN_IFRAME_SANDBOX}
           referrerPolicy="no-referrer"
@@ -276,7 +281,7 @@ export default function VisorPlan({ plan, hoy, ocupado, onProyectar, onMarcarEnU
       <div className="px-2.5 sm:px-4 pt-3 pb-3.5" style={{ background: 'linear-gradient(180deg,#EEEADF,#E7E2D4)', borderTop: `1px solid ${COLOR.line}` }}>
         <div className="rounded-xl overflow-hidden"
           style={{ background: '#fff', boxShadow: '0 28px 50px -30px rgba(15,35,64,.65), 0 2px 6px rgba(15,35,64,.08), 0 0 0 1px rgba(15,35,64,.1)' }}>
-          <MarcoHtml plan={plan} />
+          <MarcoHtml key={plan.id} plan={plan} />
         </div>
         <p className="mt-2.5 px-1 text-[11.5px] leading-snug" style={{ color: COLOR.muted }}>
           Se muestra en un marco aislado: no puede leer tu sesión ni tus datos. ¿No se ve bien?{' '}

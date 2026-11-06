@@ -3,22 +3,39 @@
 // "Proyectar": el documento a pantalla completa, para usarlo en el gimnasio o en la cocina sin nada
 // alrededor. Es un diálogo modal (role="dialog" aria-modal) que bloquea el scroll de la página.
 
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { PLAN_IFRAME_SANDBOX, planHtmlUrl, type PesoPlanMeta } from '@/lib/peso-planes'
+import { PLAN_IFRAME_SANDBOX, PLAN_MSG_ALTO, planHtmlUrl, type PesoPlanMeta, type PlanMsgAlto } from '@/lib/peso-planes'
 import { COLOR } from '../ui'
+import AvisoSinVista from './AvisoSinVista'
 import { FOCO, Icono, Spinner, TIPO_COLOR, tipoInfo } from './comun'
 import { useModal } from './hooks'
+import { useViaMarco } from './useViaMarco'
 
 const BTN_BARRA = `inline-flex items-center justify-center gap-1.5 rounded-lg min-h-10 min-w-10 px-2.5 text-[13px] font-semibold transition-colors ${FOCO}`
 
 export default function Proyector({ plan, onCerrar }: { plan: PesoPlanMeta; onCerrar: () => void }) {
   const raiz = useRef<HTMLDivElement>(null)
   const cerrarRef = useRef<HTMLButtonElement>(null)
-  const [cargado, setCargado] = useState(false)
+  const marcoRef = useRef<HTMLIFrameElement>(null)
+  // La señal de vida del documento es su primer aviso de alto (se pide con embed=1; aquí el alto no se usa: el marco
+  // mide la pantalla y hace su propio scroll). Si no llega, useViaMarco prueba con srcDoc y luego avisa.
+  const [vivo, setVivo] = useState(false)
+  const { via, srcDoc, cargado, setCargado, intento, sinVista, reintentar } = useViaMarco(plan.id, vivo, true)
   const tituloId = useId()
   useModal(raiz, onCerrar, cerrarRef)
   const info = tipoInfo(plan.tipo)
+
+  useEffect(() => {
+    function alMensaje(e: MessageEvent) {
+      const w = marcoRef.current?.contentWindow
+      if (!w || e.source !== w) return
+      const d = e.data as Partial<PlanMsgAlto> | null
+      if (d && typeof d === 'object' && d.type === PLAN_MSG_ALTO && d.id === plan.id) setVivo(true)
+    }
+    window.addEventListener('message', alMensaje)
+    return () => window.removeEventListener('message', alMensaje)
+  }, [plan.id])
 
   return createPortal(
     <div ref={raiz} role="dialog" aria-modal="true" aria-labelledby={tituloId} tabIndex={-1}
@@ -56,8 +73,15 @@ export default function Proyector({ plan, onCerrar }: { plan: PesoPlanMeta; onCe
             <Spinner size={16} /> Proyectando…
           </div>
         )}
+        {sinVista && (
+          <div className="absolute inset-x-3 top-3 z-10 rounded-xl overflow-hidden shadow-2xl">
+            <AvisoSinVista plan={plan} onReintentar={reintentar} />
+          </div>
+        )}
         <iframe
-          src={planHtmlUrl(plan.id)}
+          key={`${via}-${intento}`}
+          ref={marcoRef}
+          {...(via === 'srcdoc' && srcDoc != null ? { srcDoc } : { src: planHtmlUrl(plan.id, { embed: true }) })}
           title={`${info.label}: ${plan.titulo} (pantalla completa)`}
           sandbox={PLAN_IFRAME_SANDBOX}
           referrerPolicy="no-referrer"
