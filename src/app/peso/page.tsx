@@ -4,6 +4,8 @@ import { listarPlanes } from '@/lib/peso-planes-server'
 import type { PlanesLista } from '@/lib/peso-planes'
 import { PERFIL_DEFAULT, extraAnalisis } from '@/lib/peso-perfil'
 import { cargarPerfil, ERROR_LECTURA_PERFIL, type PerfilCarga } from '@/lib/peso-perfil-server'
+import { cargarContenido } from '@/lib/peso-contenido-server'
+import type { ContenidoCarga } from '@/lib/peso-contenido'
 import SiteHeader from '@/components/SiteHeader'
 import { PESO_TABS, type PesoTab } from './contratos'
 import PesoClient from './PesoClient'
@@ -78,6 +80,16 @@ async function getPerfil(): Promise<PerfilCarga> {
   }
 }
 
+// Y con sql/peso-05-contenido.sql (la rutina, la dieta y el plan maestro editables): sin la tabla se muestran los
+// originales y solo falta poder guardar cambios. cargarContenido no lanza; un fallo aquí tampoco debe tumbar /peso.
+async function getContenido(): Promise<ContenidoCarga | null> {
+  try {
+    return await cargarContenido()
+  } catch {
+    return null
+  }
+}
+
 // Huella que la página pasa al cliente para saber si el análisis guardado sigue vigente. Se arma igual que
 // la ruta del análisis: mediciones + meta + (planes en uso + perfil guardado). Lo último lo arma `extraAnalisis` con
 // `extraPlanes`, las MISMAS funciones que usa la ruta: no se arma a mano para que no puedan divergir.
@@ -139,7 +151,7 @@ const primero = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] :
 
 export default async function PesoPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
-  const [{ registros, fallo }, plan, { analisis, persistencia }, planes, perfil] = await Promise.all([getRegistros(), getPlan(), getAnalisis(), getPlanes(), getPerfil()])
+  const [{ registros, fallo }, plan, { analisis, persistencia }, planes, perfil, contenido] = await Promise.all([getRegistros(), getPlan(), getAnalisis(), getPlanes(), getPerfil(), getContenido()])
 
   // ?plan=<uuid> abre directo ese plan en la pestaña de rutinas y dietas (si no se pidió otra pestaña).
   const planParam = primero(sp.plan)
@@ -171,6 +183,7 @@ export default async function PesoPage({ searchParams }: { searchParams: Promise
       perfilError={perfil.error}
       tabInicial={tabInicial}
       planInicial={planInicial}
+      contenido={contenido}
     />
   )
 }

@@ -10,6 +10,7 @@ import {
   type PesoRecord, type PesoPlan, type PesoAnalisisGuardado,
 } from '@/lib/peso'
 import type { PesoPlanMeta } from '@/lib/peso-planes'
+import type { ContenidoCarga, DocId } from '@/lib/peso-contenido'
 import { PERFIL_DEFAULT, type PerfilEstado, type PesoPerfil as PerfilDatos } from '@/lib/peso-perfil'
 import { deleteRegistro } from './actions'
 import { PESO_TABS, type PesoTab } from './contratos'
@@ -27,6 +28,7 @@ import PesoPlanTexto from './PesoPlanTexto'
 import PesoPerfil from './PesoPerfil'
 import InvitacionPerfil from './perfil/Invitacion'
 import PlanesEnUso from './planes/EnUso'
+import ResumenNativo from './contenido/ResumenNativo'
 import { PLANES_EVENTO } from './planes/util'
 import { conImcDelPerfil } from './perfil/util'
 
@@ -64,7 +66,8 @@ function CargandoPestana({ nombre }: { nombre: string }) {
 // Rutinas y dietas trae todo el visor/subida de HTML. La mayoría de las visitas aterriza en Resumen y no
 // las necesita. Con ssr activo, un enlace ?tab=progreso sigue pintándose ya desde el servidor.
 const PesoProgreso = dynamic(() => import('./PesoProgreso'), { loading: () => <CargandoPestana nombre="el progreso" /> })
-const PesoPlanes = dynamic(() => import('./PesoPlanes'), { loading: () => <CargandoPestana nombre="tus rutinas y dietas" /> })
+const PesoPlanes = dynamic(() => import('./PesoPlanes'), { loading: () => <CargandoPestana nombre="tus documentos en HTML" /> })
+const PesoContenido = dynamic(() => import('./contenido/PlanesNativos'), { loading: () => <CargandoPestana nombre="tus rutinas y dietas" /> })
 
 /** Refleja la pestaña en la URL (?tab= para que el servidor la pinte directo; #hash para enlazar)
  *  sin recargar ni ensuciar el historial. "Resumen" es la de por defecto y deja la URL limpia. */
@@ -123,6 +126,26 @@ type Props = {
   perfilError?: string | null
   tabInicial?: PesoTab
   planInicial?: string | null
+  /** La rutina, la dieta y el plan maestro (nativos y editables) que cargó el servidor. Sin ellos, la pestaña solo ofrece la biblioteca en HTML. */
+  contenido?: ContenidoCarga | null
+}
+
+/** Los documentos en HTML que ya subiste, escondidos hasta que los pidas: lo principal es el contenido nativo de arriba. */
+function OtrosHtml({ abiertoInicial, ...props }: { abiertoInicial: boolean; inicial: PesoPlanMeta[]; disponible: boolean; data: PesoRecord[]; plan: PesoPlan | null; seleccionInicial: string | null; error: string | null }) {
+  const [abierto, setAbierto] = useState(abiertoInicial)
+  return (
+    <section className="rounded-2xl" style={{ border: `1px solid ${COLOR.line}`, background: '#fff' }}>
+      <button type="button" aria-expanded={abierto} onClick={() => setAbierto(v => !v)}
+        className="flex w-full items-center justify-between gap-3 rounded-2xl px-5 py-3.5 text-left min-h-[52px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#8A6420]">
+        <span>
+          <span className="block" style={{ font: '800 10.5px/1.2 var(--font-ui, system-ui)', letterSpacing: '.13em', textTransform: 'uppercase', color: COLOR.goldText }}>Opcional</span>
+          <span className="serif block mt-0.5" style={{ fontSize: 19, fontWeight: 600, color: COLOR.navy }}>Otros documentos en HTML</span>
+        </span>
+        <span aria-hidden style={{ fontSize: 18, color: COLOR.muted, transform: abierto ? 'rotate(180deg)' : 'none' }}>⌄</span>
+      </button>
+      {abierto && <div className="px-3 pb-3 sm:px-4 sm:pb-4"><PesoPlanes {...props} /></div>}
+    </section>
+  )
 }
 
 // ── Contenido de la pestaña activa ───────────────────────────────────────────
@@ -130,7 +153,7 @@ type Props = {
 
 const Contenido = memo(function Contenido({
   tab, data, datosVista, plan, analisis, persistencia, firma, planes, planesDisponible, planesError, planSel, deletingId,
-  perfilEstado, perfilError, onEdit, onDelete, onVerPlan, onIrAPlanes, onIrAPerfil, onPerfilGuardado,
+  perfilEstado, perfilError, contenido, docAtajo, hoy, onContenido, onEdit, onDelete, onVerPlan, onIrAPlanes, onIrADoc, onIrAPerfil, onPerfilGuardado,
 }: {
   tab: PesoTab
   /** Las mediciones tal como están guardadas (lo que marcó la báscula): Historial, formulario y números base. */
@@ -149,10 +172,16 @@ const Contenido = memo(function Contenido({
   deletingId: string | null
   perfilEstado: PerfilEstado
   perfilError: string | null
+  contenido: ContenidoCarga | null
+  /** Qué documento abrir al entrar a «Rutinas y dietas» (atajo del Resumen). */
+  docAtajo: DocId | null
+  hoy: string
+  onContenido: (c: ContenidoCarga) => void
   onEdit: (r: PesoRecord) => void
   onDelete: (r: PesoRecord) => void
   onVerPlan: (id: string) => void
   onIrAPlanes: () => void
+  onIrADoc: (id: DocId) => void
   onIrAPerfil: () => void
   onPerfilGuardado: (perfil: PerfilDatos, estado?: PerfilEstado) => void
 }) {
@@ -162,7 +191,11 @@ const Contenido = memo(function Contenido({
   if (tab === 'planes') {
     return (
       <>
-        <PesoPlanes inicial={planes} disponible={planesDisponible} data={data} plan={plan} seleccionInicial={planSel} error={planesError} />
+        {contenido && <PesoContenido carga={contenido} data={data} hoy={hoy} onCarga={onContenido} docInicial={docAtajo} />}
+        {/* Con la tabla de HTML sin crear y sin documentos no hay nada que mostrar: la sección solo aparece si sirve. */}
+        {(!contenido || planesDisponible || !!planSel) && (
+          <OtrosHtml abiertoInicial={!contenido || !!planSel} inicial={planes} disponible={planesDisponible} data={data} plan={plan} seleccionInicial={planSel} error={planesError} />
+        )}
         <PesoPlanTexto plan={plan} />
       </>
     )
@@ -180,7 +213,9 @@ const Contenido = memo(function Contenido({
       />
       {/* PlanesEnUso recibe TODOS los planes: él elige el activo de cada tipo y cuenta los guardados
           para decidir entre "Elegir una en uso" y "Subir la primera". */}
-      {planesDisponible && <PlanesEnUso planes={planes} error={planesError} onVer={onVerPlan} onIrAPlanes={onIrAPlanes} />}
+      {contenido
+        ? <ResumenNativo carga={contenido} data={data} hoy={hoy} onIr={onIrADoc} />
+        : planesDisponible && <PlanesEnUso planes={planes} error={planesError} onVer={onVerPlan} onIrAPlanes={onIrAPlanes} />}
       {/* El hero salta aquí cuando el siguiente paso es definir o ajustar la meta */}
       <div id={ID_META} style={{ scrollMarginTop: MARGEN_BARRA }}>
         <PesoMeta plan={plan} data={datosVista} />
@@ -266,7 +301,7 @@ function Titulo({ children, subtitulo }: { children?: ReactNode; subtitulo: Reac
 export default function PesoClient({
   initialData, initialPlan, initialAnalisis, persistencia, firma,
   planes: planesServidor = SIN_PLANES, planesDisponible: disponibleServidor = false, planesError = null,
-  perfil: perfilServidor = PERFIL_ESTADO_INICIAL, perfilError = null, tabInicial = 'resumen', planInicial = null,
+  perfil: perfilServidor = PERFIL_ESTADO_INICIAL, perfilError = null, tabInicial = 'resumen', planInicial = null, contenido: contenidoServidor = null,
 }: Props) {
   const router = useRouter()
 
@@ -294,6 +329,12 @@ export default function PesoClient({
     window.addEventListener(PLANES_EVENTO, alCambiar)
     return () => window.removeEventListener(PLANES_EVENTO, alCambiar)
   }, [])
+
+  // Rutina, dieta y plan maestro: arrancan con lo del servidor y «Rutinas y dietas» los mantiene al día al guardar o restaurar.
+  const [contenido, setContenido] = useState<ContenidoCarga | null>(contenidoServidor)
+  // Si la lectura falló, el servidor manda los originales: no se pisa con ellos una versión buena que ya está en memoria.
+  useEffect(() => { setContenido(local => (contenidoServidor?.error && local && !local.error ? local : contenidoServidor)) }, [contenidoServidor])
+  const [docAtajo, setDocAtajo] = useState<DocId | null>(null)
 
   // Perfil: arranca con lo del servidor y, al guardarlo, se actualiza al instante (todo lo que usa usePerfil se
   // recalcula sin esperar al servidor). Cuando el servidor vuelve a mandar el perfil (router.refresh) solo se adopta si
@@ -483,18 +524,16 @@ export default function PesoClient({
     cambiarTab(t, { scroll: 'forzar', destino: t === 'resumen' ? ID_META : undefined })
   }, [cambiarTab])
   const verPlan = useCallback((id: string) => { setPlanSel(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
-  const irAPlanes = useCallback(() => { setPlanSel(null); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
+  const irAPlanes = useCallback(() => { setPlanSel(null); setDocAtajo(null); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
+  const irADoc = useCallback((id: DocId) => { setPlanSel(null); setDocAtajo(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
   const irAPerfil = useCallback(() => cambiarTab('perfil', { scroll: 'forzar' }), [cambiarTab])
   const cerrarAviso = useCallback(() => setAviso(null), [])
 
   // ── Derivados ──────────────────────────────────────────────────────────────
 
   const n = initialData.length
-  const planesSinLeer = !!errorPlanes && !planes.length   // sin lista fiable: no se muestra un contador de 0
-  const contadores = useMemo<Partial<Record<PesoTab, number>>>(
-    () => ({ historial: n, ...(planesDisponible && !planesSinLeer ? { planes: planes.length } : {}) }),
-    [n, planesDisponible, planesSinLeer, planes.length],
-  )
+  // El contador de «Rutinas y dietas» ya no cuenta documentos HTML: lo principal es el contenido nativo.
+  const contadores = useMemo<Partial<Record<PesoTab, number>>>(() => ({ historial: n }), [n])
   const etapa = useMemo(() => etapaActual(initialData), [initialData])
   const avisosTabs = useMemo<Partial<Record<PesoTab, string>>>(
     () => (!perfilEstado.configurado && !perfilError ? { perfil: 'pendiente de completar' } : {}),
@@ -525,7 +564,7 @@ export default function PesoClient({
             {[
               { icono: '📈', t: 'Tendencia y proyección', d: 'Tu curva, el ritmo de tus últimos 90 días y cuándo llegarías a tu meta.' },
               { icono: '🧠', t: 'Análisis con IA', d: 'Una lectura de tu composición: qué subió, qué bajó y qué hacer al respecto.' },
-              { icono: '🏋️', t: 'Rutinas y dietas', d: 'Sube tus planes en HTML y revísalos aquí, bien explicados y a mano.' },
+              { icono: '🏋️', t: 'Rutinas y dietas', d: 'Tu rutina con ilustraciones, tu dieta y tu plan, a la mano y editables desde aquí.' },
             ].map(c => (
               <Panel key={c.t} eyebrow="Lo que vas a ver" icon={c.icono} title={c.t}>
                 <p style={{ fontSize: 13, lineHeight: 1.5, color: COLOR.muted }}>{c.d}</p>
@@ -589,7 +628,8 @@ export default function PesoClient({
             tab={tab} data={initialData} datosVista={datosVista} plan={initialPlan} analisis={initialAnalisis} persistencia={persistencia} firma={firma}
             planes={planes} planesDisponible={planesDisponible} planesError={errorPlanes}
             planSel={planSel} deletingId={deletingId} perfilEstado={perfilEstado} perfilError={perfilError}
-            onEdit={abrirEditar} onDelete={borrar} onVerPlan={verPlan} onIrAPlanes={irAPlanes}
+            contenido={contenido} docAtajo={docAtajo} hoy={hoy} onContenido={setContenido}
+            onEdit={abrirEditar} onDelete={borrar} onVerPlan={verPlan} onIrAPlanes={irAPlanes} onIrADoc={irADoc}
             onIrAPerfil={irAPerfil} onPerfilGuardado={alGuardarPerfil}
           />
         </div>
