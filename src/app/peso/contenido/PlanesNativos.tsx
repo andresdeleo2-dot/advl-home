@@ -32,7 +32,7 @@ type Aviso = { tipo: 'ok' | 'error'; texto: string } | null
 export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = null, diario = null, onDiario, onMedir }: {
   carga: ContenidoCarga; data: PesoRecord[]; hoy: string; onCarga: (c: ContenidoCarga) => void; docInicial?: VistaPlanes | null
   /** El diario (lo que anotas cada día). Sin él, la pestaña solo ofrece la rutina, la dieta y el plan. */
-  diario?: DiarioCarga | null; onDiario: (d: DiarioCarga) => void; onMedir: () => void
+  diario?: DiarioCarga | null; onDiario: (f: (prev: DiarioCarga) => DiarioCarga) => void; onMedir: () => void
 }) {
   const pendiente = (Object.keys(pendientes) as DocId[])[0] ?? null
   // `verDiario` es una vista aparte de los tres documentos: no se edita con «Editar», tiene su propio formulario por día.

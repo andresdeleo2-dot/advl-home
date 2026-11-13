@@ -1,35 +1,33 @@
 'use client'
 
-// «Mi diario»: anotas cada día lo que comiste, tus gustos y tu ejercicio, y aquí ves cuánto ganaste o perdiste por día,
-// semana, mes o año. Sin la tabla (sql/peso-06-diario.sql) la pantalla se ve pero no se puede anotar; con la lectura
-// fallida tampoco (para no pisar lo que ya tenías anotado).
+// «Mi diario»: el DÍA es lo principal (comida por comida, ejercicio, y qué tanto movió cada cosa tu balance); con la barra de
+// arriba cambias de día o miras la semana, el mes o el año. Sin la tabla (sql/peso-06-diario.sql) la pantalla se ve pero no
+// se puede anotar; con la lectura fallida tampoco (para no pisar lo que ya tenías anotado).
 
 import { useMemo, useRef, useState } from 'react'
 import type { ContenidoCarga } from '@/lib/peso-contenido'
 import type { PesoRecord } from '@/lib/peso'
 import {
-  PERIODOS, barrasDelRango, diaNuevo, etiquetaRango, listaDias, mapaDias, mesesDelRango, moverAncla, rangoDe, resumenPeriodo,
+  PERIODOS, acumuladoDelRango, barrasDelRango, etiquetaRango, listaDias, lunesDe, mapaDias, mesesDelRango, moverAncla, rangoDe, resumenPeriodo, sumaDias, totalesDia,
   type DiaDiario, type DiarioCarga, type Periodo,
 } from '@/lib/peso-diario'
 import { usePerfil } from '../perfil-context'
 import { BTN, COLOR, Panel, Segmented } from '../ui'
-import { borrarDiaApi, guardarDiaApi, leerDiarioApi } from './api'
-import DiaEditor from './DiaEditor'
-import { Cifras, DetalleDia, Grafica, Gustos, Hero, ListaDias, ListaMeses } from './Bloques'
+import { leerDiarioApi } from './api'
+import { AcumuladoGrafica, Cascada, Cifras, Grafica, Gustos, Hero, ListaDias, ListaMeses } from './Bloques'
+import DiaVista, { fechaPendienteDiario } from './DiaVista'
+
+export { hayBorradorDiario } from './DiaVista'
 
 const ARCHIVO_SQL = 'peso-06-diario.sql'
-
-/** Lo que se estaba escribiendo y no se guardó: vive mientras la página siga abierta, así que cambiar de pestaña no lo pierde. */
-let borrador: { fecha: string; dia: DiaDiario } | null = null
-
-/** ¿Quedó un día a medio anotar? Así «Rutinas y dietas» vuelve a abrir el diario al regresar a la pestaña. */
-export const hayBorradorDiario = () => borrador !== null
-
-type Editor = { fecha: string; base: DiaDiario; inicial: DiaDiario }
+const LETRAS = ['L', 'M', 'M', 'J', 'V', 'S', 'D']
 type Aviso = { tipo: 'ok' | 'error'; texto: string } | null
 
 export default function DiarioVista({ carga, onCarga, data, hoy, contenido, onMedir }: {
-  carga: DiarioCarga; onCarga: (c: DiarioCarga) => void; data: PesoRecord[]; hoy: string; contenido: ContenidoCarga; onMedir: () => void
+  carga: DiarioCarga
+  /** Cambia el diario con una función (así un guardado que llega tarde no pisa lo que ya cambió). */
+  onCarga: (f: (prev: DiarioCarga) => DiarioCarga) => void
+  data: PesoRecord[]; hoy: string; contenido: ContenidoCarga; onMedir: () => void
 }) {
   const perfil = usePerfil()
   const { dieta, rutina } = contenido.contenido
@@ -38,100 +36,58 @@ export default function DiarioVista({ carga, onCarga, data, hoy, contenido, onMe
   const primera = carga.dias[0]?.fecha ?? null
   const bloqueado = !carga.disponible || !!carga.error
 
-  const [periodo, setPeriodo] = useState<Periodo>('semana')
-  const [ancla, setAncla] = useState(hoy)
+  const [periodo, setPeriodo] = useState<Periodo>('dia')
+  // Si quedó un día sin guardar (cambiaste de pestaña), se vuelve a abrir ese día tal como lo dejaste.
+  const [ancla, setAncla] = useState(() => fechaPendienteDiario() ?? hoy)
   const [aviso, setAviso] = useState<Aviso>(null)
   const [revisando, setRevisando] = useState(false)
   const raiz = useRef<HTMLDivElement>(null)
-  const editorRef = useRef<HTMLDivElement>(null)
-
-  const plantilla = (fecha: string) => diaNuevo(fecha, dieta.comidas)
-  const abrir = (fecha: string): Editor => {
-    const guardado = mapa.get(fecha) ?? null
-    const base = guardado ?? plantilla(fecha)
-    return { fecha, base, inicial: borrador && borrador.fecha === fecha ? borrador.dia : base }
-  }
-  // Si quedó un borrador sin guardar (cambiaste de pestaña), se vuelve a abrir tal como lo dejaste.
-  const [editor, setEditor] = useState<Editor | null>(() => (borrador && !bloqueado ? abrir(borrador.fecha) : null))
 
   const rango = useMemo(() => rangoDe(periodo, ancla, primera, hoy), [periodo, ancla, primera, hoy])
-  const resumen = useMemo(() => resumenPeriodo(mapa, ctx, rango, hoy), [mapa, ctx, rango, hoy])
+  const resumen = useMemo(() => (periodo === 'dia' ? null : resumenPeriodo(mapa, ctx, rango, hoy)), [periodo, mapa, ctx, rango, hoy])
   const barras = useMemo(() => (periodo === 'dia' ? [] : barrasDelRango(mapa, ctx, rango, hoy)), [periodo, mapa, ctx, rango, hoy])
+  const acum = useMemo(() => (periodo === 'dia' ? null : acumuladoDelRango(mapa, ctx, rango, hoy)), [periodo, mapa, ctx, rango, hoy])
   const dias = useMemo(() => (periodo === 'semana' || periodo === 'mes' ? listaDias(mapa, ctx, rango, hoy) : []), [periodo, mapa, ctx, rango, hoy])
   const meses = useMemo(
     () => (periodo === 'anio' || periodo === 'todo' ? mesesDelRango(rango, hoy).map(r => ({ rango: r, r: resumenPeriodo(mapa, ctx, r, hoy) })) : []),
     [periodo, mapa, ctx, rango, hoy],
   )
+  const semana = useMemo(() => Array.from({ length: 7 }, (_, i) => sumaDias(lunesDe(ancla), i)), [ancla])
 
-  const sinCambiosPendientes = () => {
-    if (!editor || !borrador) return true
-    return JSON.stringify(borrador.dia) === JSON.stringify(editor.base) || window.confirm('Tienes un día sin guardar. ¿Descartarlo y abrir otro?')
+  function irADia(fecha: string) {
+    setPeriodo('dia'); setAncla(fecha); setAviso(null)
+    requestAnimationFrame(() => raiz.current?.scrollIntoView({ block: 'start', behavior: 'auto' }))
   }
-  const irAlEditor = () => requestAnimationFrame(() => editorRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' }))
-  function anotar(fecha: string) {
-    if (bloqueado) return
-    if (editor && editor.fecha === fecha) { irAlEditor(); return }
-    if (!sinCambiosPendientes()) return
-    borrador = null
-    setAviso(null)
-    setEditor(abrir(fecha))
-    irAlEditor()
-  }
-  function cerrarEditor() { borrador = null; setEditor(null) }
 
-  async function guardar(dia: DiaDiario): Promise<string | null> {
-    const r = await guardarDiaApi(dia)
-    if (!r.ok) {
-      if (r.error.codigo === 'sin_tabla') onCarga({ ...carga, disponible: false })
-      return r.error.mensaje
-    }
-    const nuevos = [...carga.dias.filter(d => d.fecha !== dia.fecha), r.data.dia].sort((a, b) => (a.fecha < b.fecha ? -1 : 1))
-    onCarga({ dias: nuevos, disponible: true })
-    borrador = null
-    setEditor(null)
-    // Si el día guardado queda fuera de lo que se está viendo, se lleva la vista a él.
-    if (dia.fecha < rango.ini || dia.fecha > rango.fin) setAncla(dia.fecha)
-    setAviso({ tipo: 'ok', texto: 'Día guardado.' })
-    raiz.current?.scrollIntoView({ block: 'start', behavior: 'auto' })
-    return null
-  }
-  async function borrar(): Promise<string | null> {
-    if (!editor) return null
-    const r = await borrarDiaApi(editor.fecha)
-    if (!r.ok) {
-      if (r.error.codigo === 'sin_tabla') onCarga({ ...carga, disponible: false })
-      return r.error.mensaje
-    }
-    onCarga({ dias: carga.dias.filter(d => d.fecha !== editor.fecha), disponible: true })
-    borrador = null
-    setEditor(null)
-    setAviso({ tipo: 'ok', texto: 'Día borrado.' })
-    return null
-  }
+  // Un día se guardó (o se borró): la página actualiza su lista sin volver a leer la base.
+  const alGuardar = (fecha: string, dia: DiaDiario | null) => onCarga(prev => {
+    const resto = prev.dias.filter(d => d.fecha !== fecha)
+    return { ...prev, dias: dia ? [...resto, dia].sort((a, b) => (a.fecha < b.fecha ? -1 : 1)) : resto, disponible: true }
+  })
+  const alFaltarTabla = () => onCarga(prev => ({ ...prev, disponible: false }))
+
   async function revisar() {
     if (revisando) return
     setRevisando(true); setAviso(null)
     const r = await leerDiarioApi()
     setRevisando(false)
     if (!r.ok) { setAviso({ tipo: 'error', texto: r.error.mensaje }); return }
-    onCarga({ dias: r.data.dias, disponible: r.data.disponible })
+    onCarga(() => ({ dias: r.data.dias, disponible: r.data.disponible }))
     setAviso(r.data.disponible
       ? { tipo: 'ok', texto: carga.disponible ? 'Listo: se leyó tu diario.' : '¡Listo! Ya puedes anotar tus días.' }
       : { tipo: 'error', texto: 'Todavía no existe la tabla. Pega el SQL en Supabase y vuelve a intentar.' })
   }
 
-  const anotarAncla = () => anotar(periodo === 'dia' ? ancla : hoy)
   const esHoy = periodo === 'dia' ? ancla === hoy : periodo === 'semana' || periodo === 'mes' || periodo === 'anio' ? rango.ini <= hoy && hoy <= rango.fin : false
   const siguienteNo = periodo === 'todo' || rango.fin >= hoy
-  const pesoDelDia = periodo === 'dia' ? ([...data].reverse().find(r => r.fecha === ancla && r.peso != null)?.peso ?? null) : null
   const vacio = carga.dias.length === 0
 
   return (
     <div ref={raiz} className="space-y-5" style={{ scrollMarginTop: 70 }}>
       <Panel
         eyebrow="Tu progreso" icon="📓" title="Mi diario"
-        subtitle="Anota lo que comes y entrenas, y mira cuánto ganas o pierdes por día, semana, mes o año."
-        right={<button type="button" onClick={() => anotar(hoy)} disabled={bloqueado} className={`${BTN.base} ${BTN.gold} min-h-10`}>＋ Anotar mi día</button>}
+        subtitle="Anota lo que comes en cada comida y si entrenaste; mira cuánto movió cada cosa tu balance y cómo se acumula."
+        right={periodo !== 'dia' || ancla !== hoy ? <button type="button" onClick={() => irADia(hoy)} disabled={bloqueado} className={`${BTN.base} ${BTN.gold} min-h-10`}>＋ Anotar hoy</button> : undefined}
       >
         {carga.error && (
           <div role="alert" className="mb-4 rounded-xl px-4 py-3" style={{ background: '#FEF2F1', border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${COLOR.bad}` }}>
@@ -144,7 +100,7 @@ export default function DiarioVista({ carga, onCarga, data, hoy, contenido, onMe
         {!carga.disponible && !carga.error && (
           <div role="note" className="mb-4 rounded-xl px-4 py-3" style={{ background: '#FFF8E6', border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${COLOR.warn}` }}>
             <p style={{ fontSize: 13.5, lineHeight: 1.55, color: '#5A3205' }}>
-              <strong>Para anotar tus días falta un paso único en Supabase.</strong> Pega el archivo <code style={{ fontWeight: 700 }}>{ARCHIVO_SQL}</code> en el SQL Editor (está en tu carpeta Descargas, dentro de «PEGAR-EN-SUPABASE-PESO»).
+              <strong>Para guardar tus días falta un paso único en Supabase.</strong> Pega el archivo <code style={{ fontWeight: 700 }}>{ARCHIVO_SQL}</code> en el SQL Editor (está en tu carpeta Descargas, dentro de «PEGAR-EN-SUPABASE-PESO»).
             </p>
             <button type="button" onClick={() => void revisar()} disabled={revisando} className={`${BTN.base} ${BTN.ghost} mt-2.5 min-h-10`}>{revisando ? 'Revisando…' : 'Ya lo pegué, revisar'}</button>
           </div>
@@ -161,7 +117,7 @@ export default function DiarioVista({ carga, onCarga, data, hoy, contenido, onMe
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <Segmented<Periodo> ariaLabel="Periodo" value={periodo} onChange={p => { setPeriodo(p); setAviso(null) }} options={PERIODOS} />
+          <Segmented<Periodo> ariaLabel="Periodo" value={periodo} onChange={p => { setPeriodo(p); setAviso(null); if (p === 'dia' && ancla > hoy) setAncla(hoy) }} options={PERIODOS} />
           {periodo !== 'todo' && (
             <div className="flex items-center gap-1.5">
               <button type="button" aria-label="Periodo anterior" onClick={() => setAncla(moverAncla(periodo, ancla, -1))} className={`${BTN.base} ${BTN.ghost} min-h-10 min-w-10 px-0 text-base`}>‹</button>
@@ -171,38 +127,57 @@ export default function DiarioVista({ carga, onCarga, data, hoy, contenido, onMe
             </div>
           )}
         </div>
+
+        {periodo === 'dia' && (
+          <div className="mt-3 grid grid-cols-7 gap-1.5" role="group" aria-label="Días de la semana">
+            {semana.map((f, i) => {
+              const d = mapa.get(f)
+              const sel = f === ancla
+              const futuro = f > hoy
+              const b = d ? totalesDia(d, ctx).balance : null
+              return (
+                <button key={f} type="button" disabled={futuro} aria-pressed={sel} aria-label={`${etiquetaRango('dia', { ini: f, fin: f })}${d ? ', anotado' : ''}`} onClick={() => setAncla(f)}
+                  className="flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-xl border transition-colors disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#8A6420]"
+                  style={sel ? { background: COLOR.navy, borderColor: COLOR.navy, color: '#fff' } : { background: '#fff', borderColor: COLOR.lineStrong, color: COLOR.ink }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, opacity: sel ? 0.8 : 0.65 }}>{LETRAS[i]}</span>
+                  <span className="tabular-nums" style={{ fontSize: 15, fontWeight: 700, lineHeight: 1 }}>{+f.slice(8, 10)}</span>
+                  <span aria-hidden style={{ width: 7, height: 7, borderRadius: 7, background: d ? (b == null ? COLOR.gold : b <= 0 ? '#4ADE80' : '#F87171') : 'transparent', border: d ? 'none' : `1.5px solid ${sel ? 'rgba(255,255,255,.45)' : COLOR.lineStrong}` }} />
+                </button>
+              )
+            })}
+          </div>
+        )}
       </Panel>
 
-      {editor && (
-        <div ref={editorRef} style={{ scrollMarginTop: 70 }}>
-          <DiaEditor
-            key={editor.fecha}
-            fecha={editor.fecha} hoy={hoy} base={editor.base} inicial={editor.inicial} dieta={dieta} rutina={rutina} ctx={ctx}
-            pesoDelDia={[...data].reverse().find(r => r.fecha === editor.fecha && r.peso != null)?.peso ?? null}
-            disponible={!bloqueado} existe={mapa.has(editor.fecha)}
-            onCambio={d => { borrador = { fecha: editor.fecha, dia: d } }}
-            onCambiarFecha={f => { borrador = null; setEditor(abrir(f)) }}
-            onGuardar={guardar} onBorrar={borrar} onCerrar={cerrarEditor} onMedir={onMedir}
-          />
-        </div>
-      )}
-
-      {vacio && !editor ? (
+      {periodo === 'dia' ? (
+        <DiaVista
+          key={ancla}
+          fecha={ancla} hoy={hoy} guardado={mapa.get(ancla) ?? null} mapa={mapa} dieta={dieta} rutina={rutina} ctx={ctx}
+          disponible={!bloqueado} onGuardado={alGuardar} onSinTabla={alFaltarTabla} onMedir={onMedir}
+        />
+      ) : vacio ? (
         <Panel eyebrow="Para empezar" icon="🌱" title="Aún no hay días anotados">
           <p style={{ fontSize: 14, lineHeight: 1.6, color: COLOR.ink }}>
-            Cada día marca cuáles comidas de tu dieta comiste completas, a medias o no; suma tus gustos (una cerveza, un chocolate, un pastel…) y el ejercicio que hiciste.
-            Con eso verás cuánto ganas o pierdes por día, semana y mes, y cuánto te costaron los gustos.
+            Cada día anota lo que comiste en cada comida (con un toque si fue lo de tu dieta), suma tus gustos (una cerveza, un chocolate, un pastel…) y di si entrenaste.
+            Con eso verás cuánto ganas o pierdes por día, semana y mes, qué movió tu balance y cómo se acumula.
           </p>
-          {!bloqueado && <button type="button" onClick={() => anotar(hoy)} className={`${BTN.base} ${BTN.gold} mt-3 min-h-11`}>＋ Anotar mi primer día</button>}
+          {!bloqueado && <button type="button" onClick={() => irADia(hoy)} className={`${BTN.base} ${BTN.gold} mt-3 min-h-11`}>＋ Anotar mi primer día</button>}
         </Panel>
-      ) : (
+      ) : resumen && acum && (
         <>
-          <Hero r={resumen} periodo={periodo} etiqueta={etiquetaRango(periodo, rango)} esHoy={esHoy && periodo === 'dia'} onAnotar={anotarAncla} puedeAnotar={!bloqueado} />
+          <Hero r={resumen} periodo={periodo} etiqueta={etiquetaRango(periodo, rango)} esHoy={esHoy} onAnotar={() => irADia(hoy)} puedeAnotar={!bloqueado} />
           {resumen.anotados > 0 && <Cifras r={resumen} periodo={periodo} dieta={dieta} />}
-          {periodo === 'dia' && <DetalleDia dia={mapa.get(ancla) ?? null} ctx={ctx} pesoDelDia={pesoDelDia} puedeEditar={!bloqueado} onEditar={() => anotar(ancla)} fecha={ancla} />}
+          {resumen.incompletos > 0 && (
+            <p role="note" className="rounded-xl px-4 py-2.5" style={{ background: '#FFF8E6', border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${COLOR.warn}`, color: '#5A3205', fontSize: 13.5, lineHeight: 1.5 }}>
+              {resumen.incompletos} {resumen.incompletos === 1 ? 'día tiene' : 'días tienen'} comidas de tu dieta sin anotar: en ellos la cuenta se ve mejor de lo que fue. Los ves marcados con ⚠ en la lista.
+            </p>
+          )}
+          <Cascada titulo="Qué movió tu balance" ver="periodo" impacto={resumen.impacto} balance={resumen.balance} calculables={resumen.calculables}
+            sinDatos={resumen.anotados === 0 ? 'No hay nada anotado en este periodo.' : 'Falta tu peso para estimar cuánto gastas: registra una medición.'} />
+          <AcumuladoGrafica a={acum} titulo="Tu acumulado" subtitulo={`Cómo se fue sumando lo que ganas o pierdes${periodo === 'todo' ? ' desde que empezaste' : ' en este periodo'}.`} />
+          {resumen.anotados > 0 && <Grafica barras={barras} />}
           {resumen.anotados > 0 && <Gustos r={resumen} />}
-          {periodo !== 'dia' && resumen.anotados > 0 && <Grafica barras={barras} />}
-          {(periodo === 'semana' || periodo === 'mes') && <ListaDias filas={dias} hoy={hoy} onEditar={anotar} />}
+          {(periodo === 'semana' || periodo === 'mes') && <ListaDias filas={dias} hoy={hoy} onVer={irADia} />}
           {(periodo === 'anio' || periodo === 'todo') && <ListaMeses meses={meses} onVer={ini => { setPeriodo('mes'); setAncla(ini) }} />}
         </>
       )}

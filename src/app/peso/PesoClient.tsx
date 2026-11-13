@@ -181,7 +181,7 @@ const Contenido = memo(function Contenido({
   docAtajo: VistaPlanes | null
   hoy: string
   onContenido: (c: ContenidoCarga) => void
-  onDiario: (d: DiarioCarga) => void
+  onDiario: (f: (prev: DiarioCarga) => DiarioCarga) => void
   /** Abre el formulario de «Nueva medición» (arriba de la página). */
   onMedir: () => void
   onEdit: (r: PesoRecord) => void
@@ -639,7 +639,7 @@ export default function PesoClient({
             tab={tab} data={initialData} datosVista={datosVista} plan={initialPlan} analisis={initialAnalisis} persistencia={persistencia} firma={firma}
             planes={planes} planesDisponible={planesDisponible} planesError={errorPlanes}
             planSel={planSel} deletingId={deletingId} perfilEstado={perfilEstado} perfilError={perfilError}
-            contenido={contenido} diario={diario} docAtajo={docAtajo} hoy={hoy} onContenido={setContenido} onDiario={setDiario} onMedir={medirHoy}
+            contenido={contenido} diario={diario} docAtajo={docAtajo} hoy={hoy} onContenido={setContenido} onDiario={f => setDiario(prev => (prev ? f(prev) : prev))} onMedir={medirHoy}
             onEdit={abrirEditar} onDelete={borrar} onVerPlan={verPlan} onIrAPlanes={irAPlanes} onIrADoc={irADoc}
             onIrAPerfil={irAPerfil} onPerfilGuardado={alGuardarPerfil}
           />
