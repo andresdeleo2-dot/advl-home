@@ -10,7 +10,8 @@ import {
   type PesoRecord, type PesoPlan, type PesoAnalisisGuardado,
 } from '@/lib/peso'
 import type { PesoPlanMeta } from '@/lib/peso-planes'
-import type { ContenidoCarga, DocId } from '@/lib/peso-contenido'
+import type { ContenidoCarga } from '@/lib/peso-contenido'
+import type { DiarioCarga, VistaPlanes } from '@/lib/peso-diario'
 import { PERFIL_DEFAULT, type PerfilEstado, type PesoPerfil as PerfilDatos } from '@/lib/peso-perfil'
 import { deleteRegistro } from './actions'
 import { PESO_TABS, type PesoTab } from './contratos'
@@ -128,6 +129,8 @@ type Props = {
   planInicial?: string | null
   /** La rutina, la dieta y el plan maestro (nativos y editables) que cargó el servidor. Sin ellos, la pestaña solo ofrece la biblioteca en HTML. */
   contenido?: ContenidoCarga | null
+  /** Lo que anotas cada día (comidas, gustos, ejercicio). Sin él, «Rutinas y dietas» no ofrece el diario. */
+  diario?: DiarioCarga | null
 }
 
 /** Los documentos en HTML que ya subiste, escondidos hasta que los pidas: lo principal es el contenido nativo de arriba. */
@@ -153,7 +156,7 @@ function OtrosHtml({ abiertoInicial, ...props }: { abiertoInicial: boolean; inic
 
 const Contenido = memo(function Contenido({
   tab, data, datosVista, plan, analisis, persistencia, firma, planes, planesDisponible, planesError, planSel, deletingId,
-  perfilEstado, perfilError, contenido, docAtajo, hoy, onContenido, onEdit, onDelete, onVerPlan, onIrAPlanes, onIrADoc, onIrAPerfil, onPerfilGuardado,
+  perfilEstado, perfilError, contenido, diario, docAtajo, hoy, onContenido, onDiario, onMedir, onEdit, onDelete, onVerPlan, onIrAPlanes, onIrADoc, onIrAPerfil, onPerfilGuardado,
 }: {
   tab: PesoTab
   /** Las mediciones tal como están guardadas (lo que marcó la báscula): Historial, formulario y números base. */
@@ -173,15 +176,19 @@ const Contenido = memo(function Contenido({
   perfilEstado: PerfilEstado
   perfilError: string | null
   contenido: ContenidoCarga | null
-  /** Qué documento abrir al entrar a «Rutinas y dietas» (atajo del Resumen). */
-  docAtajo: DocId | null
+  diario: DiarioCarga | null
+  /** Qué abrir al entrar a «Rutinas y dietas» (atajo del Resumen): un documento o el diario. */
+  docAtajo: VistaPlanes | null
   hoy: string
   onContenido: (c: ContenidoCarga) => void
+  onDiario: (d: DiarioCarga) => void
+  /** Abre el formulario de «Nueva medición» (arriba de la página). */
+  onMedir: () => void
   onEdit: (r: PesoRecord) => void
   onDelete: (r: PesoRecord) => void
   onVerPlan: (id: string) => void
   onIrAPlanes: () => void
-  onIrADoc: (id: DocId) => void
+  onIrADoc: (id: VistaPlanes) => void
   onIrAPerfil: () => void
   onPerfilGuardado: (perfil: PerfilDatos, estado?: PerfilEstado) => void
 }) {
@@ -191,7 +198,7 @@ const Contenido = memo(function Contenido({
   if (tab === 'planes') {
     return (
       <>
-        {contenido && <PesoContenido carga={contenido} data={data} hoy={hoy} onCarga={onContenido} docInicial={docAtajo} />}
+        {contenido && <PesoContenido carga={contenido} data={data} hoy={hoy} onCarga={onContenido} docInicial={docAtajo} diario={diario} onDiario={onDiario} onMedir={onMedir} />}
         {/* Con la tabla de HTML sin crear y sin documentos no hay nada que mostrar: la sección solo aparece si sirve. */}
         {(!contenido || planesDisponible || !!planSel) && (
           <OtrosHtml abiertoInicial={!contenido || !!planSel} inicial={planes} disponible={planesDisponible} data={data} plan={plan} seleccionInicial={planSel} error={planesError} />
@@ -214,7 +221,7 @@ const Contenido = memo(function Contenido({
       {/* PlanesEnUso recibe TODOS los planes: él elige el activo de cada tipo y cuenta los guardados
           para decidir entre "Elegir una en uso" y "Subir la primera". */}
       {contenido
-        ? <ResumenNativo carga={contenido} data={data} hoy={hoy} onIr={onIrADoc} />
+        ? <ResumenNativo carga={contenido} diario={diario} data={data} hoy={hoy} onIr={onIrADoc} />
         : planesDisponible && <PlanesEnUso planes={planes} error={planesError} onVer={onVerPlan} onIrAPlanes={onIrAPlanes} />}
       {/* El hero salta aquí cuando el siguiente paso es definir o ajustar la meta */}
       <div id={ID_META} style={{ scrollMarginTop: MARGEN_BARRA }}>
@@ -301,7 +308,7 @@ function Titulo({ children, subtitulo }: { children?: ReactNode; subtitulo: Reac
 export default function PesoClient({
   initialData, initialPlan, initialAnalisis, persistencia, firma,
   planes: planesServidor = SIN_PLANES, planesDisponible: disponibleServidor = false, planesError = null,
-  perfil: perfilServidor = PERFIL_ESTADO_INICIAL, perfilError = null, tabInicial = 'resumen', planInicial = null, contenido: contenidoServidor = null,
+  perfil: perfilServidor = PERFIL_ESTADO_INICIAL, perfilError = null, tabInicial = 'resumen', planInicial = null, contenido: contenidoServidor = null, diario: diarioServidor = null,
 }: Props) {
   const router = useRouter()
 
@@ -334,7 +341,11 @@ export default function PesoClient({
   const [contenido, setContenido] = useState<ContenidoCarga | null>(contenidoServidor)
   // Si la lectura falló, el servidor manda los originales: no se pisa con ellos una versión buena que ya está en memoria.
   useEffect(() => { setContenido(local => (contenidoServidor?.error && local && !local.error ? local : contenidoServidor)) }, [contenidoServidor])
-  const [docAtajo, setDocAtajo] = useState<DocId | null>(null)
+  const [docAtajo, setDocAtajo] = useState<VistaPlanes | null>(null)
+
+  // El diario: igual que el contenido. Si la lectura falló, el servidor manda la lista vacía: no se pisa con ella lo que ya había en memoria.
+  const [diario, setDiario] = useState<DiarioCarga | null>(diarioServidor)
+  useEffect(() => { setDiario(local => (diarioServidor?.error && local && !local.error ? local : diarioServidor)) }, [diarioServidor])
 
   // Perfil: arranca con lo del servidor y, al guardarlo, se actualiza al instante (todo lo que usa usePerfil se
   // recalcula sin esperar al servidor). Cuando el servidor vuelve a mandar el perfil (router.refresh) solo se adopta si
@@ -525,7 +536,7 @@ export default function PesoClient({
   }, [cambiarTab])
   const verPlan = useCallback((id: string) => { setPlanSel(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
   const irAPlanes = useCallback(() => { setPlanSel(null); setDocAtajo(null); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
-  const irADoc = useCallback((id: DocId) => { setPlanSel(null); setDocAtajo(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
+  const irADoc = useCallback((id: VistaPlanes) => { setPlanSel(null); setDocAtajo(id); cambiarTab('planes', { scroll: 'forzar' }) }, [cambiarTab])
   const irAPerfil = useCallback(() => cambiarTab('perfil', { scroll: 'forzar' }), [cambiarTab])
   const cerrarAviso = useCallback(() => setAviso(null), [])
 
@@ -628,7 +639,7 @@ export default function PesoClient({
             tab={tab} data={initialData} datosVista={datosVista} plan={initialPlan} analisis={initialAnalisis} persistencia={persistencia} firma={firma}
             planes={planes} planesDisponible={planesDisponible} planesError={errorPlanes}
             planSel={planSel} deletingId={deletingId} perfilEstado={perfilEstado} perfilError={perfilError}
-            contenido={contenido} docAtajo={docAtajo} hoy={hoy} onContenido={setContenido}
+            contenido={contenido} diario={diario} docAtajo={docAtajo} hoy={hoy} onContenido={setContenido} onDiario={setDiario} onMedir={medirHoy}
             onEdit={abrirEditar} onDelete={borrar} onVerPlan={verPlan} onIrAPlanes={irAPlanes} onIrADoc={irADoc}
             onIrAPerfil={irAPerfil} onPerfilGuardado={alGuardarPerfil}
           />

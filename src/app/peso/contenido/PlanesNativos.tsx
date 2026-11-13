@@ -7,18 +7,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ContenidoCarga, Doc, DocDieta, DocId, DocPlan, DocRutina } from '@/lib/peso-contenido'
 import type { PesoRecord } from '@/lib/peso'
+import type { DiarioCarga, VistaPlanes } from '@/lib/peso-diario'
 import { BTN, COLOR, Pill, Panel, Segmented } from '../ui'
 import { guardarDocumento, leerDocumento, restaurarDocumento } from './api'
 import { ProveedorDoc } from './edicion'
 import RutinaVista from './RutinaVista'
 import DietaVista from './DietaVista'
 import PlanVista from './PlanVista'
+import DiarioVista, { hayBorradorDiario } from '../diario/DiarioVista'
 
 const ARCHIVO_SQL = 'peso-05-contenido.sql'
-const OPCIONES: { value: DocId; label: string }[] = [
+const OPCIONES: { value: VistaPlanes; label: string }[] = [
   { value: 'rutina', label: '🏋️ Rutina' },
   { value: 'dieta', label: '🍽️ Dieta' },
   { value: 'plan', label: '🎯 Plan maestro' },
+  { value: 'diario', label: '📓 Mi diario' },
 ]
 
 /** Borradores sin guardar: viven mientras la página siga abierta, así que cambiar de pestaña no los pierde. */
@@ -26,11 +29,15 @@ const pendientes: Partial<Record<DocId, Doc>> = {}
 
 type Aviso = { tipo: 'ok' | 'error'; texto: string } | null
 
-export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = null }: {
-  carga: ContenidoCarga; data: PesoRecord[]; hoy: string; onCarga: (c: ContenidoCarga) => void; docInicial?: DocId | null
+export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = null, diario = null, onDiario, onMedir }: {
+  carga: ContenidoCarga; data: PesoRecord[]; hoy: string; onCarga: (c: ContenidoCarga) => void; docInicial?: VistaPlanes | null
+  /** El diario (lo que anotas cada día). Sin él, la pestaña solo ofrece la rutina, la dieta y el plan. */
+  diario?: DiarioCarga | null; onDiario: (d: DiarioCarga) => void; onMedir: () => void
 }) {
   const pendiente = (Object.keys(pendientes) as DocId[])[0] ?? null
-  const [docSel, setDocSel] = useState<DocId>(pendiente ?? docInicial ?? 'rutina')
+  // `verDiario` es una vista aparte de los tres documentos: no se edita con «Editar», tiene su propio formulario por día.
+  const [verDiario, setVerDiario] = useState(!pendiente && !!diario && (docInicial === 'diario' || hayBorradorDiario()))
+  const [docSel, setDocSel] = useState<DocId>(pendiente ?? (docInicial && docInicial !== 'diario' ? docInicial : 'rutina'))
   const [borrador, setBorrador] = useState<Doc | null>(pendiente ? pendientes[pendiente] ?? null : null)
   const [ocupado, setOcupado] = useState<'guardar' | 'restaurar' | 'revisar' | null>(null)
   const [aviso, setAviso] = useState<Aviso>(pendiente ? { tipo: 'ok', texto: 'Sigues donde lo dejaste: tus cambios aún no están guardados.' } : null)
@@ -42,7 +49,10 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
   const visible: Doc = editando && borrador ? borrador : original
 
   // Si llega otro documento desde afuera (un atajo del Resumen) y no se está editando, se muestra ese.
-  useEffect(() => { if (docInicial && !borrador) setDocSel(docInicial) }, [docInicial]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!docInicial || borrador) return
+    if (docInicial === 'diario') { if (diario) setVerDiario(true) } else { setVerDiario(false); setDocSel(docInicial) }
+  }, [docInicial]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Con cambios sin guardar, el navegador avisa antes de cerrar o recargar la página.
   useEffect(() => {
@@ -118,9 +128,11 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
     setAviso(disponible ? { tipo: 'ok', texto: sinLeer ? 'Listo: se leyó lo que tenías guardado.' : '¡Listo! Ya puedes editar y guardar.' } : { tipo: 'error', texto: 'Todavía no existe la tabla. Pega el SQL en Supabase y vuelve a intentar.' })
   }
 
-  function cambiarDoc(d: DocId) {
+  function cambiarDoc(d: VistaPlanes) {
     if (editando) { setAviso({ tipo: 'error', texto: 'Guarda o cancela tus cambios antes de cambiar de documento.' }); return }
-    setDocSel(d); setAviso(null)
+    setAviso(null)
+    if (d === 'diario') { setVerDiario(true); return }
+    setVerDiario(false); setDocSel(d)
   }
 
   const guardado = carga.guardados[docSel]
@@ -129,8 +141,8 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
     <div ref={raiz} className="space-y-5" style={{ scrollMarginTop: 70 }}>
       <Panel
         eyebrow="Tu plan" icon="🏋️" title="Rutinas y dietas"
-        subtitle="Todo está aquí mismo y se cambia aquí mismo: toca «Editar», haz tus cambios y guarda."
-        right={!editando ? (
+        subtitle={verDiario ? 'Anota lo que comes y entrenas, y mira cuánto ganas o pierdes.' : 'Todo está aquí mismo y se cambia aquí mismo: toca «Editar», haz tus cambios y guarda.'}
+        right={!editando && !verDiario ? (
           <>
             {guardado && <button type="button" disabled={!!ocupado} onClick={() => void restaurar()} className={`${BTN.base} ${BTN.ghost} min-h-10`}>{ocupado === 'restaurar' ? 'Restaurando…' : 'Volver al original'}</button>}
             <button type="button" onClick={empezar} disabled={!carga.disponible || sinLeer} title={sinLeer ? 'No se pudo leer lo que tenías guardado' : carga.disponible ? 'Editar este documento' : 'Falta crear la tabla para guardar cambios'} className={`${BTN.base} ${BTN.gold} min-h-10`}>✏️ Editar</button>
@@ -138,13 +150,13 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
         ) : undefined}
       >
         <div className="flex flex-wrap items-center gap-3">
-          <Segmented<DocId> ariaLabel="Documento" value={docSel} onChange={cambiarDoc} options={OPCIONES} />
-          {editando
+          <Segmented<VistaPlanes> ariaLabel="Documento" value={verDiario ? 'diario' : docSel} onChange={cambiarDoc} options={diario ? OPCIONES : OPCIONES.filter(o => o.value !== 'diario')} />
+          {!verDiario && (editando
             ? <Pill color={COLOR.warn}>✏️ Editando{sucio ? ' · cambios sin guardar' : ''}</Pill>
-            : <Pill color={guardado ? COLOR.good : COLOR.muted}>{guardado ? '✓ Tu versión' : 'Original del plan de octubre'}</Pill>}
+            : <Pill color={guardado ? COLOR.good : COLOR.muted}>{guardado ? '✓ Tu versión' : 'Original del plan de octubre'}</Pill>)}
         </div>
 
-        {sinLeer && (
+        {!verDiario && sinLeer && (
           <div role="alert" className="mt-4 rounded-xl px-4 py-3" style={{ background: '#FEF2F1', border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${COLOR.bad}` }}>
             <p style={{ fontSize: 13.5, lineHeight: 1.55, color: '#7F1D1D' }}>
               <strong>No se pudo leer lo que tenías guardado.</strong> Lo que ves es el original. Tu versión no se borró; para no pisarla, la edición está bloqueada hasta que se lea bien.
@@ -153,7 +165,7 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
           </div>
         )}
 
-        {!carga.disponible && !sinLeer && (
+        {!verDiario && !carga.disponible && !sinLeer && (
           <div role="note" className="mt-4 rounded-xl px-4 py-3" style={{ background: '#FFF8E6', border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${COLOR.warn}` }}>
             <p style={{ fontSize: 13.5, lineHeight: 1.55, color: '#5A3205' }}>
               <strong>Para poder editar y guardar falta un paso único en Supabase.</strong> Pega el archivo <code style={{ fontWeight: 700 }}>{ARCHIVO_SQL}</code> en el SQL Editor (está en tu carpeta Descargas, dentro de «PEGAR-EN-SUPABASE-PESO»). Mientras tanto puedes leer todo.
@@ -163,7 +175,7 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
         )}
 
         <div role="status" aria-live="polite">
-          {aviso && (
+          {!verDiario && aviso && (
             <p className="mt-4 rounded-xl px-4 py-2.5" role={aviso.tipo === 'error' ? 'alert' : undefined}
               style={aviso.tipo === 'ok'
                 ? { background: '#EFF9F2', border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${COLOR.good}`, color: '#14532D', fontSize: 13.5 }
@@ -174,11 +186,15 @@ export default function PlanesNativos({ carga, data, hoy, onCarga, docInicial = 
         </div>
       </Panel>
 
-      <ProveedorDoc doc={visible} editando={editando} onCambio={cambiar}>
-        {docSel === 'rutina' && <RutinaVista hoy={hoy} />}
-        {docSel === 'dieta' && <DietaVista />}
-        {docSel === 'plan' && <PlanVista data={data} hoy={hoy} />}
-      </ProveedorDoc>
+      {verDiario && diario ? (
+        <DiarioVista carga={diario} onCarga={onDiario} data={data} hoy={hoy} contenido={carga} onMedir={onMedir} />
+      ) : (
+        <ProveedorDoc doc={visible} editando={editando} onCambio={cambiar}>
+          {docSel === 'rutina' && <RutinaVista hoy={hoy} />}
+          {docSel === 'dieta' && <DietaVista />}
+          {docSel === 'plan' && <PlanVista data={data} hoy={hoy} />}
+        </ProveedorDoc>
+      )}
 
       {editando && (
         <div className="sticky z-30 flex flex-wrap items-center justify-between gap-2 rounded-2xl px-4 py-3" style={{ bottom: 'max(12px, env(safe-area-inset-bottom))', background: COLOR.navy, color: COLOR.onDark, boxShadow: '0 18px 40px -16px rgba(15,35,64,.7)' }}>

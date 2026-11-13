@@ -6,6 +6,8 @@ import { PERFIL_DEFAULT, extraAnalisis } from '@/lib/peso-perfil'
 import { cargarPerfil, ERROR_LECTURA_PERFIL, type PerfilCarga } from '@/lib/peso-perfil-server'
 import { cargarContenido } from '@/lib/peso-contenido-server'
 import type { ContenidoCarga } from '@/lib/peso-contenido'
+import { cargarDiario } from '@/lib/peso-diario-server'
+import type { DiarioCarga } from '@/lib/peso-diario'
 import SiteHeader from '@/components/SiteHeader'
 import { PESO_TABS, type PesoTab } from './contratos'
 import PesoClient from './PesoClient'
@@ -90,6 +92,16 @@ async function getContenido(): Promise<ContenidoCarga | null> {
   }
 }
 
+// Y con sql/peso-06-diario.sql (lo que anotas cada día): sin la tabla el diario se ve pero no se puede anotar. cargarDiario no
+// lanza; un fallo aquí tampoco debe tumbar /peso, así que se envuelve igual (null = la pestaña no ofrece el diario).
+async function getDiario(): Promise<DiarioCarga | null> {
+  try {
+    return await cargarDiario()
+  } catch {
+    return null
+  }
+}
+
 // Huella que la página pasa al cliente para saber si el análisis guardado sigue vigente. Se arma igual que
 // la ruta del análisis: mediciones + meta + (planes en uso + perfil guardado). Lo último lo arma `extraAnalisis` con
 // `extraPlanes`, las MISMAS funciones que usa la ruta: no se arma a mano para que no puedan divergir.
@@ -151,7 +163,7 @@ const primero = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] :
 
 export default async function PesoPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
-  const [{ registros, fallo }, plan, { analisis, persistencia }, planes, perfil, contenido] = await Promise.all([getRegistros(), getPlan(), getAnalisis(), getPlanes(), getPerfil(), getContenido()])
+  const [{ registros, fallo }, plan, { analisis, persistencia }, planes, perfil, contenido, diario] = await Promise.all([getRegistros(), getPlan(), getAnalisis(), getPlanes(), getPerfil(), getContenido(), getDiario()])
 
   // ?plan=<uuid> abre directo ese plan en la pestaña de rutinas y dietas (si no se pidió otra pestaña).
   const planParam = primero(sp.plan)
@@ -184,6 +196,7 @@ export default async function PesoPage({ searchParams }: { searchParams: Promise
       tabInicial={tabInicial}
       planInicial={planInicial}
       contenido={contenido}
+      diario={diario}
     />
   )
 }

@@ -4,8 +4,9 @@
 
 import {
   diaDeFecha, fmtNum, minutosBici, semanaActual, seriesDelDia, totalesDieta,
-  type ContenidoCarga, type DocId,
+  type ContenidoCarga,
 } from '@/lib/peso-contenido'
+import type { DiarioCarga, VistaPlanes } from '@/lib/peso-diario'
 import { fmtFecha, type PesoRecord } from '@/lib/peso'
 import { BTN, COLOR, Panel } from '../ui'
 
@@ -31,7 +32,7 @@ function Tarjeta({ rotulo, titulo, children, onVer, verTxt }: { rotulo: string; 
   )
 }
 
-export default function ResumenNativo({ carga, data, hoy, onIr }: { carga: ContenidoCarga; data: PesoRecord[]; hoy: string; onIr: (id: DocId) => void }) {
+export default function ResumenNativo({ carga, diario = null, data, hoy, onIr }: { carga: ContenidoCarga; diario?: DiarioCarga | null; data: PesoRecord[]; hoy: string; onIr: (id: VistaPlanes) => void }) {
   const { rutina, dieta, plan } = carga.contenido
   const dia = diaDeFecha(rutina, hoy)
   const tot = totalesDieta(dieta.comidas)
@@ -63,6 +64,15 @@ export default function ResumenNativo({ carga, data, hoy, onIr }: { carga: Conte
           </>) : <p style={{ color: COLOR.muted }}>Agrega los viernes en el plan.</p>}
         </Tarjeta>
       </div>
+      {diario && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5 rounded-xl px-3.5 py-3" style={{ background: COLOR.card2, border: `1px solid ${COLOR.line}` }}>
+          <p className="min-w-0 flex-1" style={{ flexBasis: 220, fontSize: 13.5, lineHeight: 1.45, color: COLOR.ink }}>
+            <span aria-hidden>📓</span> <strong>{diario.dias.some(d => d.fecha === hoy) ? 'Ya anotaste lo de hoy.' : 'Aún no anotas lo de hoy.'}</strong>{' '}
+            <span style={{ color: COLOR.muted }}>Comidas, gustos y ejercicio: mira cuánto ganas o pierdes por día, semana y mes.</span>
+          </p>
+          <button type="button" onClick={() => onIr('diario')} className={`${BTN.base} ${BTN.ghost} min-h-10`}>{diario.dias.some(d => d.fecha === hoy) ? 'Ver mi diario' : 'Anotar mi día'} →</button>
+        </div>
+      )}
     </Panel>
   )
 }
