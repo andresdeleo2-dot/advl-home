@@ -15,7 +15,7 @@ import {
 } from '@/lib/peso-diario'
 import { BTN, COLOR, INPUT, Panel, Pill, Segmented } from '../ui'
 import { borrarDiaApi, guardarDiaApi } from './api'
-import { AcumuladoGrafica, Cascada, Cifras, grasaConSigno } from './Bloques'
+import { AcumuladoGrafica, Cascada, Cifras, PorComida, grasaConSigno } from './Bloques'
 import Num from './Num'
 
 // ── Lo que está sin guardar vive aquí (fuera de React) para que cambiar de día o de pestaña no lo pierda ───────────────
@@ -150,28 +150,54 @@ function PanelAgregar({ comida, frec, onAgregar, onCerrar }: { comida: ComidaDia
 
 // ── Una fila de lo que comiste ──────────────────────────────────────────────
 
+const PORCIONES = [0.25, 0.5, 0.75, 1, 1.5, 2]
+const FRACCION: Record<number, string> = { 0.25: '¼', 0.5: '½', 0.75: '¾', 1: '1', 1.5: '1½', 2: '2' }
+const fracc = (n: number) => FRACCION[n] ?? cant(n)
+
+/** Un renglón compacto: qué fue, cuántas porciones y cuántas kcal. «Ajustar» abre las porciones y las calorías exactas. */
 function FilaItem({ x, onCambio, onQuitar }: { x: ItemDia; onCambio: (p: Partial<ItemDia>) => void; onQuitar: () => void }) {
+  const [ajustar, setAjustar] = useState(false)
   const g = grupoDe(x.grupo)
-  const paso = x.grupo === 'plan' ? 0.5 : 1
-  const min = x.grupo === 'plan' ? 0.5 : 1
+  const esPlan = x.grupo === 'plan'
+  const opciones = PORCIONES.includes(x.n) ? PORCIONES : [...PORCIONES, x.n].sort((a, b) => a - b)
+  const boton = `${BTN.base} min-h-10 min-w-10 rounded-lg border px-2 text-sm`
   return (
-    <li className="rounded-lg bg-white px-3 py-2.5" style={{ border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${g.color}` }}>
-      <div className="flex items-start justify-between gap-2">
-        <span className="min-w-0 font-semibold" style={{ fontSize: 14, lineHeight: 1.35, color: COLOR.navy }}><span aria-hidden>{g.icono}</span> {x.nombre}</span>
-        <button type="button" aria-label={`Quitar ${x.nombre}`} onClick={onQuitar} className={`${BTN.base} ${BTN.danger} min-h-10 min-w-10 shrink-0 px-0 text-base`}>✕</button>
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="flex items-center gap-1">
-          <button type="button" aria-label={`Menos ${x.nombre}`} disabled={x.n <= min} onClick={() => onCambio({ n: Math.max(min, x.n - paso) })} className={`${BTN.base} ${BTN.ghost} min-h-11 min-w-11 px-0 text-base`}>−</button>
-          <Num valor={x.n} onValor={n => onCambio({ n: Math.round(n * 4) / 4 })} min={0.25} max={50} paso={paso} etiqueta={`Porciones de ${x.nombre}`} className="w-16 text-center" />
-          <button type="button" aria-label={`Más ${x.nombre}`} onClick={() => onCambio({ n: Math.min(50, x.n + paso) })} className={`${BTN.base} ${BTN.ghost} min-h-11 min-w-11 px-0 text-base`}>＋</button>
+    <li data-n={x.n} className="rounded-lg bg-white px-3 py-2" style={{ border: `1px solid ${COLOR.line}`, borderLeft: `4px solid ${g.color}` }}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 font-semibold" style={{ fontSize: 14, lineHeight: 1.35, color: COLOR.navy }}><span aria-hidden>{g.icono}</span> {esPlan ? 'Lo de tu dieta' : x.nombre}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          <span className="mr-1 tabular-nums font-semibold" style={{ fontSize: 13.5, color: COLOR.ink }}>{fmtNum(Math.round(x.n * x.kcal))} kcal</span>
+          <button type="button" aria-label={`Ajustar ${x.nombre}`} aria-expanded={ajustar} onClick={() => setAjustar(a => !a)} className={`${BTN.base} ${BTN.ghost} min-h-10 min-w-10 px-0 text-sm`} style={ajustar ? { background: COLOR.card2, borderColor: COLOR.gold } : undefined} title="Ajustar porciones y calorías">✎</button>
+          <button type="button" aria-label={`Quitar ${x.nombre}`} onClick={onQuitar} className={`${BTN.base} ${BTN.danger} min-h-10 min-w-10 px-0 text-base`}>✕</button>
         </span>
-        <span className="flex items-center gap-1.5">
-          <Num valor={x.kcal} onValor={kcal => onCambio({ kcal: Math.round(kcal) })} max={5000} etiqueta={`Calorías de cada porción de ${x.nombre}`} className="w-20" />
-          <span className="whitespace-nowrap" style={{ fontSize: 12, color: COLOR.muted }}>kcal c/u</span>
-        </span>
-        <span className="ml-auto tabular-nums font-semibold" style={{ fontSize: 13.5, color: COLOR.ink }}>{fmtNum(Math.round(x.n * x.kcal))} kcal</span>
       </div>
+      {esPlan ? (
+        <div className="mt-1 grid gap-1" role="group" aria-label={`Cuánto comiste de ${x.nombre}`} style={{ gridTemplateColumns: `repeat(${opciones.length}, minmax(0, 1fr))`, maxWidth: 380 }}>
+          {opciones.map(v => (
+            <button key={v} type="button" aria-pressed={x.n === v} aria-label={`${fracc(v)} de ${x.nombre}`} onClick={() => onCambio({ n: v })} className={`${BTN.base} min-h-10 rounded-lg border px-0 text-sm`}
+              style={x.n === v ? { background: COLOR.navy, borderColor: COLOR.navy, color: '#fff' } : { background: '#fff', borderColor: COLOR.lineStrong, color: COLOR.ink }}>{fracc(v)}</button>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="flex items-center gap-1">
+            <button type="button" aria-label={`Menos ${x.nombre}`} disabled={x.n <= 1} onClick={() => onCambio({ n: Math.max(1, x.n - 1) })} className={`${boton} bg-white`} style={{ borderColor: COLOR.lineStrong }}>−</button>
+            <span className="min-w-10 text-center tabular-nums font-semibold" style={{ fontSize: 14, color: COLOR.navy }} aria-label={`${cant(x.n)} porciones de ${x.nombre}`}>×{cant(x.n)}</span>
+            <button type="button" aria-label={`Más ${x.nombre}`} onClick={() => onCambio({ n: Math.min(50, x.n + 1) })} className={`${boton} bg-white`} style={{ borderColor: COLOR.lineStrong }}>＋</button>
+          </span>
+          <span className="tabular-nums" style={{ fontSize: 12, color: COLOR.muted }}>{fmtNum(x.kcal)} kcal c/u</span>
+        </div>
+      )}
+      {ajustar && (
+        <div className="mt-1.5 flex flex-wrap items-end gap-3 rounded-lg p-2.5" style={{ background: COLOR.card2, border: `1px solid ${COLOR.line}` }}>
+          <label className="block"><span style={{ fontSize: 12, fontWeight: 700, color: COLOR.muted }}>Porciones</span>
+            <Num valor={x.n} onValor={n => onCambio({ n: Math.round(n * 4) / 4 })} min={0.25} max={50} paso={0.25} etiqueta={`Porciones de ${x.nombre}`} className="mt-1 w-20 text-center" /></label>
+          <label className="block"><span style={{ fontSize: 12, fontWeight: 700, color: COLOR.muted }}>kcal de cada una</span>
+            <Num valor={x.kcal} onValor={kcal => onCambio({ kcal: Math.round(kcal) })} max={5000} etiqueta={`Calorías de cada porción de ${x.nombre}`} className="mt-1 w-24" /></label>
+          <label className="block"><span style={{ fontSize: 12, fontWeight: 700, color: COLOR.muted }}>Proteína (g)</span>
+            <Num valor={x.prot} onValor={prot => onCambio({ prot: Math.round(prot * 10) / 10 })} max={500} etiqueta={`Proteína de cada porción de ${x.nombre}`} className="mt-1 w-24" /></label>
+        </div>
+      )}
     </li>
   )
 }
@@ -198,13 +224,15 @@ function TarjetaComida({ c, plan, abierta, frec, onAbrir, onCambio }: {
   }
 
   return (
-    <li className="rounded-xl p-3.5" style={{ background: COLOR.card2, border: `1px solid ${COLOR.line}` }} data-comida={c.id}>
+    <li className="rounded-xl p-3" style={{ background: COLOR.card2, border: `1px solid ${COLOR.line}` }} data-comida={c.id}>
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
         <div className="min-w-0">
           <h3 className="serif" style={{ fontSize: 18, lineHeight: 1.2, fontWeight: 600, color: COLOR.navy }}>{c.nombre}{c.hora && <span style={{ fontSize: 13, fontWeight: 500, color: COLOR.muted }}> · {c.hora}</span>}</h3>
-          <p className="mt-0.5 tabular-nums" style={{ fontSize: 12.5, color: COLOR.muted }}>
-            {otros ? 'Lo que comes entre comidas o fuera de tu dieta.' : `Tu dieta pide ${fmtNum(c.kcal)} kcal · ${fmtNum(c.prot)} g de proteína`}
-          </p>
+          {(otros || c.items.length === 0 || c.omitida) && (
+            <p className="mt-0.5 tabular-nums" style={{ fontSize: 12.5, color: COLOR.muted }}>
+              {otros ? 'Lo que comes entre comidas o fuera de tu dieta.' : `Tu dieta pide ${fmtNum(c.kcal)} kcal · ${fmtNum(c.prot)} g de proteína`}
+            </p>
+          )}
         </div>
         {estado}
       </div>
@@ -216,13 +244,13 @@ function TarjetaComida({ c, plan, abierta, frec, onAbrir, onCambio }: {
         </div>
       ) : (
         <>
-          {!otros && c.kcal > 0 && (
+          {!otros && c.kcal > 0 && c.items.length > 0 && (
             <div className="mt-2.5">
               <div className="h-2 overflow-hidden rounded-full" style={{ background: 'rgba(15,35,64,.09)' }} role="progressbar" aria-label={`${c.nombre}: ${fmtNum(Math.round(comido))} de ${fmtNum(c.kcal)} kcal`} aria-valuemin={0} aria-valuemax={c.kcal} aria-valuenow={Math.round(comido)}>
                 <div style={{ width: `${pct}%`, height: '100%', background: comido > c.kcal * 1.1 ? COLOR.warn : COLOR.navy2, transition: 'width .2s' }} />
               </div>
               <p className="mt-1 tabular-nums" style={{ fontSize: 12.5, color: COLOR.ink }}>
-                Llevas <strong>{fmtNum(Math.round(comido))}</strong> de {fmtNum(c.kcal)} kcal{prot > 0 && <> · {fmtNum(Math.round(prot))} g de proteína</>}
+                Llevas <strong>{fmtNum(Math.round(comido))}</strong> de {fmtNum(c.kcal)} kcal{(prot > 0 || c.prot > 0) && <> · proteína {fmtNum(Math.round(prot))} de {fmtNum(c.prot)} g</>}
               </p>
             </div>
           )}
@@ -420,6 +448,9 @@ export default function DiaVista({ fecha, hoy, guardado, mapa, dieta, rutina, ct
   }
 
   const planPorId = (id: string) => dieta.comidas.find(c => c.id === id)
+  const delPlan = dia.comidas.filter(c => c.id !== ID_OTROS).reduce((a, c) => a + sumaComida(c), 0)
+  const extrasKcal = dia.comidas.filter(c => c.id === ID_OTROS).reduce((a, c) => a + sumaComida(c), 0)
+  const protPlan = dia.comidas.filter(c => c.id !== ID_OTROS).reduce((a, c) => a + c.prot, 0)
   const futuro = fecha > hoy
 
   return (
@@ -438,6 +469,22 @@ export default function DiaVista({ fecha, hoy, guardado, mapa, dieta, rutina, ct
           {peso != null && <> Para tus cuentas se usa {fmtNum(peso, 1)} kg.</>}
           {futuro && <> (Es mañana: puedes dejarlo listo.)</>}
         </p>
+        {t.planKcal > 0 && (
+          <div className="mb-4 rounded-xl bg-white p-3" style={{ border: `1px solid ${COLOR.line}` }} data-progreso-dia>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <strong style={{ fontSize: 14, color: COLOR.navy }}>Tu dieta de hoy</strong>
+              <span className="tabular-nums" style={{ fontSize: 13, color: COLOR.ink }}><strong>{fmtNum(Math.round(delPlan))}</strong> de {fmtNum(t.planKcal)} kcal</span>
+            </div>
+            <div className="mt-1.5 h-2.5 overflow-hidden rounded-full" style={{ background: 'rgba(15,35,64,.09)' }}>
+              <div style={{ width: `${Math.min(100, (delPlan / t.planKcal) * 100)}%`, height: '100%', background: delPlan > t.planKcal * 1.1 ? COLOR.warn : COLOR.navy2, transition: 'width .2s' }} />
+            </div>
+            <p className="mt-1.5 tabular-nums" style={{ fontSize: 12.5, lineHeight: 1.5, color: COLOR.muted }}>
+              {delPlan >= t.planKcal ? <>Ya cubriste tu dieta{delPlan > t.planKcal * 1.1 ? ` (+${fmtNum(Math.round(delPlan - t.planKcal))} kcal de más)` : ''}</> : <>Te faltan <strong style={{ color: COLOR.ink }}>{fmtNum(Math.round(t.planKcal - delPlan))} kcal</strong></>}
+              {' · '}Proteína {fmtNum(t.prot)} de {fmtNum(protPlan)} g
+              {extrasKcal > 0 && <> · Fuera de tu dieta: <strong style={{ color: COLOR.ink }}>+{fmtNum(Math.round(extrasKcal))} kcal</strong></>}
+            </p>
+          </div>
+        )}
         {dia.comidas.length === 0 ? (
           <p style={{ fontSize: 13, color: COLOR.muted }}>Tu dieta no tiene comidas todavía: agrégalas en Dieta › Editar.</p>
         ) : (
@@ -513,6 +560,8 @@ export default function DiaVista({ fecha, hoy, guardado, mapa, dieta, rutina, ct
           Faltan por anotar: <strong>{t.faltan.join(', ')}</strong>. Mientras tanto la cuenta del día se ve mejor de lo que será (cuenta lo que gastas todo el día, pero solo lo que ya comiste).
         </p>
       )}
+
+      <PorComida comidas={dia.comidas} />
 
       <Cascada
         titulo={vacio ? 'Cómo se arma tu balance' : 'Qué movió tu balance hoy'} ver="dia"

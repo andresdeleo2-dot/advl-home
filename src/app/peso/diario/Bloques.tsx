@@ -7,8 +7,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtNum, type DocDieta } from '@/lib/peso-contenido'
 import {
-  GRUPOS_ITEM, KCAL_POR_KG, conSigno, diasEntre, etiquetaCorta, etiquetaDia, etiquetaLarga, fmtKgCambio, grupoDe, nombreMes,
-  type Acumulado, type Barra, type FilaDia, type Periodo, type Rango, type ResumenPeriodo,
+  GRUPOS_ITEM, ID_OTROS, KCAL_POR_KG, conSigno, diasEntre, etiquetaCorta, etiquetaDia, etiquetaLarga, fmtKgCambio, grupoDe, nombreMes,
+  type Acumulado, type Barra, type ComidaDia, type FilaDia, type Periodo, type Rango, type ResumenPeriodo,
 } from '@/lib/peso-diario'
 import { BTN, COLOR, Panel, Pill } from '../ui'
 
@@ -184,6 +184,56 @@ export function Cascada({ titulo, ver, impacto, balance, calculables, sinDatos }
           <p className="mt-1.5" style={{ fontSize: 12, color: COLOR.muted }}>{balance <= 0 ? 'Déficit: comiste menos de lo que gastas.' : 'Superávit: comiste más de lo que gastas.'} La línea vertical es el cero.</p>
         </li>
       </ul>
+    </Panel>
+  )
+}
+
+// ── Calorías por comida ─────────────────────────────────────────────────────
+
+/** Una barra por comida, apilada por de qué fue (tu dieta, otra comida, antojos, alcohol…); la marca es lo que pide tu dieta. */
+export function PorComida({ comidas }: { comidas: ComidaDia[] }) {
+  const filas = comidas.filter(c => c.id !== ID_OTROS || c.items.length > 0).map(c => {
+    const trozos = GRUPOS_ITEM.map(g => ({ g, kcal: c.items.filter(x => x.grupo === g.v).reduce((a, x) => a + x.n * x.kcal, 0) })).filter(t => t.kcal > 0)
+    return { c, trozos, total: trozos.reduce((a, t) => a + t.kcal, 0) }
+  })
+  const hay = filas.some(f => f.total > 0)
+  const max = Math.max(1, ...filas.map(f => Math.max(f.total, f.c.kcal)))
+  const usados = GRUPOS_ITEM.filter(g => filas.some(f => f.trozos.some(t => t.g.v === g.v)))
+  if (!hay) {
+    return (
+      <Panel eyebrow="Por comida" icon="🍽️" title="Calorías por comida">
+        <p style={{ fontSize: 13.5, lineHeight: 1.5, color: COLOR.muted }}>Anota lo que comiste y verás aquí cuánto pesó cada comida contra lo que pide tu dieta.</p>
+      </Panel>
+    )
+  }
+  return (
+    <Panel eyebrow="Por comida" icon="🍽️" title="Calorías por comida" subtitle="Cada barra es una comida; los colores son de qué fue. La marca vertical es lo que pide tu dieta para esa comida.">
+      <ul className="space-y-3">
+        {filas.map(({ c, trozos, total }) => {
+          const pasa = c.kcal > 0 && total > c.kcal * 1.1
+          return (
+            <li key={c.id}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 font-semibold" style={{ fontSize: 13.5, color: COLOR.navy }}>{c.nombre}</span>
+                <span className="shrink-0 tabular-nums" style={{ fontSize: 13, color: pasa ? '#92400E' : COLOR.ink }}>
+                  {c.omitida ? 'No la comí' : total > 0 ? <><strong>{fmtNum(Math.round(total))} kcal</strong>{c.kcal > 0 && <span style={{ color: COLOR.muted }}> de {fmtNum(c.kcal)}</span>}</> : <span style={{ color: COLOR.muted }}>Sin anotar{c.kcal > 0 ? ` · pide ${fmtNum(c.kcal)}` : ''}</span>}
+                </span>
+              </div>
+              <div className="relative mt-1 flex h-3.5 rounded-full" style={{ background: 'rgba(15,35,64,.06)' }}>
+                {trozos.map((t, i) => (
+                  <span key={t.g.v} aria-hidden title={`${t.g.nombre}: ${fmtNum(Math.round(t.kcal))} kcal`}
+                    style={{ width: `${(t.kcal / max) * 100}%`, background: t.g.color, borderRadius: i === 0 ? '999px 0 0 999px' : i === trozos.length - 1 ? '0 999px 999px 0' : 0, borderRight: i < trozos.length - 1 ? '1.5px solid #fff' : undefined }} />
+                ))}
+                {c.kcal > 0 && <span aria-hidden style={{ position: 'absolute', top: -3, bottom: -3, left: `${(c.kcal / max) * 100}%`, width: 2, borderRadius: 1, background: COLOR.navy, opacity: 0.75 }} />}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5" style={{ fontSize: 12.5, color: COLOR.ink }}>
+        {usados.map(g => <span key={g.v} className="inline-flex items-center gap-1.5"><span aria-hidden style={{ width: 11, height: 11, borderRadius: 3, background: g.color }} />{g.nombre}</span>)}
+        <span className="inline-flex items-center gap-1.5"><span aria-hidden style={{ width: 2, height: 13, background: COLOR.navy, opacity: 0.75 }} />Lo que pide tu dieta</span>
+      </div>
     </Panel>
   )
 }
