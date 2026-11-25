@@ -18,6 +18,7 @@ import { waNumero } from '@/lib/cumple'
 import { fotoSrc, edadEnFecha, colorTipo, diffFechas, formatDiff } from '@/lib/vida'
 import { useTodayResumen, hmm } from '@/lib/useTodayResumen'
 import { cmpRoadmap, cmpFeature } from '@/lib/ordenRoadmap'
+import { usePanelDia, useTusTres, HeroDia, KpisDia, ChipsDia, TusTres, TuSemana, EpicasSemana, PersonasDia, SaludDia, Preguntale, AnotarPanel } from './PanelDia'
 
 const SERIF = 'var(--epica-serif, Georgia, serif)'
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -39,7 +40,7 @@ const signoDe = (mes0: number, dia: number) => {
 type SlotState = 'normal' | 'collapsed'
 // Estado inicial de cada slot cuando el usuario NUNCA lo ha tocado (nada guardado en localStorage
 // todavía). El resto arrancan expandidos como siempre; sólo Noticias arranca cerrado.
-const SLOT_DEFAULTS: Record<string, SlotState> = { noticias: 'collapsed' }
+const SLOT_DEFAULTS: Record<string, SlotState> = { noticias: 'collapsed', frase: 'collapsed' }
 
 const baseCard: CSSProperties = { borderRadius: 16, overflow: 'hidden', boxShadow: '0 20px 44px -34px rgba(15,35,64,0.5)' }
 
@@ -82,6 +83,10 @@ const ENF_ORDENES: [EnfOrden, string][] = [['importancia', 'Importancia'], ['mio
 export default function PanelClient() {
   const { epics, today, todayTasks, routines, routinesDone, dueSoon, workedMin, runningName } = useTodayResumen()
   const [now, setNow] = useState<Date | null>(null)
+  // «Mi día»: lo de hoy se hace allá; aquí se ve en resumen (PanelDia.tsx).
+  const { dia, extra } = usePanelDia(today)
+  const tres = useTusTres(dia, epics)
+  const tresIds = useMemo(() => new Set(tres.map(x => x.task?.id).filter(Boolean) as string[]), [tres])
   const [personas, setPersonas] = useState<{ id: string; nombre: string; apodo: string | null; cumple: string; excepcional?: boolean; foto?: string | null; celular?: string | null }[]>([])
   const [momentos, setMomentos] = useState<{ id: number; titulo: string; tipo?: string | null; fecha: string | null; fecha_fin?: string | null; outstanding: boolean; recordar?: boolean | null; personas: string[] | null; descripcion?: string | null; nota?: string | null; fotos?: string[] | null; importancia?: number | null }[]>([])
   const [layout, setLayout] = useState<Record<string, SlotState>>({})
@@ -124,14 +129,15 @@ export default function PanelClient() {
   // Épicas presentes en las tareas de hoy (para el filtro) + tareas filtradas.
   const enfEpics = useMemo(() => { const seen = new Map<string, Epica>(); todayTasks.forEach(({ e }) => { if (!seen.has(e.id)) seen.set(e.id, e) }); return [...seen.values()] }, [todayTasks])
   const filteredTasks = useMemo(() => {
-    const base = enfEpic === 'todas' ? todayTasks : todayTasks.filter(x => x.e.id === enfEpic)
+    // Tus 3 de Mi día van arriba en su propia lista; aquí queda «también agendado».
+    const base = (enfEpic === 'todas' ? todayTasks : todayTasks.filter(x => x.e.id === enfEpic)).filter(x => !x.t.id || !tresIds.has(x.t.id))
     if (enfOrden === 'importancia') return base
     // sort estable: lo que empata conserva el orden de importancia
     const due = (x: { t: EpicaTask }) => x.t.due || '9999-99-99'
     return [...base].sort(enfOrden === 'mio' ? (a, b) => (a.t.planOrder ?? 1e9) - (b.t.planOrder ?? 1e9)
       : enfOrden === 'roadmap' ? cmpRoadmap : enfOrden === 'feature' ? cmpFeature
       : (a, b) => due(a).localeCompare(due(b)))
-  }, [todayTasks, enfEpic, enfOrden])
+  }, [todayTasks, enfEpic, enfOrden, tresIds])
 
   const cumples = useMemo(() => {
     const hoy = new Date(); hoy.setHours(12, 0, 0, 0)
@@ -182,6 +188,7 @@ export default function PanelClient() {
             <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.22em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 8 }}>Panel de hoy</div>
             <div style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.05 }}>{greet}, Andrés.</div>
             <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.72)', textTransform: 'capitalize', marginTop: 4 }}>{cap(longDay(today))}</div>
+            <HeroDia dia={dia} now={now} tres={tres} />
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontFamily: SERIF, fontSize: 40, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{now ? now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
@@ -190,20 +197,9 @@ export default function PanelClient() {
           </div>
         </div>
 
-        {/* Tiras de resumen */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
-          {[
-            { n: todayTasks.length, l: 'tareas de hoy', c: '#2E5A9E' },
-            { n: `${routinesDone}/${routines.length}`, l: 'rutinas hechas', c: '#2E6E6E' },
-            { n: hmm(workedMin), l: 'trabajado hoy', c: '#A87A2C' },
-            { n: dueSoon.length, l: 'por vencer (14 d)', c: '#B0522E' },
-          ].map((s, i) => (
-            <div key={i} style={{ ...baseCard, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', padding: '13px 16px', borderTop: `3px solid ${s.c}` }}>
-              <div style={{ fontFamily: SERIF, fontSize: 27, lineHeight: .9, color: s.c }}>{s.n}</div>
-              <div style={{ fontSize: 11.5, fontWeight: 600, color: 'rgba(20,35,61,0.55)', marginTop: 5 }}>{s.l}</div>
-            </div>
-          ))}
-        </div>
+        {/* Números del día y de la semana (Mi día) + lo urgente + captura rápida con voz */}
+        <KpisDia dia={dia} tres={tres} workedMin={workedMin} routinesDone={routinesDone} routinesTotal={routines.length} />
+        <ChipsDia dia={dia} extra={extra} cumples={cumples} />
 
         {/* INFORMATIVO tras KPIs: Clima por HORA + Frase */}
         <div className="panel-info" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.25fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginBottom: 4 }}>
@@ -249,6 +245,7 @@ export default function PanelClient() {
           <Slot id="enfoque" title="Enfoque de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
             <div className="enfoque-split" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) 1px minmax(0,1fr)', gap: 20, alignItems: 'stretch' }}>
               <div>
+                <TusTres tres={tres} abrir={(e, t) => setPeek({ kind: 'task', e, t })} />
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
                   <span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E5A9E' }}>Actividades · {filteredTasks.length}</span>
                   {todayTasks.length > 1 && (
@@ -318,6 +315,19 @@ export default function PanelClient() {
             </div>
           </div>
         </div>
+
+        {/* SECCIÓN · TU SEMANA (lo que no está en Mi día: tendencias, épicas, personas, salud, preguntas) */}
+        <SectionTitle icon="📈" href="/dia" cta="ver días en Mi día">Tu semana</SectionTitle>
+        <TuSemana dia={dia} epics={epics} hoy={today} />
+        <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginTop: 16 }}>
+          <EpicasSemana epics={epics} hoy={today} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <PersonasDia extra={extra} epics={epics} hoy={today} abrirPersona={openPersona} celulares={new Map(personas.map(p => [p.id, p.celular ?? null]))} />
+            <SaludDia extra={extra} />
+          </div>
+        </div>
+        <div style={{ marginTop: 16 }}><Preguntale /></div>
+        <AnotarPanel hoy={today} />
 
         {/* SECCIÓN · NOTICIAS (Gemini con búsqueda en vivo, se refresca cada hora) */}
         <SectionTitle icon="📰">Noticias</SectionTitle>
