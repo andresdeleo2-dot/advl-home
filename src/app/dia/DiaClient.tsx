@@ -365,7 +365,7 @@ export default function DiaClient() {
         )}
 
         {dia && fecha === hoy && modo === 'ritual' && data && (
-          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} />
+          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} volver={() => ir('hoy')} />
         )}
         {dia && fecha === hoy && modo === 'tus3' && data && (
           <Ritual data={data} hoy={hoy} pendientes={[]} prioridades={prioridades} tareaDe={tareaDePrioridad}

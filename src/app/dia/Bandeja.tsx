@@ -55,73 +55,180 @@ export function itemsDe(data: DiaData | null): Item[] {
   ]
 }
 
-export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, abrirEn }: {
+/** Secciones de la bandeja, en el orden en que conviene decidir. */
+const SECCIONES: { f: Exclude<Filtro, 'todo'>; t: string; sub: string }[] = [
+  { f: 'nuevo', t: 'Pendientes nuevos', sub: 'Salieron de tu diario. «Sí» los vuelve tarea en su épica.' },
+  { f: 'decision', t: 'Decisiones', sub: 'Elige una opción o escribe la tuya. Se guarda en su nota de Obsidian.' },
+  { f: 'sugerencia', t: 'Sugerencias para tus tareas', sub: 'Cambios a tareas que ya tienes.' },
+  { f: 'cerebro', t: 'Para tu cerebro', sub: 'Con una o dos líneas basta. Se guarda en tu bóveda a las 3:00.' },
+  { f: 'mover', t: 'Notas del inbox', sub: 'A qué carpeta de tu bóveda van.' },
+]
+
+export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn }: {
   data: DiaData; hoy: string; respuestas: Map<string, DiaRespuesta>; epicas: Epica[] | null
-  acc: AccionesBandeja; alTerminar: () => void; abrirEn?: string | null
+  acc: AccionesBandeja; alTerminar: () => void; volver: () => void; abrirEn?: string | null
 }) {
   const [filtro, setFiltro] = useState<Filtro>('todo')
   const [abierto, setAbierto] = useState<string | null>(abrirEn ?? null)
+  const [verHechas, setVerHechas] = useState(false)
   const todos = useMemo(() => itemsDe(data), [data])
-  const lista = useMemo(() => todos.filter(it => filtro === 'todo' || filtroDe(it) === filtro), [todos, filtro])
   const pendientes = todos.filter(it => !respuestas.has(it.id))
-  const cuenta = (f: Filtro) => todos.filter(it => (f === 'todo' || filtroDe(it) === f) && !respuestas.has(it.id)).length
+  const hechas = todos.filter(it => respuestas.has(it.id))
+  // La ficha recorre las que faltan (en el orden de las secciones) para que ‹ › no te regrese a lo ya decidido.
+  const orden = useMemo(() => SECCIONES.flatMap(s => todos.filter(it => filtroDe(it) === s.f)), [todos])
+  const lista = useMemo(() => orden.filter(it => (filtro === 'todo' || filtroDe(it) === filtro) && (!respuestas.has(it.id) || it.id === abierto)), [orden, filtro, respuestas, abierto])
+  const cuenta = (f: Filtro) => pendientes.filter(it => f === 'todo' || filtroDe(it) === f).length
   const idx = abierto ? lista.findIndex(it => it.id === abierto) : -1
-  const actual = idx >= 0 ? lista[idx] : null
-  const ir = (d: number) => { if (!lista.length) return; const n = (idx + d + lista.length) % lista.length; setAbierto(lista[n].id) }
-  // Después de decidir, pasa a la siguiente SIN decidir (si ya no hay, cierra).
+  const actual = idx >= 0 ? lista[idx] : abierto ? todos.find(it => it.id === abierto) || null : null
+  const ir = (d: number) => { if (!lista.length) return; const n = ((idx < 0 ? 0 : idx) + d + lista.length) % lista.length; setAbierto(lista[n].id) }
   const siguiente = useCallback((desde: string) => {
     const i = lista.findIndex(it => it.id === desde)
     for (let k = 1; k <= lista.length; k++) { const it = lista[(i + k) % lista.length]; if (it.id !== desde && !respuestas.has(it.id)) { setAbierto(it.id); return } }
     setAbierto(null)
   }, [lista, respuestas])
+  const pct = todos.length ? Math.round((hechas.length / todos.length) * 100) : 100
+  const secciones = SECCIONES.filter(s => filtro === 'todo' || s.f === filtro)
+    .map(s => ({ ...s, items: pendientes.filter(it => filtroDe(it) === s.f) })).filter(s => s.items.length)
 
   return (
     <section className="bd md-fade">
-      <div className="md-entre md-base">
-        <h1 className="md-fecha">Por decidir</h1>
-        <span className="md-meta">{todos.length - pendientes.length} de {todos.length} listas</span>
-      </div>
-      <p className="md-sub md-mt4">Lo que salió de anoche. Toca cualquiera para verla completa, cambiarle épica, feature o fecha, y moverte entre todas con ‹ ›.</p>
-
-      <div className="bd-filtros" role="tablist" aria-label="Filtrar">
-        {FILTROS.filter(([f]) => f === 'todo' || todos.some(it => filtroDe(it) === f)).map(([f, l]) => (
-          <button key={f} role="tab" aria-selected={filtro === f} data-on={filtro === f} onClick={() => setFiltro(f)}>{l}{cuenta(f) ? <span>{cuenta(f)}</span> : null}</button>
-        ))}
+      <div className="bd-barra">
+        <button className="bd-volver" onClick={volver}><span aria-hidden>←</span> Volver a Hoy</button>
+        <span className="md-meta">{pendientes.length ? `Faltan ${pendientes.length}` : 'Todo decidido'}</span>
       </div>
 
-      <div className="md-card md-lista">
-        {lista.map(it => {
-          const r = respuestas.get(it.id)
-          const meta = it.kind === 'tarjeta' ? [it.c.epica, it.c.tipo === 'mover' ? it.c.destino : null].filter(Boolean).join(' · ') : (it.kind === 'decision' ? it.d.nota : it.q.nota) || ''
-          return (
-            <div key={it.id} className="md-row bd-fila" data-hecha={!!r}>
-              <button className="bd-abrir" onClick={() => setAbierto(it.id)}>
-                <span className={`md-chip md-tipo-${tipoDe(it) === 'decision' ? 'nuevo' : tipoDe(it) === 'cerebro' ? 'esperando' : tipoDe(it)}`}>{ETIQUETA[tipoDe(it)]}</span>
-                <span className="bd-tit">{tituloDe(it)}</span>
-                {meta && <span className="md-meta">{meta}</span>}
-              </button>
-              {r ? (
-                <span className="bd-estado"><span>{ESTADO_TXT[r.estado] || r.estado}</span><button className="md-link" onClick={() => acc.deshacer(it.id)}>Deshacer</button></span>
-              ) : it.kind === 'tarjeta' ? (
-                <span className="bd-rapidos">
-                  <button className="md-icobtn" title="Descartar" aria-label="Descartar" onClick={() => acc.descartar(it)}>✕</button>
-                  <button className="md-icobtn bd-si" title={it.c.tipo === 'nuevo' ? 'Sí, hoy' : 'Sí'} aria-label="Aceptar" onClick={() => acc.aceptar(it.c, null)}>✓</button>
-                </span>
-              ) : <span className="md-meta bd-abrir-txt" onClick={() => setAbierto(it.id)}>Contestar ›</span>}
+      <h1 className="md-fecha md-mt8">Por decidir</h1>
+      <p className="md-sub md-mt4">Lo que salió de anoche. Decide rápido aquí mismo, o toca el texto para verlo completo y cambiarle épica, feature o fecha.</p>
+      <div className="bd-progreso md-mt12" role="progressbar" aria-valuenow={hechas.length} aria-valuemin={0} aria-valuemax={todos.length} aria-label="Avance">
+        <div style={{ width: `${pct}%` }} />
+      </div>
+      <p className="md-meta md-mt4">{hechas.length} de {todos.length} decididas</p>
+
+      {pendientes.length > 0 && (
+        <div className="bd-filtros" role="tablist" aria-label="Filtrar">
+          {([['todo', 'Todo'], ...SECCIONES.map(s => [s.f, s.t] as [Filtro, string])] as [Filtro, string][]).filter(([f]) => f === 'todo' || cuenta(f) > 0).map(([f, l]) => (
+            <button key={f} role="tab" aria-selected={filtro === f} data-on={filtro === f} onClick={() => setFiltro(f)}>{l}<span>{cuenta(f)}</span></button>
+          ))}
+        </div>
+      )}
+
+      {!pendientes.length ? (
+        <div className="md-card bd-fin md-mt12">
+          <p className="bd-fin-ico" aria-hidden>✓</p>
+          <p className="md-h3">Listo, decidiste todo</p>
+          <p className="md-sub">Lo que aceptaste ya está en tus épicas. Las decisiones y respuestas se guardan en Obsidian a las 3:00.</p>
+          <div className="md-fila md-envuelve bd-centro md-mt12">
+            <button className="md-btn" onClick={volver}>Volver a Hoy</button>
+            <button className="md-btn md-primario" onClick={alTerminar}>Elegir tus 3 de hoy</button>
+          </div>
+        </div>
+      ) : !secciones.length ? (
+        <div className="md-card md-mt12"><p className="md-sub">Ya no queda nada en este filtro. <button className="md-link" onClick={() => setFiltro('todo')}>Ver todo</button></p></div>
+      ) : secciones.map(s => (
+        <div key={s.f} className="bd-seccion">
+          <div className="bd-sec-cab"><h2>{s.t} <span>{s.items.length}</span></h2><p className="md-meta">{s.sub}</p></div>
+          <div className="md-card md-lista">
+            {s.items.map(it => <Fila key={it.id} it={it} hoy={hoy} acc={acc} abrir={() => setAbierto(it.id)} />)}
+          </div>
+        </div>
+      ))}
+
+      {hechas.length > 0 && (
+        <div className="bd-seccion">
+          <button className="bd-hechas-tog" onClick={() => setVerHechas(v => !v)} aria-expanded={verHechas}>
+            {verHechas ? '▾' : '▸'} Ya decididas ({hechas.length})
+          </button>
+          {verHechas && (
+            <div className="md-card md-lista md-mt8">
+              {hechas.map(it => {
+                const r = respuestas.get(it.id)!
+                const txt = (r.respuesta as { texto?: string } | null)?.texto
+                return (
+                  <div key={it.id} className="md-row bd-fila" data-hecha>
+                    <div className="md-grow"><div className="bd-tit">{tituloDe(it)}</div><div className="md-meta">{ESTADO_TXT[r.estado] || r.estado}{txt ? ` · «${txt}»` : ''}</div></div>
+                    <button className="md-link" onClick={() => acc.deshacer(it.id)}>Deshacer</button>
+                  </div>
+                )
+              })}
             </div>
-          )
-        })}
-        {!lista.length && <div className="md-row md-meta">Nada en este filtro.</div>}
-      </div>
+          )}
+        </div>
+      )}
 
-      <button className="md-btn md-primario md-ancho" onClick={alTerminar}>{pendientes.length ? `Seguir: elegir tus 3 de hoy (quedan ${pendientes.length} sin decidir)` : 'Listo: elegir tus 3 de hoy'}</button>
+      {pendientes.length > 0 && (
+        <div className="bd-pie">
+          <button className="md-btn" onClick={volver}>← Hoy</button>
+          <button className="md-btn md-primario" onClick={alTerminar}>Elegir tus 3 de hoy</button>
+        </div>
+      )}
 
       {actual && (
-        <Ficha key={actual.id} it={actual} pos={idx + 1} total={lista.length} r={respuestas.get(actual.id)} hoy={hoy} epicas={epicas} acc={acc}
+        <Ficha key={actual.id} it={actual} pos={Math.max(1, idx + 1)} total={Math.max(1, lista.length)} r={respuestas.get(actual.id)} hoy={hoy} epicas={epicas} acc={acc}
           cerrar={() => setAbierto(null)} anterior={() => ir(-1)} siguienteItem={() => ir(1)} hecho={() => siguiente(actual.id)} />
       )}
       <style>{CSS_BD}</style>
     </section>
+  )
+}
+
+const SUBTIPO: Record<string, string> = { limpieza: 'Limpieza', evitando: 'Lo vienes evitando', esperando: 'Esperando a otros' }
+
+/** Un renglón: se decide ahí mismo con botones que dicen lo que hacen. El texto abre la ficha completa. */
+function Fila({ it, hoy, acc, abrir }: { it: Item; hoy: string; acc: AccionesBandeja; abrir: () => void }) {
+  const [ocupado, setOcupado] = useState(false)
+  const [err, setErr] = useState('')
+  const [txt, setTxt] = useState('')
+  const [escribir, setEscribir] = useState(false)
+  const correr = async (f: () => Promise<void>) => {
+    setOcupado(true); setErr('')
+    try { await f() } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setOcupado(false) }
+  }
+  const sub = it.kind === 'tarjeta' ? SUBTIPO[it.c.tipo] : undefined
+  const meta = it.kind === 'tarjeta'
+    ? [it.c.epica || (it.c.tipo === 'nuevo' ? 'Del diario' : null), it.c.tipo === 'mover' ? `→ ${it.c.destino}` : null].filter(Boolean).join(' · ')
+    : (it.kind === 'decision' ? it.d.nota : it.q.nota) ? `se guarda en ${it.kind === 'decision' ? it.d.nota : it.q.nota}` : ''
+
+  return (
+    <div className="md-row bd-fila" aria-busy={ocupado}>
+      <div className="bd-cuerpo">
+        <button className="bd-abrir" onClick={abrir} title="Ver completo y editar">
+          {sub && <span className="bd-sub">{sub}</span>}
+          <span className="bd-tit">{tituloDe(it)}</span>
+          {meta && <span className="md-meta">{meta}</span>}
+        </button>
+
+        {it.kind === 'decision' && (
+          <div className="md-fila md-envuelve md-mt8">
+            {it.d.opciones.map(o => <button key={o} className="md-btn md-chico" disabled={ocupado} onClick={() => correr(() => acc.decidir(it.d, o, null))}>{o}</button>)}
+            <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => setEscribir(v => !v)}>Otra…</button>
+          </div>
+        )}
+        {(it.kind === 'cerebro' || (it.kind === 'decision' && escribir)) && (
+          <form className="md-fila md-mt8" onSubmit={e => { e.preventDefault(); const v = txt.trim(); if (!v) return; correr(() => it.kind === 'cerebro' ? acc.contestar(it.q, v) : acc.decidir((it as Extract<Item, { kind: 'decision' }>).d, v, null)) }}>
+            <input className="md-input md-grow" value={txt} onChange={e => setTxt(e.target.value)} placeholder={it.kind === 'cerebro' ? 'Tu respuesta' : 'Tu decisión'} aria-label="Tu respuesta" />
+            <button className="md-btn md-chico md-primario" disabled={ocupado || !txt.trim()}>Guardar</button>
+          </form>
+        )}
+        {err && <p className="md-err-txt md-mt4">{err}</p>}
+      </div>
+
+      <div className="bd-acciones">
+        {it.kind === 'tarjeta' && it.c.tipo === 'nuevo' && <>
+          <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>No</button>
+          <button className="md-btn md-chico" disabled={ocupado} onClick={() => correr(() => acc.posponer(it.c, sumarDias(hoy, 1)))}>Mañana</button>
+          <button className="md-btn md-chico md-primario" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null))}>Sí, hoy</button>
+        </>}
+        {it.kind === 'tarjeta' && it.c.tipo === 'mover' && <>
+          <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>Dejarla</button>
+          <button className="md-btn md-chico md-primario" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null, it.c.destino))}>Moverla</button>
+        </>}
+        {it.kind === 'tarjeta' && SUGERENCIA.has(it.c.tipo) && <>
+          <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>No</button>
+          <button className="md-btn md-chico md-primario" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null))}>Sí</button>
+        </>}
+        {it.kind !== 'tarjeta' && <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>{it.kind === 'cerebro' ? 'No aplica' : 'Todavía no'}</button>}
+      </div>
+    </div>
   )
 }
 
@@ -152,7 +259,7 @@ function Ficha({ it, pos, total, r, hoy, epicas, acc, cerrar, anterior, siguient
           <span className="md-meta">{pos} de {total}</span>
           <button className="md-icobtn" onClick={siguienteItem} aria-label="Siguiente">›</button>
           <span className="md-grow" />
-          <button className="md-icobtn" onClick={cerrar} aria-label="Cerrar">✕</button>
+          <button className="md-btn md-chico" onClick={cerrar}>← Lista</button>
         </div>
         <span className={`md-chip md-tipo-${tipoDe(it) === 'decision' ? 'nuevo' : tipoDe(it) === 'cerebro' ? 'esperando' : tipoDe(it)}`}>{ETIQUETA[tipoDe(it)]}</span>
         <p className="md-titulo-tarjeta">{tituloDe(it)}</p>
@@ -374,13 +481,36 @@ export function TuCerebro({ aprendido }: { aprendido: DiaAprendido[] }) {
 }
 
 const CSS_BD = `
+.bd-barra{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;background:var(--md-papel)}
+.bd-volver{border:1px solid var(--md-linea);background:#fff;border-radius:999px;padding:7px 14px;font:500 14px var(--dia-ui);color:var(--md-tinta);cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.bd-volver:hover{border-color:var(--md-tinta2)}
+.bd-progreso{height:6px;border-radius:999px;background:var(--md-linea2);overflow:hidden}
+.bd-progreso>div{height:100%;background:var(--md-verde);border-radius:999px;transition:width .3s ease}
+.bd-seccion{margin-top:22px}
+.bd-sec-cab{margin:0 2px 8px}
+.bd-sec-cab h2{font:600 15px var(--dia-ui);margin:0;color:var(--md-tinta);display:flex;gap:8px;align-items:center}
+.bd-sec-cab h2 span{font:500 11px var(--dia-ui);background:var(--md-suave);color:var(--md-acento);border-radius:999px;padding:1px 7px}
+.bd-fila{gap:14px;align-items:flex-start}
+.bd-fila[aria-busy="true"]{opacity:.55}
+.bd-cuerpo{flex:1;min-width:0}
+.bd-sub{font-size:11.5px;font-weight:600;letter-spacing:.02em;color:var(--md-acento);text-transform:uppercase}
+.bd-acciones{display:flex;gap:6px;flex:none;align-items:center;padding-top:2px}
+.bd-fantasma{background:transparent!important;border-color:transparent!important;color:var(--md-tinta2)!important}
+.bd-fantasma:hover{border-color:var(--md-linea)!important}
+@media(max-width:640px){.bd-fila{flex-direction:column;gap:10px}.bd-acciones{align-self:stretch;justify-content:flex-end;flex-wrap:wrap}}
+.bd-hechas-tog{background:none;border:0;padding:4px 2px;font:500 14px var(--dia-ui);color:var(--md-tinta2);cursor:pointer}
+.bd-pie{position:sticky;bottom:12px;z-index:10;margin-top:22px;display:flex;justify-content:space-between;gap:10px;background:#fff;border:1px solid var(--md-linea);border-radius:999px;padding:6px;box-shadow:0 10px 30px -18px rgba(28,26,23,.45)}
+@media(max-width:700px){.bd-pie{bottom:calc(92px + env(safe-area-inset-bottom))}}
+.bd-pie .md-btn{border-radius:999px}
+.bd-fin{text-align:center;padding:28px 20px}
+.bd-fin-ico{width:44px;height:44px;border-radius:50%;margin:0 auto 10px;display:grid;place-items:center;background:#e7efe2;color:var(--md-verde);font-size:20px}
+.bd-centro{justify-content:center}
 .bd-filtros{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 10px}
 .bd-filtros button{border:1px solid var(--md-linea);background:#fff;border-radius:999px;padding:6px 12px;font:500 13px var(--dia-ui);color:var(--md-tinta2);cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .bd-filtros button[data-on="true"]{background:var(--md-tinta);color:var(--md-papel);border-color:var(--md-tinta)}
 .bd-filtros button span{font-size:11px;background:var(--md-suave);color:var(--md-acento);border-radius:999px;padding:0 6px}
 .bd-filtros button[data-on="true"] span{background:rgba(255,255,255,.18);color:#fff}
-.bd-fila{align-items:center}
-.bd-fila[data-hecha="true"] .bd-tit{color:var(--md-tenue);text-decoration:line-through}
+.bd-fila[data-hecha] .bd-tit{color:var(--md-tenue)}
 .bd-abrir{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;background:none;border:0;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
 .bd-abrir:hover .bd-tit{color:var(--md-acento)}
 .bd-tit{font-weight:500}
