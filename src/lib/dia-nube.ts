@@ -123,6 +123,7 @@ export async function armarDiaEnNube(hoy: string, limiteMs = 38_000): Promise<Re
       if (['Por hacer', 'En curso', 'Esperando', 'Terminada'].includes(String(k.estado))) cambio.estado = String(k.estado)
       if (['alta', 'media', 'baja'].includes(String(k.prioridad))) cambio.prioridad = k.prioridad as 'alta' | 'media' | 'baja'
       if (k.archivar === true) cambio.archivar = true
+      if (s(k.titulo)) cambio.titulo = s(k.titulo, 200)
       let id = s(c.id, 12).replace(/[^a-z0-9-]/gi, '') || `g${tarjetas.length + 1}`
       if (tarjetas.some(x => x.id === id)) id = `${id}-${tarjetas.length}`
       tarjetas.push({ id, tipo, titulo: s(c.titulo, 220), detalle: s(c.detalle) || undefined, tareaId: tarea ? String(tarea.id) : undefined, epicaId: e ? String(e.id) : undefined, epica: e ? String(e.name) : undefined, cambio: Object.keys(cambio).length ? cambio : undefined })
@@ -132,7 +133,14 @@ export async function armarDiaEnNube(hoy: string, limiteMs = 38_000): Promise<Re
       if (!tarea && !nuevo) return null
       const min = Number(p.min)
       return { t: tarea ? String(tarea.titulo) : nuevo!.titulo, tareaId: tarea ? String(tarea.id) : undefined, itemId: nuevo?.id, epica: tarea ? String(eDe.get(eId.get(String(tarea.epica_id))!)?.name || '') : nuevo?.epica, min: Number.isFinite(min) && min > 0 ? Math.min(480, Math.round(min)) : undefined, porque: s(p.porque, 80) }
-    }).filter((x): x is NonNullable<typeof x> => x !== null).slice(0, 3)
+    }).filter((x): x is NonNullable<typeof x> => x !== null)
+      // Regla fija: una prioridad es algo que Andrés hace; «esperar…» o en Esperando usa el título claro propuesto, o se quita.
+      .map(p => {
+        const t = p.tareaId ? tareas.find(x => String(x.id) === p.tareaId) : undefined
+        if (!/^esperar\b/i.test(p.t) && t?.estado !== 'Esperando') return p
+        const mejor = tarjetas.find(c => c.tareaId === p.tareaId && c.cambio && 'titulo' in c.cambio && c.cambio.titulo)
+        return mejor ? { ...p, t: String(mejor.cambio!.titulo) } : null
+      }).filter((x): x is NonNullable<typeof x> => x !== null).slice(0, 3)
 
     const data: DiaData = {
       origen: 'gemini',
