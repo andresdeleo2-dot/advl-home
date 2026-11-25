@@ -33,6 +33,8 @@ export type AccionesBandeja = {
   posponer: (c: DiaTarjeta, fecha: string | null) => Promise<void>
   descartar: (it: Item) => Promise<void>
   deshacer: (id: string) => Promise<void>
+  /** «Ya la hice»: la tarea existente queda Terminada; un pendiente nuevo se crea ya terminado. */
+  terminar: (c: DiaTarjeta) => Promise<void>
   decidir: (d: DiaDecision, texto: string, crear: CamposTarea | null) => Promise<void>
   contestar: (q: DiaPreguntaCerebro, texto: string) => Promise<void>
 }
@@ -45,6 +47,10 @@ const ETIQUETA: Record<string, string> = { nuevo: 'Nuevo del diario', sugerencia
 const tipoDe = (it: Item) => (it.kind === 'tarjeta' ? it.c.tipo : it.kind)
 const tituloDe = (it: Item) => (it.kind === 'tarjeta' ? it.c.titulo : it.kind === 'decision' ? it.d.pregunta : it.q.pregunta)
 const ESTADO_TXT: Record<string, string> = { aceptada: 'Aceptada', pospuesta: 'Pospuesta', descartada: 'Descartada', respondida: 'Contestada' }
+const estadoTxt = (r: DiaRespuesta) => ((r.respuesta as { terminada?: boolean } | null)?.terminada ? 'Ya la hiciste' : ESTADO_TXT[r.estado] || r.estado)
+/** Se puede palomear: pendiente nuevo, o cualquier sugerencia que apunte a una tarea tuya. */
+const marcable = (it: Item) => it.kind === 'tarjeta' && it.c.tipo !== 'mover' && (it.c.tipo === 'nuevo' || !!it.c.tareaId)
+type Avisar = (texto: string, id: string) => void
 
 export function itemsDe(data: DiaData | null): Item[] {
   if (!data) return []
@@ -56,17 +62,17 @@ export function itemsDe(data: DiaData | null): Item[] {
 }
 
 /** Secciones de la bandeja, en el orden en que conviene decidir. */
-const SECCIONES: { f: Exclude<Filtro, 'todo'>; t: string; sub: string }[] = [
-  { f: 'nuevo', t: 'Pendientes nuevos', sub: 'Salieron de tu diario. «Sí» los vuelve tarea en su épica.' },
-  { f: 'decision', t: 'Decisiones', sub: 'Elige una opción o escribe la tuya. Se guarda en su nota de Obsidian.' },
-  { f: 'sugerencia', t: 'Sugerencias para tus tareas', sub: 'Cambios a tareas que ya tienes.' },
-  { f: 'cerebro', t: 'Para tu cerebro', sub: 'Con una o dos líneas basta. Se guarda en tu bóveda a las 3:00.' },
-  { f: 'mover', t: 'Notas del inbox', sub: 'A qué carpeta de tu bóveda van.' },
+const SECCIONES: { f: Exclude<Filtro, 'todo'>; t: string; sub: string; color: string }[] = [
+  { f: 'nuevo', t: 'Pendientes nuevos', sub: 'Salieron de tu diario. Palomea los que ya hiciste; «Hoy» o «Mañana» los vuelve tarea.', color: '#b5651d' },
+  { f: 'decision', t: 'Decisiones', sub: 'Un toque basta. Se guarda en su nota de Obsidian y no te lo vuelve a preguntar.', color: '#6b5ca5' },
+  { f: 'sugerencia', t: 'Sugerencias para tus tareas', sub: 'Cambios a tareas que ya tienes. Si ya la hiciste, palomeála.', color: '#3f7a8c' },
+  { f: 'cerebro', t: 'Para tu cerebro', sub: 'Con una o dos líneas basta. Se guarda en tu bóveda a las 3:00.', color: '#5a7a3a' },
+  { f: 'mover', t: 'Notas del inbox', sub: 'A qué carpeta de tu bóveda van.', color: '#8a8378' },
 ]
 
-export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn }: {
+export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn, avisar }: {
   data: DiaData; hoy: string; respuestas: Map<string, DiaRespuesta>; epicas: Epica[] | null
-  acc: AccionesBandeja; alTerminar: () => void; volver: () => void; abrirEn?: string | null
+  acc: AccionesBandeja; alTerminar: () => void; volver: () => void; abrirEn?: string | null; avisar?: Avisar
 }) {
   const [filtro, setFiltro] = useState<Filtro>('todo')
   const [abierto, setAbierto] = useState<string | null>(abrirEn ?? null)
@@ -93,16 +99,22 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
   return (
     <section className="bd md-fade">
       <div className="bd-barra">
-        <button className="bd-volver" onClick={volver}><span aria-hidden>←</span> Volver a Hoy</button>
-        <span className="md-meta">{pendientes.length ? `Faltan ${pendientes.length}` : 'Todo decidido'}</span>
+        <button className="bd-volver" onClick={volver}><span aria-hidden>←</span> Hoy</button>
+        <div className="bd-barra-av">
+          <div className="bd-progreso" role="progressbar" aria-valuenow={hechas.length} aria-valuemin={0} aria-valuemax={todos.length} aria-label="Avance">
+            <div style={{ width: `${pct}%` }} />
+          </div>
+          <span className="md-meta">{hechas.length}/{todos.length}</span>
+        </div>
       </div>
 
-      <h1 className="md-fecha md-mt8">Por decidir</h1>
-      <p className="md-sub md-mt4">Lo que salió de anoche. Decide rápido aquí mismo, o toca el texto para verlo completo y cambiarle épica, feature o fecha.</p>
-      <div className="bd-progreso md-mt12" role="progressbar" aria-valuenow={hechas.length} aria-valuemin={0} aria-valuemax={todos.length} aria-label="Avance">
-        <div style={{ width: `${pct}%` }} />
+      <div className="bd-hero">
+        <div>
+          <h1 className="md-fecha">Por decidir</h1>
+          <p className="md-sub md-mt4">Lo que salió de anoche, ya clasificado. Decide con un toque; toca el texto para verlo completo y cambiarle épica o fecha.</p>
+        </div>
+        <div className="bd-falta" aria-live="polite"><b>{pendientes.length}</b><span>{pendientes.length === 1 ? 'falta' : 'faltan'}</span></div>
       </div>
-      <p className="md-meta md-mt4">{hechas.length} de {todos.length} decididas</p>
 
       {pendientes.length > 0 && (
         <div className="bd-filtros" role="tablist" aria-label="Filtrar">
@@ -126,9 +138,9 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
         <div className="md-card md-mt12"><p className="md-sub">Ya no queda nada en este filtro. <button className="md-link" onClick={() => setFiltro('todo')}>Ver todo</button></p></div>
       ) : secciones.map(s => (
         <div key={s.f} className="bd-seccion">
-          <div className="bd-sec-cab"><h2>{s.t} <span>{s.items.length}</span></h2><p className="md-meta">{s.sub}</p></div>
-          <div className="md-card md-lista">
-            {s.items.map(it => <Fila key={it.id} it={it} hoy={hoy} acc={acc} abrir={() => setAbierto(it.id)} />)}
+          <div className="bd-sec-cab" style={{ ['--bd-c' as string]: s.color }}><h2><i aria-hidden />{s.t} <span>{s.items.length}</span></h2><p className="md-meta">{s.sub}</p></div>
+          <div className="bd-tarjeta">
+            {s.items.map(it => <Fila key={it.id} it={it} hoy={hoy} acc={acc} avisar={avisar} abrir={() => setAbierto(it.id)} />)}
           </div>
         </div>
       ))}
@@ -145,7 +157,8 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
                 const txt = (r.respuesta as { texto?: string } | null)?.texto
                 return (
                   <div key={it.id} className="md-row bd-fila" data-hecha>
-                    <div className="md-grow"><div className="bd-tit">{tituloDe(it)}</div><div className="md-meta">{ESTADO_TXT[r.estado] || r.estado}{txt ? ` · «${txt}»` : ''}</div></div>
+                    <span className="bd-palomita" data-on={(r.respuesta as { terminada?: boolean } | null)?.terminada || undefined} aria-hidden>{(r.respuesta as { terminada?: boolean } | null)?.terminada ? '✓' : ''}</span>
+                    <div className="md-grow"><div className="bd-tit">{tituloDe(it)}</div><div className="md-meta">{estadoTxt(r)}{txt ? ` · «${txt}»` : ''}</div></div>
                     <button className="md-link" onClick={() => acc.deshacer(it.id)}>Deshacer</button>
                   </div>
                 )
@@ -158,7 +171,8 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
       {pendientes.length > 0 && (
         <div className="bd-pie">
           <button className="md-btn" onClick={volver}>← Hoy</button>
-          <button className="md-btn md-primario" onClick={alTerminar}>Elegir tus 3 de hoy</button>
+          <span className="md-meta bd-pie-txt">{pendientes.length} por decidir · puedes dejar algunas</span>
+          <button className="md-btn md-primario" onClick={alTerminar}>Elegir tus 3 de hoy →</button>
         </div>
       )}
 
@@ -173,61 +187,75 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
 
 const SUBTIPO: Record<string, string> = { limpieza: 'Limpieza', evitando: 'Lo vienes evitando', esperando: 'Esperando a otros' }
 
-/** Un renglón: se decide ahí mismo con botones que dicen lo que hacen. El texto abre la ficha completa. */
-function Fila({ it, hoy, acc, abrir }: { it: Item; hoy: string; acc: AccionesBandeja; abrir: () => void }) {
+/** Un renglón: palomita «Ya la hice» a la izquierda, el texto (abre la ficha) y botones que dicen lo que hacen.
+ *  Cada decisión rápida avisa abajo con «Deshacer». */
+function Fila({ it, hoy, acc, abrir, avisar }: { it: Item; hoy: string; acc: AccionesBandeja; abrir: () => void; avisar?: Avisar }) {
   const [ocupado, setOcupado] = useState(false)
+  const [hecha, setHecha] = useState(false)
   const [err, setErr] = useState('')
   const [txt, setTxt] = useState('')
   const [escribir, setEscribir] = useState(false)
-  const correr = async (f: () => Promise<void>) => {
+  const correr = async (f: () => Promise<void>, aviso?: string) => {
     setOcupado(true); setErr('')
-    try { await f() } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setOcupado(false) }
+    try { await f(); if (aviso) avisar?.(aviso, it.id) }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); setOcupado(false); setHecha(false) }
   }
+  const corto = (t: string) => (t.length > 48 ? `${t.slice(0, 46)}…` : t)
+  const tit = tituloDe(it)
   const sub = it.kind === 'tarjeta' ? SUBTIPO[it.c.tipo] : undefined
+  const epica = it.kind === 'tarjeta' ? it.c.epica || (it.c.tipo === 'nuevo' ? 'Del diario' : '') : ''
   const meta = it.kind === 'tarjeta'
-    ? [it.c.epica || (it.c.tipo === 'nuevo' ? 'Del diario' : null), it.c.tipo === 'mover' ? `→ ${it.c.destino}` : null].filter(Boolean).join(' · ')
+    ? (it.c.tipo === 'mover' ? `→ ${it.c.destino}` : '')
     : (it.kind === 'decision' ? it.d.nota : it.q.nota) ? `se guarda en ${it.kind === 'decision' ? it.d.nota : it.q.nota}` : ''
+  const puedeMarcar = marcable(it)
+  const terminar = () => { if (it.kind !== 'tarjeta') return; setHecha(true); correr(() => acc.terminar(it.c), `Hecha: ${corto(tit)}`) }
 
   return (
-    <div className="md-row bd-fila" aria-busy={ocupado}>
+    <div className="bd-fila" aria-busy={ocupado} data-hecha={hecha || undefined}>
+      {puedeMarcar
+        ? <button className="bd-palomita" data-on={hecha || undefined} disabled={ocupado} onClick={terminar} title="Ya la hice" aria-label={`Ya la hice: ${tit}`}>{hecha ? '✓' : ''}</button>
+        : <span className="bd-palomita-vacia" aria-hidden />}
       <div className="bd-cuerpo">
         <button className="bd-abrir" onClick={abrir} title="Ver completo y editar">
           {sub && <span className="bd-sub">{sub}</span>}
-          <span className="bd-tit">{tituloDe(it)}</span>
-          {meta && <span className="md-meta">{meta}</span>}
+          <span className="bd-tit">{tit}</span>
+          {(epica || meta) && <span className="bd-meta">{epica && <span className="bd-epica">{epica}</span>}{meta && <span>{meta}</span>}</span>}
         </button>
 
         {it.kind === 'decision' && (
-          <div className="md-fila md-envuelve md-mt8">
-            {it.d.opciones.map(o => <button key={o} className="md-btn md-chico" disabled={ocupado} onClick={() => correr(() => acc.decidir(it.d, o, null))}>{o}</button>)}
-            <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => setEscribir(v => !v)}>Otra…</button>
+          <div className="bd-opciones">
+            {it.d.opciones.map(o => <button key={o} className="bd-op" disabled={ocupado} onClick={() => correr(() => acc.decidir(it.d, o, null), `Decidido: ${corto(o)}`)}>{o}</button>)}
+            <button className="bd-op bd-op-otra" disabled={ocupado} onClick={() => setEscribir(v => !v)} aria-expanded={escribir}>Otra…</button>
+            <button className="bd-op bd-op-luego" disabled={ocupado} onClick={() => correr(() => acc.descartar(it), 'Lo dejas para después')}>Todavía no</button>
           </div>
         )}
         {(it.kind === 'cerebro' || (it.kind === 'decision' && escribir)) && (
-          <form className="md-fila md-mt8" onSubmit={e => { e.preventDefault(); const v = txt.trim(); if (!v) return; correr(() => it.kind === 'cerebro' ? acc.contestar(it.q, v) : acc.decidir((it as Extract<Item, { kind: 'decision' }>).d, v, null)) }}>
-            <input className="md-input md-grow" value={txt} onChange={e => setTxt(e.target.value)} placeholder={it.kind === 'cerebro' ? 'Tu respuesta' : 'Tu decisión'} aria-label="Tu respuesta" />
+          <form className="bd-responder" onSubmit={e => { e.preventDefault(); const v = txt.trim(); if (!v) return; correr(() => it.kind === 'cerebro' ? acc.contestar(it.q, v) : acc.decidir((it as Extract<Item, { kind: 'decision' }>).d, v, null), 'Guardado para tu cerebro') }}>
+            <input className="md-input md-grow" value={txt} onChange={e => setTxt(e.target.value)} placeholder={it.kind === 'cerebro' ? 'Tu respuesta, en una línea' : 'Tu decisión'} aria-label="Tu respuesta" />
             <button className="md-btn md-chico md-primario" disabled={ocupado || !txt.trim()}>Guardar</button>
+            {it.kind === 'cerebro' && <button type="button" className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it), 'Pregunta descartada')}>No aplica</button>}
           </form>
         )}
         {err && <p className="md-err-txt md-mt4">{err}</p>}
       </div>
 
-      <div className="bd-acciones">
-        {it.kind === 'tarjeta' && it.c.tipo === 'nuevo' && <>
-          <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>No</button>
-          <button className="md-btn md-chico" disabled={ocupado} onClick={() => correr(() => acc.posponer(it.c, sumarDias(hoy, 1)))}>Mañana</button>
-          <button className="md-btn md-chico md-primario" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null))}>Sí, hoy</button>
-        </>}
-        {it.kind === 'tarjeta' && it.c.tipo === 'mover' && <>
-          <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>Dejarla</button>
-          <button className="md-btn md-chico md-primario" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null, it.c.destino))}>Moverla</button>
-        </>}
-        {it.kind === 'tarjeta' && SUGERENCIA.has(it.c.tipo) && <>
-          <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>No</button>
-          <button className="md-btn md-chico md-primario" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null))}>Sí</button>
-        </>}
-        {it.kind !== 'tarjeta' && <button className="md-btn md-chico bd-fantasma" disabled={ocupado} onClick={() => correr(() => acc.descartar(it))}>{it.kind === 'cerebro' ? 'No aplica' : 'Todavía no'}</button>}
-      </div>
+      {it.kind === 'tarjeta' && (
+        <div className="bd-acciones">
+          {it.c.tipo === 'nuevo' && <>
+            <button className="bd-acc bd-acc-no" disabled={ocupado} onClick={() => correr(() => acc.descartar(it), 'Descartado')} title="No es pendiente">No</button>
+            <button className="bd-acc" disabled={ocupado} onClick={() => correr(() => acc.posponer(it.c, sumarDias(hoy, 1)), 'Tarea para mañana')}>Mañana</button>
+            <button className="bd-acc bd-acc-si" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null), 'Tarea para hoy')}>Hoy</button>
+          </>}
+          {it.c.tipo === 'mover' && <>
+            <button className="bd-acc bd-acc-no" disabled={ocupado} onClick={() => correr(() => acc.descartar(it), 'Se queda en el inbox')}>Dejarla</button>
+            <button className="bd-acc bd-acc-si" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null, it.c.destino), 'Se mueve a las 3:00')}>Moverla</button>
+          </>}
+          {SUGERENCIA.has(it.c.tipo) && <>
+            <button className="bd-acc bd-acc-no" disabled={ocupado} onClick={() => correr(() => acc.descartar(it), 'Sugerencia descartada')}>No</button>
+            <button className="bd-acc bd-acc-si" disabled={ocupado} onClick={() => correr(() => acc.aceptar(it.c, null), 'Cambio aplicado')}>Aplicar</button>
+          </>}
+        </div>
+      )}
     </div>
   )
 }
@@ -266,7 +294,7 @@ function Ficha({ it, pos, total, r, hoy, epicas, acc, cerrar, anterior, siguient
         {it.kind === 'tarjeta' && it.c.detalle && <p className="md-sub">{it.c.detalle}</p>}
         {it.kind === 'cerebro' && it.q.porque && <p className="md-sub">{it.q.porque}</p>}
         {(() => { const n = it.kind === 'tarjeta' ? it.c.nota : it.kind === 'decision' ? it.d.nota : it.q.nota; return n ? <a className="md-link md-mt4 bd-bloque" href={obsidianUrl(n)}>Abrir {n} en Obsidian ↗</a> : null })()}
-        {r && <p className="bd-ya md-mt8">Ya {(ESTADO_TXT[r.estado] || r.estado).toLowerCase()}. <button className="md-link" onClick={() => correr(() => acc.deshacer(it.id))}>Deshacer</button></p>}
+        {r && <p className="bd-ya md-mt8">{estadoTxt(r)}. <button className="md-link" onClick={() => correr(() => acc.deshacer(it.id))}>Deshacer</button></p>}
         {error && <p className="md-err-txt md-mt8" role="alert">{error}</p>}
 
         {!r && it.kind === 'tarjeta' && it.c.tipo === 'mover' && <FichaMover c={it.c} ocupado={ocupado} correr={correr} acc={acc} />}
@@ -312,6 +340,11 @@ function FichaTarea({ c, hoy, epicas, ocupado, correr, acc }: { c: DiaTarjeta; h
             <button key={l} className="md-btn" disabled={ocupado} onClick={() => correr(() => acc.posponer({ ...c, cambio: { ...c.cambio, titulo: campos.titulo } }, f))}>{l}</button>
           ))}
         </div>
+      )}
+      {(c.tipo === 'nuevo' || c.tareaId) && (
+        <button className="bd-ya-hice md-mt12" disabled={ocupado} onClick={() => correr(() => acc.terminar({ ...c, cambio: { ...c.cambio, titulo: campos.titulo } }))}>
+          <span className="bd-palomita" aria-hidden /> Ya la hice — {c.tipo === 'nuevo' ? 'guardarla como terminada' : 'marcarla terminada'}
+        </button>
       )}
       <div className="md-tres">
         <button className="md-btn" disabled={ocupado} onClick={() => correr(() => acc.descartar({ kind: 'tarjeta', id: c.id, c }))}>Descartar</button>
@@ -481,25 +514,13 @@ export function TuCerebro({ aprendido }: { aprendido: DiaAprendido[] }) {
 }
 
 const CSS_BD = `
-.bd-barra{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;background:var(--md-papel)}
 .bd-volver{border:1px solid var(--md-linea);background:#fff;border-radius:999px;padding:7px 14px;font:500 14px var(--dia-ui);color:var(--md-tinta);cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .bd-volver:hover{border-color:var(--md-tinta2)}
-.bd-progreso{height:6px;border-radius:999px;background:var(--md-linea2);overflow:hidden}
 .bd-progreso>div{height:100%;background:var(--md-verde);border-radius:999px;transition:width .3s ease}
 .bd-seccion{margin-top:22px}
 .bd-sec-cab{margin:0 2px 8px}
-.bd-sec-cab h2{font:600 15px var(--dia-ui);margin:0;color:var(--md-tinta);display:flex;gap:8px;align-items:center}
 .bd-sec-cab h2 span{font:500 11px var(--dia-ui);background:var(--md-suave);color:var(--md-acento);border-radius:999px;padding:1px 7px}
-.bd-fila{gap:14px;align-items:flex-start}
-.bd-fila[aria-busy="true"]{opacity:.55}
-.bd-cuerpo{flex:1;min-width:0}
-.bd-sub{font-size:11.5px;font-weight:600;letter-spacing:.02em;color:var(--md-acento);text-transform:uppercase}
-.bd-acciones{display:flex;gap:6px;flex:none;align-items:center;padding-top:2px}
-.bd-fantasma{background:transparent!important;border-color:transparent!important;color:var(--md-tinta2)!important}
-.bd-fantasma:hover{border-color:var(--md-linea)!important}
-@media(max-width:640px){.bd-fila{flex-direction:column;gap:10px}.bd-acciones{align-self:stretch;justify-content:flex-end;flex-wrap:wrap}}
 .bd-hechas-tog{background:none;border:0;padding:4px 2px;font:500 14px var(--dia-ui);color:var(--md-tinta2);cursor:pointer}
-.bd-pie{position:sticky;bottom:12px;z-index:10;margin-top:22px;display:flex;justify-content:space-between;gap:10px;background:#fff;border:1px solid var(--md-linea);border-radius:999px;padding:6px;box-shadow:0 10px 30px -18px rgba(28,26,23,.45)}
 @media(max-width:700px){.bd-pie{bottom:calc(92px + env(safe-area-inset-bottom))}}
 .bd-pie .md-btn{border-radius:999px}
 .bd-fin{text-align:center;padding:28px 20px}
@@ -510,10 +531,8 @@ const CSS_BD = `
 .bd-filtros button[data-on="true"]{background:var(--md-tinta);color:var(--md-papel);border-color:var(--md-tinta)}
 .bd-filtros button span{font-size:11px;background:var(--md-suave);color:var(--md-acento);border-radius:999px;padding:0 6px}
 .bd-filtros button[data-on="true"] span{background:rgba(255,255,255,.18);color:#fff}
-.bd-fila[data-hecha] .bd-tit{color:var(--md-tenue)}
 .bd-abrir{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;background:none;border:0;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
 .bd-abrir:hover .bd-tit{color:var(--md-acento)}
-.bd-tit{font-weight:500}
 .bd-abrir-txt{cursor:pointer;flex:none}
 .bd-rapidos{display:flex;gap:4px;flex:none}
 .bd-rapidos .md-icobtn{width:34px;height:34px;border:1px solid var(--md-linea);border-radius:10px;font-size:14px}
@@ -536,4 +555,57 @@ const CSS_BD = `
 .bd-seg button[data-on="true"]{background:#fff;color:var(--md-tinta)}
 .md-btn[data-on="true"]{background:var(--md-tinta);color:var(--md-papel);border-color:var(--md-tinta)}
 .bd-check{display:flex;gap:8px;align-items:center;font-size:14px;cursor:pointer}
+.bd-barra{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 0;background:var(--md-papel)}
+.bd-barra-av{flex:1;max-width:260px;display:flex;gap:10px;align-items:center}
+.bd-progreso{flex:1;height:6px;border-radius:999px;background:var(--md-linea2);overflow:hidden}
+.bd-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin-top:6px}
+.bd-falta{flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;width:78px;height:78px;border-radius:22px;background:var(--md-suave);border:1px solid #ead8c3;color:var(--md-acento)}
+.bd-falta b{font:400 34px/1 var(--dia-serif),Georgia,serif}
+.bd-falta span{font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;margin-top:2px}
+@media(max-width:520px){.bd-falta{width:60px;height:60px;border-radius:18px}.bd-falta b{font-size:26px}}
+.bd-sec-cab h2{font:600 15px var(--dia-ui);margin:0;color:var(--md-tinta);display:flex;gap:9px;align-items:center}
+.bd-sec-cab h2 i{width:9px;height:9px;border-radius:50%;background:var(--bd-c)}
+.bd-sec-cab p{margin:3px 0 0 18px}
+.bd-tarjeta{background:#fff;border:1px solid var(--md-linea);border-radius:18px;overflow:hidden}
+.bd-fila{display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border-top:1px solid var(--md-linea2);transition:background .15s,opacity .25s}
+.bd-fila:first-child{border-top:0}
+.bd-tarjeta .bd-fila:hover{background:#fcfaf6}
+.bd-fila[aria-busy="true"]{opacity:.6}
+.bd-fila[data-hecha] .bd-tit{text-decoration:line-through;color:var(--md-tenue)}
+.bd-palomita{flex:none;width:24px;height:24px;margin-top:1px;border-radius:50%;border:1.5px solid #cfc6b8;background:#fff;display:inline-grid;place-items:center;color:#fff;font-size:13px;font-weight:700;cursor:pointer;padding:0;transition:all .15s}
+.bd-palomita:hover{border-color:var(--md-verde);background:#eef4ea;color:var(--md-verde)}
+.bd-palomita:hover:empty::after{content:'✓'}
+.bd-palomita[data-on]{background:var(--md-verde);border-color:var(--md-verde);color:#fff}
+.bd-palomita-vacia{flex:none;width:24px}
+.bd-cuerpo{flex:1;min-width:0}
+.bd-tit{font-weight:500;font-size:15.5px;line-height:1.35;color:var(--md-tinta)}
+.bd-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12.5px;color:var(--md-tenue)}
+.bd-epica{background:#f3eee6;color:var(--md-tinta2);border-radius:6px;padding:1px 7px;font-size:12px}
+.bd-acciones{display:flex;gap:0;flex:none;align-items:center;border:1px solid var(--md-linea);border-radius:12px;overflow:hidden;background:#fff}
+.bd-acc{border:0;border-left:1px solid var(--md-linea);background:#fff;padding:8px 14px;font:500 13.5px var(--dia-ui);color:var(--md-tinta);cursor:pointer;white-space:nowrap}
+.bd-acc:first-child{border-left:0}
+.bd-acc:hover{background:#f6f1e9}
+.bd-acc-no{color:var(--md-tenue)}
+.bd-acc-si{background:var(--md-tinta);color:var(--md-papel)}
+.bd-acc-si:hover{background:#000}
+.bd-acc:disabled,.bd-op:disabled{opacity:.5;cursor:default}
+.bd-opciones{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.bd-op{border:1px solid var(--md-linea);background:#fff;border-radius:999px;padding:6px 13px;font:500 13.5px var(--dia-ui);color:var(--md-tinta);cursor:pointer}
+.bd-op:hover{border-color:var(--md-tinta);background:#faf7f2}
+.bd-op-otra,.bd-op-luego{border-style:dashed;color:var(--md-tinta2)}
+.bd-op-luego{margin-left:auto;border-color:transparent}
+.bd-responder{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.bd-pie{position:sticky;bottom:12px;z-index:10;margin-top:22px;display:flex;justify-content:space-between;align-items:center;gap:10px;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--md-linea);border-radius:999px;padding:6px;box-shadow:0 10px 30px -18px rgba(28,26,23,.45)}
+.bd-pie-txt{flex:1;text-align:center}
+.bd-ya-hice{width:100%;display:flex;gap:10px;align-items:center;justify-content:center;border:1px dashed #b9cfae;background:#f3f8f0;color:#3f6b2c;border-radius:12px;padding:10px;font:500 14px var(--dia-ui);cursor:pointer}
+.bd-ya-hice:hover{background:#e7f0e1}
+.bd-ya-hice .bd-palomita{width:18px;height:18px;pointer-events:none}
+@media(max-width:640px){
+  .bd-fila{flex-wrap:wrap;padding:13px 14px}
+  .bd-cuerpo{flex:1 1 calc(100% - 40px)}
+  .bd-acciones{margin-left:38px;width:calc(100% - 38px)}
+  .bd-acc{flex:1;padding:10px 8px}
+  .bd-pie-txt{display:none}
+  .bd-op-luego{margin-left:0}
+}
 `

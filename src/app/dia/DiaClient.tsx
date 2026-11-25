@@ -116,8 +116,8 @@ export default function DiaClient() {
     return m
   }, [epicas])
 
-  const sync = useCallback(async (epicaId: string, cambios: { create?: EpicaTask[]; update?: EpicaTask[] }) => {
-    const j = await postJSON<{ ok: boolean; error?: string; conflicts?: string[] }>('/api/tareas/sync', { epicaId, create: cambios.create || [], update: cambios.update || [], remove: [] })
+  const sync = useCallback(async (epicaId: string, cambios: { create?: EpicaTask[]; update?: EpicaTask[]; remove?: string[] }) => {
+    const j = await postJSON<{ ok: boolean; error?: string; conflicts?: string[] }>('/api/tareas/sync', { epicaId, create: cambios.create || [], update: cambios.update || [], remove: cambios.remove || [] })
     if (!j.ok) throw new Error(j.error || 'No se pudo guardar la tarea')
     if (j.conflicts?.length) throw new Error('Esa tarea cambió en otra pestaña. Recarga y vuelve a intentar.')
   }, [])
@@ -321,7 +321,35 @@ export default function DiaClient() {
     },
     posponer: async (c, f) => { await decidirTarjeta(c, 'otro', f) },
     descartar: async it => { await responder(it.id, it.kind === 'tarjeta' ? it.c.tipo : it.kind, 'descartada') },
-    deshacer: async id => { await deshacerRespuesta(id) },
+    /** «Ya la hice»: la tarea existente queda Terminada; un pendiente nuevo se crea ya terminado (cuenta en tu día). */
+    terminar: async c => {
+      if (c.tipo === 'nuevo') {
+        const epicaId = c.epicaId && (epicas || []).some(e => e.id === c.epicaId && !e.archived) ? c.epicaId : await epicaDelDiario()
+        const base: EpicaTask = { id: uid(), t: c.cambio?.titulo || c.titulo, status: 'Por hacer', due: '', links: [], createdAt: hoy,
+          note: [c.detalle, data?.diario ? `De tu diario del ${diaLargo(data.diario)}.` : ''].filter(Boolean).join(' ') }
+        const t = completeRecurring(base, hoy, () => 0)
+        await sync(epicaId, { create: [t] })
+        await responder(c.id, c.tipo, 'aceptada', { tareaId: t.id, respuesta: { terminada: true, epicaId, creada: true } })
+      } else {
+        const hit = c.tareaId ? todas.get(c.tareaId) : undefined
+        if (!hit) throw new Error('Ya no encuentro esa tarea en tus épicas')
+        if (ABIERTA(hit.t)) await sync(hit.e.id, { update: [completeRecurring(hit.t, hoy, () => 0)] })
+        await responder(c.id, c.tipo, 'aceptada', { tareaId: hit.t.id, respuesta: { terminada: true } })
+      }
+      cargarEpicas()
+    },
+    deshacer: async id => {
+      // Si fue «Ya la hice», también se revierte la tarea: la nueva se borra y la existente se reabre.
+      const r = respuestas.get(id)
+      const k = (r?.respuesta || {}) as { terminada?: boolean; creada?: boolean; epicaId?: string }
+      if (k.terminada && r?.tarea_id) {
+        const hit = todas.get(r.tarea_id)
+        if (k.creada) { const ep = hit?.e.id || k.epicaId; if (ep) await sync(ep, { remove: [r.tarea_id] }) }
+        else if (hit && !ABIERTA(hit.t)) await sync(hit.e.id, { update: [{ ...hit.t, status: hit.t.planPrev && hit.t.planPrev !== 'Terminada' ? hit.t.planPrev : 'Por hacer', doneAt: undefined }] })
+        cargarEpicas()
+      }
+      await deshacerRespuesta(id)
+    },
     decidir: async (d, texto, k) => {
       let ids: { tareaId?: string; featureId?: string } = {}
       if (k) { ids = await crearConCampos(k, `Decisión: ${d.pregunta}${texto ? ` → ${texto}` : ''}`); cargarEpicas() }
@@ -329,7 +357,22 @@ export default function DiaClient() {
       await responder(d.id, 'decision', 'respondida', { tareaId: ids.tareaId, respuesta: { texto: txt, ...ids } })
     },
     contestar: async (q, texto) => { await responder(q.id, 'cerebro', 'respondida', { respuesta: { texto } }) },
-  }), [responder, decidirTarjeta, crearConCampos, data, todas, sync, hoy, epicas, cargarEpicas, deshacerRespuesta])
+  }), [responder, decidirTarjeta, crearConCampos, data, todas, sync, hoy, epicas, cargarEpicas, deshacerRespuesta, epicaDelDiario, respuestas])
+
+  /** Palomita de «Tus 3» / Ahora: si ya es tarea, se marca o reabre; si todavía es un pendiente sin decidir
+   *  (salió del diario), se crea ya terminada en su épica, con aviso para deshacer. */
+  const marcarPrioridad = useCallback(async (x: DiaPrioridad) => {
+    const hit = tareaDePrioridad(x)
+    if (hit?.t.id) return toggleHecha(hit.t.id)
+    const c = x.itemId ? data?.tarjetas.find(k => k.id === x.itemId) : undefined
+    if (!c || respuestas.has(c.id)) return
+    try {
+      await accBandeja.terminar(c)
+      mostrarAviso({ texto: `Hecha: ${c.cambio?.titulo || c.titulo}`, deshacer: () => { accBandeja.deshacer(c.id).catch(e => mostrarAviso({ texto: e instanceof Error ? e.message : String(e) })) } })
+    } catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }) }
+  }, [tareaDePrioridad, toggleHecha, data, respuestas, accBandeja, mostrarAviso])
+  const puedeMarcar = useCallback((x: DiaPrioridad) => !!tareaDePrioridad(x)?.t.id || (!!x.itemId && !!data?.tarjetas.some(k => k.id === x.itemId) && !respuestas.has(x.itemId)),
+    [tareaDePrioridad, data, respuestas])
 
   const porDecidir = itemsDe(data).filter(it => !respuestas.has(it.id))
   const pendientes = (data?.tarjetas || []).filter(c => !respuestas.has(c.id))
@@ -365,7 +408,8 @@ export default function DiaClient() {
         )}
 
         {dia && fecha === hoy && modo === 'ritual' && data && (
-          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} volver={() => ir('hoy')} />
+          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} volver={() => ir('hoy')}
+            avisar={(texto, id) => mostrarAviso({ texto, deshacer: () => { accBandeja.deshacer(id).catch(e => mostrarAviso({ texto: e instanceof Error ? e.message : String(e) })) } })} />
         )}
         {dia && fecha === hoy && modo === 'tus3' && data && (
           <Ritual data={data} hoy={hoy} pendientes={[]} prioridades={prioridades} tareaDe={tareaDePrioridad}
@@ -374,7 +418,7 @@ export default function DiaClient() {
 
         {dia && fecha === hoy && modo === 'hoy' && (
           <VistaHoy dia={dia} data={data} hoy={hoy} epicas={epicas} cumples={cumples} eventos={eventos} saludHoy={saludHoy}
-            prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha}
+            prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar}
             pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas} porDecidir={porDecidir.length}
             abrirRitual={() => ir('ritual')} responder={responder} capturar={capturar} aviso={mostrarAviso}
             cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} />
@@ -382,7 +426,7 @@ export default function DiaClient() {
 
         {dia && fecha === hoy && modo === 'noche' && (
           <VistaNoche dia={dia} data={data} hoy={hoy} prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad}
-            toggleHecha={toggleHecha} capturar={capturar} calificar={calificar} />
+            toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar} capturar={capturar} calificar={calificar} />
         )}
 
         {dia && modo === 'semana' && <VistaSemana dia={dia} hoy={hoy} />}
@@ -565,7 +609,8 @@ function proximoLunes(hoy: string) { const d = fechaDe(hoy).getDay(); return sum
 function VistaHoy(p: {
   dia: DiaGet; data: DiaData | null; hoy: string; epicas: Epica[] | null; cumples: Cumple[]; eventos: Evento[] | null; saludHoy: boolean | null
   prioridades: DiaPrioridad[]; respaldo: { e: Epica; t: EpicaTask }[]; tareaDe: (x: DiaPrioridad) => { e: Epica; t: EpicaTask } | null
-  toggleHecha: (id: string) => Promise<void>; pendientes: DiaTarjeta[]; decisiones: DiaDecision[]; respuestas: Map<string, DiaRespuesta>
+  toggleHecha: (id: string) => Promise<void>; marcar: (x: DiaPrioridad) => Promise<void>; puedeMarcar: (x: DiaPrioridad) => boolean
+  pendientes: DiaTarjeta[]; decisiones: DiaDecision[]; respuestas: Map<string, DiaRespuesta>
   abrirRitual: () => void; responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown; tareaId?: string }) => Promise<void>
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; aviso: (a: Aviso) => void
   cerebroAbiertas: number; porDecidir: number; crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
@@ -638,7 +683,7 @@ function VistaHoy(p: {
               <p className="md-meta">{[siguiente.p.epica || siguiente.hit?.e.name, siguiente.p.min ? `${siguiente.p.min} min` : null, siguiente.p.porque].filter(Boolean).join(' · ')}</p>
               <div className="md-fila md-mt12">
                 <Link href="/tiempo" className="md-btn md-primario md-grow">▶ Foco{siguiente.p.min ? ` ${siguiente.p.min} min` : ''}</Link>
-                {siguiente.hit?.t.id && <button className="md-btn" onClick={() => p.toggleHecha(siguiente.hit!.t.id!)}>✓ Hecha</button>}
+                {p.puedeMarcar(siguiente.p) && <button className="md-btn" onClick={() => p.marcar(siguiente.p)}>✓ Hecha</button>}
               </div>
             </div>
           ) : tres.length > 0 ? (
@@ -651,7 +696,7 @@ function VistaHoy(p: {
               {tres.filter(x => x !== siguiente).map((x, i) => {
                 const hecha = !!x.hit && !ABIERTA(x.hit.t)
                 return (
-                  <button key={i} className="md-check" data-hecha={hecha} disabled={!x.hit?.t.id} onClick={() => x.hit?.t.id && p.toggleHecha(x.hit.t.id)}>
+                  <button key={i} className="md-check" data-hecha={hecha} disabled={!p.puedeMarcar(x.p)} onClick={() => p.marcar(x.p)} title={hecha ? 'Reabrir' : 'Marcar como hecha'}>
                     <span className="md-caja" aria-hidden>{hecha ? '✓' : ''}</span><span className="md-grow">{x.hit?.t.t || x.p.t}</span>
                   </button>
                 )
@@ -988,9 +1033,10 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
 }
 
 /* ── Noche ── */
-function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, toggleHecha, capturar, calificar }: {
+function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, puedeMarcar, capturar, calificar }: {
   dia: DiaGet; data: DiaData | null; hoy: string; prioridades: DiaPrioridad[]; respaldo: { e: Epica; t: EpicaTask }[]
   tareaDe: (p: DiaPrioridad) => { e: Epica; t: EpicaTask } | null; toggleHecha: (id: string) => Promise<void>
+  marcar: (x: DiaPrioridad) => Promise<void>; puedeMarcar: (x: DiaPrioridad) => boolean
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; calificar: (n: number) => Promise<void>
 }) {
   const previa = dia.cierres.find(c => c.fecha === hoy)?.calificacion ?? null
@@ -1001,7 +1047,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, toggleHech
   const [err, setErr] = useState('')
   const [listo, setListo] = useState(false)
   const [guardando, setGuardando] = useState(false)
-  const tres = prioridades.length ? prioridades.map(p => ({ p, hit: tareaDe(p) })) : respaldo.map(hit => ({ p: { t: hit.t.t, porque: '' } as DiaPrioridad, hit }))
+  const tres = prioridades.length ? prioridades.map(p => ({ p, hit: tareaDe(p) })) : respaldo.map(hit => ({ p: { t: hit.t.t, tareaId: hit.t.id, porque: '' } as DiaPrioridad, hit }))
   const hechas = tres.filter(x => x.hit && !ABIERTA(x.hit.t)).length
 
   const cerrar = async () => {
@@ -1035,7 +1081,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, toggleHech
             {tres.map((x, i) => {
               const hecha = !!x.hit && !ABIERTA(x.hit.t)
               return (
-                <button key={i} className="md-check md-row" data-hecha={hecha} disabled={!x.hit?.t.id} onClick={() => x.hit?.t.id && toggleHecha(x.hit.t.id)}>
+                <button key={i} className="md-check md-row" data-hecha={hecha} disabled={!puedeMarcar(x.p)} onClick={() => marcar(x.p)}>
                   <span className="md-caja" aria-hidden>{hecha ? '✓' : ''}</span><span className="md-grow">{x.hit?.t.t || x.p.t}</span><span className="md-meta">{hecha ? 'hecha' : 'mañana'}</span>
                 </button>
               )
