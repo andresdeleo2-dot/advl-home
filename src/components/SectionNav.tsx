@@ -4,7 +4,8 @@ import Link from 'next/link'
 import type { ReactNode } from 'react'
 import CommandPalette from './CommandPalette'
 
-/* Conmutador consistente entre las secciones (Mi día / Panel / Tiempo / Épicas / Ideas / Accesos),
+/* Conmutador consistente entre las secciones (Mi día / Tiempo / Épicas / Roadmap / Ideas / Peso / Accesos).
+   El Panel se juntó con Mi día (2026-11-25): /panel redirige a /dia.
    presente en todos los headers (banda navy). El actual va resaltado en oro; los demás
    navegan rápido (Next prefetch) con hover. Íconos para lectura de un vistazo. */
 
@@ -15,18 +16,20 @@ const ICONS: Record<string, ReactNode> = {
   epicas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4" /><path d="M4 4h13l-2.5 4L17 12H4" /></svg>),
   tiempo: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 1.8" /></svg>),
   ideas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6M10 21h4" /><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.46 1.6 1.4 1.6 2.2h4c0-.8 1-1.74 1.6-2.2A6 6 0 0 0 12 3Z" /></svg>),
+  peso: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M8.5 10a3.5 3.5 0 0 1 7 0" /><path d="M12 10l1.5-1.5" /></svg>),
   roadmap: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11h5l2-3 4 6 2-3h5" /><circle cx="20" cy="5" r="2" /><circle cx="4" cy="19" r="2" /></svg>),
 }
 
-export default function SectionNav({ current }: { current: 'dia' | 'accesos' | 'panel' | 'epicas' | 'tiempo' | 'ideas' | 'roadmap' }) {
+export type Seccion = 'dia' | 'accesos' | 'epicas' | 'tiempo' | 'ideas' | 'roadmap' | 'peso'
+export default function SectionNav({ current }: { current: Seccion }) {
   const items = [
     { id: 'dia', label: 'Mi día', href: '/dia' },
-    { id: 'panel', label: 'Panel', href: '/panel' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
     { id: 'epicas', label: 'Épicas', href: '/epicas' },
-    { id: 'accesos', label: 'Accesos', href: '/' },
-    { id: 'ideas', label: 'Ideas', href: '/ideas' },
     { id: 'roadmap', label: 'Roadmap', href: '/roadmap' },
+    { id: 'ideas', label: 'Ideas', href: '/ideas' },
+    { id: 'peso', label: 'Peso', href: '/peso' },
+    { id: 'accesos', label: 'Accesos', href: '/' },
   ] as const
   // "+" = captura rápida: abre la paleta (⌘K) ya en modo "crear tarea".
   const capturar = () => window.dispatchEvent(new CustomEvent('advl:captura', { detail: { texto: '+ ' } }))
@@ -57,9 +60,9 @@ export default function SectionNav({ current }: { current: 'dia' | 'accesos' | '
             box-shadow: 0 14px 34px -10px rgba(0,0,0,.55) !important;
           }
           .section-nav a { flex: 1; min-width: 0; flex-direction: column; gap: 4px !important; padding: 9px 4px !important; justify-content: center; min-height: 52px; }
-          /* El "+" va al centro de la barra (entre Épicas y Accesos), como botón dorado. */
+          /* El "+" va al centro de la barra (entre Tiempo y Épicas), como botón dorado. */
           .section-nav .sn-plus {
-            order: 5; flex: 0 0 48px; width: 48px; height: 48px; align-self: center; margin: 0; border: none;
+            order: 3; flex: 0 0 48px; width: 48px; height: 48px; align-self: center; margin: 0; border: none;
             background: linear-gradient(135deg,#E7C56B,#C2933A); color: #1B1305; box-shadow: 0 8px 18px -8px rgba(194,147,58,.95);
           }
           /* Con texto: en Accesos hay otro "+" dorado arriba (nuevo acceso) y no deben confundirse. */
@@ -71,8 +74,9 @@ export default function SectionNav({ current }: { current: 'dia' | 'accesos' | '
           /* Deja aire abajo para que la barra no tape el último contenido (sólo donde existe el nav). */
           body { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
         }
-        /* Con Mi día son 7 secciones: en la barra de abajo del celular Roadmap (vista de escritorio) se oculta. */
-        @media (max-width: 700px) { .section-nav a[href="/roadmap"] { display: none !important; } }
+        /* En la barra de abajo del celular van 5 (Mi día, Tiempo, +, Épicas, Peso, Accesos): Roadmap e Ideas son de
+           escritorio (Ideas también se captura con el "+" y ⌘K). */
+        @media (max-width: 700px) { .section-nav a[href="/roadmap"], .section-nav a[href="/ideas"] { display: none !important; } }
         @media (max-width: 400px) {
           .section-nav a { padding: 9px 1px !important; }
           .section-nav .sn-label { display: block !important; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }

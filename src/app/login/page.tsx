@@ -30,7 +30,7 @@ export default function Login() {
     } else {
       // Navegación completa: si la cuenta no tiene acceso, el middleware regresa a /login?e=cuenta y
       // esta página se vuelve a montar para mostrar el aviso (con router.push se quedaba en "Entrando…").
-      window.location.assign('/')
+      window.location.assign('/dia')
     }
   }
 
@@ -39,7 +39,7 @@ export default function Login() {
       <form onSubmit={submit} className="band w-full max-w-sm rounded-3xl p-8 text-center text-white shadow-2xl">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.png" alt="ADVL" className="mx-auto h-20 w-auto drop-shadow-[0_4px_12px_rgba(0,0,0,0.4)]" />
-        <h1 className="mt-4 text-xl font-semibold">Panel Andres</h1>
+        <h1 className="serif mt-4 text-[30px] font-semibold italic leading-none text-[#F3EFE6]">ADVL</h1>
         <p className="mt-1 text-sm text-white/55">Inicia sesión para continuar</p>
 
         <input
@@ -62,7 +62,7 @@ export default function Login() {
         {error && <p className="mt-2 text-xs font-medium text-red-300">{error}</p>}
 
         <button type="submit" disabled={loading || !password || !email}
-          className="mt-4 w-full rounded-2xl bg-white py-3 text-sm font-bold text-[#16365f] shadow-lg transition hover:bg-white/90 disabled:opacity-50">
+          className="gold-fill mt-4 w-full rounded-2xl py-3 text-sm font-bold transition hover:brightness-105 disabled:opacity-50">
           {loading ? 'Entrando…' : 'Entrar'}
         </button>
       </form>

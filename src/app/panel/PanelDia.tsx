@@ -1,115 +1,41 @@
 'use client'
 
-/* Bloques del Panel ligados a «Mi día» (/dia). El Panel es para VER cómo va todo; lo de hoy se HACE en Mi día.
- * Aquí NO se repite lo de Mi día (chips, épicas, esperando a otros, Anotar). Solo: el resumen de hoy según la hora,
- * los números de la semana, tu semana en gráficas, personas sin verse, salud y «Pregúntale a tu cerebro». Datos: /api/dia, /api/panel y las
- * épicas que ya carga el Panel. */
+/* Bloques que venían del Panel y ahora usa «Mi día» (/dia): tu semana en gráficas, salud y «Pregúntale a tu cerebro».
+ * (El Panel se juntó con Mi día el 2026-11-25; /panel redirige a /dia.) Datos: /api/dia, /api/panel y /api/tiempo-estado. */
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import Link from 'next/link'
-import type { Epica, EpicaTask } from '@/lib/supabase'
-import { racha, sumarDias, type DiaGet } from '@/lib/dia'
+import type { Epica } from '@/lib/supabase'
+import { sumarDias, type DiaGet } from '@/lib/dia'
 import { useDictado, juntar } from '@/lib/useDictado'
 
-const SERIF = 'var(--epica-serif, Georgia, serif)'
-const NAVY = '#10233F', AZUL = '#2E5A9E', ORO = '#A87A2C', ROJO = '#B0522E', VERDE = '#2E6E6E'
+const SERIF = 'var(--dia-serif, var(--font-serif), Georgia, serif)'
+const NAVY = 'var(--md-tinta, #10233F)', AZUL = '#2E5A9E', ORO = '#A87A2C', ROJO = '#B0522E', VERDE = '#2E6E6E'
 const MUTED = 'rgba(20,35,61,0.55)', TENUE = 'rgba(20,35,61,0.4)', LINEA = 'rgba(15,35,64,0.08)'
 const DN3 = ['D', 'L', 'M', 'M', 'J', 'V', 'S']
-const ABIERTA = (t?: EpicaTask) => !!t && t.status !== 'Terminada' && t.status !== 'Archivada'
 const fecha0 = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d) }
-const hm = (min: number) => (min >= 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60}` : ''}` : `${min} min`)
-const tarjeta: CSSProperties = { borderRadius: 16, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', boxShadow: '0 20px 44px -34px rgba(15,35,64,0.5)' }
+const tarjeta: CSSProperties = { borderRadius: 16, background: '#fff', border: '1px solid var(--md-linea, rgba(15,35,64,0.09))' }
 
 export type PanelExtra = { salud: null | { peso: number; fecha: string; cambioSemana: number | null; hace: number; anotadoHoy: boolean | null }; sinContacto: null | { id: string; nombre: string; dias: number }[] }
-
-/** Lee Mi día de hoy y los datos extra del Panel. */
-export function usePanelDia(hoy: string) {
-  const [dia, setDia] = useState<DiaGet | null>(null)
-  const [extra, setExtra] = useState<PanelExtra | null>(null)
-  useEffect(() => {
-    let vivo = true
-    fetch(`/api/dia?fecha=${hoy}`).then(r => r.json()).then(j => { if (vivo && j?.ok) setDia(j as DiaGet) }).catch(() => {})
-    fetch('/api/panel').then(r => r.json()).then(j => { if (vivo && j?.ok) setExtra(j as PanelExtra) }).catch(() => {})
-    return () => { vivo = false }
-  }, [hoy])
-  return { dia, extra }
-}
-
-/** Tus 3 de hoy, ya ligados a tareas reales (lo que propuso Claude y aceptaste). */
-export function useTusTres(dia: DiaGet | null, epics: Epica[] | null) {
-  return useMemo(() => {
-    const data = dia?.resumen?.data
-    if (!data || !epics) return [] as { t: string; e?: Epica; task?: EpicaTask; porque?: string }[]
-    const todas = new Map<string, { e: Epica; t: EpicaTask }>()
-    for (const e of epics) for (const t of e.tasks || []) if (t.id) todas.set(t.id, { e, t })
-    const resp = new Map(dia!.respuestas.map(r => [r.item_id, r]))
-    const orden = (resp.get('prioridades')?.respuesta as { orden?: number[] } | undefined)?.orden
-    const lista = orden?.length && orden.every(i => data.prioridades[i]) ? orden.map(i => data.prioridades[i]) : data.prioridades
-    return lista.map(p => {
-      const id = p.tareaId || (p.itemId ? resp.get(p.itemId)?.tarea_id || undefined : undefined)
-      const hit = id ? todas.get(id) : undefined
-      return { t: hit?.t.t || p.t, e: hit?.e, task: hit?.t, porque: p.porque }
-    })
-  }, [dia, epics])
-}
-
-/** Debajo del saludo: lo de hoy según la hora, con el botón a Mi día. */
-export function HeroDia({ dia, now, tres }: { dia: DiaGet | null; now: Date | null; tres: ReturnType<typeof useTusTres> }) {
-  if (!dia || !now) return null
-  const h = now.getHours()
-  const data = dia.resumen?.data
-  const hechas = tres.filter(x => x.task && !ABIERTA(x.task)).length
-  const porDecidir = data ? data.tarjetas.filter(c => !dia.respuestas.some(r => r.item_id === c.id)).length + data.decisiones.filter(d => !dia.respuestas.some(r => r.item_id === d.id)).length : 0
-  const cerrado = dia.cierres.some(c => c.fecha === dia.fecha && c.calificacion != null)
-  const sig = tres.find(x => !x.task || (ABIERTA(x.task) && x.task.status !== 'Esperando'))
-  let titulo = '', linea = '', cta = 'Abrir Mi día'
-  if (!data) { titulo = 'Tu día todavía no se arma'; linea = 'Se arma solo a las 3:00 con tu diario de Obsidian.' }
-  else if (h >= 20) { titulo = cerrado ? 'Ya cerraste tu día. Descansa.' : '¿Cierras tu día?'; linea = tres.length ? `Hiciste ${hechas} de ${tres.length}.${cerrado ? '' : ' Platícame cómo te fue: toma un minuto.'}` : 'Platícame cómo te fue.'; cta = cerrado ? 'Ver Mi día' : 'Cerrar mi día' }
-  else if (h >= 13 && tres.length) { titulo = hechas === tres.length ? `Tus ${tres.length} están hechas.` : `Vas ${hechas} de ${tres.length}.${sig ? ` Sigue: ${sig.t}` : ''}`; linea = data.frase }
-  else { titulo = 'Tu día está listo.'; linea = data.frase; if (porDecidir) cta = `Abrir Mi día · ${porDecidir} por decidir` }
-  return (
-    <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.14)', maxWidth: 640 }}>
-      <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1.2, color: '#F3EFE6' }}>{titulo}</div>
-      <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,0.7)', marginTop: 4 }}>{linea}</div>
-      <Link href="/dia" style={{ display: 'inline-block', marginTop: 12, padding: '8px 14px', borderRadius: 10, background: 'linear-gradient(135deg,#E7C56B,#C2933A)', color: '#1B1305', fontWeight: 800, fontSize: 12.5, textDecoration: 'none' }}>{cta} →</Link>
-    </div>
-  )
-}
-
-/** Los números de la semana, en una tira dentro del encabezado (lo de hoy ya lo dice el saludo). */
-export function KpisDia({ dia, workedMin, routinesDone, routinesTotal }: { dia: DiaGet | null; workedMin: number; routinesDone: number; routinesTotal: number }) {
-  const hoy = dia?.fecha || ''
-  const semana = (dia?.cierres || []).filter(c => c.calificacion != null && c.fecha >= sumarDias(hoy, -6))
-  const prom = semana.length ? Math.round(semana.reduce((s, c) => s + (c.calificacion || 0), 0) / semana.length * 10) / 10 : null
-  const n = dia ? racha(dia.cierres.filter(c => c.calificacion != null).map(c => c.fecha), hoy) : 0
-  const tiles = [
-    { n: hm(workedMin), l: 'trabajado hoy' },
-    { n: `${routinesDone}/${routinesTotal}`, l: 'rutinas' },
-    { n: prom ?? '—', l: 'tu semana (1–10)' },
-    { n: n ? `${n} ${n === 1 ? 'día' : 'días'}` : '—', l: 'racha cerrando el día' },
-  ]
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 1, marginTop: 16, borderRadius: 12, overflow: 'hidden', background: 'rgba(255,255,255,0.1)' }}>
-      {tiles.map((s, i) => (
-        <div key={i} style={{ background: 'rgba(11,26,53,0.55)', padding: '10px 14px' }}>
-          <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1, color: '#F3EFE6' }}>{s.n}</div>
-          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.58)', marginTop: 4 }}>{s.l}</div>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 /** Tu semana: calificación por día y planeado contra trabajado (Tiempo). */
 export function TuSemana({ dia, epics, hoy }: { dia: DiaGet | null; epics: Epica[] | null; hoy: string }) {
   const [trab, setTrab] = useState<Record<string, number>>({})
   useEffect(() => {
-    try {
-      const d = JSON.parse(localStorage.getItem('margen.v1') || '{}')
+    // Lo trabajado sale de Tiempo: primero el guardado en el servidor (sirve en cualquier dispositivo);
+    // si no hay, lo de este navegador.
+    const sumar = (hist: unknown) => {
       const m: Record<string, number> = {}
-      for (const h of (d.history || []) as { date: string; area: string; dur: number }[]) if (h.area === 'trabajo') m[h.date] = (m[h.date] || 0) + (Number(h.dur) || 0)
-      setTrab(m)
-    } catch { /* sin Tiempo en este navegador */ }
+      for (const h of (Array.isArray(hist) ? hist : []) as { date: string; area: string; dur: number }[]) if (h?.area === 'trabajo') m[h.date] = (m[h.date] || 0) + (Number(h.dur) || 0)
+      return m
+    }
+    let vivo = true
+    try { setTrab(sumar(JSON.parse(localStorage.getItem('margen.v1') || '{}').history)) } catch { /* sin Tiempo en este navegador */ }
+    fetch('/api/tiempo-estado').then(r => r.json()).then(j => {
+      const hist = j?.ok && j.ready ? j.data?.history : null
+      if (vivo && Array.isArray(hist) && hist.length) setTrab(sumar(hist))
+    }).catch(() => {})
+    return () => { vivo = false }
   }, [])
   const dias = Array.from({ length: 7 }, (_, i) => sumarDias(hoy, i - 6))
   const cal = new Map((dia?.cierres || []).map(c => [c.fecha, c.calificacion]))
@@ -161,23 +87,6 @@ export function TuSemana({ dia, epics, hoy }: { dia: DiaGet | null; epics: Epica
           {ratio == null ? 'Agenda tareas con tiempo estimado y registra en Tiempo para ver esto.' : ratio < 0.6 ? `Trabajas ${Math.round(ratio * 100)} % de lo que planeas. Claude te propone menos prioridades.` : ratio > 1.2 ? 'Trabajas más de lo que planeas: estimas de menos.' : 'Planeas más o menos lo que trabajas. Bien calibrado.'}
         </div>
       </div>
-    </div>
-  )
-}
-
-/** Personas importantes que no ves hace tiempo (lo de «esperando a otros» está en Mi día). Va dentro de la tarjeta oscura. */
-export function SinContacto({ extra, abrirPersona }: { extra: PanelExtra | null; abrirPersona: (id: string) => void }) {
-  const sin = extra?.sinContacto || []
-  if (!sin.length) return null
-  return (
-    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
-      <div style={{ font: '800 9.5px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>Sin verse hace tiempo</div>
-      {sin.map(p => (
-        <div key={p.id} onClick={() => abrirPersona(p.id)} className="pn-fila pn-osc" style={{ borderBottom: 'none', padding: '6px 4px' }}>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nombre}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{p.dias >= 60 ? `${Math.round(p.dias / 30)} meses` : `${p.dias} días`}</span>
-        </div>
-      ))}
     </div>
   )
 }

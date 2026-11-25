@@ -1,9 +1,8 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
+import { subirCalificacion, traerCalificaciones, juntarCalificaciones } from '@/lib/calificacionDia'
 import SiteHeader from '@/components/SiteHeader'
-import SectionNav from '@/components/SectionNav'
-import FavoritosStrip from '@/components/FavoritosStrip'
 import PushReminders from '@/components/PushReminders'
 import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
@@ -331,6 +330,14 @@ export default function TiempoClient() {
     }
   }, [now, taskDay, planDay])
 
+  // Recuerda la última pestaña (Planificador, Hoy, Semana…). Si llegas con ?start=<tarea> manda Hoy.
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem('tiempo.vista.v1')
+      if (v && ['plan', 'hoy', 'semana', 'rutina', 'historial'].includes(v) && !new URLSearchParams(window.location.search).get('start')) setView(v as typeof view)
+    } catch {}
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { try { localStorage.setItem('tiempo.vista.v1', view) } catch {} }, [view])
   // Estado inicial del permiso de notificaciones.
   useEffect(() => { try { if (typeof Notification !== 'undefined') setNotifOn(Notification.permission === 'granted') } catch {} }, [])
 
@@ -1256,12 +1263,20 @@ export default function TiempoClient() {
     setDayAgendedNW(next)
   }
   // Calificación 1-10 del día (mismo almacén que Épicas).
-  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayScores.v1'); if (raw) setDayScoresT(JSON.parse(raw)) } catch {} }, [])
-  const setDayScoreT = (day: string, score: number | null) => setDayScoresT(prev => {
-    const next = { ...prev }; if (score != null && score > 0) next[day] = score; else delete next[day]
-    try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch {}
-    return next
-  })
+  // Desde 2026-11-25 la fuente es Mi día (servidor, lib/calificacionDia): así Épicas, Tiempo y Mi día ven la misma.
+  useEffect(() => {
+    let local: Record<string, number> = {}
+    try { const raw = localStorage.getItem('epicas.dayScores.v1'); if (raw) { local = JSON.parse(raw); setDayScoresT(local) } } catch {}
+    traerCalificaciones(iso(new Date())).then(srv => { if (Object.keys(srv).length) setDayScoresT(prev => juntarCalificaciones({ ...local, ...prev }, srv)) })
+  }, [])
+  const setDayScoreT = (day: string, score: number | null) => {
+    subirCalificacion(day, score)
+    setDayScoresT(prev => {
+      const next = { ...prev }; if (score != null && score > 0) next[day] = score; else delete next[day]
+      try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
   // Día cerrado (compartido con Épicas): se marca al cerrar (con confeti); se puede reabrir/ver de nuevo.
   useEffect(() => { try { const raw = localStorage.getItem('epicas.dayClosed.v1'); if (raw) setDayClosedT(JSON.parse(raw)) } catch {} }, [])
   const markDayClosedT = (day: string, agendedNW?: Array<{ taskId: string; name: string; min: number }>) => {
@@ -1633,7 +1648,7 @@ export default function TiempoClient() {
       }
     }
     // Si la sesión venía de una RUTINA y elegiste "y hecha", marca su día como hecho (llena el chip de hoy).
-    if (s.routineRef && markDone) setRoutineDone(s.routineRef.epicaId, s.routineRef.rIdx, today)
+    if (s.routineRef && markDone) setRoutineDone(s.routineRef.epicaId, s.routineRef.rIdx, entryDay)   // el día en que empezó (no «hoy» si cruzó la medianoche)
   }
   // Vincular una tarea a un objetivo (KPI) de su épica ("Contribuye a"). Escribe a la épica.
   // Objetivos/Features viven en sus propias tablas desde sql/epicas-18/19-*.sql (antes epicas.kpis
@@ -2158,10 +2173,9 @@ export default function TiempoClient() {
       <style>{MARGEN_CSS}</style>
 
       {/* Header de marca compartido (banda ADVL) */}
-      <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="tiempo" />} />
+      <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" seccion="tiempo" />
 
       {/* Cinta de accesos rápidos (favoritos del home), igual que en Épicas */}
-      <div style={{ maxWidth: 1180, margin: '14px auto 0', padding: '0 20px' }}><FavoritosStrip /></div>
 
       <div className="tiempo-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
         {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
@@ -2170,7 +2184,7 @@ export default function TiempoClient() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <button onClick={refreshTasks} title="Actualizar tareas de Épicas (mantiene día y filtros)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', transition: 'transform .6s', transform: refreshing ? 'rotate(360deg)' : 'none' }}>↻</span>{refreshing ? 'Actualizando…' : 'Actualizar'}</button>
             <button onClick={requestNotif} title={notifOn ? 'Avisos del navegador activados' : 'Activar avisos del navegador (agendados, recordatorios y fin de bloque)'} style={{ border: '1px solid ' + (notifOn ? '#cfe0c4' : '#e2d9cb'), background: notifOn ? '#eef1e7' : '#faf7f1', borderRadius: 999, padding: '7px 13px', fontSize: 13, color: notifOn ? '#4f6238' : '#6b645b', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{notifOn ? '🔔 Avisos on' : '🔔 Activar avisos'}</button>
-            <button onClick={() => setDayCloseT(true)} title="Cerrar el día: retro, general/rutinas, % por actividad y comentario" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '7px 13px', fontSize: 13, fontWeight: 600, color: '#8a4b28', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>✓ Cerrar el día</button>
+            <button onClick={() => { if (view === 'plan') setTaskDay(planDay); setDayCloseT(true) }} title="Cerrar el día: retro, general/rutinas, % por actividad y comentario" style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '7px 13px', fontSize: 13, fontWeight: 600, color: '#8a4b28', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>✓ Cerrar el día</button>
             <span className="t-clock" style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{loaded ? V.nowLabel : '—'}</span>
             <div className="t-tabs" style={{ display: 'flex', gap: 4, background: '#e7dfd2', padding: 4, borderRadius: 999 }}>
               {tabs.map(([id, label]) => (
@@ -2813,7 +2827,7 @@ export default function TiempoClient() {
                       const lightest = d.date >= iso(new Date()) && d.planned === minPlan && d.planned < 480
                       const barC = over ? '#b0522e' : d.planned >= 360 ? '#c2933a' : '#6f8256'
                       return (
-                        <div key={d.date} onClick={() => { setTaskDay(d.date); setView('plan') }} title="Abrir este día en el Planificador" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 12px', borderRadius: 14, cursor: 'pointer', background: lightest ? 'rgba(111,130,86,0.08)' : d.isToday ? '#f5ece2' : '#f7f2e8', border: `1px solid ${lightest ? 'rgba(111,130,86,0.4)' : d.isToday ? '#e6cfa4' : '#ece3d5'}` }}>
+                        <div key={d.date} onClick={() => { setTaskDay(d.date); setPlanDay(d.date); setView('plan') }} title="Abrir este día en el Planificador" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 12px', borderRadius: 14, cursor: 'pointer', background: lightest ? 'rgba(111,130,86,0.08)' : d.isToday ? '#f5ece2' : '#f7f2e8', border: `1px solid ${lightest ? 'rgba(111,130,86,0.4)' : d.isToday ? '#e6cfa4' : '#ece3d5'}` }}>
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 38, flexShrink: 0 }}>
                             <span style={{ fontSize: 11, color: '#a49b90', textTransform: 'uppercase' }}>{d.letter}</span>
                             <span style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1, color: d.isToday ? '#8a4b28' : '#1c1a17' }}>{d.num}</span>

@@ -1,8 +1,8 @@
 {
-  "name": "Panel Andres",
+  "name": "ADVL",
   "short_name": "ADVL",
-  "description": "Start page personal conectada a Supabase",
-  "start_url": "/",
+  "description": "Tu día, tus épicas y tus accesos",
+  "start_url": "/dia",
   "display": "standalone",
   "background_color": "#0f2340",
   "theme_color": "#16365f",

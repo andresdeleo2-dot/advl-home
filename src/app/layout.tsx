@@ -19,8 +19,8 @@ const serif = Cormorant_Garamond({
 })
 
 export const metadata: Metadata = {
-  title: "Panel Andres",
-  description: "Home dashboard",
+  title: "ADVL",
+  description: "Tu día, tus épicas y tus accesos",
   manifest: "/manifest.json",
   icons: { icon: "/icon-32.png", apple: "/icon-180.png" },
   appleWebApp: { capable: true, title: "ADVL", statusBarStyle: "default" },

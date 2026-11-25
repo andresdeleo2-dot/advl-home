@@ -87,7 +87,8 @@ export async function middleware(request: NextRequest) {
 
   if (pathname.startsWith('/login')) {
     const redirect = request.nextUrl.clone()
-    redirect.pathname = '/'
+    redirect.pathname = '/dia'
+    redirect.search = ''
     return NextResponse.redirect(redirect)
   }
 

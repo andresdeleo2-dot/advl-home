@@ -1,8 +1,7 @@
 'use client'
 
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import SiteHeader from '@/components/SiteHeader'
-import SectionNav from '@/components/SectionNav'
 import TaskLinks from '@/components/TaskLinks'
 import type { Idea } from '@/lib/ideas'
 import type { Epica } from '@/lib/supabase'
@@ -68,9 +67,15 @@ export default function IdeasClient() {
     else if (r?.error) setErr(r.error)
     return r
   }
-  const remove = async (id: string) => {
+  // Borrar es definitivo: se pregunta antes, y si el servidor falla la idea regresa a la lista.
+  const remove = async (id: string): Promise<boolean> => {
+    const idea = (ideas || []).find(x => x.id === id)
+    if (!window.confirm(`¿Borrar esta idea para siempre?${idea ? `\n\n«${idea.texto.slice(0, 120)}»` : ''}\n\nSi solo ya no te interesa, mejor «Descartar».`)) return false
+    const antes = ideas
     setIdeas(prev => (prev || []).filter(x => x.id !== id))
-    await fetch(`/api/ideas/${id}`, { method: 'DELETE' }).catch(() => {})
+    const r = await fetch(`/api/ideas/${id}`, { method: 'DELETE' }).catch(() => null)
+    if (!r || !r.ok) { setIdeas(antes); setErr('No se pudo borrar la idea. Sigue en tu lista.'); return false }
+    return true
   }
 
   const activeEpicas = (epicas || []).filter(e => !e.archived)
@@ -113,7 +118,7 @@ export default function IdeasClient() {
           ) : (
             <button onClick={e => { e.stopPropagation(); patch(idea.id, { descartada: true }) }} style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', background: '#fff', color: 'rgba(20,35,61,0.55)', borderRadius: 99, padding: '5px 11px', fontSize: 11.5, fontWeight: 700 }}>No es viable</button>
           )}
-          <button onClick={e => { e.stopPropagation(); remove(idea.id) }} title="Eliminar (no se puede deshacer)" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(176,82,46,0.6)', fontSize: 13 }}>✕</button>
+          <button onClick={e => { e.stopPropagation(); remove(idea.id) }} title="Borrar para siempre (te pregunta antes)" style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'rgba(176,82,46,0.6)', fontSize: 13 }}>✕</button>
         </div>
       </div>
     )
@@ -121,7 +126,7 @@ export default function IdeasClient() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#f3efe6', color: '#10233F' }}>
-      <SiteHeader title="Ideas" subtitle="Captura rápida · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="ideas" />} />
+      <SiteHeader title="Ideas" subtitle="Captura rápida · ADVL" seccion="ideas" />
       <main style={{ maxWidth: 760, margin: '18px auto 60px', padding: '0 20px' }}>
         <div style={{ marginBottom: 18 }}>
           <div className="serif" style={{ fontSize: 26, fontWeight: 600, color: '#10233F' }}>💡 Ideas</div>
@@ -209,7 +214,7 @@ export default function IdeasClient() {
       </main>
 
       {openIdea && (
-        <IdeaPopup idea={openIdea} epicas={activeEpicas} richReady={richReady} onPatch={patch} onDelete={id => { remove(id); setOpenId(null) }} onClose={() => setOpenId(null)} />
+        <IdeaPopup idea={openIdea} epicas={activeEpicas} richReady={richReady} onPatch={patch} onDelete={id => { remove(id).then(ok => { if (ok) setOpenId(null) }) }} onClose={() => setOpenId(null)} />
       )}
     </div>
   )
@@ -225,13 +230,21 @@ function IdeaPopup({ idea, epicas, richReady, onPatch, onDelete, onClose }: {
 }) {
   const [commentDraft, setCommentDraft] = useState('')
   const [converting, setConverting] = useState(false)
+  const [convErr, setConvErr] = useState('')
+  const creada = useRef<string | null>(null)   // tarea ya creada si falló solo el paso de ligarla (no crear otra)
   const converted = !!idea.tareaId
   const tagEpica = epicas.find(e => e.id === idea.epicaId)
   const feats = tagEpica?.features || []
 
   const convert = async () => {
     if (!idea.epicaId || converting) return
-    setConverting(true)
+    setConverting(true); setConvErr('')
+    if (creada.current) {
+      const p = await onPatch(idea.id, { tareaId: creada.current })
+      setConverting(false)
+      if (!p?.ok) setConvErr('La tarea ya existe, pero no pude marcar la idea como convertida. Vuelve a intentar.')
+      return
+    }
     const taskId = uid()
     const r = await fetch('/api/tareas/sync', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -244,9 +257,11 @@ function IdeaPopup({ idea, epicas, richReady, onPatch, onDelete, onClose }: {
         }],
       }),
     }).then(x => x.json()).catch(() => null)
+    if (!r?.ok) { setConverting(false); setConvErr(r?.error ? `No se creó la tarea: ${r.error}` : 'No se creó la tarea. Revisa tu conexión.'); return }
+    creada.current = taskId
+    const p = await onPatch(idea.id, { tareaId: taskId })
     setConverting(false)
-    if (!r?.ok) return
-    await onPatch(idea.id, { tareaId: taskId })
+    if (!p?.ok) setConvErr('La tarea se creó, pero no pude marcar la idea como convertida. Vuelve a intentar (no se duplica).')
   }
 
   const addComment = () => {
@@ -298,6 +313,7 @@ function IdeaPopup({ idea, epicas, richReady, onPatch, onDelete, onClose }: {
               {converting ? 'Creando…' : '✓ Convertir en tarea'}
             </button>
           )}
+          {convErr && <div role="alert" style={{ fontSize: 12.5, color: '#B0522E' }}>{convErr}</div>}
 
           {!richReady ? (
             <div style={{ fontSize: 11.5, color: 'rgba(176,82,46,0.9)' }}>Corre sql/ideas-02-links-comentarios.sql para poder agregar links y comentarios.</div>

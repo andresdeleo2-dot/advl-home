@@ -1,6 +1,6 @@
 // Branding / config (equivalente al Sheet2 del GAS original)
 export const CONFIG = {
-  siteName: 'Panel Andres',
+  siteName: 'ADVL',
   logoText: 'ADVL',
   maxFavorites: 20,
   // Acciones rápidas del header (links globales)

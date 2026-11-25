@@ -25,11 +25,11 @@ import { reordenarSubconjunto } from '@/lib/ordenTareas'
 import { fechasClave, fechasClavePorDia, fechasClaveVisibles, plazoFechaClave, tonoFechaClave, ICONO_FECHA_CLAVE, type FechaClave } from '@/lib/hitos'
 import { parseCaptura, quitarToken, escaparToken, etiquetaFecha, normalizar, ICONO_TOKEN, type TokenCaptura, type Captura, type CapturaEpica } from '@/lib/captura'
 import SectionNav from './SectionNav'
+import { subirCalificacion, traerCalificaciones, juntarCalificaciones } from '@/lib/calificacionDia'
 import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
 import BirthdayCelebration from './BirthdayCelebration'
-import FavoritosStrip from './FavoritosStrip'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 import {
   ARCHIVED,
@@ -389,6 +389,11 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
   }
   const modalOpenRef = useRef(false)     // hay un modal/editor abierto → no refrescar (no pisar una edición)
   const writeChain = useRef<Map<string, Promise<unknown>>>(new Map())  // cola de escrituras por épica (evita choques consigo misma)
+  // Para que una recarga vieja no pise lo que acabas de guardar: cada GET lleva un número; si en lo que tardó hubo
+  // (o hay) escrituras, su respuesta se tira y se vuelve a leer cuando terminan.
+  const loadSeq = useRef(0)
+  const writesPending = useRef(0)
+  const writeEpoch = useRef(0)
   const removeUndoRef = useRef<{ eId: string; tid: string; snap: Partial<EpicaTask> } | null>(null)
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const progressPending = useRef<{ id: string; tasks: EpicaTask[] } | null>(null)
@@ -421,8 +426,10 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
   }, [])
 
   // refresca desde el server al montar (revalidate corto en el page)
-  const loadEpics = useCallback(() => {
+  const loadEpics = useCallback((reintento = false) => {
     setLoading(true)
+    const seq = ++loadSeq.current
+    const epoch = writeEpoch.current
     const linksDesde = featLinksClock.current
     // Feature con guardado de links en vuelo o que se movió durante este GET: manda lo local (el GET pudo leer la BD antes).
     const conLinksLocales = (e: Epica): Epica => {
@@ -438,6 +445,12 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
     }
     fetch('/api/epicas').then(r => r.json()).then(j => {
       if (!j.ok || !Array.isArray(j.data)) throw new Error(j.error || 'respuesta inválida')
+      if (seq !== loadSeq.current) return   // ya salió otra lectura más nueva
+      if (writesPending.current > 0 || writeEpoch.current !== epoch) {
+        // Guardaste algo mientras se leía: esta foto puede ser de antes. Se relee al terminar las escrituras.
+        if (!reintento) Promise.all([...writeChain.current.values()]).then(() => loadEpics(true))
+        return
+      }
       planHistReady.current = !!j.planHistReady
       ordenReady.current = !!j.ordenReady
       remindReady.current = !!j.remindReady
@@ -480,17 +493,20 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
       // Antes esto era `.catch(() => {})`: si Supabase fallaba se veían los datos rancios
       // del SSR sin ninguna señal. Ahora se avisa y se ofrece reintentar.
       setLoadError('No se pudieron cargar las épicas.')
-    }).finally(() => setLoading(false))
+    }).finally(() => { if (seq === loadSeq.current) setLoading(false) })
   }, [])
-  useEffect(() => { loadEpics() }, [loadEpics])
+  useEffect(() => { loadEpics() }, [loadEpics])   // también en modo ficha: es lo que prende los «xReady» que deciden qué campos se guardan
   // Al volver a la pestaña de Épicas (tras editar en Tiempo u otra pestaña) se refresca solo,
   // salvo que haya un modal/editor abierto (para no pisar lo que estás editando). Mismo patrón que Tiempo.
   useEffect(() => {
+    if (ficha) return   // en el Roadmap la ficha no se recarga sola (el Roadmap ya tiene sus datos)
     const can = () => document.visibilityState === 'visible' && !modalOpenRef.current
-    const onVis = () => { if (can()) loadEpics() }
+    // focus y visibilitychange llegan juntos al volver: una sola lectura.
+    let t: ReturnType<typeof setTimeout> | null = null
+    const onVis = () => { if (t) clearTimeout(t); t = setTimeout(() => { t = null; if (can()) loadEpics() }, 300) }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onVis)
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis) }
+    return () => { if (t) clearTimeout(t); document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis) }
   }, [loadEpics])
 
   // Recordatorios: cada minuto (y al abrir la app) revisa las tareas con remindAt
@@ -758,12 +774,21 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
     return next
   })
   // Calificación del día (1-10, con decimales). Se guarda junto al comentario (mismo día).
-  useEffect(() => { try { const raw = localStorage.getItem('epicas.dayScores.v1'); if (raw) setDayScores(JSON.parse(raw)) } catch { /* noop */ } }, [])
-  const setDayScore = (day: string, score: number | null) => setDayScores(prev => {
-    const next = { ...prev }; if (score != null && score > 0) next[day] = score; else delete next[day]
-    try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch { /* noop */ }
-    return next
-  })
+  // Desde 2026-11-25 la fuente es Mi día (servidor, lib/calificacionDia): así Épicas, Tiempo y Mi día ven la misma.
+  useEffect(() => {
+    let local: Record<string, number> = {}
+    try { const raw = localStorage.getItem('epicas.dayScores.v1'); if (raw) { local = JSON.parse(raw); setDayScores(local) } } catch { /* noop */ }
+    if (ficha) return
+    traerCalificaciones(todayISO()).then(srv => { if (Object.keys(srv).length) setDayScores(prev => juntarCalificaciones({ ...local, ...prev }, srv)) })
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  const setDayScore = (day: string, score: number | null) => {
+    subirCalificacion(day, score)
+    setDayScores(prev => {
+      const next = { ...prev }; if (score != null && score > 0) next[day] = score; else delete next[day]
+      try { localStorage.setItem('epicas.dayScores.v1', JSON.stringify(next)) } catch { /* noop */ }
+      return next
+    })
+  }
   // Día cerrado: se marca al pulsar "Cerrar el día" (con confeti). Se puede reabrir/ver de nuevo.
   useEffect(() => { try { const raw = localStorage.getItem('epicas.dayClosed.v1'); if (raw) setDayClosed(JSON.parse(raw)) } catch { /* noop */ } }, [])
   const markDayClosed = (day: string, closed: boolean, agendedNW?: Array<{ taskId: string; name: string; min: number }>) => {
@@ -1058,6 +1083,7 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
     // updated_at). Así dos ediciones rapidísimas a la misma tarea no chocan entre sí ni se
     // descartan; sin serializar, la 2ª mandaba un updated_at viejo y el server la rechazaba.
     const prevChain = writeChain.current.get(id) || Promise.resolve()
+    writesPending.current++; writeEpoch.current++
     const run = (async () => {
       await prevChain.catch(() => {})
       // Campos de la épica (nombre, color, rutinas, links…)
@@ -1112,6 +1138,7 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
       }
     })()
     writeChain.current.set(id, run.catch(() => {}))
+    run.catch(() => {}).finally(() => { writesPending.current = Math.max(0, writesPending.current - 1) })
     try {
       await run
       return true
@@ -9834,14 +9861,11 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
           <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16, borderRadius: 13, padding: '12px 15px', background: 'rgba(176,82,46,0.08)', border: '1px solid rgba(176,82,46,0.32)' }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: '#B0522E' }}>{loadError}</span>
             <span style={{ fontSize: 12, color: 'rgba(20,35,61,0.55)' }}>Lo que ves puede estar desactualizado.</span>
-            <button onClick={loadEpics} disabled={loading} style={{ marginLeft: 'auto', cursor: loading ? 'default' : 'pointer', border: '1px solid rgba(176,82,46,0.4)', background: '#fff', color: '#B0522E', borderRadius: 9, padding: '7px 14px', fontSize: 12, fontWeight: 700 }}>
+            <button onClick={() => loadEpics()} disabled={loading} style={{ marginLeft: 'auto', cursor: loading ? 'default' : 'pointer', border: '1px solid rgba(176,82,46,0.4)', background: '#fff', color: '#B0522E', borderRadius: 9, padding: '7px 14px', fontSize: 12, fontWeight: 700 }}>
               {loading ? 'Reintentando…' : 'Reintentar'}
             </button>
           </div>
         )}
-
-        {/* ACCESOS RÁPIDOS — favoritos del home, plegables para no robar espacio */}
-        <FavoritosStrip />
 
         {/* PLAN DE HOY — enfoque del día, lo primero de la página */}
         {renderPlanToday()}
@@ -12847,7 +12871,7 @@ function CapturaDia({ epicas, hoy, dia, epicaFiltro, featureFiltro, iniciativaFi
 }
 
 /* ─── Header ─────────────────────────────────────────────────── */
-function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void }) {
+function TopBar({ onNew }: { sourceCount?: number; onNew: () => void }) {
   return (
     <>
       <div className="brand-rule" />
@@ -12866,14 +12890,10 @@ function TopBar({ sourceCount, onNew }: { sourceCount: number; onNew: () => void
               <HeaderStats />
               <CumplesWidget />
               <ExcepcionalesWidget />
-              <span className="ep-hide-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 10, background: 'rgba(62,142,142,0.16)', border: '1px solid rgba(120,200,190,0.25)', padding: '8px 12px', fontSize: 11.5, fontWeight: 700, color: '#B9E2DA' }}>
-                <span className="ep-live" style={{ height: 7, width: 7, borderRadius: 99, background: '#5FD0BE' }} />Supabase · {sourceCount} fuentes
-              </span>
             </span>
             <WidgetsDropdown />
             <SpecialsDropdown />
             <CommandPalette />
-            <Link href="/peso" className="band-glass band-glass-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 10, padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}><span style={{ fontSize: 13, lineHeight: 1 }}>⚖️</span> Peso</Link>
             <SectionNav current="epicas" />
             <button onClick={onNew} style={{ ...goldBtn, display: 'flex', alignItems: 'center', gap: 6, padding: '9px 15px', fontSize: 12 }}>
               <span style={{ fontSize: 16, lineHeight: 1, marginTop: -1 }}>+</span> <span className="ep-hide-xs">Nueva</span> épica

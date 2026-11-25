@@ -19,7 +19,6 @@ import CalendarWidget from './CalendarWidget'
 import MomentosWidget from './MomentosWidget'
 import FlujoCalendar from './FlujoCalendar'
 import EditModal from './EditModal'
-import { useTodayResumen, hmm } from '@/lib/useTodayResumen'
 
 function isFlujo(section: string) {
   return section.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim() === 'flujo'
@@ -37,50 +36,6 @@ function greetingFor(hour: number) {
   if (hour >= 5 && hour < 12) return 'Buenos días'
   if (hour >= 12 && hour < 19) return 'Buenas tardes'
   return 'Buenas noches'
-}
-
-// Resumen de "hoy" (tareas/rutinas/tiempo) — esta pantalla es la primera que se abre cada vez y
-// antes no sabía nada de Épicas/Tiempo pese a que /panel ya calculaba todo esto. Mismo hook que
-// PanelClient.tsx, así que el criterio de "tarea de hoy" y la fuente de tiempo trabajado no se
-// duplican ni pueden divergir entre las dos pantallas.
-function TodayStrip() {
-  const { loading, todayTasks, routines, routinesDone, dueSoon, workedMin, runningName } = useTodayResumen()
-  if (loading) return null   // evita un salto de layout mientras carga (esto NO viene del SSR de items)
-  return (
-    <section className="mb-6 rounded-2xl glass p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="eyebrow">Hoy</h2>
-        <Link href="/panel" className="text-[11px] font-semibold text-[#2E5A9E] no-underline">panel completo →</Link>
-      </div>
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        {[
-          { n: todayTasks.length, l: 'tareas de hoy', c: '#2E5A9E' },
-          { n: `${routinesDone}/${routines.length}`, l: 'rutinas hechas', c: '#2E6E6E' },
-          { n: hmm(workedMin), l: runningName ? `▶ ${runningName}` : 'trabajado hoy', c: '#A87A2C' },
-          { n: dueSoon.length, l: 'por vencer (14 d)', c: '#B0522E' },
-        ].map((s, i) => (
-          <div key={i} className="rounded-xl border border-[rgba(15,35,64,0.09)] bg-white px-3 py-2.5" style={{ borderTop: `3px solid ${s.c}` }}>
-            <div className="serif" style={{ fontSize: 22, lineHeight: 1, color: s.c }}>{s.n}</div>
-            <div className="mt-1 text-[10.5px] font-semibold text-[rgba(20,35,61,0.55)]">{s.l}</div>
-          </div>
-        ))}
-      </div>
-      {todayTasks.length > 0 ? (
-        <div className="mt-3 flex flex-col gap-1">
-          {todayTasks.slice(0, 4).map(({ e, t }, k) => (
-            <Link key={t.id || k} href={`/epicas?e=${e.id}&t=${t.id}`} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-[#16365F] no-underline hover:bg-[rgba(15,35,64,0.04)]">
-              <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: e.color }} />
-              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.t}</span>
-              <span className="flex-shrink-0 text-[10.5px] text-[rgba(20,35,61,0.4)]">{e.name}</span>
-            </Link>
-          ))}
-          {todayTasks.length > 4 && <Link href="/panel" className="mt-0.5 px-2 text-[11px] font-semibold text-[#2E5A9E] no-underline">ver las {todayTasks.length} →</Link>}
-        </div>
-      ) : (
-        <div className="mt-3 px-0.5 text-[12.5px] text-[rgba(20,35,61,0.5)]">Nada planeado para hoy. <Link href="/epicas" className="font-semibold text-[#A87A2C] no-underline">Elige tu enfoque →</Link></div>
-      )}
-    </section>
-  )
 }
 
 export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
@@ -261,8 +216,8 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
   const deleteItem = async (item: Item) => {
     const prev = items
     setItems(items.filter(i => i.id !== item.id))
-    const r = await fetch(`/api/items/${item.id}`, { method: 'DELETE' })
-    if (!r.ok) {
+    const r = await fetch(`/api/items/${item.id}`, { method: 'DELETE' }).catch(() => null)
+    if (!r || !r.ok) {
       setItems(prev)
       showToast('No se pudo eliminar', true)
     } else {
@@ -371,7 +326,7 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.png" alt="ADVL" className="h-10 w-auto" style={{ filter: 'drop-shadow(0 3px 8px rgba(0,0,0,.4))' }} />
             <div className="flex flex-col gap-0.5">
-              <span className="text-[15px] font-semibold leading-none text-[#F3EFE6]" style={{ letterSpacing: '.01em' }}>{CONFIG.siteName}</span>
+              <span className="serif italic leading-none text-[#F3EFE6]" style={{ fontSize: 26, fontWeight: 600 }}>Accesos</span>
               <span className="eyebrow" style={{ color: '#C8A24C', letterSpacing: '.24em' }}>{greeting || 'Dashboard'} · ADVL</span>
             </div>
           </div>
@@ -426,14 +381,16 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
           <div className="mb-6 rounded-2xl glass p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
-                <span className="flex items-center gap-1.5 rounded-full bg-[rgba(62,142,142,0.12)] px-2.5 py-1 text-[11px] font-semibold text-[#2E6E6E]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#3E8E8E]" /> Supabase conectado
-                </span>
+                {loadError && (
+                  <span className="flex items-center gap-1.5 rounded-full bg-[rgba(176,82,46,0.10)] px-2.5 py-1 text-[11px] font-semibold text-[#B0522E]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#B0522E]" /> Sin conexión
+                  </span>
+                )}
                 <span className="text-[12px] text-[rgba(20,35,61,0.6)]">{items.length} accesos · {categories.length} categorías</span>
               </div>
               <span className="hidden items-center gap-1.5 text-[11px] text-[rgba(20,35,61,0.45)] sm:flex">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                Pasa el cursor sobre una tarjeta para editar
+                <span className="[@media(hover:none)]:hidden">Pasa el cursor sobre una tarjeta para editar</span>
               </span>
             </div>
 
@@ -468,7 +425,11 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
             </p>
           </div>
 
-          <TodayStrip />
+          {/* Lo de hoy vive en Mi día: aquí solo un acceso, para no repetirlo. */}
+          <Link href="/dia" className="mb-5 flex items-center justify-between gap-3 rounded-2xl glass glass-hover px-4 py-3 no-underline">
+            <span className="text-[13px] font-semibold text-[#16365F]">☀︎ Tu día: tus 3, agenda y lo que falta decidir</span>
+            <span className="text-[12px] font-bold text-[#A87A2C]">Abrir Mi día →</span>
+          </Link>
 
           {/* RECIENTES */}
           {recents.length > 0 && !query && (

@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
     const push = {
       title: '🌙 ¿Cierras tu día?',
       body: pregunta ? `Platícame cómo te fue. Y una pregunta: ${pregunta}` : 'Platícame cómo te fue y califícalo. Toma un minuto.',
-      tag: `noche-${hoy}`, url: '/dia',
+      tag: `noche-${hoy}`, url: '/dia?modo=noche',
     }
     if (qs.get('dry') === '1') return NextResponse.json({ ok: true, dry: true, sent: 0, push })
 

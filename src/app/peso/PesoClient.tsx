@@ -566,7 +566,7 @@ export default function PesoClient({
   if (!n) {
     return (
       <PerfilProvider perfil={perfilEstado.perfil}>
-        <SiteHeader title="Peso" subtitle="Salud · ADVL" />
+        <SiteHeader title="Peso" subtitle="Salud · ADVL" seccion="peso" />
         <main className="peso-root px-4 pt-6 pb-16 max-w-3xl mx-auto space-y-6">
           <Titulo subtitulo="Aún no hay mediciones. Registra la primera para empezar a ver tu progreso, el análisis con IA y tus rutinas y dietas." />
           {avisoPerfil}
@@ -593,7 +593,7 @@ export default function PesoClient({
   // El proveedor envuelve TODO (hero, formulario, pestañas): estatura, sexo y edad ya no están fijos en el código.
   return (
     <PerfilProvider perfil={perfilEstado.perfil}>
-      <SiteHeader title="Peso" subtitle="Salud · ADVL" />
+      <SiteHeader title="Peso" subtitle="Salud · ADVL" seccion="peso" />
       {/* peso-root: ancla de reglas de estilo propias de /peso (p. ej. cifras serif alineadas en globals.css). */}
       <main className="peso-root px-4 pt-6 pb-20 max-w-5xl mx-auto flex flex-col">
         <div className="space-y-5 mb-6">

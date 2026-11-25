@@ -1,7 +1,7 @@
-import PanelClient from './PanelClient'
+import { redirect } from 'next/navigation'
 
-// Sección "Panel": centro del día (actividades de hoy, rutinas, por vencer, calendario y
-// fechas a recordar). Datos en el cliente (/api/epicas + margen.v1 + widgets propios).
+// El Panel se juntó con «Mi día» (2026-11-25): lo que solo tenía el Panel (Pregúntale a tu cerebro, salud,
+// personas sin verse y las gráficas de la semana) ahora vive en /dia. Se deja la ruta para no romper favoritos.
 export default function PanelPage() {
-  return <PanelClient />
+  redirect('/dia')
 }

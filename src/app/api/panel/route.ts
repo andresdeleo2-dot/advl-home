@@ -24,7 +24,7 @@ export async function GET() {
   let salud: null | { peso: number; fecha: string; cambioSemana: number | null; hace: number; anotadoHoy: boolean | null } = null
   if (!pesos.error && pesos.data?.length) {
     const ult = pesos.data[0] as { fecha: string; peso: number }
-    const antes = (pesos.data as { fecha: string; peso: number }[]).find(r => r.fecha <= sumarDias(ult.fecha, -6))
+    const antes = (pesos.data as { fecha: string; peso: number }[]).find(r => r.fecha <= sumarDias(ult.fecha, -6) && r.fecha >= sumarDias(ult.fecha, -10))   // «en la semana»: una medición de hace 6–10 días; si no hay, no se inventa
     const d = diario.error ? null : (diario.data?.data as { comidas?: { items?: unknown[] }[]; ejercicio?: unknown[] } | null)
     salud = {
       peso: Number(ult.peso), fecha: ult.fecha, hace: dias(ult.fecha, hoy),

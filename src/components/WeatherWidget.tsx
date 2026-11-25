@@ -11,8 +11,15 @@ const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 
 export default function WeatherWidget() {
   const [data, setData] = useState<WeatherData | null>(null)
-  useEffect(() => { fetch('/api/weather').then(r => r.json()).then(setData).catch(() => {}) }, [])
+  const [fallo, setFallo] = useState(false)
+  // Si el servicio del clima falla, /api/weather responde {error}: antes eso tronaba la página entera (forecast undefined).
+  useEffect(() => {
+    fetch('/api/weather').then(r => r.json()).then(j => {
+      if (j && typeof j.temp === 'number' && Array.isArray(j.forecast)) setData(j as WeatherData); else setFallo(true)
+    }).catch(() => setFallo(true))
+  }, [])
 
+  if (fallo) return <div className="rounded-2xl glass p-4 text-[12.5px] text-[rgba(20,35,61,0.5)]">El clima no está disponible ahorita.</div>
   if (!data) return <div className="h-40 animate-pulse rounded-2xl glass" />
 
   return (

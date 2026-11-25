@@ -3,7 +3,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import SiteHeader from '@/components/SiteHeader'
-import SectionNav from '@/components/SectionNav'
 import type { Epica, EpicaFeature, EpicaMilestone, EpicaTask, Iniciativa } from '@/lib/supabase'
 import {
   ARCHIVED, addDays, addMonths, clickable, doneCount, duracionLabel, dueTone,
@@ -1820,7 +1819,7 @@ export default function RoadmapClient() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#f3efe6', color: '#10233F' }}>
-      <SiteHeader title="Roadmap" subtitle="A dónde vamos · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="roadmap" />} />
+      <SiteHeader title="Roadmap" subtitle="A dónde vamos · ADVL" seccion="roadmap" />
       <main className="ep-shell" style={{ maxWidth: 1360, margin: '18px auto 60px', padding: '0 20px 40px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
           <div>

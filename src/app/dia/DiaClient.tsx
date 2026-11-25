@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import SiteHeader from '@/components/SiteHeader'
-import SectionNav from '@/components/SectionNav'
 import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO, uid, completeRecurring } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { useDictado, juntar } from '@/lib/useDictado'
+import { Preguntale, SaludDia, TuSemana, type PanelExtra } from '@/app/panel/PanelDia'
 import { Bandeja, TuCerebro, itemsDe, type CamposTarea, type AccionesBandeja } from './Bandeja'
 import {
   obsidianUrl, saludEpicas, esperandoAOtros, racha, sumarDias, resolverPlan, diasHasta, textoRecordatorio,
@@ -22,7 +22,6 @@ const fechaDe = (iso: string) => { const [y, m, d] = iso.split('-').map(Number);
 const diaLargo = (iso: string) => { const d = fechaDe(iso); return `${DN[d.getDay()]} ${d.getDate()} de ${MN[d.getMonth()]}` }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 const RITUAL_KEY = 'dia.ritual.v1'
-const leerLS = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
 const ponerLS = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* sin almacenamiento */ } }
 const enDias = (n: number) => (n === 0 ? 'hoy' : n === 1 ? 'mañana' : n < 0 ? `hace ${-n} días` : `en ${n} días`)
 const hora = (iso: string) => new Date(iso).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })
@@ -51,6 +50,7 @@ export default function DiaClient() {
   const [cumples, setCumples] = useState<Cumple[]>([])
   const [eventos, setEventos] = useState<Evento[] | null>(null)
   const [saludHoy, setSaludHoy] = useState<boolean | null>(null)
+  const [extra, setExtra] = useState<PanelExtra | null>(null)   // salud y personas sin verse (lo que antes era el Panel)
   const [modo, setModo] = useState<Modo>('hoy')
   const [modoElegido, setModoElegido] = useState(false)
   const [fecha, setFecha] = useState(hoy)            // el día que estás viendo (tira de la semana)
@@ -79,6 +79,7 @@ export default function DiaClient() {
   useEffect(() => {
     cargarDia(); cargarEpicas()
     fetch('/api/cumples').then(r => r.json()).then(j => { if (j?.ok) setCumples(j.personas || []) }).catch(() => {})
+    fetch('/api/panel').then(r => r.json()).then(j => { if (j?.ok) setExtra(j as PanelExtra) }).catch(() => {})
     fetch('/api/calendar').then(r => r.json()).then(j => setEventos(Array.isArray(j) ? j : Array.isArray(j?.events) ? j.events : [])).catch(() => setEventos([]))
     // Salud: ¿ya anotaste hoy en /peso? Solo si usas el diario (hay días anotados).
     fetch('/api/peso/diario').then(r => r.json()).then(j => {
@@ -106,6 +107,14 @@ export default function DiaClient() {
     const cerrado = dia.cierres.some(c => c.fecha === hoy && c.calificacion != null)
     if (new Date().getHours() >= 20 && !cerrado) setModo('noche')
   }, [dia, hoy, modoElegido])
+  // ?modo=noche|semana|boveda|hoy: otras secciones (Tiempo, Épicas, avisos) abren directo esa vista.
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search).get('modo')
+      if (q === 'noche' || q === 'semana' || q === 'boveda' || q === 'hoy') { setModo(q); setModoElegido(true) }
+      if (q) window.history.replaceState({}, '', '/dia')
+    } catch { /* sin URL */ }
+  }, [])
   const ir = (m: Modo) => { setModo(m); setModoElegido(true); if (m !== 'semana' && m !== 'boveda') setFecha(hoy); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   const verDia = (f: string) => { setFecha(f); if (f === hoy) setModo(m => (m === 'ritual' ? 'hoy' : m)); else setModo('hoy'); setModoElegido(true) }
 
@@ -382,7 +391,7 @@ export default function DiaClient() {
   return (
     <div className="md-root">
       <style>{CSS}</style>
-      <SiteHeader title="Mi día" subtitle="Tu día · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="dia" />} />
+      <SiteHeader title="Mi día" subtitle="Tu día · ADVL" seccion="dia" />
       <main className="md-main">
         <nav className="md-tabs" aria-label="Vistas de Mi día">
           {([['hoy', 'Hoy'], ['noche', 'Cerrar día'], ['semana', 'Semana'], ['boveda', 'Bóveda']] as [Modo, string][]).map(([m, l]) => (
@@ -417,10 +426,10 @@ export default function DiaClient() {
         )}
 
         {dia && fecha === hoy && modo === 'hoy' && (
-          <VistaHoy dia={dia} data={data} hoy={hoy} epicas={epicas} cumples={cumples} eventos={eventos} saludHoy={saludHoy}
+          <VistaHoy extra={extra} dia={dia} data={data} hoy={hoy} epicas={epicas} cumples={cumples} eventos={eventos} saludHoy={saludHoy}
             prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar}
             pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas} porDecidir={porDecidir.length}
-            abrirRitual={() => ir('ritual')} responder={responder} capturar={capturar} aviso={mostrarAviso}
+            abrirRitual={() => ir('ritual')} ordenar={() => { setModo('tus3'); setModoElegido(true); window.scrollTo({ top: 0 }) }} irBoveda={() => ir('boveda')} responder={responder} capturar={capturar} aviso={mostrarAviso}
             cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} />
         )}
 
@@ -429,7 +438,7 @@ export default function DiaClient() {
             toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar} capturar={capturar} calificar={calificar} />
         )}
 
-        {dia && modo === 'semana' && <VistaSemana dia={dia} hoy={hoy} />}
+        {dia && modo === 'semana' && <VistaSemana dia={dia} hoy={hoy} epicas={epicas} />}
         {dia && modo === 'boveda' && <VistaBoveda dia={dia} />}
 
         {dia && fecha === hoy && <Pie dia={dia} />}
@@ -607,11 +616,12 @@ function proximoLunes(hoy: string) { const d = fechaDe(hoy).getDay(); return sum
 
 /* ── Vista Hoy ── */
 function VistaHoy(p: {
+  extra: PanelExtra | null
   dia: DiaGet; data: DiaData | null; hoy: string; epicas: Epica[] | null; cumples: Cumple[]; eventos: Evento[] | null; saludHoy: boolean | null
   prioridades: DiaPrioridad[]; respaldo: { e: Epica; t: EpicaTask }[]; tareaDe: (x: DiaPrioridad) => { e: Epica; t: EpicaTask } | null
   toggleHecha: (id: string) => Promise<void>; marcar: (x: DiaPrioridad) => Promise<void>; puedeMarcar: (x: DiaPrioridad) => boolean
   pendientes: DiaTarjeta[]; decisiones: DiaDecision[]; respuestas: Map<string, DiaRespuesta>
-  abrirRitual: () => void; responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown; tareaId?: string }) => Promise<void>
+  abrirRitual: () => void; ordenar: () => void; irBoveda: () => void; responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown; tareaId?: string }) => Promise<void>
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; aviso: (a: Aviso) => void
   cerebroAbiertas: number; porDecidir: number; crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
 }) {
@@ -632,7 +642,7 @@ function VistaHoy(p: {
 
   // Chips: fechas que vienen, cumpleaños, por decidir, inbox, salud, ERP en vivo.
   const chips = useMemo(() => {
-    const out: { t: string; tono: 'ambar' | 'azul' | 'rojo' | 'verde' | 'gris'; href?: string }[] = []
+    const out: { t: string; tono: 'ambar' | 'azul' | 'rojo' | 'verde' | 'gris'; href?: string; accion?: () => void }[] = []
     for (const f of (data?.fechas || [])) { const n = diasHasta(hoy, f.fecha); if (n >= 0 && n <= 30) out.push({ t: `${f.t} · ${enDias(n)}`, tono: n <= 3 ? 'rojo' : 'ambar', href: f.nota ? obsidianUrl(f.nota) : undefined }) }
     for (const c of p.cumples) {
       const [, m, d] = c.cumple.split('-').map(Number); if (!m || !d) continue
@@ -643,16 +653,16 @@ function VistaHoy(p: {
     if (data?.inbox) out.push({ t: `Inbox · ${data.inbox}`, tono: 'gris' })
     if (p.saludHoy === false) out.push({ t: 'Registrar salud', tono: 'ambar', href: '/peso' })
     const erp = dia.boveda?.resumen.find(r => /ERP/.test(r) && /vivo/i.test(r))
-    if (erp) { const n = erp.match(/\d+/)?.[0]; out.push({ t: n ? `ERP en vivo · ${n}` : 'ERP en vivo', tono: 'rojo', href: '#boveda' }) }
+    if (erp) { const n = erp.match(/\d+/)?.[0]; out.push({ t: n ? `ERP en vivo · ${n}` : 'ERP en vivo', tono: 'rojo', accion: p.irBoveda }) }
     return out
-  }, [data, hoy, p.cumples, p.saludHoy, dia.boveda])
+  }, [data, hoy, p.cumples, p.saludHoy, dia.boveda, p.irBoveda])
 
   const noCorrio = !dia.resumen && dia.disponible
   return (
     <div className="md-fade">
       <div className="md-entre md-base md-mt12">
         <h1 className="md-fecha">{cap(diaLargo(hoy))}</h1>
-        {tres.length > 0 && <span className="md-meta">{hechas} de {tres.length} hechas</span>}
+        {tres.length > 0 && <span className="md-meta">{hechas} de {tres.length} hechas{p.prioridades.length > 1 && <> · <button type="button" className="md-link" onClick={p.ordenar}>Ordenar</button></>}</span>}
       </div>
       {data && (data.frase || data.hechos.length > 0) && <AyerCorto data={data} />}
       {noCorrio && (
@@ -682,7 +692,7 @@ function VistaHoy(p: {
               <p className="md-titulo-ahora">{siguiente.hit?.t.t || siguiente.p.t}</p>
               <p className="md-meta">{[siguiente.p.epica || siguiente.hit?.e.name, siguiente.p.min ? `${siguiente.p.min} min` : null, siguiente.p.porque].filter(Boolean).join(' · ')}</p>
               <div className="md-fila md-mt12">
-                <Link href="/tiempo" className="md-btn md-primario md-grow">▶ Foco{siguiente.p.min ? ` ${siguiente.p.min} min` : ''}</Link>
+                <Link href={siguiente.hit?.t.id ? `/tiempo?start=${encodeURIComponent(siguiente.hit.t.id)}` : '/tiempo'} className="md-btn md-primario md-grow" title={siguiente.hit ? 'Abre Tiempo con el cronómetro de esta tarea corriendo' : 'Abrir Tiempo'}>▶ Foco{siguiente.p.min ? ` ${siguiente.p.min} min` : ''}</Link>
                 {p.puedeMarcar(siguiente.p) && <button className="md-btn" onClick={() => p.marcar(siguiente.p)}>✓ Hecha</button>}
               </div>
             </div>
@@ -706,7 +716,9 @@ function VistaHoy(p: {
 
           {chips.length > 0 && (
             <div className="md-chips">
-              {chips.map((c, i) => c.href
+              {chips.map((c, i) => c.accion
+                ? <button key={i} type="button" onClick={c.accion} className={`md-chip md-tono-${c.tono}`}>{c.t}</button>
+                : c.href
                 ? <a key={i} href={c.href} className={`md-chip md-tono-${c.tono}`}>{c.t}</a>
                 : <span key={i} className={`md-chip md-tono-${c.tono}`}>{c.t}</span>)}
             </div>
@@ -758,6 +770,19 @@ function VistaHoy(p: {
               </div>
             </details>
           )}
+
+          <SaludDia extra={p.extra} />
+          {(p.extra?.sinContacto?.length ?? 0) > 0 && (
+            <section>
+              <div className="md-lbl"><span>Sin verse hace tiempo</span><a className="md-link" href="https://mi-vida-neon.vercel.app/vida?vista=personas" target="_blank" rel="noopener noreferrer">Personas ↗</a></div>
+              <div className="md-card md-lista">
+                {p.extra!.sinContacto!.map(x => (
+                  <div key={x.id} className="md-row"><span className="md-grow">{x.nombre}</span><span className="md-meta">{x.dias >= 60 ? `${Math.round(x.dias / 30)} meses` : `${x.dias} días`}</span></div>
+                ))}
+              </div>
+            </section>
+          )}
+          <Preguntale />
         </div>
       </div>
 
@@ -921,19 +946,30 @@ function Agenda({ eventos, hoy }: { eventos: Evento[] | null; hoy: string }) {
   const hoyEv = eventos.filter(e => !e.allDay && e.start && e.end && new Date(e.end).getTime() > ini && new Date(e.start).getTime() < fin)
     .map(e => ({ ...e, a: Math.max(ini, new Date(e.start).getTime()), b: Math.min(fin, new Date(e.end!).getTime()) }))
     .sort((x, y) => x.a - y.a)
+  // Reuniones que se enciman van en carriles (antes se pintaban una encima de otra).
+  const finCarril: number[] = []
+  const conCarril = hoyEv.map(e => {
+    let c = finCarril.findIndex(f => f <= e.a); if (c < 0) { c = finCarril.length; finCarril.push(0) }
+    finCarril[c] = e.b
+    return { ...e, carril: c }
+  })
+  const carriles = Math.max(1, finCarril.length)
+  const pos = (h: number) => `${((fechaDe(hoy).setHours(h, 0, 0, 0) - ini) / total) * 100}%`
   const ahora = Date.now()
   return (
     <section>
       <div className="md-lbl"><span>Tu agenda</span><span>{hoyEv.length ? `${hoyEv.length} ${hoyEv.length === 1 ? 'reunión' : 'reuniones'}` : 'sin reuniones'}</span></div>
       <div className="md-agenda" aria-label="Agenda de 8 a 21 h">
-        {hoyEv.map((e, i) => (
-          <div key={i} className="md-evento" title={`${e.title || 'Reunión'} · ${hora(e.start)}`} style={{ left: `${((e.a - ini) / total) * 100}%`, width: `${Math.max(1.5, ((e.b - e.a) / total) * 100)}%` }}>
+        {conCarril.map((e, i) => (
+          <div key={i} className="md-evento" title={`${e.title || 'Reunión'} · ${hora(e.start)}`} style={{ left: `${((e.a - ini) / total) * 100}%`, width: `${Math.max(1.5, ((e.b - e.a) / total) * 100)}%`, top: `${(e.carril / carriles) * 100}%`, bottom: 'auto', height: `${100 / carriles}%` }}>
             <span>{e.title || 'Reunión'}</span>
           </div>
         ))}
         {ahora > ini && ahora < fin && <div className="md-ahora-linea" style={{ left: `${((ahora - ini) / total) * 100}%` }} />}
       </div>
-      <div className="md-entre md-meta md-mt4"><span>8</span><span>12</span><span>16</span><span>21</span></div>
+      <div className="md-meta md-mt4" style={{ position: 'relative', height: 16 }} aria-hidden>
+        {[8, 12, 16, 21].map(h => <span key={h} style={{ position: 'absolute', left: pos(h), transform: h === 8 ? 'none' : h === 21 ? 'translateX(-100%)' : 'translateX(-50%)' }}>{h}</span>)}
+      </div>
       {hoyEv.length > 0 && (
         <div className="md-mt8">
           {hoyEv.slice(0, 4).map((e, i) => <div key={i} className="md-meta">{hora(e.start)} · {e.title || 'Reunión'}</div>)}
@@ -968,6 +1004,7 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
   const [estado, setEstado] = useState<'' | 'guardando' | string>('')
   const [ok, setOk] = useState('')
   const [comoTarea, setComoTarea] = useState(false)
+  const [comoIdea, setComoIdea] = useState(false)    // va directo a Ideas (/ideas), no al diario
   const [epicaId, setEpicaId] = useState('')        // '' = «Del diario»
   const [elegida, setElegida] = useState(false)     // ya la escogiste tú: no se cambia sola
   const [cuando, setCuando] = useState<PlanRapido>('')
@@ -982,7 +1019,12 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
     const v = t.trim(); if (!v) { setEstado(comoTarea ? 'Escribe la tarea primero' : 'Escribe o dicta algo primero'); return }
     setEstado('guardando'); setOk('')
     try {
-      if (comoTarea) {
+      if (comoIdea) {
+        const j = await postJSON<{ ok: boolean; error?: string; needsMigration?: boolean }>('/api/ideas', { texto: v.slice(0, 2000) })
+        if (!j.ok) throw new Error(j.needsMigration ? 'Falta la tabla de ideas en tu base.' : j.error || 'No se guardó la idea')
+        setOk('Idea guardada en tu libreta de Ideas.')
+        setComoIdea(false)
+      } else if (comoTarea) {
         const nombre = await crearRapida(v, epicaId, cuando)
         setOk(`Tarea creada en «${nombre}»${cuando ? (cuando === 'hoy' ? ', para hoy' : ', para mañana') : ''}. Queda anotada en tu nota de Obsidian a las 3:00.`)
       } else setOk('Guardado. Llega a tu nota de Obsidian a las 3:00 y, si es un pendiente, Claude te lo propone como tarea mañana.')
@@ -1015,8 +1057,10 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
         <BotonMic d={d} />
         <input value={mostrado} onChange={e => { setT(e.target.value); if (estado && !guardando) setEstado('') }}
           placeholder={d.escuchando ? 'Te escucho…' : comoTarea ? 'La tarea, con verbo: «Llamar al abogado…»' : 'Anotar algo… o toca el micrófono y habla'} aria-label={comoTarea ? 'Tarea nueva' : 'Anotar algo'} />
-        <button type="button" className="md-tarea-tog" data-on={comoTarea} aria-pressed={comoTarea} onClick={() => { setComoTarea(v => !v); setEstado('') }}
+        <button type="button" className="md-tarea-tog" data-on={comoTarea} aria-pressed={comoTarea} onClick={() => { setComoTarea(v => !v); setComoIdea(false); setEstado('') }}
           title="Volverla tarea en una épica">{comoTarea ? 'Tarea ✓' : '＋ Tarea'}</button>
+        <button type="button" className="md-tarea-tog" data-on={comoIdea} aria-pressed={comoIdea} onClick={() => { setComoIdea(v => !v); setComoTarea(false); setEstado('') }}
+          title="Guardarla en tu libreta de Ideas">{comoIdea ? 'Idea ✓' : 'Idea'}</button>
         <button className="md-enviar" aria-label={comoTarea ? 'Crear tarea' : 'Guardar'} disabled={guardando}>↑</button>
       </form>
       <p className="md-meta md-centro-txt" aria-live="polite">
@@ -1026,6 +1070,7 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
           : estado ? <span className="md-err-txt">{estado}</span>
           : ok ? <span className="md-ok-txt">{ok}</span>
           : comoTarea ? '↑ crea la tarea ahora mismo en esa épica.'
+          : comoIdea ? <>↑ la guarda en <Link className="md-link" href="/ideas">Ideas</Link>.</>
           : pendientes ? `${pendientes} ${pendientes === 1 ? 'nota' : 'notas'} esperando el cierre de las 3:00` : ' '}
       </p>
     </div>
@@ -1118,12 +1163,26 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, pu
 }
 
 /* ── Semana ── */
-function VistaSemana({ dia, hoy }: { dia: DiaGet; hoy: string }) {
+function VistaSemana({ dia, hoy, epicas }: { dia: DiaGet; hoy: string; epicas: Epica[] | null }) {
   const cal = new Map(dia.cierres.map(c => [c.fecha, c.calificacion]))
-  if (!dia.semana.length) return <div className="md-card md-fade"><p className="md-h3">Tu semana aparece aquí</p><p className="md-sub">Cada mañana se agrega el día anterior: lo que hiciste y lo que quedó.</p></div>
+  const califSemana = dia.cierres.filter(c => c.calificacion != null && c.fecha >= sumarDias(hoy, -6))
+  const prom = califSemana.length ? Math.round(califSemana.reduce((s, c) => s + (c.calificacion || 0), 0) / califSemana.length * 10) / 10 : null
+  const nRacha = racha(dia.cierres.filter(c => c.calificacion != null).map(c => c.fecha), hoy)
+  const hechos = dia.semana.reduce((s, x) => s + (x.data.hechos?.length || 0), 0)
+  const kpis = (
+    <div className="md-kpis md-mt12">
+      <div><b>{prom ?? '—'}</b><span>promedio (1–10)</span></div>
+      <div><b>{nRacha ? `${nRacha} ${nRacha === 1 ? 'día' : 'días'}` : '—'}</b><span>racha cerrando el día</span></div>
+      <div><b>{hechos || '—'}</b><span>cosas hechas</span></div>
+    </div>
+  )
+  const graficas = <div className="md-card md-mt12" style={{ padding: '16px 18px' }}><TuSemana dia={dia} epics={epicas} hoy={hoy} /></div>
+  if (!dia.semana.length) return <div className="md-fade"><h1 className="md-fecha">Tu semana</h1>{kpis}{graficas}<div className="md-card md-mt12"><p className="md-h3">Tu semana aparece aquí</p><p className="md-sub">Cada mañana se agrega el día anterior: lo que hiciste y lo que quedó.</p></div></div>
   return (
     <div className="md-fade">
       <h1 className="md-fecha">Tu semana</h1>
+      {kpis}
+      {graficas}
       <div className="md-linea-tiempo md-mt12">
         {dia.semana.map(s => {
           const d = s.data.diario || sumarDias(s.fecha, -1)
@@ -1234,6 +1293,11 @@ const CSS = `
 .md-flechas{display:flex;flex-direction:column}
 .md-dot{width:9px;height:9px;border-radius:50%;margin-top:6px;flex:none}
 .md-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}
+button.md-chip{border:none;cursor:pointer;font-family:inherit}
+.md-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;border-radius:14px;overflow:hidden;background:var(--md-linea);border:1px solid var(--md-linea)}
+.md-kpis>div{background:#fff;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.md-kpis b{font-family:var(--dia-serif),Georgia,serif;font-weight:400;font-size:26px;line-height:1}
+.md-kpis span{font-size:11.5px;color:var(--md-tenue)}
 .md-chip{font-size:12.5px;padding:5px 11px;border-radius:999px;white-space:nowrap;text-decoration:none;display:inline-block;font-weight:500}
 .md-tono-ambar,.md-tipo-sugerencia,.md-tipo-evitando{background:var(--md-ambar-bg);color:var(--md-acento)}
 .md-tono-rojo{background:var(--md-rojo-bg);color:var(--md-rojo)}
@@ -1316,6 +1380,7 @@ code{font-size:.9em;background:#f1ebe1;padding:1px 5px;border-radius:5px}
 .md-anotar .md-enviar{width:36px;height:36px;border-radius:50%;border:0;background:var(--md-tinta);color:var(--md-papel);font-size:16px;cursor:pointer;flex:none}
 .md-anotar{padding:6px}.md-anotar input{padding-left:4px}
 .md-tarea-tog{flex:none;border:1px solid var(--md-linea);background:transparent;color:var(--md-tinta);border-radius:999px;padding:7px 11px;font:500 13px var(--dia-ui);cursor:pointer;white-space:nowrap}
+@media (max-width:420px){.md-tarea-tog{padding:6px 8px;font-size:12px}}
 .md-tarea-tog[data-on="true"]{background:#f3e6cf;border-color:#e6cfa4}
 .md-anotar[data-tarea="true"]{border-color:#e6cfa4}
 .md-anotar-tarea{max-width:640px;margin:0 auto 8px;background:#fff;border:1px solid var(--md-linea);border-radius:16px;padding:12px;display:flex;gap:14px;flex-wrap:wrap;box-shadow:0 10px 30px -18px rgba(28,26,23,.45)}

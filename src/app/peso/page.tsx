@@ -125,7 +125,7 @@ function huellaAnalisis(
 function FalloLectura({ href }: { href: string }) {
   return (
     <>
-      <SiteHeader title="Peso" subtitle="Salud · ADVL" />
+      <SiteHeader title="Peso" subtitle="Salud · ADVL" seccion="peso" />
       <main className="px-4 pt-6 pb-16 max-w-3xl mx-auto space-y-6">
         <div className="min-w-0">
           <Eyebrow>Salud · composición corporal</Eyebrow>
