@@ -1,14 +1,14 @@
 'use client'
 
 /* Bloques del Panel ligados a «Mi día» (/dia). El Panel es para VER cómo va todo; lo de hoy se HACE en Mi día.
- * Aquí: el resumen de hoy según la hora, los números de la semana, tus 3, tu semana en gráficas, tus épicas esta
- * semana, personas, salud, «Pregúntale a tu cerebro» y «Anotar algo» con voz. Datos: /api/dia, /api/panel y las
+ * Aquí NO se repite lo de Mi día (chips, épicas, esperando a otros, Anotar). Solo: el resumen de hoy según la hora,
+ * los números de la semana, tu semana en gráficas, personas sin verse, salud y «Pregúntale a tu cerebro». Datos: /api/dia, /api/panel y las
  * épicas que ya carga el Panel. */
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import Link from 'next/link'
 import type { Epica, EpicaTask } from '@/lib/supabase'
-import { saludEpicas, esperandoAOtros, racha, sumarDias, diasHasta, textoRecordatorio, type DiaGet } from '@/lib/dia'
+import { racha, sumarDias, type DiaGet } from '@/lib/dia'
 import { useDictado, juntar } from '@/lib/useDictado'
 
 const SERIF = 'var(--epica-serif, Georgia, serif)'
@@ -76,79 +76,26 @@ export function HeroDia({ dia, now, tres }: { dia: DiaGet | null; now: Date | nu
   )
 }
 
-/** Los cuatro números de arriba. */
-export function KpisDia({ dia, tres, workedMin, routinesDone, routinesTotal }: { dia: DiaGet | null; tres: ReturnType<typeof useTusTres>; workedMin: number; routinesDone: number; routinesTotal: number }) {
-  const data = dia?.resumen?.data
-  const hechas = tres.filter(x => x.task && !ABIERTA(x.task)).length
-  const porDecidir = data && dia ? data.tarjetas.filter(c => !dia.respuestas.some(r => r.item_id === c.id)).length + data.decisiones.filter(d => !dia.respuestas.some(r => r.item_id === d.id)).length : 0
+/** Los números de la semana, en una tira dentro del encabezado (lo de hoy ya lo dice el saludo). */
+export function KpisDia({ dia, workedMin, routinesDone, routinesTotal }: { dia: DiaGet | null; workedMin: number; routinesDone: number; routinesTotal: number }) {
   const hoy = dia?.fecha || ''
   const semana = (dia?.cierres || []).filter(c => c.calificacion != null && c.fecha >= sumarDias(hoy, -6))
   const prom = semana.length ? Math.round(semana.reduce((s, c) => s + (c.calificacion || 0), 0) / semana.length * 10) / 10 : null
   const n = dia ? racha(dia.cierres.filter(c => c.calificacion != null).map(c => c.fecha), hoy) : 0
   const tiles = [
-    { n: tres.length ? `${hechas}/${tres.length}` : '—', l: 'tus 3 de hoy', c: AZUL, href: '/dia' },
-    { n: porDecidir, l: 'por decidir', c: ROJO, href: '/dia' },
-    { n: prom ?? '—', l: 'cómo va tu semana (1–10)', c: ORO },
-    { n: n ? `${n} ${n === 1 ? 'día' : 'días'}` : '—', l: 'racha cerrando el día', c: VERDE },
-    { n: hm(workedMin), l: 'trabajado hoy', c: ORO },
-    { n: `${routinesDone}/${routinesTotal}`, l: 'rutinas hechas', c: VERDE },
+    { n: hm(workedMin), l: 'trabajado hoy' },
+    { n: `${routinesDone}/${routinesTotal}`, l: 'rutinas' },
+    { n: prom ?? '—', l: 'tu semana (1–10)' },
+    { n: n ? `${n} ${n === 1 ? 'día' : 'días'}` : '—', l: 'racha cerrando el día' },
   ]
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 12 }}>
-      {tiles.map((s, i) => {
-        const cuerpo = (<>
-          <div style={{ fontFamily: SERIF, fontSize: 27, lineHeight: .9, color: s.c }}>{s.n}</div>
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: MUTED, marginTop: 5 }}>{s.l}</div>
-        </>)
-        const st: CSSProperties = { ...tarjeta, padding: '13px 16px', borderTop: `3px solid ${s.c}`, textDecoration: 'none', color: 'inherit', display: 'block' }
-        return s.href ? <Link key={i} href={s.href} style={st}>{cuerpo}</Link> : <div key={i} style={st}>{cuerpo}</div>
-      })}
-    </div>
-  )
-}
-
-/** Chips de lo urgente: fechas que vienen, ERP en vivo, inbox, salud, cumpleaños cercanos. */
-export function ChipsDia({ dia, extra, cumples }: { dia: DiaGet | null; extra: PanelExtra | null; cumples: { nombre: string; days: number }[] }) {
-  const hoy = dia?.fecha
-  const out: { t: string; bg: string; c: string; href?: string }[] = []
-  const data = dia?.resumen?.data
-  if (hoy) for (const f of data?.fechas || []) { const n = diasHasta(hoy, f.fecha); if (n >= 0 && n <= 30) out.push({ t: `${f.t} · ${n === 0 ? 'hoy' : n === 1 ? 'mañana' : `en ${n} días`}`, bg: 'rgba(168,122,44,0.12)', c: '#7a5718' }) }
-  const erp = dia?.boveda?.resumen.find(r => /ERP/.test(r) && /vivo/i.test(r))
-  if (erp) out.push({ t: `ERP en vivo · ${erp.match(/\d+/)?.[0] || ''}`, bg: 'rgba(176,82,46,0.11)', c: ROJO, href: '/dia' })
-  if (data?.inbox) out.push({ t: `Inbox · ${data.inbox}`, bg: LINEA, c: MUTED })
-  if (extra?.salud && extra.salud.anotadoHoy === false) out.push({ t: 'Registrar salud', bg: 'rgba(168,122,44,0.12)', c: '#7a5718', href: '/peso' })
-  for (const c of cumples.filter(x => x.days <= 7).slice(0, 2)) out.push({ t: `Cumple de ${c.nombre.split(' ')[0]} · ${c.days === 0 ? 'hoy' : c.days === 1 ? 'mañana' : `en ${c.days} días`}`, bg: 'rgba(46,110,110,0.11)', c: VERDE })
-  if (!out.length) return null
-  return (
-    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
-      {out.map((x, i) => {
-        const st: CSSProperties = { fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 999, background: x.bg, color: x.c, textDecoration: 'none' }
-        return x.href ? <Link key={i} href={x.href} style={st}>{x.t}</Link> : <span key={i} style={st}>{x.t}</span>
-      })}
-    </div>
-  )
-}
-
-/** Tus 3 de hoy, al frente del Enfoque. Tocar abre la tarea. */
-export function TusTres({ tres, abrir }: { tres: ReturnType<typeof useTusTres>; abrir: (e: Epica, t: EpicaTask) => void }) {
-  if (!tres.length) return null
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: ROJO, marginBottom: 8 }}>Tus 3 de hoy · de Mi día</div>
-      {tres.map((x, k) => {
-        const hecha = !!x.task && !ABIERTA(x.task)
-        return (
-          <div key={k} onClick={() => x.e && x.task && abrir(x.e, x.task)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', borderBottom: `1px solid ${LINEA}`, cursor: x.task ? 'pointer' : 'default' }}>
-            <span style={{ fontFamily: SERIF, fontSize: 20, width: 16, color: hecha ? VERDE : TENUE }}>{hecha ? '✓' : k + 1}</span>
-            <span style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: hecha ? TENUE : '#16365F', textDecoration: hecha ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t}</span>
-              {x.porque && <span style={{ fontSize: 11, color: TENUE }}>{x.porque}</span>}
-            </span>
-            {x.e && <span style={{ fontSize: 10.5, color: TENUE, flexShrink: 0 }}>{x.e.name}</span>}
-          </div>
-        )
-      })}
-      <div style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: AZUL, margin: '14px 0 0' }}>También agendado</div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 1, marginTop: 16, borderRadius: 12, overflow: 'hidden', background: 'rgba(255,255,255,0.1)' }}>
+      {tiles.map((s, i) => (
+        <div key={i} style={{ background: 'rgba(11,26,53,0.55)', padding: '10px 14px' }}>
+          <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1, color: '#F3EFE6' }}>{s.n}</div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.58)', marginTop: 4 }}>{s.l}</div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -184,8 +131,8 @@ export function TuSemana({ dia, epics, hoy }: { dia: DiaGet | null; epics: Epica
   const prom = califs.length ? Math.round(califs.reduce((a, b) => a + b, 0) / califs.length * 10) / 10 : null
   const barra = (h: number, color: string) => <span style={{ display: 'block', width: '100%', height: Math.max(3, h), borderRadius: '4px 4px 0 0', background: color }} />
   return (
-    <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 16 }}>
-      <div style={{ ...tarjeta, padding: '14px 16px' }}>
+    <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 22 }}>
+      <div>
         <Cab t="Cómo calificaste cada día" d={prom != null ? `promedio ${prom}` : 'cierra tu día para verlo'} />
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 96 }}>
           {dias.map(d => { const c = cal.get(d); return (
@@ -197,7 +144,7 @@ export function TuSemana({ dia, epics, hoy }: { dia: DiaGet | null; epics: Epica
           ) })}
         </div>
       </div>
-      <div style={{ ...tarjeta, padding: '14px 16px' }}>
+      <div>
         <Cab t="Planeado contra trabajado" d="gris = planeado · azul = trabajado" />
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 96 }}>
           {dias.map(d => (
@@ -218,57 +165,17 @@ export function TuSemana({ dia, epics, hoy }: { dia: DiaGet | null; epics: Epica
   )
 }
 
-/** Tus épicas esta semana: cuánto terminaste en cada una y cómo va. */
-export function EpicasSemana({ epics, hoy }: { epics: Epica[] | null; hoy: string }) {
-  const filas = useMemo(() => {
-    if (!epics) return []
-    const desde = sumarDias(hoy, -6)
-    return saludEpicas(epics, hoy).map(s => ({ s, hechas: (s.e.tasks || []).filter(t => t.status === 'Terminada' && (t.doneAt || '').slice(0, 10) >= desde).length }))
-      .sort((a, b) => b.hechas - a.hechas || 0).slice(0, 8)
-  }, [epics, hoy])
-  return (
-    <div style={{ ...tarjeta, padding: '14px 16px' }}>
-      <Cab t="Tus épicas esta semana" d="terminadas · estado" href="/epicas" />
-      {filas.map(({ s, hechas }) => {
-        const color = s.estado === 'vencidas' ? ROJO : s.estado === 'al_dia' ? VERDE : s.estado === 'quieta' || s.estado === 'pausa' ? TENUE : ORO
-        return (
-          <div key={s.e.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: `1px solid ${LINEA}` }}>
-            <span style={{ width: 8, height: 8, borderRadius: 99, background: s.e.color, flexShrink: 0 }} />
-            <span style={{ width: 110, fontSize: 13, fontWeight: 600, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.e.name}</span>
-            <span style={{ flex: 1, display: 'flex', gap: 2, alignItems: 'center' }} title={`${hechas} terminadas en 7 días`}>
-              {Array.from({ length: Math.min(10, Math.max(hechas, 1)) }, (_, k) => <i key={k} style={{ display: 'block', width: 9, height: 9, borderRadius: 2, background: k < hechas ? AZUL : LINEA }} />)}
-              {hechas > 10 && <span style={{ fontSize: 10.5, color: MUTED }}>+{hechas - 10}</span>}
-            </span>
-            <span style={{ fontSize: 11, fontWeight: 700, color, flexShrink: 0 }}>{s.etiqueta}</span>
-          </div>
-        )
-      })}
-      {!filas.length && <div style={{ fontSize: 13, color: MUTED }}>Cargando…</div>}
-    </div>
-  )
-}
-
-/** Personas: con quién no hablas hace tiempo y a quién le esperas respuesta. */
-export function PersonasDia({ extra, epics, hoy, abrirPersona, celulares }: { extra: PanelExtra | null; epics: Epica[] | null; hoy: string; abrirPersona: (id: string) => void; celulares: Map<string, string | null> }) {
-  const esperando = useMemo(() => (epics ? esperandoAOtros(epics, hoy).filter(w => w.quien).slice(0, 4) : []), [epics, hoy])
+/** Personas importantes que no ves hace tiempo (lo de «esperando a otros» está en Mi día). Va dentro de la tarjeta oscura. */
+export function SinContacto({ extra, abrirPersona }: { extra: PanelExtra | null; abrirPersona: (id: string) => void }) {
   const sin = extra?.sinContacto || []
-  if (!esperando.length && !sin.length) return null
+  if (!sin.length) return null
   return (
-    <div style={{ ...tarjeta, padding: '14px 16px' }}>
-      <Cab t="Personas" d="de Mi Vida y tus tareas" />
-      {esperando.map(w => {
-        const tel = w.t.personaId ? (celulares.get(w.t.personaId) || '').replace(/\D/g, '') : ''
-        return (
-          <div key={w.t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: `1px solid ${LINEA}` }}>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F' }}><b>{w.quien}</b> · esperas «{w.t.t}»{w.dias != null ? `, ${w.dias} ${w.dias === 1 ? 'día' : 'días'}` : ''}</span>
-            <a href={`https://wa.me/${tel}?text=${encodeURIComponent(textoRecordatorio(w.t, w.quien))}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11.5, fontWeight: 700, color: AZUL, textDecoration: 'none', flexShrink: 0 }}>Recordarle</a>
-          </div>
-        )
-      })}
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+      <div style={{ font: '800 9.5px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.5)', marginBottom: 6 }}>Sin verse hace tiempo</div>
       {sin.map(p => (
-        <div key={p.id} onClick={() => abrirPersona(p.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: `1px solid ${LINEA}`, cursor: 'pointer' }}>
-          <span style={{ flex: 1, fontSize: 13, color: '#16365F' }}><b>{p.nombre}</b> · sin verse hace {p.dias >= 60 ? `${Math.round(p.dias / 30)} meses` : `${p.dias} días`}</span>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: AZUL }}>Ficha</span>
+        <div key={p.id} onClick={() => abrirPersona(p.id)} className="pn-fila pn-osc" style={{ borderBottom: 'none', padding: '6px 4px' }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.nombre}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{p.dias >= 60 ? `${Math.round(p.dias / 30)} meses` : `${p.dias} días`}</span>
         </div>
       ))}
     </div>
@@ -327,35 +234,6 @@ export function Preguntale() {
           {r.fuentes.length > 0 && <div style={{ fontSize: 11, color: TENUE, marginTop: 6 }}>Fuentes: {r.fuentes.join(' · ')}</div>}
         </div>
       )}
-    </div>
-  )
-}
-
-/** «Anotar algo» con voz: llega a tu nota del día de Obsidian a las 3:00 (igual que en Mi día). */
-export function AnotarPanel({ hoy }: { hoy: string }) {
-  const [t, setT] = useState('')
-  const [estado, setEstado] = useState('')
-  const d = useDictado(f => setT(v => juntar(v, f)))
-  const enviar = async () => {
-    if (d.escuchando) d.parar()
-    const v = t.trim(); if (!v) { setEstado('Escribe o dicta algo primero'); return }
-    setEstado('guardando')
-    try {
-      const j = await (await fetch('/api/dia', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'captura', fecha: hoy, tipo: 'nota', texto: v }) })).json()
-      if (!j.ok) setEstado(j.error || 'No se guardó'); else { setT(''); setEstado('ok'); setTimeout(() => setEstado(''), 2500) }
-    } catch { setEstado('No se guardó. Revisa tu conexión.') }
-  }
-  return (
-    <div style={{ margin: '18px auto 0', maxWidth: 720 }}>
-      <form onSubmit={e => { e.preventDefault(); enviar() }} style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#fff', border: `1px solid ${d.escuchando ? 'rgba(176,82,46,0.4)' : 'rgba(15,35,64,0.12)'}`, borderRadius: 999, padding: 6, boxShadow: '0 12px 30px -20px rgba(15,35,64,0.5)' }}>
-        <MicBoton d={d} />
-        <input value={d.parcial ? juntar(t, d.parcial) : t} onChange={e => { setT(e.target.value); if (estado !== 'guardando') setEstado('') }} placeholder={d.escuchando ? 'Te escucho…' : 'Anotar algo… o toca el micrófono y habla'} aria-label="Anotar algo"
-          style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', fontSize: 14, background: 'transparent', color: NAVY }} />
-        <button aria-label="Guardar" disabled={estado === 'guardando'} style={{ width: 36, height: 36, borderRadius: 99, border: 'none', background: NAVY, color: '#fff', fontSize: 16, cursor: 'pointer', flexShrink: 0 }}>↑</button>
-      </form>
-      <div style={{ textAlign: 'center', fontSize: 11.5, color: estado && estado !== 'ok' && estado !== 'guardando' ? ROJO : TENUE, marginTop: 6, minHeight: 16 }}>
-        {d.error || (d.escuchando ? 'Escuchando. Toca el micrófono para parar y luego ↑ para guardar.' : estado === 'ok' ? 'Guardado. Llega a tu nota de Obsidian a las 3:00.' : estado === 'guardando' ? '' : estado)}
-      </div>
     </div>
   )
 }

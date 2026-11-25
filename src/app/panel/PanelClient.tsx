@@ -16,9 +16,9 @@ import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { fotoSrc, edadEnFecha, colorTipo, diffFechas, formatDiff } from '@/lib/vida'
-import { useTodayResumen, hmm } from '@/lib/useTodayResumen'
+import { useTodayResumen } from '@/lib/useTodayResumen'
 import { cmpRoadmap, cmpFeature } from '@/lib/ordenRoadmap'
-import { usePanelDia, useTusTres, HeroDia, KpisDia, ChipsDia, TusTres, TuSemana, EpicasSemana, PersonasDia, SaludDia, Preguntale, AnotarPanel } from './PanelDia'
+import { usePanelDia, useTusTres, HeroDia, KpisDia, TuSemana, SinContacto, SaludDia, Preguntale } from './PanelDia'
 
 const SERIF = 'var(--epica-serif, Georgia, serif)'
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -40,7 +40,7 @@ const signoDe = (mes0: number, dia: number) => {
 type SlotState = 'normal' | 'collapsed'
 // Estado inicial de cada slot cuando el usuario NUNCA lo ha tocado (nada guardado en localStorage
 // todavía). El resto arrancan expandidos como siempre; sólo Noticias arranca cerrado.
-const SLOT_DEFAULTS: Record<string, SlotState> = { noticias: 'collapsed', frase: 'collapsed' }
+const SLOT_DEFAULTS: Record<string, SlotState> = { noticias: 'collapsed', frase: 'collapsed', clima: 'collapsed' }
 
 const baseCard: CSSProperties = { borderRadius: 16, overflow: 'hidden', boxShadow: '0 20px 44px -34px rgba(15,35,64,0.5)' }
 
@@ -66,18 +66,6 @@ function Slot({ id, title, icon, accent = '#2E5A9E', dark, bare, children, layou
   )
 }
 
-// Título de sección con regla + link opcional a "su parte".
-function SectionTitle({ icon, children, href, cta, external }: { icon?: string; children: ReactNode; href?: string; cta?: string; external?: boolean }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '26px 2px 14px' }}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, font: '800 12px var(--font-ui, system-ui)', letterSpacing: '.14em', textTransform: 'uppercase', color: '#10233F' }}>{icon && <span style={{ fontSize: 15 }}>{icon}</span>}{children}</span>
-      <span style={{ flex: 1, height: 1, background: 'rgba(15,35,64,0.12)' }} />
-      {href && (external
-        ? <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none', whiteSpace: 'nowrap' }}>{cta || 'ver todo'} →</a>
-        : <Link href={href} style={{ fontSize: 11, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none', whiteSpace: 'nowrap' }}>{cta || 'ver todo'} →</Link>)}
-    </div>
-  )
-}
 type EnfOrden = 'importancia' | 'mio' | 'roadmap' | 'feature' | 'entrega'
 const ENF_ORDENES: [EnfOrden, string][] = [['importancia', 'Importancia'], ['mio', 'Mi orden del día'], ['roadmap', 'Orden Roadmap'], ['feature', 'Feature › iniciativa'], ['entrega', 'Entrega']]
 export default function PanelClient() {
@@ -173,6 +161,26 @@ export default function PanelClient() {
 
   const greet = now ? (now.getHours() < 12 ? 'Buenos días' : now.getHours() < 19 ? 'Buenas tardes' : 'Buenas noches') : ''
   const seeAll = (href: string) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10.5, fontWeight: 700, color: 'rgba(231,197,107,0.9)', textDecoration: 'none' }}>ver todos →</a>
+  // Cumpleaños y momentos en UNA lista, por cercanía.
+  const vienen = useMemo(() => [
+    ...cumples.map(c => ({ k: `c${c.id}`, days: c.days, dia: c.dia, mes: c.mes, icon: '🎂', t: c.nombre, sub: `cumple ${c.anos}`, exc: c.exc, abrir: () => openPersona(c.id), cargando: personaLoading === c.id })),
+    ...fechas.map(f => ({ k: `f${f.id}`, days: f.days, dia: f.dia, mes: f.mes, icon: '✦', t: f.titulo, sub: f.anos > 0 ? `${f.anos} años` : '', exc: false, abrir: () => setPeek({ kind: 'fecha', f }), cargando: false })),
+  ].sort((a, b) => a.days - b.days).slice(0, 7),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [cumples, fechas, personaLoading])
+  const hoyIds = useMemo(() => new Set(todayTasks.map(x => x.t.id).filter(Boolean)), [todayTasks])
+  const vence = dueSoon.filter(x => !x.t.id || (!hoyIds.has(x.t.id) && !tresIds.has(x.t.id)))
+  const fila = (k: string | number, color: string, txt: string, der: ReactNode, onClick: () => void, extra?: ReactNode) => (
+    <div key={k} onClick={onClick} title={`Ver “${txt}”`} className="pn-fila">
+      <span style={{ width: 8, height: 8, borderRadius: 99, background: color, flexShrink: 0 }} />
+      {extra}
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txt}</span>
+      <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.45)', flexShrink: 0 }}>{der}</span>
+    </div>
+  )
+  const sub: CSSProperties = { font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', margin: '14px 0 6px' }
+  const sel: CSSProperties = { cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 6px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 140 }
+  const lista = enfAll ? filteredTasks : filteredTasks.slice(0, 7)
 
   return (
     <div style={{ minHeight: '100vh', background: '#f3efe6', color: '#10233F' }}>
@@ -181,188 +189,120 @@ export default function PanelClient() {
       <SiteHeader title="Panel" subtitle="Tu centro · ADVL" backHref="/" backLabel="← Accesos" extra={<SectionNav current="panel" />} />
       <div style={{ maxWidth: 1180, margin: '14px auto 0', padding: '0 20px' }}><FavoritosStrip /></div>
 
-      <main style={{ maxWidth: 1180, margin: '18px auto 60px', padding: '0 20px' }}>
-        {/* Encabezado grande */}
-        <div style={{ ...baseCard, background: 'linear-gradient(135deg,#10233F 0%,#1c3a63 55%,#2E5A9E 120%)', color: '#fff', padding: '22px 26px', marginBottom: 16, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
-          <div>
-            <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.22em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)', marginBottom: 8 }}>Panel de hoy</div>
-            <div style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.05 }}>{greet}, Andrés.</div>
-            <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.72)', textTransform: 'capitalize', marginTop: 4 }}>{cap(longDay(today))}</div>
-            <HeroDia dia={dia} now={now} tres={tres} />
+      <main style={{ maxWidth: 1180, margin: '16px auto 60px', padding: '0 20px' }}>
+        {/* Encabezado: saludo, cómo va Mi día, hora, clima y los números de la semana. Lo de hoy se hace en Mi día. */}
+        <div style={{ ...baseCard, background: 'linear-gradient(135deg,#10233F 0%,#1c3a63 55%,#2E5A9E 120%)', color: '#fff', padding: '20px 24px', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+            <div style={{ minWidth: 0, flex: '1 1 380px' }}>
+              <div style={{ fontFamily: SERIF, fontSize: 28, lineHeight: 1.05 }}>{greet}, Andrés.</div>
+              <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,0.68)', marginTop: 4 }}>{cap(longDay(today))}</div>
+              <HeroDia dia={dia} now={now} tres={tres} />
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: SERIF, fontSize: 36, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{now ? now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
+              {weather && <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', marginTop: 6 }} title={`Naucalpan · sensación ${weather.feels}° · humedad ${weather.humidity}%`}>{weather.icon} {weather.temp}° · {weather.label}</div>}
+              {runningName && <div style={{ fontSize: 11.5, color: '#F1DB92', marginTop: 4 }}>▶ {runningName} en curso</div>}
+              <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}><PushReminders /></div>
+            </div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: SERIF, fontSize: 40, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{now ? now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
-            <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.6)', marginTop: 4 }}>{runningName ? `▶ ${runningName} en curso` : `⏱ ${hmm(workedMin)} trabajadas hoy`}</div>
-            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}><PushReminders /></div>
-          </div>
+          <KpisDia dia={dia} workedMin={workedMin} routinesDone={routinesDone} routinesTotal={routines.length} />
         </div>
 
-        {/* Números del día y de la semana (Mi día) + lo urgente + captura rápida con voz */}
-        <KpisDia dia={dia} tres={tres} workedMin={workedMin} routinesDone={routinesDone} routinesTotal={routines.length} />
-        <ChipsDia dia={dia} extra={extra} cumples={cumples} />
+        <div className="panel-main" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.55fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
+          {/* ── Columna principal ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            <Slot id="enfoque" title={`Hoy · ${tres.length + filteredTasks.length}`} icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot}
+              right={<>
+                {enfEpics.length > 1 && <select value={enfEpic} onChange={ev => { setEnfEpic(ev.target.value); setEnfAll(false) }} aria-label="Filtrar por épica" style={sel}><option value="todas">Todas</option>{enfEpics.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>}
+                {todayTasks.length > 1 && <select value={enfOrden} onChange={ev => cambiarEnfOrden(ev.target.value as EnfOrden)} aria-label="Ordenar las actividades de hoy" style={sel}>{ENF_ORDENES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>}
+              </>}>
+              {/* Tus 3 de Mi día primero, luego lo demás agendado, en una sola lista */}
+              {tres.map((x, k) => {
+                const hecha = !!x.task && x.task.status === 'Terminada'
+                return (
+                  <div key={`t${k}`} onClick={() => x.e && x.task && setPeek({ kind: 'task', e: x.e, t: x.task })} className="pn-fila" title={x.porque || x.t}>
+                    <span style={{ width: 18, height: 18, borderRadius: 99, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', font: '800 10px var(--font-ui)', background: hecha ? '#2E6E6E' : '#E7C56B', color: hecha ? '#fff' : '#1B1305' }}>{hecha ? '✓' : k + 1}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: hecha ? 'rgba(20,35,61,0.4)' : '#10233F', textDecoration: hecha ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.t}</span>
+                    {x.e && <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.45)', flexShrink: 0 }}>{x.e.name}</span>}
+                  </div>
+                )
+              })}
+              {epics === null ? <div style={{ height: 80, opacity: 0 }} /> : (<>
+                {lista.map(({ e, t }, k) => fila(t.id || k, e.color, t.t, e.name, () => setPeek({ kind: 'task', e, t }),
+                  t.priority === 'alta' ? <span title="Prioridad alta" style={{ font: '800 8.5px var(--font-ui)', color: '#B0522E', background: 'rgba(176,82,46,0.1)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>ALTA</span> : undefined))}
+                {filteredTasks.length > 7 && <button onClick={() => setEnfAll(v => !v)} className="pn-mas">{enfAll ? 'ver menos ▴' : `ver todas (${filteredTasks.length}) ▾`}</button>}
+                {!tres.length && !filteredTasks.length && <div style={{ padding: '6px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>{todayTasks.length === 0 ? <>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></> : 'Nada en esta épica hoy.'}</div>}
+              </>)}
 
-        {/* INFORMATIVO tras KPIs: Clima por HORA + Frase */}
-        <div className="panel-info" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.25fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginBottom: 4 }}>
-          <Slot id="clima" title="Clima" icon="🌤️" accent="#2E5A9E" layout={layout} setSlot={setSlot}>
-            {!weather ? <div style={{ height: 130, opacity: 0 }} /> : (<>
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-                <div>
-                  <span style={{ fontFamily: SERIF, fontSize: 42, lineHeight: 1, color: '#10233F' }}>{weather.temp}°</span>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#16365F', marginTop: 2 }}>{weather.label}</div>
-                  <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.5)', marginTop: 2 }}>Naucalpan · sens. {weather.feels}° · 💧 {weather.humidity}%</div>
+              {vence.length > 0 && (<>
+                <div style={{ ...sub, color: '#B0522E' }}>Por vencer</div>
+                {vence.map(({ e, t, days }, k) => fila(t.id || `v${k}`, e.color, t.t, <b style={{ color: days === 0 ? '#B0522E' : days <= 3 ? '#A87A2C' : 'rgba(20,35,61,0.5)' }}>{days === 0 ? 'hoy' : days === 1 ? 'mañana' : `en ${days} d`}</b>, () => setPeek({ kind: 'task', e, t })))}
+              </>)}
+
+              {routines.length > 0 && (<>
+                <div style={{ ...sub, color: '#2E6E6E', display: 'flex', justifyContent: 'space-between' }}><span>Rutinas · {routinesDone}/{routines.length}</span><Link href="/epicas" style={{ color: '#2E6E6E', textDecoration: 'none', letterSpacing: 0, textTransform: 'none', fontWeight: 700, fontSize: 11 }}>marcar →</Link></div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {routines.map((r, k) => <span key={k} style={{ borderRadius: 99, padding: '3px 10px', fontSize: 12, fontWeight: 600, background: r.done ? 'rgba(46,110,110,0.12)' : 'rgba(15,35,64,0.05)', color: r.done ? '#2E6E6E' : 'rgba(20,35,61,0.6)' }}>{r.done ? '✓' : '○'} {r.name}</span>)}
                 </div>
-                <span style={{ fontSize: 42, lineHeight: 1 }}>{weather.icon}</span>
-              </div>
-              {hours.length > 0 && (
-                <div style={{ display: 'flex', gap: 2, overflowX: 'auto', paddingTop: 10, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
-                  {hours.map((x, k) => (
-                    <div key={k} style={{ flex: '0 0 auto', minWidth: 48, textAlign: 'center', padding: '5px 3px', borderRadius: 10, background: k === 0 ? 'rgba(46,90,158,0.09)' : 'transparent' }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: k === 0 ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }}>{k === 0 ? 'ahora' : `${x.h}h`}</div>
-                      <div style={{ fontSize: 19, margin: '3px 0 1px' }}>{x.icon}</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#10233F' }}>{x.temp}°</div>
+              </>)}
+            </Slot>
+
+            <Slot id="semana" title="Tu semana" icon="📈" accent="#A87A2C" layout={layout} setSlot={setSlot} right={<Link href="/dia" style={{ fontSize: 10.5, fontWeight: 700, color: '#A87A2C', textDecoration: 'none' }}>días en Mi día →</Link>}>
+              <TuSemana dia={dia} epics={epics} hoy={today} />
+            </Slot>
+
+            <Preguntale />
+          </div>
+
+          {/* ── Columna lateral ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            <Slot id="calendario" title="Calendario" icon="🗓️" bare layout={layout} setSlot={setSlot}><CalendarWidget /></Slot>
+
+            {(vienen.length > 0 || (extra?.sinContacto?.length ?? 0) > 0) && (
+              <Slot id="fechas" title="Personas y fechas" icon="✦" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
+                {vienen.map((v, k) => (
+                  <div key={v.k} onClick={v.abrir} className="pn-fila pn-osc" style={{ opacity: v.cargando ? 0.55 : 1, borderBottom: k < vienen.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
+                    <span style={{ width: 40, fontSize: 11, fontWeight: 700, color: '#E7C56B', flexShrink: 0 }}>{v.dia} {MES3[v.mes]}</span>
+                    <span style={{ fontSize: 12, flexShrink: 0 }}>{v.icon}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{v.t}{v.sub && <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {v.sub}</span>}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: v.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{v.cargando ? '…' : rel(v.days)}</span>
+                  </div>
+                ))}
+                <SinContacto extra={extra} abrirPersona={openPersona} />
+              </Slot>
+            )}
+
+            <SaludDia extra={extra} />
+
+            {hours.length > 0 && (
+              <Slot id="clima" title="Clima por hora" icon="🌤️" accent="#2E5A9E" layout={layout} setSlot={setSlot}>
+                <div style={{ display: 'flex', gap: 2, overflowX: 'auto' }}>
+                  {hours.slice(0, 8).map((x, k) => (
+                    <div key={k} style={{ flex: '0 0 auto', minWidth: 42, textAlign: 'center', padding: '4px 2px', borderRadius: 9, background: k === 0 ? 'rgba(46,90,158,0.09)' : 'transparent' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: k === 0 ? '#2E5A9E' : 'rgba(20,35,61,0.5)' }}>{k === 0 ? 'ahora' : `${x.h}h`}</div>
+                      <div style={{ fontSize: 17, margin: '2px 0 1px' }}>{x.icon}</div>
+                      <div style={{ fontSize: 12.5, fontWeight: 700 }}>{x.temp}°</div>
                       {x.pop != null && x.pop >= 20 && <div style={{ fontSize: 9, color: '#2E5A9E', fontWeight: 700 }}>💧{x.pop}%</div>}
                     </div>
                   ))}
                 </div>
-              )}
-              {weather.cities?.length > 0 && (
-                <div style={{ display: 'flex', gap: 18, marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
-                  {weather.cities.map((c, k) => (
-                    <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}><span style={{ fontSize: 15 }}>{c.icon}</span><span style={{ color: 'rgba(20,35,61,0.6)' }}>{c.name}</span><b style={{ color: '#10233F' }}>{c.temp}°</b></div>
-                  ))}
-                </div>
-              )}
-            </>)}
-          </Slot>
-          <Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot>
-        </div>
-
-        {/* SECCIÓN · EL DÍA */}
-        <SectionTitle icon="📅" href="/epicas" cta="ver en Épicas">El día</SectionTitle>
-
-        {/* Enfoque de hoy = Actividades + Rutinas en UNA tarjeta grande, dividida */}
-        <div style={{ marginBottom: 16 }}>
-          <Slot id="enfoque" title="Enfoque de hoy" icon="📋" accent="#2E5A9E" layout={layout} setSlot={setSlot} right={<Link href="/epicas" style={{ fontSize: 10.5, fontWeight: 700, color: '#2E5A9E', textDecoration: 'none' }}>Épicas →</Link>}>
-            <div className="enfoque-split" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) 1px minmax(0,1fr)', gap: 20, alignItems: 'stretch' }}>
-              <div>
-                <TusTres tres={tres} abrir={(e, t) => setPeek({ kind: 'task', e, t })} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                  <span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E5A9E' }}>Actividades · {filteredTasks.length}</span>
-                  {todayTasks.length > 1 && (
-                    <select value={enfOrden} onChange={ev => cambiarEnfOrden(ev.target.value as EnfOrden)} aria-label="Ordenar las actividades de hoy" title="Ordenar las actividades de hoy"
-                      style={{ cursor: 'pointer', border: '1px solid rgba(15,35,64,0.14)', borderRadius: 8, padding: '3px 7px', fontSize: 11, fontWeight: 700, color: 'rgba(20,35,61,0.6)', background: '#fff', outline: 'none', maxWidth: 170 }}>
-                      {ENF_ORDENES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-                    </select>
-                  )}
-                </div>
-                {enfEpics.length > 1 && (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                    <button onClick={() => { setEnfEpic('todas'); setEnfAll(false) }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', font: '700 11px var(--font-ui)', border: enfEpic === 'todas' ? 'none' : '1px solid rgba(15,35,64,0.14)', background: enfEpic === 'todas' ? '#16365F' : '#fff', color: enfEpic === 'todas' ? '#fff' : 'rgba(20,35,61,0.6)' }}>Todas</button>
-                    {enfEpics.map(e => (
-                      <button key={e.id} onClick={() => { setEnfEpic(e.id); setEnfAll(false) }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 11px', font: '700 11px var(--font-ui)', border: enfEpic === e.id ? 'none' : '1px solid rgba(15,35,64,0.14)', background: enfEpic === e.id ? e.color : '#fff', color: enfEpic === e.id ? '#fff' : 'rgba(20,35,61,0.6)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: 99, background: enfEpic === e.id ? '#fff' : e.color }} />{e.name}</button>
-                    ))}
+                {(weather?.cities?.length ?? 0) > 0 && (
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(15,35,64,0.07)' }}>
+                    {weather!.cities.map((c, k) => <span key={k} style={{ fontSize: 12, color: 'rgba(20,35,61,0.6)' }}>{c.icon} {c.name} <b style={{ color: '#10233F' }}>{c.temp}°</b></span>)}
                   </div>
                 )}
-                {epics === null ? <div style={{ height: 80, opacity: 0 }} /> : filteredTasks.length === 0 ? (
-                  <div style={{ padding: '8px 0', color: 'rgba(20,35,61,0.5)', fontSize: 13 }}>{todayTasks.length === 0 ? <>Nada planeado. <Link href="/epicas" style={{ color: '#A87A2C', fontWeight: 700 }}>Elige tu enfoque →</Link></> : 'Nada en esta épica hoy.'}</div>
-                ) : (<>
-                  {(enfAll ? filteredTasks : filteredTasks.slice(0, 9)).map(({ e, t }, k, arr) => (
-                    <div key={t.id || k} onClick={() => setPeek({ kind: 'task', e, t })} title={`Ver “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < arr.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
-                      <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
-                      {t.priority === 'alta' && <span title="Prioridad alta" style={{ font: '800 8.5px var(--font-ui)', letterSpacing: '.05em', color: '#B0522E', background: 'rgba(176,82,46,0.1)', border: '1px solid rgba(176,82,46,0.25)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>ALTA</span>}
-                      <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
-                      <span style={{ fontSize: 10.5, color: 'rgba(20,35,61,0.4)', flexShrink: 0 }}>{e.name}</span>
-                    </div>
-                  ))}
-                  {filteredTasks.length > 9 && <button onClick={() => setEnfAll(v => !v)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', font: '700 11.5px var(--font-ui)', color: '#2E5A9E', padding: '8px 0 0' }}>{enfAll ? 'ver menos ▴' : `ver todas (${filteredTasks.length}) ▾`}</button>}
-                </>)}
-              </div>
-              <div className="enfoque-div" style={{ background: 'rgba(15,35,64,0.08)' }} />
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}><span style={{ font: '800 10px/1 var(--font-ui)', letterSpacing: '.12em', textTransform: 'uppercase', color: '#2E6E6E' }}>Rutinas</span><span style={{ fontSize: 10.5, fontWeight: 700, color: '#2E6E6E' }}>{routinesDone}/{routines.length}</span></div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {routines.map((r, k) => <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 99, padding: '5px 12px', fontSize: 12.5, fontWeight: 600, background: r.done ? 'rgba(46,110,110,0.12)' : 'rgba(15,35,64,0.05)', border: `1px solid ${r.done ? 'rgba(46,110,110,0.3)' : 'rgba(15,35,64,0.1)'}`, color: r.done ? '#2E6E6E' : 'rgba(20,35,61,0.6)' }}>{r.done ? '✓' : '○'} {r.name}</span>)}
-                  {routines.length === 0 && <span style={{ fontSize: 12.5, color: 'rgba(20,35,61,0.45)' }}>Sin rutinas.</span>}
-                </div>
-                <Link href="/epicas" style={{ display: 'inline-block', marginTop: 12, fontSize: 11.5, fontWeight: 700, color: '#2E6E6E', textDecoration: 'none' }}>marcar en Épicas →</Link>
-              </div>
-            </div>
-          </Slot>
-        </div>
-
-        {/* Calendario + (Por vencer + accesos) */}
-        <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
-          <Slot id="calendario" title="Calendario" icon="🗓️" bare layout={layout} setSlot={setSlot}><CalendarWidget /></Slot>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {dueSoon.length > 0 && (
-              <Slot id="vence" title="Por vencer" icon="⏳" accent="#B0522E" layout={layout} setSlot={setSlot}>
-                {dueSoon.map(({ e, t, days }, k) => (
-                  <div key={t.id || k} onClick={() => setPeek({ kind: 'task', e, t })} title={`Ver “${t.t}”`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < dueSoon.length - 1 ? '1px solid rgba(15,35,64,0.06)' : 'none' }} onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(15,35,64,0.03)'} onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
-                    <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#16365F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</span>
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: days === 0 ? '#B0522E' : days <= 3 ? '#A87A2C' : 'rgba(20,35,61,0.5)', flexShrink: 0 }}>{days === 0 ? 'hoy' : days === 1 ? 'mañana' : `en ${days} d`}</span>
-                  </div>
-                ))}
               </Slot>
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              {[{ href: '/tiempo', t: 'Tiempo', d: 'Planifica y cierra el día', c: '#8a4b28' }, { href: '/epicas', t: 'Épicas', d: 'Tus frentes y tareas', c: '#2E5A9E' }].map(q => (
-                <Link key={q.href} href={q.href} style={{ ...baseCard, background: '#fff', border: '1px solid rgba(15,35,64,0.09)', padding: '14px 16px', textDecoration: 'none', color: 'inherit', display: 'block', transition: 'transform .14s ease, box-shadow .14s ease' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 16px 32px -22px rgba(15,35,64,0.6)' }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = baseCard.boxShadow as string }}>
-                  <div style={{ fontFamily: SERIF, fontSize: 17, color: q.c }}>{q.t} →</div>
-                  <div style={{ fontSize: 11, color: 'rgba(20,35,61,0.55)', marginTop: 3 }}>{q.d}</div>
-                </Link>
-              ))}
-            </div>
+
+            <Slot id="frase" title="Frase del día" icon="✍️" bare layout={layout} setSlot={setSlot}><QuoteWidget /></Slot>
           </div>
         </div>
 
-        {/* SECCIÓN · TU SEMANA (lo que no está en Mi día: tendencias, épicas, personas, salud, preguntas) */}
-        <SectionTitle icon="📈" href="/dia" cta="ver días en Mi día">Tu semana</SectionTitle>
-        <TuSemana dia={dia} epics={epics} hoy={today} />
-        <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr)', gap: 16, alignItems: 'start', marginTop: 16 }}>
-          <EpicasSemana epics={epics} hoy={today} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <PersonasDia extra={extra} epics={epics} hoy={today} abrirPersona={openPersona} celulares={new Map(personas.map(p => [p.id, p.celular ?? null]))} />
-            <SaludDia extra={extra} />
-          </div>
-        </div>
-        <div style={{ marginTop: 16 }}><Preguntale /></div>
-        <AnotarPanel hoy={today} />
-
-        {/* SECCIÓN · NOTICIAS (Gemini con búsqueda en vivo, se refresca cada hora) */}
-        <SectionTitle icon="📰">Noticias</SectionTitle>
-        <Slot id="noticias" title="Videojuegos · Finanzas · Política · Series" icon="📰" layout={layout} setSlot={setSlot}>
-          <NewsWidget />
-        </Slot>
-
-        {/* SECCIÓN · PERSONAS Y FECHAS (navy, 2-col grandes) */}
-        <SectionTitle icon="👥" href={PERSONAS} external cta="ver en Mi Vida">Personas y fechas</SectionTitle>
-        <div className="panel-2col" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px,1fr))', gap: 16, alignItems: 'start' }}>
-          {cumples.length > 0 && (
-            <Slot id="cumples" title="Cumpleaños que vienen" icon="🎂" dark accent="#E7C56B" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
-              {cumples.map((c, k) => (
-                <div key={k} onClick={() => openPersona(c.id)} title={`Ver la ficha de ${c.nombre}`} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', opacity: personaLoading === c.id ? 0.55 : 1, borderBottom: k < cumples.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: c.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0 }}>{c.dia} {MES3[c.mes]}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.exc && <span style={{ color: '#E7C56B' }}>✦ </span>}{c.nombre}<span style={{ color: 'rgba(243,239,230,0.5)' }}> · cumple {c.anos}</span></span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: c.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0 }}>{personaLoading === c.id ? '…' : rel(c.days)}</span>
-                </div>
-              ))}
-            </Slot>
-          )}
-          {fechas.length > 0 && (
-            <Slot id="fechas" title="Fechas a recordar" icon="✦" dark accent="#C2933A" layout={layout} setSlot={setSlot} right={seeAll(PERSONAS)}>
-              {fechas.map((f, k) => (
-                <div key={k} onClick={() => setPeek({ kind: 'fecha', f })} title="Ver este momento" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 4px', margin: '0 -4px', borderRadius: 8, cursor: 'pointer', borderBottom: k < fechas.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none' }} onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  <span style={{ width: 44, fontSize: 11, fontWeight: 700, color: f.days === 0 ? '#F1DB92' : '#E7C56B', flexShrink: 0, paddingTop: 1 }}>{f.dia} {MES3[f.mes]}</span>
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, color: '#F3EFE6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.titulo}{f.anos > 0 ? <span style={{ color: 'rgba(243,239,230,0.5)' }}> · {f.anos} años</span> : ''}</div>
-                    {f.personas.length > 0 && <div style={{ fontSize: 10.5, color: 'rgba(243,239,230,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>con {f.personas.join(', ')}</div>}
-                  </span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: f.days <= 3 ? '#F1DB92' : 'rgba(243,239,230,0.55)', flexShrink: 0, paddingTop: 1 }}>{rel(f.days)}</span>
-                </div>
-              ))}
-            </Slot>
-          )}
+        {/* Noticias al final, plegadas de inicio */}
+        <div style={{ marginTop: 16 }}>
+          <Slot id="noticias" title="Noticias · Videojuegos · Finanzas · Política · Series" icon="📰" layout={layout} setSlot={setSlot}>
+            <NewsWidget />
+          </Slot>
         </div>
       </main>
 
@@ -509,7 +449,7 @@ export default function PanelClient() {
         </div>
       )}
 
-      <style>{`@media (max-width: 720px){ .panel-info, .panel-2col{ grid-template-columns: 1fr !important; } .enfoque-split{ grid-template-columns: 1fr !important; } .enfoque-div{ display: none !important; } }`}</style>
+      <style>{`.pn-fila{display:flex;align-items:center;gap:10px;padding:7px 4px;margin:0 -4px;border-radius:8px;cursor:pointer;border-bottom:1px solid rgba(15,35,64,0.06)}.pn-fila:hover{background:rgba(15,35,64,0.035)}.pn-osc{padding:9px 4px}.pn-osc:hover{background:rgba(255,255,255,0.05)}.pn-mas{cursor:pointer;border:none;background:transparent;font:700 11.5px var(--font-ui);color:#2E5A9E;padding:8px 0 0}@media (max-width: 860px){ .panel-main, .panel-2col{ grid-template-columns: 1fr !important; } }`}</style>
     </div>
   )
 }
