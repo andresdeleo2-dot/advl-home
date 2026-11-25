@@ -4,11 +4,12 @@ import Link from 'next/link'
 import type { ReactNode } from 'react'
 import CommandPalette from './CommandPalette'
 
-/* Conmutador consistente entre las secciones (Panel / Tiempo / Épicas / Ideas / Accesos),
+/* Conmutador consistente entre las secciones (Mi día / Panel / Tiempo / Épicas / Ideas / Accesos),
    presente en todos los headers (banda navy). El actual va resaltado en oro; los demás
    navegan rápido (Next prefetch) con hover. Íconos para lectura de un vistazo. */
 
 const ICONS: Record<string, ReactNode> = {
+  dia: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>),
   accesos: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>),
   panel: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></svg>),
   epicas: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4" /><path d="M4 4h13l-2.5 4L17 12H4" /></svg>),
@@ -17,8 +18,9 @@ const ICONS: Record<string, ReactNode> = {
   roadmap: (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11h5l2-3 4 6 2-3h5" /><circle cx="20" cy="5" r="2" /><circle cx="4" cy="19" r="2" /></svg>),
 }
 
-export default function SectionNav({ current }: { current: 'accesos' | 'panel' | 'epicas' | 'tiempo' | 'ideas' | 'roadmap' }) {
+export default function SectionNav({ current }: { current: 'dia' | 'accesos' | 'panel' | 'epicas' | 'tiempo' | 'ideas' | 'roadmap' }) {
   const items = [
+    { id: 'dia', label: 'Mi día', href: '/dia' },
     { id: 'panel', label: 'Panel', href: '/panel' },
     { id: 'tiempo', label: 'Tiempo', href: '/tiempo' },
     { id: 'epicas', label: 'Épicas', href: '/epicas' },
@@ -69,6 +71,8 @@ export default function SectionNav({ current }: { current: 'accesos' | 'panel' |
           /* Deja aire abajo para que la barra no tape el último contenido (sólo donde existe el nav). */
           body { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
         }
+        /* Con Mi día son 7 secciones: en la barra de abajo del celular Roadmap (vista de escritorio) se oculta. */
+        @media (max-width: 700px) { .section-nav a[href="/roadmap"] { display: none !important; } }
         @media (max-width: 400px) {
           .section-nav a { padding: 9px 1px !important; }
           .section-nav .sn-label { display: block !important; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }

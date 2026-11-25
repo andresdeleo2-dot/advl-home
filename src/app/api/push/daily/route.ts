@@ -244,8 +244,19 @@ async function armarResumen(hoy: string) {
   const primeroId = urgentes[0]?.tareaId
   const candidatas = [...enHoy.map(t => ({ t, pre: '• ' })), ...arrastradas.map(t => ({ t, pre: '↪ ' }))].filter(x => x.t.id !== primeroId)
   const fijas = [lineaUrgente, lineaCumple, lineaPeso].filter(Boolean).length
-  const lineasTareas = candidatas.slice(0, Math.max(0, Math.min(3, MAX_LINEAS - fijas))).map(x => `${x.pre}${corto(x.t.titulo)}`)
-  const lineas = [lineaUrgente, ...lineasTareas, lineaCumple, lineaPeso].filter((l): l is string => !!l)
+  // «Mi día»: si el cierre de la madrugada ya armó el día, la notificación lo dice y abre /dia.
+  let lineaDia: string | null = null
+  {
+    const { data: dia } = await supabase.from('dia_resumen').select('data').eq('fecha', hoy).maybeSingle()
+    const d = (dia?.data || null) as { prioridades?: unknown[]; tarjetas?: unknown[]; decisiones?: unknown[] } | null
+    if (d) {
+      const partesDia = [d.prioridades?.length ? plural(d.prioridades.length, 'prioridad', 'prioridades') : null,
+        (d.tarjetas?.length || 0) + (d.decisiones?.length || 0) ? `${(d.tarjetas?.length || 0) + (d.decisiones?.length || 0)} por decidir` : null].filter(Boolean)
+      lineaDia = `📋 Tu día está listo${partesDia.length ? `: ${partesDia.join(' · ')}` : ''}`
+    }
+  }
+  const lineasTareas = candidatas.slice(0, Math.max(0, Math.min(3, MAX_LINEAS - fijas - (lineaDia ? 1 : 0)))).map(x => `${x.pre}${corto(x.t.titulo)}`)
+  const lineas = [lineaDia, lineaUrgente, ...lineasTareas, lineaCumple, lineaPeso].filter((l): l is string => !!l)
 
   const partes: string[] = []
   if (enHoy.length) partes.push(plural(enHoy.length, 'tarea', 'tareas'))
@@ -262,7 +273,7 @@ async function armarResumen(hoy: string) {
   const body = lineas.length ? lineas.join('\n') : (filas ? 'Nada planeado ni vencido para hoy.' : '')
 
   return {
-    push: { title, body, tag: `daily-${hoy}`, url: '/epicas' },
+    push: { title, body, tag: `daily-${hoy}`, url: lineaDia ? '/dia' : '/epicas' },
     detalle: {
       hoy,
       conteos: { hoy: enHoy.length, arrastradas: arrastradas.length, vencidas: vencidas.length, venceHoy: venceHoy.length, fechasClave: claves.length },
