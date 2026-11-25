@@ -32,6 +32,9 @@ export type DiaTarjeta = {
   destino?: string
 }
 export type DiaDecision = { id: string; pregunta: string; nota?: string; opciones: string[] }
+/** Pregunta para tu cerebro: llena un hueco de la bóveda (cómo haces las cosas, datos por confirmar).
+ *  La respuesta la guarda el cierre de las 3:00 en `nota`. */
+export type DiaPreguntaCerebro = { id: string; pregunta: string; nota?: string; porque?: string }
 export type DiaCambio = { nota: string; que: string }
 export type DiaFecha = { t: string; fecha: string; nota?: string }
 
@@ -45,6 +48,7 @@ export type DiaData = {
   cambios: DiaCambio[]
   fechas: DiaFecha[]
   pregunta?: string        // la pregunta de la noche para conocerte mejor
+  cerebro?: DiaPreguntaCerebro[] // preguntas para que la bóveda aprenda cómo haces las cosas
   inbox?: number           // notas en 00-inbox
   sinDictado?: boolean     // no hubo texto nuevo: no se llamó a Claude
   modelo?: string

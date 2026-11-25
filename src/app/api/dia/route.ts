@@ -57,7 +57,7 @@ export async function GET(req: Request) {
 }
 
 const ESTADOS = new Set(['aceptada', 'pospuesta', 'descartada', 'respondida'])
-const TIPOS_CAPTURA = new Set(['nota', 'cierre', 'pregunta'])
+const TIPOS_CAPTURA = new Set(['nota', 'cierre', 'pregunta', 'tarea'])
 
 export async function POST(req: Request) {
   let body: Record<string, unknown>
