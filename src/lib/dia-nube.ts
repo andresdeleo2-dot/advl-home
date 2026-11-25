@@ -24,7 +24,7 @@ Claves (listas vacías si no hay):
  "decisiones": [{"id": "d1", "pregunta": "...", "opciones": ["2 a 3 respuestas cortas"]}],
  "fechas": [{"t": "...", "fecha": "AAAA-MM-DD"}],
  "pregunta": "UNA pregunta para conocerlo mejor (valores, prioridades, cómo decide), que no repita las ya hechas"}
-«nuevo» = pendiente concreto de lo que anotó (si ya hay tarea parecida, usa «sugerencia» sobre ella). «sugerencia» = reagendar vencidas, marcar Terminada lo que dijo que hizo, Esperando si espera a alguien. «prioridades» = lo que más importa hoy por fechas, esperas largas y lo que lleva evitando.`
+«nuevo» = pendiente concreto de lo que anotó (si ya hay tarea parecida, usa «sugerencia» sobre ella). «sugerencia» = reagendar vencidas, marcar Terminada lo que dijo que hizo, Esperando si espera a alguien. «prioridades» = lo que más importa hoy por fechas, esperas largas y lo que lleva evitando; siempre una acción que Andrés hace él mismo, con verbo (nunca «esperar» ni tareas en Esperando: en su lugar, darle seguimiento).`
 
 export type ResultadoNube = { hecho: boolean; motivo: string }
 

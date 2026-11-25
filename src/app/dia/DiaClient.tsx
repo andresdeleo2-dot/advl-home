@@ -49,6 +49,8 @@ export default function DiaClient() {
   const [saludHoy, setSaludHoy] = useState<boolean | null>(null)
   const [modo, setModo] = useState<Modo>('hoy')
   const [modoElegido, setModoElegido] = useState(false)
+  const [fecha, setFecha] = useState(hoy)            // el día que estás viendo (tira de la semana)
+  const [diaOtro, setDiaOtro] = useState<DiaGet | null>(null)
   const [aviso, setAviso] = useState<Aviso>(null)
   const avisoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -82,20 +84,26 @@ export default function DiaClient() {
     }).catch(() => {})
   }, [cargarDia, cargarEpicas, hoy])
 
+  // Otro día (pasado o futuro): su resumen y su calificación, solo para ver.
+  useEffect(() => {
+    if (fecha === hoy) { setDiaOtro(null); return }
+    let vivo = true
+    setDiaOtro(null)
+    fetch(`/api/dia?fecha=${fecha}`).then(r => r.json()).then(j => { if (vivo && j?.ok) setDiaOtro(j as DiaGet) }).catch(() => {})
+    return () => { vivo = false }
+  }, [fecha, hoy])
+
   const data: DiaData | null = dia?.resumen?.data ?? null
   const respuestas = useMemo(() => new Map((dia?.respuestas || []).map(r => [r.item_id, r])), [dia])
 
-  // Modo inicial: de noche, cerrar; si hay día armado y no has hecho el ritual hoy, el ritual.
+  // Siempre abre en Hoy. De noche (20:00 en adelante) abre en Cerrar día, si todavía no lo cierras.
   useEffect(() => {
     if (!dia || modoElegido) return
-    const h = new Date().getHours()
-    const ritualHecho = (() => { try { return JSON.parse(leerLS(RITUAL_KEY) || '{}').fecha === hoy } catch { return false } })()
-    const hayQueDecidir = !!data && (data.hechos.length > 0 || data.tarjetas.length > 0 || data.prioridades.length > 0)
-    if (h >= 20) setModo('noche')
-    else if (hayQueDecidir && !ritualHecho) setModo('ritual')
-    else setModo('hoy')
-  }, [dia, data, hoy, modoElegido])
-  const ir = (m: Modo) => { setModo(m); setModoElegido(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+    const cerrado = dia.cierres.some(c => c.fecha === hoy && c.calificacion != null)
+    if (new Date().getHours() >= 20 && !cerrado) setModo('noche')
+  }, [dia, hoy, modoElegido])
+  const ir = (m: Modo) => { setModo(m); setModoElegido(true); if (m !== 'semana' && m !== 'boveda') setFecha(hoy); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  const verDia = (f: string) => { setFecha(f); if (f === hoy) setModo(m => (m === 'ritual' ? 'hoy' : m)); else setModo('hoy'); setModoElegido(true) }
 
   /* ── Escritura de tareas (mismo endpoint y candado de choques que Épicas) ── */
   const todas = useMemo(() => {
@@ -270,19 +278,25 @@ export default function DiaClient() {
           </div>
         )}
 
-        {dia && modo === 'ritual' && data && (
+        {dia && (modo === 'hoy' || modo === 'noche') && <TiraSemana dia={dia} hoy={hoy} fecha={fecha} elegir={verDia} />}
+
+        {dia && fecha !== hoy && (
+          <VistaOtroDia fecha={fecha} hoy={hoy} otro={diaOtro} epicas={epicas} cumples={cumples} cierre={dia.cierres.find(c => c.fecha === fecha)?.calificacion ?? null} volver={() => verDia(hoy)} />
+        )}
+
+        {dia && fecha === hoy && modo === 'ritual' && data && (
           <Ritual data={data} hoy={hoy} pendientes={pendientes} prioridades={prioridades} tareaDe={tareaDePrioridad}
             decidir={decidirTarjeta} deshacer={deshacerRespuesta} empezar={empezarDia} saltar={() => ir('hoy')} minutosLibres={minutosLibres(eventos, hoy)} />
         )}
 
-        {dia && modo === 'hoy' && (
+        {dia && fecha === hoy && modo === 'hoy' && (
           <VistaHoy dia={dia} data={data} hoy={hoy} epicas={epicas} cumples={cumples} eventos={eventos} saludHoy={saludHoy}
             prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha}
             pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas}
             abrirRitual={() => ir('ritual')} responder={responder} capturar={capturar} aviso={mostrarAviso} />
         )}
 
-        {dia && modo === 'noche' && (
+        {dia && fecha === hoy && modo === 'noche' && (
           <VistaNoche dia={dia} data={data} hoy={hoy} prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad}
             toggleHecha={toggleHecha} capturar={capturar} calificar={calificar} />
         )}
@@ -290,7 +304,7 @@ export default function DiaClient() {
         {dia && modo === 'semana' && <VistaSemana dia={dia} hoy={hoy} />}
         {dia && modo === 'boveda' && <VistaBoveda dia={dia} />}
 
-        {dia && <Pie dia={dia} />}
+        {dia && fecha === hoy && <Pie dia={dia} />}
       </main>
       {aviso && (
         <div className="md-toast" role="status">
@@ -326,7 +340,7 @@ function Ritual({ data, hoy, pendientes, prioridades, tareaDe, decidir, deshacer
   saltar: () => void
   minutosLibres: number | null
 }) {
-  const [paso, setPaso] = useState(data.hechos.length ? 0 : pendientes.length ? 1 : 2)
+  const [paso, setPaso] = useState(pendientes.length ? 1 : 2)
   const [cola] = useState(pendientes)            // la cola no cambia mientras decides (para poder deshacer)
   const [idx, setIdx] = useState(0)
   const [ocupado, setOcupado] = useState(false)
@@ -479,7 +493,8 @@ function VistaHoy(p: {
     return p.respaldo.map(hit => ({ p: { t: hit.t.t, tareaId: hit.t.id, epica: hit.e.name, porque: hit.t.due ? `vence ${hit.t.due}` : 'agendada para hoy' } as DiaPrioridad, hit }))
   }, [p.prioridades, p.respaldo, p.tareaDe])
   const hechas = tres.filter(x => x.hit && !ABIERTA(x.hit.t)).length
-  const siguiente = tres.find(x => !x.hit || ABIERTA(x.hit.t))
+  // «Ahora» = la primera que puedes hacer tú: lo que está en Esperando no va primero.
+  const siguiente = tres.find(x => !x.hit || (ABIERTA(x.hit.t) && x.hit.t.status !== 'Esperando')) || tres.find(x => !x.hit || ABIERTA(x.hit.t))
 
   const salud = useMemo(() => (epicas ? saludEpicas(epicas, hoy) : []), [epicas, hoy])
   const esperando = useMemo(() => (epicas ? esperandoAOtros(epicas, hoy) : []), [epicas, hoy])
@@ -506,12 +521,11 @@ function VistaHoy(p: {
   const noCorrio = !dia.resumen && dia.disponible
   return (
     <div className="md-fade">
-      <TiraSemana dia={dia} hoy={hoy} />
       <div className="md-entre md-base md-mt12">
         <h1 className="md-fecha">{cap(diaLargo(hoy))}</h1>
         {tres.length > 0 && <span className="md-meta">{hechas} de {tres.length} hechas</span>}
       </div>
-      {data?.frase && <p className="md-sub md-mt4">Ayer: {data.frase}</p>}
+      {data && (data.frase || data.hechos.length > 0) && <AyerCorto data={data} />}
       {noCorrio && (
         <div className="md-card md-aviso md-mt12">
           <p className="md-h3">El cierre de anoche no ha corrido</p>
@@ -632,25 +646,174 @@ function FilaEpica({ s }: { s: SaludEpica }) {
   )
 }
 
-function TiraSemana({ dia, hoy }: { dia: DiaGet; hoy: string }) {
+function TiraSemana({ dia, hoy, fecha, elegir }: { dia: DiaGet; hoy: string; fecha: string; elegir: (f: string) => void }) {
   const cal = new Map(dia.cierres.map(c => [c.fecha, c.calificacion]))
-  const dias = Array.from({ length: 7 }, (_, i) => sumarDias(hoy, i - 6))
+  // Semana de lunes a domingo que contiene el día que estás viendo.
+  const lunes = sumarDias(fecha, -((fechaDe(fecha).getDay() + 6) % 7))
+  const dias = Array.from({ length: 7 }, (_, i) => sumarDias(lunes, i))
   const n = racha(dia.cierres.filter(c => c.calificacion != null).map(c => c.fecha), hoy)
+  const mes = (() => { const a = fechaDe(dias[0]), b = fechaDe(dias[6]); return a.getMonth() === b.getMonth() ? cap(MN[a.getMonth()]) : `${cap(MN[a.getMonth()]).slice(0, 3)} – ${cap(MN[b.getMonth()]).slice(0, 3)}` })()
   return (
-    <div>
-      <div className="md-semana" role="list" aria-label="Tu semana">
+    <div className="md-tira">
+      <div className="md-entre md-tira-cab">
+        <button className="md-icobtn" onClick={() => elegir(sumarDias(fecha, -7))} aria-label="Semana anterior">‹</button>
+        <span className="md-meta">{mes}{fecha !== hoy && <> · <button className="md-link" onClick={() => elegir(hoy)}>Volver a hoy</button></>}</span>
+        <button className="md-icobtn" onClick={() => elegir(sumarDias(fecha, 7))} aria-label="Semana siguiente">›</button>
+      </div>
+      <div className="md-semana" role="tablist" aria-label="Elige un día">
         {dias.map(d => {
           const c = cal.get(d)
           const tono = c == null ? 'var(--md-tenue)' : c >= 7 ? 'var(--md-verde)' : 'var(--md-ambar)'
           return (
-            <div key={d} role="listitem" className="md-dia" data-hoy={d === hoy}>
-              {DN3[fechaDe(d).getDay()]}<b>{fechaDe(d).getDate()}</b><span style={{ color: tono }}>{d === hoy ? 'hoy' : c ?? '·'}</span>
-            </div>
+            <button key={d} role="tab" aria-selected={d === fecha} className="md-dia" data-sel={d === fecha} data-hoy={d === hoy} data-futuro={d > hoy} onClick={() => elegir(d)}>
+              {DN3[fechaDe(d).getDay()]}<b>{fechaDe(d).getDate()}</b>
+              <span style={{ color: d === hoy ? 'var(--md-acento)' : tono }}>{d === hoy ? 'hoy' : c != null ? c : d < hoy ? '·' : ' '}</span>
+            </button>
           )
         })}
       </div>
-      {n >= 2 && <p className="md-meta md-centro-txt">{n} días seguidos cerrando tu día</p>}
+      {n >= 2 && fecha === hoy && <p className="md-meta md-centro-txt">{n} días seguidos cerrando tu día</p>}
     </div>
+  )
+}
+
+/** Ayer en corto: la frase y, si quieres, lo que hiciste. */
+function AyerCorto({ data }: { data: DiaData }) {
+  const [abierto, setAbierto] = useState(false)
+  return (
+    <div className="md-ayer md-mt8">
+      <p className="md-kicker">{data.diario ? cap(diaLargo(data.diario)) : 'Ayer'}</p>
+      <p className="md-ayer-frase">{data.frase}</p>
+      {data.hechos.length > 0 && (
+        <>
+          <button className="md-link" onClick={() => setAbierto(v => !v)} aria-expanded={abierto}>{abierto ? 'Ocultar' : `Lo que hiciste (${data.hechos.length})`}</button>
+          {abierto && (
+            <ul className="md-ul md-fade">
+              {data.hechos.map((h, i) => <li key={i}>{h.t}{h.nota && <> · <a className="md-link" href={obsidianUrl(h.nota)}>{h.nota} ↗</a></>}</li>)}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Otro día de la tira: si ya pasó, cómo te fue; si viene, qué tienes agendado. Solo para ver. */
+function VistaOtroDia({ fecha, hoy, otro, epicas, cumples, cierre, volver }: {
+  fecha: string; hoy: string; otro: DiaGet | null; epicas: Epica[] | null; cumples: Cumple[]; cierre: number | null; volver: () => void
+}) {
+  const pasado = fecha < hoy
+  const data = otro?.resumen?.data ?? null
+  const tareas = useMemo(() => {
+    const hechas: { e: Epica; t: EpicaTask }[] = [], agendadas: { e: Epica; t: EpicaTask }[] = [], vencen: { e: Epica; t: EpicaTask }[] = []
+    for (const e of epicas || []) {
+      if (e.archived) continue
+      for (const t of e.tasks || []) {
+        if (t.status === 'Terminada' && t.doneAt?.slice(0, 10) === fecha) hechas.push({ e, t })
+        else if (ABIERTA(t) && (t.plan === fecha || t.dayPlans?.some(d => d.day === fecha))) agendadas.push({ e, t })
+        else if (ABIERTA(t) && t.due === fecha) vencen.push({ e, t })
+      }
+    }
+    return { hechas, agendadas, vencen }
+  }, [epicas, fecha])
+  const cumpleHoy = cumples.filter(c => c.cumple?.slice(5) === fecha.slice(5))
+  const Lista = ({ titulo, xs, vacio }: { titulo: string; xs: { e: Epica; t: EpicaTask }[]; vacio?: string }) => (xs.length || vacio) ? (
+    <section>
+      <div className="md-lbl"><span>{titulo}</span><span>{xs.length || ''}</span></div>
+      {xs.length ? (
+        <div className="md-card md-lista">
+          {xs.map(({ e, t }) => <div key={t.id} className="md-row"><span className="md-dot" style={{ background: e.color || 'var(--md-linea)' }} /><div className="md-grow">{t.t}<div className="md-meta">{e.name}</div></div></div>)}
+        </div>
+      ) : <p className="md-meta">{vacio}</p>}
+    </section>
+  ) : null
+
+  return (
+    <div className="md-fade">
+      <div className="md-entre md-base md-mt12">
+        <h1 className="md-fecha">{cap(diaLargo(fecha))}</h1>
+        {cierre != null && <span className="md-meta">Le diste {cierre}/10</span>}
+      </div>
+      <p className="md-meta md-mt4">{pasado ? `Hace ${-diasHasta(hoy, fecha)} ${diasHasta(hoy, fecha) === -1 ? 'día' : 'días'}` : `En ${diasHasta(hoy, fecha)} ${diasHasta(hoy, fecha) === 1 ? 'día' : 'días'}`} · <button className="md-link" onClick={volver}>Volver a hoy</button></p>
+      {cumpleHoy.length > 0 && <div className="md-chips">{cumpleHoy.map(c => <span key={c.id} className="md-chip md-tono-verde">Cumple de {c.apodo || c.nombre.split(' ')[0]}</span>)}</div>}
+
+      <div className="md-grid">
+        <div className="md-col">
+          {pasado && !otro && <div className="md-card md-sk md-mt12" style={{ height: 120 }} />}
+          {pasado && otro && (data ? (
+            <section>
+              <div className="md-lbl"><span>Lo que armó Claude esa mañana</span><span>{data.diario ? `diario del ${fechaDe(data.diario).getDate()}` : ''}</span></div>
+              <div className="md-card">
+                <p className="md-ayer-frase">{data.frase}</p>
+                {data.hechos.length > 0 && <ul className="md-ul">{data.hechos.map((h, i) => <li key={i}>{h.t}</li>)}</ul>}
+                {data.prioridades.length > 0 && (
+                  <>
+                    <p className="md-kicker md-mt12">Tus 3 de ese día</p>
+                    <ul className="md-ul">{data.prioridades.map((x, i) => {
+                      const t = x.tareaId ? (epicas || []).flatMap(e => e.tasks || []).find(tt => tt.id === x.tareaId) : undefined
+                      return <li key={i}>{t && !ABIERTA(t) ? '✓ ' : ''}{t?.t || x.t}</li>
+                    })}</ul>
+                  </>
+                )}
+              </div>
+            </section>
+          ) : <div className="md-card md-mt12"><p className="md-sub">Ese día todavía no había resumen de Mi día.</p></div>)}
+          {!pasado && <Lista titulo="Agendado para ese día" xs={tareas.agendadas} vacio="Nada agendado todavía. Agenda desde Épicas o desde las tarjetas de Decide." />}
+          {!pasado && <Lista titulo="Vence ese día" xs={tareas.vencen} />}
+        </div>
+        <div className="md-col">
+          {pasado && <Lista titulo="Terminaste" xs={tareas.hechas} vacio="No hay tareas terminadas ese día." />}
+          {pasado && <Lista titulo="Se quedó agendado sin terminar" xs={tareas.agendadas} />}
+          {!pasado && <p className="md-meta md-mt12"><Link className="md-link" href="/epicas">Abrir Épicas para agendar →</Link></p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Dictado por voz (Web Speech API: Chrome y Safari; en iPhone, Safari) ── */
+type Reconocedor = { lang: string; continuous: boolean; interimResults: boolean; start: () => void; stop: () => void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null; onend: (() => void) | null; onerror: ((e: { error: string }) => void) | null }
+function useDictado(alTexto: (final: string) => void) {
+  const [escuchando, setEscuchando] = useState(false)
+  const [parcial, setParcial] = useState('')
+  const [error, setError] = useState('')
+  const rec = useRef<Reconocedor | null>(null)
+  const cb = useRef(alTexto); cb.current = alTexto
+  const soportado = typeof window !== 'undefined' && !!((window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition)
+  const parar = useCallback(() => { rec.current?.stop() }, [])
+  const iniciar = useCallback(() => {
+    setError('')
+    const W = window as unknown as { SpeechRecognition?: new () => Reconocedor; webkitSpeechRecognition?: new () => Reconocedor }
+    const C = W.SpeechRecognition || W.webkitSpeechRecognition
+    if (!C) { setError('Tu navegador no dicta aquí: usa el micrófono del teclado.'); return }
+    const r = new C()
+    r.lang = 'es-MX'; r.continuous = true; r.interimResults = true
+    r.onresult = e => {
+      let fin = '', par = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i]; const txt = res[0]?.transcript || ''
+        if (res.isFinal) fin += txt; else par += txt
+      }
+      if (fin.trim()) cb.current(fin.trim())
+      setParcial(par)
+    }
+    r.onerror = e => { setError(e.error === 'not-allowed' ? 'Da permiso al micrófono para dictar.' : e.error === 'no-speech' ? 'No te escuché. Intenta de nuevo.' : 'Se cortó el dictado.'); }
+    r.onend = () => { setEscuchando(false); setParcial('') }
+    rec.current = r
+    try { r.start(); setEscuchando(true) } catch { setError('No se pudo abrir el micrófono.') }
+  }, [])
+  useEffect(() => () => rec.current?.stop(), [])
+  return { soportado, escuchando, parcial, error, iniciar, parar }
+}
+const juntar = (a: string, b: string) => (a.trim() ? `${a.trimEnd()} ${b}` : b)
+
+function BotonMic({ d, grande }: { d: ReturnType<typeof useDictado>; grande?: boolean }) {
+  return (
+    <button type="button" className={`md-mic${grande ? ' md-mic-grande' : ''}`} data-on={d.escuchando} onClick={d.escuchando ? d.parar : d.iniciar}
+      aria-label={d.escuchando ? 'Dejar de dictar' : 'Dictar con la voz'} title={d.escuchando ? 'Dejar de dictar' : 'Dictar con la voz'}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
+      {grande && <span>{d.escuchando ? 'Escuchando… toca para parar' : 'Dictar'}</span>}
+    </button>
   )
 }
 
@@ -720,20 +883,24 @@ function PorDecidir({ decisiones, responder, aviso }: { decisiones: DiaDecision[
 function Anotar({ capturar, pendientes }: { capturar: (t: string) => Promise<void>; pendientes: number }) {
   const [t, setT] = useState('')
   const [estado, setEstado] = useState<'' | 'guardando' | 'ok' | string>('')
+  const d = useDictado(f => setT(v => juntar(v, f)))
   const enviar = async () => {
-    const v = t.trim(); if (!v) { setEstado('Escribe algo primero'); return }
+    if (d.escuchando) d.parar()
+    const v = t.trim(); if (!v) { setEstado('Escribe o dicta algo primero'); return }
     setEstado('guardando')
     try { await capturar(v); setT(''); setEstado('ok'); setTimeout(() => setEstado(''), 2500) }
     catch (e) { setEstado(e instanceof Error ? e.message : String(e)) }
   }
+  const mostrado = d.parcial ? juntar(t, d.parcial) : t
   return (
     <div className="md-anotar-wrap">
-      <form className="md-anotar" onSubmit={e => { e.preventDefault(); enviar() }}>
-        <input value={t} onChange={e => { setT(e.target.value); if (estado && estado !== 'guardando') setEstado('') }} placeholder="Anotar algo… (llega a tu nota del día)" aria-label="Anotar algo" />
-        <button aria-label="Guardar" disabled={estado === 'guardando'}>↑</button>
+      <form className="md-anotar" data-escuchando={d.escuchando} onSubmit={e => { e.preventDefault(); enviar() }}>
+        <BotonMic d={d} />
+        <input value={mostrado} onChange={e => { setT(e.target.value); if (estado && estado !== 'guardando') setEstado('') }} placeholder={d.escuchando ? 'Te escucho…' : 'Anotar algo… o toca el micrófono y habla'} aria-label="Anotar algo" />
+        <button className="md-enviar" aria-label="Guardar" disabled={estado === 'guardando'}>↑</button>
       </form>
       <p className="md-meta md-centro-txt" aria-live="polite">
-        {estado === 'ok' ? 'Guardado. Llega a tu nota de Obsidian a las 3:00.' : estado && estado !== 'guardando' ? <span className="md-err-txt">{estado}</span> : pendientes ? `${pendientes} ${pendientes === 1 ? 'nota' : 'notas'} esperando el cierre de las 3:00` : ' '}
+        {d.error ? <span className="md-err-txt">{d.error}</span> : d.escuchando ? 'Escuchando. Toca el micrófono para parar y luego ↑ para guardar.' : estado === 'ok' ? 'Guardado. Llega a tu nota de Obsidian a las 3:00.' : estado && estado !== 'guardando' ? <span className="md-err-txt">{estado}</span> : pendientes ? `${pendientes} ${pendientes === 1 ? 'nota' : 'notas'} esperando el cierre de las 3:00` : ' '}
       </p>
     </div>
   )
@@ -748,6 +915,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, toggleHech
   const previa = dia.cierres.find(c => c.fecha === hoy)?.calificacion ?? null
   const [nota, setNota] = useState<number | null>(previa)
   const [texto, setTexto] = useState('')
+  const dictado = useDictado(f => setTexto(v => juntar(v, f)))
   const [resp, setResp] = useState('')
   const [err, setErr] = useState('')
   const [listo, setListo] = useState(false)
@@ -757,6 +925,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, toggleHech
 
   const cerrar = async () => {
     if (!nota) { setErr('Elige cómo estuvo tu día (1 a 10)'); return }
+    if (dictado.escuchando) dictado.parar()
     if (texto.trim().length < 3) { setErr('Platícame aunque sea una línea de tu día'); return }
     setGuardando(true); setErr('')
     try {
@@ -801,9 +970,11 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, toggleHech
         ))}
       </div>
       <div className="md-lbl"><span>Platícame tu día</span><span>dictado o escrito</span></div>
-      <textarea className="md-input md-area" rows={7} value={texto} onChange={e => { setTexto(e.target.value); setErr('') }}
+      <BotonMic d={dictado} grande />
+      {dictado.error && <p className="md-err-txt md-mt4">{dictado.error}</p>}
+      <textarea className="md-input md-area md-mt8" rows={7} value={dictado.parcial ? juntar(texto, dictado.parcial) : texto} onChange={e => { setTexto(e.target.value); setErr('') }}
         placeholder="Hoy hablé con el abogado nuevo, me pidió los papeles del departamento…" aria-label="Tu día" />
-      <p className="md-meta md-mt4">Toca el micrófono del teclado para dictar. También puedes dictar en tu nota de Obsidian, como siempre.</p>
+      <p className="md-meta md-mt4">Toca «Dictar» y habla; se escribe solo. También puedes dictar en tu nota de Obsidian, como siempre.</p>
       {data?.pregunta && (
         <>
           <div className="md-lbl"><span>Una pregunta para conocerte</span><span>opcional</span></div>
@@ -971,9 +1142,8 @@ const CSS = `
 .md-plegable summary::-webkit-details-marker{display:none}
 .md-anotar-wrap{position:sticky;bottom:12px;margin-top:26px;z-index:5}
 @media(max-width:700px){.md-anotar-wrap{bottom:calc(92px + env(safe-area-inset-bottom))}}
-.md-anotar{display:flex;gap:8px;align-items:center;background:#fff;border:1px solid var(--md-linea);border-radius:999px;padding:6px 6px 6px 16px;box-shadow:0 10px 30px -18px rgba(28,26,23,.45);max-width:640px;margin:0 auto}
+.md-anotar{display:flex;gap:8px;align-items:center;background:#fff;border:1px solid var(--md-linea);border-radius:999px;box-shadow:0 10px 30px -18px rgba(28,26,23,.45);max-width:640px;margin:0 auto}
 .md-anotar input{flex:1;border:0;font:15px var(--dia-ui);background:transparent;color:var(--md-tinta);min-width:0;padding:6px 0}
-.md-anotar button{width:36px;height:36px;border-radius:50%;border:0;background:var(--md-tinta);color:var(--md-papel);font-size:16px;cursor:pointer;flex:none}
 .md-ritual{max-width:480px;margin:0 auto}
 .md-dots{display:flex;gap:6px;justify-content:center;margin:4px 0 18px}
 .md-dots span{height:7px;width:7px;border-radius:4px;background:var(--md-linea);transition:width .25s}
@@ -1003,6 +1173,21 @@ const CSS = `
 .md-sk{background:linear-gradient(90deg,#f3eee6,#faf7f1,#f3eee6);background-size:200% 100%;animation:md-brillo 1.3s infinite;border:0}
 .md-fade{animation:md-aparece .25s ease-out}
 code{font-size:.9em;background:#f1ebe1;padding:1px 5px;border-radius:5px}
+.md-tira{margin-bottom:4px}.md-tira-cab{margin-bottom:6px}.md-tira-cab .md-icobtn{font-size:20px;padding:2px 10px}
+.md-dia{border:1px solid transparent;background:none;font:inherit;cursor:pointer;transition:background .15s}
+.md-dia:hover{background:#fff}
+.md-dia[data-futuro="true"] b{color:var(--md-tinta2)}
+.md-dia[data-sel="true"]{background:#fff;border-color:var(--md-linea);box-shadow:0 1px 2px rgba(28,26,23,.06)}
+.md-dia[data-hoy="true"] b{color:var(--md-acento)}
+.md-ayer{border-left:2px solid #e6d6bf;padding:2px 0 2px 14px}
+.md-ayer-frase{font-family:var(--dia-serif),Georgia,serif;font-size:21px;line-height:1.3;margin:4px 0 6px;color:var(--md-tinta)}
+.md-mic{width:36px;height:36px;border-radius:50%;border:1px solid var(--md-linea);background:#fff;color:var(--md-tinta2);display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;flex:none;padding:0}
+.md-mic[data-on="true"]{background:var(--md-rojo);border-color:var(--md-rojo);color:#fff;animation:md-pulso 1.4s infinite}
+.md-mic-grande{width:auto;height:44px;border-radius:12px;padding:0 16px;font:500 14px var(--dia-ui)}
+.md-anotar[data-escuchando="true"]{border-color:#e8cbc2}
+.md-anotar .md-enviar{width:36px;height:36px;border-radius:50%;border:0;background:var(--md-tinta);color:var(--md-papel);font-size:16px;cursor:pointer;flex:none}
+.md-anotar{padding:6px}.md-anotar input{padding-left:4px}
+@keyframes md-pulso{0%,100%{box-shadow:0 0 0 0 rgba(138,60,42,.35)}50%{box-shadow:0 0 0 7px rgba(138,60,42,0)}}
 @keyframes md-aparece{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @keyframes md-entra{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes md-brillo{to{background-position:-200% 0}}
