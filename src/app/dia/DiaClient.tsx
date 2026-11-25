@@ -878,7 +878,8 @@ function Pie({ dia }: { dia: DiaGet }) {
   const r = dia.resumen, c = dia.corrida
   if (!r && !c) return null
   const partes: string[] = []
-  if (r) partes.push(`Claude armó tu día a las ${hora(r.procesado_at)}`)
+  if (r?.data.origen === 'gemini') partes.push(`Tu Mac estaba apagada: Gemini armó tu día en la nube a las ${hora(r.procesado_at)}. Claude lo mejora con tu nota de Obsidian cuando prendas la Mac`)
+  else if (r) partes.push(`Claude armó tu día a las ${hora(r.procesado_at)}`)
   if (c?.epicas) partes.push(`revisó ${c.epicas} épicas`)
   const tk = milTokens(r?.tokens); if (tk) partes.push(tk)
   if (c && !c.ok) partes.push(`la última corrida falló: ${c.mensaje || 'sin detalle'}`)

@@ -48,6 +48,7 @@ export type DiaData = {
   inbox?: number           // notas en 00-inbox
   sinDictado?: boolean     // no hubo texto nuevo: no se llamó a Claude
   modelo?: string
+  origen?: 'claude' | 'gemini' // gemini = respaldo en la nube (Mac apagada); Claude lo mejora al prender la Mac
 }
 
 export type EstadoRespuesta = 'aceptada' | 'pospuesta' | 'descartada' | 'respondida'

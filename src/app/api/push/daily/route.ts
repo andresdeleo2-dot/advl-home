@@ -4,8 +4,10 @@ import webpush from 'web-push'
 import { supabase } from '@/lib/supabase'
 import { VAPID_PUBLIC_KEY } from '@/lib/push'
 import { esAndres, mmdd } from '@/lib/cumple'
+import { armarDiaEnNube } from '@/lib/dia-nube'
 
 export const dynamic = 'force-dynamic'   // un cron nunca se cachea
+export const maxDuration = 60            // incluye el respaldo de Mi día con Gemini (lib/dia-nube.ts, tope 38 s)
 
 // Resumen diario por push: Vercel Cron lo llama a las 13:00 UTC = 7:00 en México (vercel.json; en
 // Hobby puede caer en cualquier minuto de esa hora). ?dry=1 devuelve el resumen en JSON sin enviar.
@@ -302,8 +304,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const qs = new URL(req.url).searchParams
+    const dry = qs.get('dry') === '1'
+    // Respaldo de Mi día: si la Mac no armó el día (estaba apagada), lo arma Gemini antes de avisar.
+    // En ?dry=1 no escribe nada, salvo que se pida con ?nube=1.
+    const nube = !dry || qs.get('nube') === '1' ? await armarDiaEnNube(hoyEnMexico()) : null
     const { push, detalle } = await armarResumen(hoyEnMexico())
-    if (new URL(req.url).searchParams.get('dry') === '1') return NextResponse.json({ ok: true, dry: true, sent: 0, push, detalle })
+    if (dry) return NextResponse.json({ ok: true, dry: true, sent: 0, push, detalle, nube })
 
     const priv = process.env.VAPID_PRIVATE_KEY
     if (!priv) return NextResponse.json({ ok: true, sent: 0, motivo: 'falta VAPID_PRIVATE_KEY (push apagado)', push, detalle })
@@ -325,7 +332,7 @@ export async function GET(req: NextRequest) {
       })))
     const sent = results.filter(r => r.status === 'fulfilled' && r.value).length
     if (deadEndpoints.size) await supabase.from('push_subs').delete().in('endpoint', [...deadEndpoints])
-    return NextResponse.json({ ok: true, sent, dispositivos: subs.length, eliminadas: deadEndpoints.size, push, detalle })
+    return NextResponse.json({ ok: true, sent, dispositivos: subs.length, eliminadas: deadEndpoints.size, push, detalle, nube })
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e) }, { status: 500 })
   }
