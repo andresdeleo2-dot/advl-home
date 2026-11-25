@@ -8,9 +8,10 @@ import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO, uid, completeRecurring } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { useDictado, juntar } from '@/lib/useDictado'
+import { Bandeja, TuCerebro, itemsDe, type CamposTarea, type AccionesBandeja } from './Bandeja'
 import {
   obsidianUrl, saludEpicas, esperandoAOtros, racha, sumarDias, resolverPlan, diasHasta, textoRecordatorio,
-  type DiaGet, type DiaData, type DiaPreguntaCerebro, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica,
+  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica,
 } from '@/lib/dia'
 
 /* ── Utilidades ── */
@@ -36,7 +37,7 @@ async function postJSON<T = { ok: boolean; error?: string }>(url: string, body: 
   return j as T
 }
 
-type Modo = 'ritual' | 'hoy' | 'noche' | 'semana' | 'boveda'
+type Modo = 'ritual' | 'tus3' | 'hoy' | 'noche' | 'semana' | 'boveda'   // ritual = bandeja «Por decidir»; tus3 = elegir tus 3
 type Cumple = { id: string; nombre: string; apodo?: string | null; cumple: string; celular?: string | null }
 type Evento = { id?: string; title?: string; start: string; end?: string; allDay?: boolean }
 type Aviso = { texto: string; deshacer?: () => void } | null
@@ -271,6 +272,66 @@ export default function DiaClient() {
     setDia(d => d ? { ...d, cierres: [...d.cierres.filter(c => c.fecha !== hoy), { fecha: hoy, calificacion: n }] } : d)
   }, [hoy])
 
+  /* ── Bandeja «Por decidir»: aceptar con épica/feature/iniciativa/fechas, decisiones y preguntas ── */
+  /** Crea un feature en la épica (POST /api/features) y devuelve su id. */
+  const crearFeature = useCallback(async (epicaId: string, nombre: string): Promise<string> => {
+    const id = uid()
+    const j = await postJSON<{ ok: boolean; error?: string; needsMigration?: boolean }>('/api/features', { id, epicaId, t: nombre.slice(0, 160) })
+    if (!j.ok) throw new Error(j.needsMigration ? 'Tu base todavía no tiene features (falta sql/epicas-18).' : j.error || 'No se pudo crear el feature')
+    return id
+  }, [])
+  /** Crea una tarea o un feature con lo que pusiste en la ficha. Devuelve ids. */
+  const crearConCampos = useCallback(async (k: CamposTarea, origen: string): Promise<{ tareaId?: string; featureId?: string; epicaId: string }> => {
+    const epicaId = k.epicaId && (epicas || []).some(e => e.id === k.epicaId && !e.archived) ? k.epicaId : await epicaDelDiario()
+    if (k.comoFeature) return { featureId: await crearFeature(epicaId, k.titulo.trim()), epicaId }
+    const t: EpicaTask = { id: uid(), t: k.titulo.trim().slice(0, 200), status: 'Por hacer', due: k.vence || '', links: [], createdAt: hoy,
+      note: [k.nota.trim(), origen].filter(Boolean).join(' ') }
+    if (k.plan) t.plan = k.plan
+    if (k.prioridad) t.priority = k.prioridad
+    if (k.featureId) t.featureId = k.featureId
+    if (k.iniciativaId) t.iniciativaId = k.iniciativaId
+    await sync(epicaId, { create: [t] })
+    return { tareaId: t.id, epicaId }
+  }, [epicas, epicaDelDiario, crearFeature, sync, hoy])
+
+  const accBandeja: AccionesBandeja = useMemo(() => ({
+    aceptar: async (c, k, destino) => {
+      if (c.tipo === 'mover') { await responder(c.id, c.tipo, 'aceptada', { respuesta: { destino: destino || c.destino } }); return }
+      if (!k) { await decidirTarjeta(c, 'si'); return }
+      if (c.tipo === 'nuevo') {
+        const r = await crearConCampos(k, data?.diario ? `De tu diario del ${diaLargo(data.diario)}.` : '')
+        await responder(c.id, c.tipo, 'aceptada', { tareaId: r.tareaId, respuesta: { plan: k.plan || null, featureId: r.featureId } })
+      } else {
+        const hit = c.tareaId ? todas.get(c.tareaId) : undefined
+        if (!hit) throw new Error('Ya no encuentro esa tarea en tus épicas')
+        let t: EpicaTask = { ...hit.t, t: k.titulo.trim() || hit.t.t, due: k.vence || '' }
+        if (k.plan) t.plan = k.plan; else delete t.plan
+        if (k.prioridad) t.priority = k.prioridad
+        t.featureId = k.featureId || undefined; t.iniciativaId = k.iniciativaId || undefined
+        if (k.nota.trim()) t.note = [t.note, k.nota.trim()].filter(Boolean).join(' ')
+        if (c.cambio?.archivar) t.status = 'Archivada'
+        else if (c.cambio?.estado === 'Terminada') t = completeRecurring(t, hoy, () => 0)
+        else if (c.cambio?.estado) t.status = c.cambio.estado
+        const destinoEpica = k.epicaId && k.epicaId !== hit.e.id && (epicas || []).some(e => e.id === k.epicaId) ? k.epicaId : hit.e.id
+        // Cambiar de épica viaja como «create» en la nueva (mismo id): así lo hace Épicas al mover una tarea.
+        await sync(destinoEpica, destinoEpica === hit.e.id ? { update: [t] } : { create: [t] })
+        await responder(c.id, c.tipo, 'aceptada', { tareaId: c.tareaId })
+      }
+      cargarEpicas()
+    },
+    posponer: async (c, f) => { await decidirTarjeta(c, 'otro', f) },
+    descartar: async it => { await responder(it.id, it.kind === 'tarjeta' ? it.c.tipo : it.kind, 'descartada') },
+    deshacer: async id => { await deshacerRespuesta(id) },
+    decidir: async (d, texto, k) => {
+      let ids: { tareaId?: string; featureId?: string } = {}
+      if (k) { ids = await crearConCampos(k, `Decisión: ${d.pregunta}${texto ? ` → ${texto}` : ''}`); cargarEpicas() }
+      const txt = texto || (k ? `${k.comoFeature ? 'Feature' : 'Tarea'} creada: ${k.titulo}` : '')
+      await responder(d.id, 'decision', 'respondida', { tareaId: ids.tareaId, respuesta: { texto: txt, ...ids } })
+    },
+    contestar: async (q, texto) => { await responder(q.id, 'cerebro', 'respondida', { respuesta: { texto } }) },
+  }), [responder, decidirTarjeta, crearConCampos, data, todas, sync, hoy, epicas, cargarEpicas, deshacerRespuesta])
+
+  const porDecidir = itemsDe(data).filter(it => !respuestas.has(it.id))
   const pendientes = (data?.tarjetas || []).filter(c => !respuestas.has(c.id))
   const decisionesAbiertas = (data?.decisiones || []).filter(d => !respuestas.has(d.id))
   const cerebroAbiertas = (data?.cerebro || []).filter(q => !respuestas.has(q.id)).length
@@ -282,8 +343,8 @@ export default function DiaClient() {
       <main className="md-main">
         <nav className="md-tabs" aria-label="Vistas de Mi día">
           {([['hoy', 'Hoy'], ['noche', 'Cerrar día'], ['semana', 'Semana'], ['boveda', 'Bóveda']] as [Modo, string][]).map(([m, l]) => (
-            <button key={m} className="md-tab" data-on={modo === m || (m === 'hoy' && modo === 'ritual')} onClick={() => ir(m)}>
-              {l}{m === 'hoy' && pendientes.length > 0 && modo !== 'ritual' ? <span className="md-badge">{pendientes.length}</span> : null}
+            <button key={m} className="md-tab" data-on={modo === m || (m === 'hoy' && (modo === 'ritual' || modo === 'tus3'))} onClick={() => ir(m)}>
+              {l}{m === 'hoy' && porDecidir.length > 0 && modo !== 'ritual' ? <span className="md-badge">{porDecidir.length}</span> : null}
             </button>
           ))}
         </nav>
@@ -304,14 +365,17 @@ export default function DiaClient() {
         )}
 
         {dia && fecha === hoy && modo === 'ritual' && data && (
-          <Ritual data={data} hoy={hoy} pendientes={pendientes} prioridades={prioridades} tareaDe={tareaDePrioridad}
+          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} />
+        )}
+        {dia && fecha === hoy && modo === 'tus3' && data && (
+          <Ritual data={data} hoy={hoy} pendientes={[]} prioridades={prioridades} tareaDe={tareaDePrioridad}
             decidir={decidirTarjeta} deshacer={deshacerRespuesta} empezar={empezarDia} saltar={() => ir('hoy')} minutosLibres={minutosLibres(eventos, hoy)} />
         )}
 
         {dia && fecha === hoy && modo === 'hoy' && (
           <VistaHoy dia={dia} data={data} hoy={hoy} epicas={epicas} cumples={cumples} eventos={eventos} saludHoy={saludHoy}
             prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha}
-            pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas}
+            pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas} porDecidir={porDecidir.length}
             abrirRitual={() => ir('ritual')} responder={responder} capturar={capturar} aviso={mostrarAviso}
             cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} />
         )}
@@ -504,7 +568,7 @@ function VistaHoy(p: {
   toggleHecha: (id: string) => Promise<void>; pendientes: DiaTarjeta[]; decisiones: DiaDecision[]; respuestas: Map<string, DiaRespuesta>
   abrirRitual: () => void; responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown; tareaId?: string }) => Promise<void>
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; aviso: (a: Aviso) => void
-  cerebroAbiertas: number; crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
+  cerebroAbiertas: number; porDecidir: number; crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
 }) {
   const { dia, data, hoy, epicas } = p
   // Tus 3: lo que propuso Claude, ya ligado a tareas reales; si no hay, lo agendado para hoy.
@@ -531,14 +595,12 @@ function VistaHoy(p: {
       if (f < hoy) f = `${Number(hoy.slice(0, 4)) + 1}${f.slice(4)}`
       const n = diasHasta(hoy, f); if (n <= 7) out.push({ t: `Cumple de ${c.apodo || c.nombre.split(' ')[0]} · ${enDias(n)}`, tono: n === 0 ? 'rojo' : 'verde' })
     }
-    if (p.decisiones.length) out.push({ t: `${p.decisiones.length} por decidir`, tono: 'azul', href: '#por-decidir' })
-    if (p.cerebroAbiertas) out.push({ t: `${p.cerebroAbiertas} ${p.cerebroAbiertas === 1 ? 'pregunta' : 'preguntas'} para tu cerebro`, tono: 'azul', href: '#cerebro' })
     if (data?.inbox) out.push({ t: `Inbox · ${data.inbox}`, tono: 'gris' })
     if (p.saludHoy === false) out.push({ t: 'Registrar salud', tono: 'ambar', href: '/peso' })
     const erp = dia.boveda?.resumen.find(r => /ERP/.test(r) && /vivo/i.test(r))
     if (erp) { const n = erp.match(/\d+/)?.[0]; out.push({ t: n ? `ERP en vivo · ${n}` : 'ERP en vivo', tono: 'rojo', href: '#boveda' }) }
     return out
-  }, [data, hoy, p.cumples, p.decisiones.length, p.cerebroAbiertas, p.saludHoy, dia.boveda])
+  }, [data, hoy, p.cumples, p.saludHoy, dia.boveda])
 
   const noCorrio = !dia.resumen && dia.disponible
   return (
@@ -558,9 +620,13 @@ function VistaHoy(p: {
 
       <div className="md-grid">
         <div className="md-col">
-          {p.pendientes.length > 0 && (
+          {p.porDecidir > 0 && (
             <button className="md-card md-pendientes" onClick={p.abrirRitual}>
-              <span><b>{p.pendientes.length}</b> {p.pendientes.length === 1 ? 'cosa por decidir' : 'cosas por decidir'} de anoche</span>
+              <span><b>Por decidir · {p.porDecidir}</b>
+                <span className="md-meta md-bloque">{[p.pendientes.filter(c => c.tipo === 'nuevo').length ? `${p.pendientes.filter(c => c.tipo === 'nuevo').length} pendientes nuevos` : null,
+                  p.pendientes.filter(c => c.tipo !== 'nuevo').length ? `${p.pendientes.filter(c => c.tipo !== 'nuevo').length} sugerencias` : null,
+                  p.decisiones.length ? `${p.decisiones.length} ${p.decisiones.length === 1 ? 'decisión' : 'decisiones'}` : null,
+                  p.cerebroAbiertas ? `${p.cerebroAbiertas} para tu cerebro` : null].filter(Boolean).join(' · ')}</span></span>
               <span className="md-link">Revisar →</span>
             </button>
           )}
@@ -603,9 +669,7 @@ function VistaHoy(p: {
 
           <Agenda eventos={p.eventos} hoy={hoy} />
 
-          {p.decisiones.length > 0 && <PorDecidir decisiones={p.decisiones} responder={p.responder} aviso={p.aviso} />}
-
-          {(data?.cerebro?.length ?? 0) > 0 && <PreguntasCerebro preguntas={data!.cerebro!} respuestas={p.respuestas} responder={p.responder} aviso={p.aviso} />}
+          <TuCerebro aprendido={dia.aprendido || []} />
         </div>
 
         <div className="md-col">
@@ -834,41 +898,6 @@ function Agenda({ eventos, hoy }: { eventos: Evento[] | null; hoy: string }) {
   )
 }
 
-function PorDecidir({ decisiones, responder, aviso }: { decisiones: DiaDecision[]; responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown }) => Promise<void>; aviso: (a: Aviso) => void }) {
-  const [hechas, setHechas] = useState<Record<string, string>>({})
-  const [libre, setLibre] = useState<Record<string, string>>({})
-  const contestar = async (d: DiaDecision, r: string) => {
-    try { await responder(d.id, 'decision', 'respondida', { respuesta: { texto: r } }); setHechas(h => ({ ...h, [d.id]: r })) }
-    catch (e) { aviso({ texto: e instanceof Error ? e.message : String(e) }) }
-  }
-  return (
-    <section id="por-decidir">
-      <div className="md-lbl"><span>Por decidir</span><span>{decisiones.length}</span></div>
-      <div className="md-pila-v">
-        {decisiones.map(d => (
-          <div key={d.id} className="md-card">
-            {hechas[d.id] ? (
-              <><p className="md-ok-txt">✓ Anotado: «{hechas[d.id]}»</p><p className="md-meta">Claude lo pasa a {d.nota || 'su nota'} esta noche.</p></>
-            ) : (
-              <>
-                <p>{d.pregunta}</p>
-                {d.nota && <a className="md-meta md-link" href={obsidianUrl(d.nota)}>{d.nota} ↗</a>}
-                <div className="md-fila md-envuelve md-mt8">
-                  {d.opciones.map(o => <button key={o} className="md-btn md-chico" onClick={() => contestar(d, o)}>{o}</button>)}
-                </div>
-                <form className="md-fila md-mt8" onSubmit={e => { e.preventDefault(); const t = (libre[d.id] || '').trim(); if (t) contestar(d, t) }}>
-                  <input className="md-input md-grow" value={libre[d.id] || ''} onChange={e => setLibre(l => ({ ...l, [d.id]: e.target.value }))} placeholder="O escribe tu decisión" aria-label="Tu decisión" />
-                  <button className="md-btn md-chico" disabled={!(libre[d.id] || '').trim()}>Listo</button>
-                </form>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 /** La épica cuyo nombre aparece en lo que escribiste (palabras de 4+ letras). Sin coincidencia: ninguna. */
 const sinAcentos = (x: string) => x.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 function sugerirEpica(texto: string, epicas: Epica[]): Epica | null {
@@ -954,66 +983,6 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
           : comoTarea ? '↑ crea la tarea ahora mismo en esa épica.'
           : pendientes ? `${pendientes} ${pendientes === 1 ? 'nota' : 'notas'} esperando el cierre de las 3:00` : ' '}
       </p>
-    </div>
-  )
-}
-
-/** Preguntas para tu cerebro: Claude pregunta lo que le falta a tu bóveda (cómo haces las cosas, datos por
- *  confirmar). Tu respuesta se guarda aquí y el cierre de las 3:00 la escribe en la nota indicada. */
-function PreguntasCerebro({ preguntas, respuestas, responder, aviso }: {
-  preguntas: DiaPreguntaCerebro[]; respuestas: Map<string, DiaRespuesta>
-  responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown }) => Promise<void>; aviso: (a: Aviso) => void
-}) {
-  const abiertas = preguntas.filter(q => !respuestas.has(q.id)).length
-  return (
-    <section id="cerebro">
-      <div className="md-lbl"><span>Preguntas para tu cerebro</span><span>{abiertas ? `${abiertas} sin contestar` : 'listo'}</span></div>
-      <p className="md-meta md-mb8">Lo que contestes se guarda en tu bóveda de Obsidian a las 3:00. Con una o dos líneas basta.</p>
-      <div className="md-pila-v">
-        {preguntas.map(q => <PreguntaCerebro key={q.id} q={q} r={respuestas.get(q.id)} responder={responder} aviso={aviso} />)}
-      </div>
-    </section>
-  )
-}
-
-function PreguntaCerebro({ q, r, responder, aviso }: {
-  q: DiaPreguntaCerebro; r?: DiaRespuesta
-  responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown }) => Promise<void>; aviso: (a: Aviso) => void
-}) {
-  const [txt, setTxt] = useState('')
-  const [ocupado, setOcupado] = useState(false)
-  const d = useDictado(f => setTxt(v => juntar(v, f)))
-  const enviar = async (estado: 'respondida' | 'descartada') => {
-    if (d.escuchando) d.parar()
-    const v = txt.trim(); if (estado === 'respondida' && !v) return
-    setOcupado(true)
-    try { await responder(q.id, 'cerebro', estado, estado === 'respondida' ? { respuesta: { texto: v } } : undefined) }
-    catch (e) { aviso({ texto: e instanceof Error ? e.message : String(e) }) }
-    finally { setOcupado(false) }
-  }
-  if (r) {
-    const texto = (r.respuesta as { texto?: string } | null)?.texto
-    return (
-      <div className="md-card md-cerebro-hecha">
-        <p className="md-meta">{q.pregunta}</p>
-        {r.estado === 'respondida'
-          ? <p className="md-ok-txt md-mt4">✓ «{texto}» {r.aplicada_at ? '· ya está en' : '· va a'} {q.nota ? <a className="md-link" href={obsidianUrl(q.nota)}>{q.nota}</a> : 'tu bóveda'}</p>
-          : <p className="md-meta md-mt4">Saltada. No te la vuelve a hacer.</p>}
-      </div>
-    )
-  }
-  return (
-    <div className="md-card">
-      <p>{q.pregunta}</p>
-      <p className="md-meta">{[q.porque, q.nota ? `se guarda en ${q.nota}` : null].filter(Boolean).join(' · ')}{q.nota && <> <a className="md-link" href={obsidianUrl(q.nota)} aria-label={`Abrir ${q.nota}`}>↗</a></>}</p>
-      <textarea className="md-input md-area md-mt8" rows={2} value={d.parcial ? juntar(txt, d.parcial) : txt} onChange={e => setTxt(e.target.value)} aria-label="Tu respuesta" placeholder={d.escuchando ? 'Te escucho…' : 'Tu respuesta'} />
-      {d.error && <p className="md-err-txt md-mt4">{d.error}</p>}
-      <div className="md-fila md-mt8">
-        <BotonMic d={d} />
-        <span className="md-grow" />
-        <button className="md-btn md-chico" disabled={ocupado} onClick={() => enviar('descartada')}>No aplica</button>
-        <button className="md-btn md-chico md-primario" disabled={ocupado || !txt.trim()} onClick={() => enviar('respondida')}>Guardar</button>
-      </div>
     </div>
   )
 }
@@ -1184,6 +1153,7 @@ const CSS = `
 .md-badge{background:var(--md-acento);color:#fff;border-radius:999px;font-size:11px;padding:1px 7px;font-weight:600}
 .md-card{background:#fff;border:1px solid var(--md-linea);border-radius:16px;padding:14px 16px}
 .md-lista{padding:2px 16px}
+.md-bloque{display:block;margin-top:2px}
 .md-row{display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--md-linea2);text-align:left;width:100%;background:none;color:inherit;font:inherit}
 .md-lista>.md-row:first-child,.md-lista>*:first-child .md-row{border-top:0}
 .md-fila-link{text-decoration:none}.md-fila-link:hover .md-fuerte{color:var(--md-acento)}

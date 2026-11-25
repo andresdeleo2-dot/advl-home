@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { sumarDias, type DiaGet } from '@/lib/dia'
+import { sumarDias, type DiaGet, type DiaData, type DiaAprendido } from '@/lib/dia'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,6 +40,26 @@ export async function GET(req: Request) {
   const err = [res, resp, cier, sem, kv].find(r => r.error)?.error
   if (err) return NextResponse.json({ ok: false, error: err.message }, { status: 500, headers: NO_STORE })
 
+  // Tu cerebro: decisiones y respuestas de los últimos 14 días, con la nota donde quedaron.
+  const aprendido: DiaAprendido[] = []
+  {
+    const [rs, ress] = await Promise.all([
+      supabase.from('dia_respuestas').select('id,fecha,item_id,tipo,estado,respuesta,aplicada_at').in('tipo', ['decision', 'cerebro', 'mover']).in('estado', ['respondida', 'aceptada']).gte('fecha', sumarDias(fecha, -14)).lte('fecha', fecha).order('created_at', { ascending: false }),
+      supabase.from('dia_resumen').select('fecha,data').gte('fecha', sumarDias(fecha, -14)).lte('fecha', fecha),
+    ])
+    const porFecha = new Map(((ress.data || []) as { fecha: string; data: DiaData }[]).map(r => [r.fecha, r.data]))
+    for (const r of (rs.data || []) as { id: string; fecha: string; item_id: string; tipo: string; respuesta: Record<string, unknown> | null; aplicada_at: string | null }[]) {
+      const d = porFecha.get(r.fecha)
+      const src = r.tipo === 'decision' ? d?.decisiones?.find(x => x.id === r.item_id) : r.tipo === 'cerebro' ? d?.cerebro?.find(x => x.id === r.item_id) : d?.tarjetas?.find(x => x.id === r.item_id)
+      if (!src) continue
+      const pregunta = 'pregunta' in src ? src.pregunta : src.titulo
+      const respuesta = r.tipo === 'mover' ? `mover a ${String(r.respuesta?.destino || '')}` : String(r.respuesta?.texto || '')
+      if (!respuesta) continue
+      const nota = String(r.respuesta?.guardado_en || ('nota' in src ? src.nota || '' : '')) || undefined
+      aprendido.push({ id: r.id, fecha: r.fecha, tipo: r.tipo, pregunta, respuesta, nota, guardadoAt: r.aplicada_at })
+    }
+  }
+
   const kvMap = new Map((kv.data || []).map(r => [r.clave as string, r.data]))
   const out: DiaGet = {
     ok: true,
@@ -52,6 +72,7 @@ export async function GET(req: Request) {
     corrida: (kvMap.get('corrida') as DiaGet['corrida']) ?? null,
     boveda: (kvMap.get('boveda') as DiaGet['boveda']) ?? null,
     capturasPendientes: caps.count ?? 0,
+    aprendido,
   }
   return NextResponse.json(out, { headers: NO_STORE })
 }

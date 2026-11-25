@@ -62,6 +62,9 @@ export type BovedaItem = { titulo: string; detalle?: string; nota?: string; tono
 export type BovedaGrupo = { titulo: string; items: BovedaItem[] }
 export type BovedaDatos = { fecha: string; resumen: string[]; grupos: BovedaGrupo[] }
 
+/** Lo que decidiste o contestaste en «Por decidir» y dónde quedó en Obsidian (Tu cerebro). */
+export type DiaAprendido = { id: string; fecha: string; tipo: string; pregunta: string; respuesta: string; nota?: string; guardadoAt: string | null }
+
 export type DiaGet = {
   ok: true
   disponible: boolean       // ¿existen las tablas?
@@ -73,6 +76,7 @@ export type DiaGet = {
   corrida: DiaCorrida | null
   boveda: BovedaDatos | null
   capturasPendientes: number
+  aprendido?: DiaAprendido[]   // últimos 14 días
 }
 
 /* ── Cálculos sobre las épicas (en la página, 0 tokens) ── */
