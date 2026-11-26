@@ -8,6 +8,7 @@ import BirthdayCelebration from './BirthdayCelebration'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 import CommandPalette from './CommandPalette'
 import SectionNav, { type Seccion } from './SectionNav'
+import FavoritosStrip from './FavoritosStrip'
 
 /* Header de marca compartido (banda navy con logo, relojes/clima, Widgets y Especiales) + el menú de secciones.
    Se quitó el botón «← Accesos» (repetía Accesos del menú) y el link suelto a Peso (ya está en el menú). */
@@ -51,6 +52,8 @@ export default function SiteHeader({
           </div>
         </div>
       </header>
+      {/* Accesos rápidos en todas las secciones */}
+      <FavoritosStrip />
       <BirthdayCelebration />
     </>
   )

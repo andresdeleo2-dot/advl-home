@@ -2191,8 +2191,6 @@ export default function TiempoClient() {
       {/* Header de marca compartido (banda ADVL) */}
       <SiteHeader title="Tiempo" subtitle="Tu día · ADVL" seccion="tiempo" />
 
-      {/* Cinta de accesos rápidos (favoritos del home), igual que en Épicas */}
-
       <div className="tiempo-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 20px 64px' }}>
         {/* Sub-encabezado propio de la sección: fecha + reloj + pestañas */}
         <div className="tiempo-sub" style={{ width: '100%', maxWidth: 1180, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', justifyContent: 'space-between', padding: '4px 0 26px' }}>

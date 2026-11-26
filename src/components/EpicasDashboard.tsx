@@ -30,6 +30,7 @@ import HeaderStats from './HeaderStats'
 import CumplesWidget from './CumplesWidget'
 import ExcepcionalesWidget from './ExcepcionalesWidget'
 import BirthdayCelebration from './BirthdayCelebration'
+import FavoritosStrip from './FavoritosStrip'
 import { WidgetsDropdown, SpecialsDropdown } from './HeaderWidgets'
 import {
   ARCHIVED,
@@ -12514,6 +12515,8 @@ function TopBar({ onNew }: { sourceCount?: number; onNew: () => void }) {
           </div>
         </div>
       </header>
+      {/* Accesos rápidos en todas las secciones */}
+      <FavoritosStrip />
     </>
   )
 }
