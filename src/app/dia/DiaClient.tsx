@@ -1160,18 +1160,22 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, pu
   const [resp, setResp] = useState('')
   const [err, setErr] = useState('')
   const [listo, setListo] = useState(false)
+  const [conTexto, setConTexto] = useState(false)
   const [guardando, setGuardando] = useState(false)
   const tres = prioridades.length ? prioridades.map(p => ({ p, hit: tareaDe(p) })) : respaldo.map(hit => ({ p: { t: hit.t.t, tareaId: hit.t.id, porque: '' } as DiaPrioridad, hit }))
   const hechas = tres.filter(x => x.hit && hechaHoy(x.hit.t, hoy)).length
 
   const cerrar = async () => {
     if (!nota) { setErr('Elige cómo estuvo tu día (1 a 10)'); return }
+    // Lo que platicas es opcional: con la calificación basta (puedes dictar en Obsidian).
+    // Si el dictado sigue abierto, se guarda también lo que iba diciendo.
+    const platica = (dictado.parcial ? juntar(texto, dictado.parcial) : texto).trim()
     if (dictado.escuchando) dictado.parar()
-    if (texto.trim().length < 3) { setErr('Platícame aunque sea una línea de tu día'); return }
     setGuardando(true); setErr('')
     try {
       await calificar(nota)
-      await capturar(texto.trim(), 'cierre')
+      if (platica) await capturar(platica, 'cierre')
+      setConTexto(!!platica)
       if (resp.trim() && data?.pregunta) await capturar(`Pregunta: ${data.pregunta}\nRespuesta: ${resp.trim()}`, 'pregunta')
       setListo(true)
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
@@ -1182,7 +1186,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, pu
     <div className="md-card md-noche-fin md-fade">
       <p className="md-luna" aria-hidden>☾</p>
       <p className="md-frase md-sin-margen">Listo, descansa</p>
-      <p className="md-sub">Le diste {nota} a tu día. A las 3:00 Claude acomoda lo que dictaste en tu nota de Obsidian y mañana te espera tu día armado.</p>
+      <p className="md-sub">Le diste {nota} a tu día. {conTexto ? 'A las 3:00 Claude acomoda lo que platicaste en tu nota de Obsidian y mañana te espera tu día armado.' : 'A las 3:00 Claude arma tu día de mañana con lo que haya en tu nota de Obsidian.'}</p>
     </div>
   )
   return (
@@ -1220,7 +1224,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, pu
           <button key={v} role="radio" aria-checked={nota === v} data-on={nota === v} onClick={() => { setNota(v); setErr('') }}>{v}</button>
         ))}
       </div>
-      <div className="md-lbl"><span>Platícame tu día</span><span>dictado o escrito</span></div>
+      <div className="md-lbl"><span>Platícame tu día</span><span>opcional · dictado o escrito</span></div>
       <BotonMic d={dictado} grande />
       {dictado.error && <p className="md-err-txt md-mt4">{dictado.error}</p>}
       <textarea className="md-input md-area md-mt8" rows={7} value={dictado.parcial ? juntar(texto, dictado.parcial) : texto} onChange={e => { setTexto(e.target.value); setErr('') }}
