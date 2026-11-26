@@ -4,7 +4,7 @@ import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useS
 import Link from 'next/link'
 import SiteHeader from '@/components/SiteHeader'
 import type { Epica, EpicaMilestone, EpicaTask } from '@/lib/supabase'
-import { todayISO, uid, completeRecurring } from '@/components/epicas/core'
+import { todayISO, uid, completeRecurring, WEEK_EST_MIN } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { useDictado, juntar } from '@/lib/useDictado'
 import { Preguntale, SaludDia, TuSemana, type PanelExtra, type Gente } from '@/app/panel/PanelDia'
@@ -302,6 +302,17 @@ export default function DiaClient() {
     } catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
     finally { enCurso.current.delete(tareaId) }
   }, [todas, hoy, toggleHecha, sync, cargarEpicas, mostrarAviso])
+
+  /** «＋ Agregar tarea» del tablero de una épica (con el feature/iniciativa que tengas filtrado). */
+  const crearEnEpica = useCallback(async (epicaId: string, titulo: string, extra: { featureId?: string; iniciativaId?: string; plan?: string }): Promise<string | null> => {
+    const t: EpicaTask = { id: uid(), t: titulo.slice(0, 200), status: 'Por hacer', due: '', links: [], note: '', createdAt: hoy }
+    if (extra.featureId) t.featureId = extra.featureId
+    if (extra.iniciativaId) t.iniciativaId = extra.iniciativaId
+    if (extra.plan) t.plan = extra.plan
+    setEpicas(es => es ? es.map(e => e.id !== epicaId ? e : { ...e, tasks: [...(e.tasks || []), t] }) : es)
+    try { await sync(epicaId, { create: [t] }); cargarEpicas(); mostrarAviso({ texto: `Agregada: ${t.t}` }); return t.id! }
+    catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas(); return null }
+  }, [hoy, sync, cargarEpicas, mostrarAviso])
 
   /** Cerrar día: lo que no hiciste se mueve ya (mañana u otro día) o se suelta del plan. */
   const reprogramar = useCallback(async (tareaId: string, plan: string | null) => {
@@ -648,7 +659,7 @@ export default function DiaClient() {
       </main>
       {epicaPop && (() => {
         const e = (epicas || []).find(x => x.id === epicaPop)
-        return e ? <EpicaTablero e={e} hoy={hoy} tapada={!!ficha} cerrar={() => setEpicaPop(null)} abrir={abrirTarea} terminar={terminarTarea} reprogramar={reprogramar} /> : null
+        return e ? <EpicaTablero e={e} hoy={hoy} tapada={!!ficha} cerrar={() => setEpicaPop(null)} abrir={abrirTarea} terminar={terminarTarea} reprogramar={reprogramar} crear={crearEnEpica} /> : null
       })()}
       {ficha && (
         <Suspense fallback={<div role="status" aria-live="polite" className="md-abriendo">Abriendo la tarea…</div>}>
@@ -1249,9 +1260,19 @@ function pctObjetivo(k: EpicaMilestone, e: Epica): number {
 }
 const UNIDAD: Partial<Record<string, string>> = { pesos: '$', usd: 'US$', porcentaje: '%', dias: 'días', meses: 'meses', kg: 'kg', horas: 'h' }
 
-/** Pop-up con el tablero de una épica: cómo va, qué sigue, por feature y objetivos. Las tareas abren su ficha aquí. */
-function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: {
+/** Pop-up con el tablero de una épica: cómo va, todas sus tareas con filtros, por feature e iniciativa,
+ *  los próximos 14 días y objetivos. Las tareas abren su ficha aquí; «Ir a la épica» baja a su sección en Épicas. */
+type CuandoF = '' | 'sin' | 'hoy' | 'semana' | 'despues' | 'atrasada' | `dia:${string}`
+type FiltrosEp = { cuando: CuandoF; feat: string | null; ini: string | null; prio: '' | 'alta' | 'media' | 'baja' | 'sin'; estado: '' | 'Por hacer' | 'En curso'; dif: '' | 'facil' | 'media' | 'dificil'; quien: string }
+const SIN_FILTROS: FiltrosEp = { cuando: '', feat: null, ini: null, prio: '', estado: '', dif: '', quien: '' }
+const minDe = (t: EpicaTask) => t.estMin ?? WEEK_EST_MIN(t.difficulty)
+const horas = (m: number) => m >= 60 ? `${Math.round(m / 30) / 2} h` : `${m} min`
+const diasDe = (t: EpicaTask) => [t.plan, ...(t.dayPlans || []).map(d => d.day)].filter(Boolean) as string[]
+const quienDe = (t: EpicaTask) => t.personaNombre || (t.responsable && t.responsable.trim().toLowerCase() !== 'yo' ? t.responsable.trim() : '')
+
+function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar, crear }: {
   e: Epica; hoy: string; tapada: boolean; cerrar: () => void; abrir: (id: string) => void; terminar: (id: string) => Promise<void>; reprogramar: (id: string, plan: string | null) => Promise<void>
+  crear: (epicaId: string, titulo: string, extra: { featureId?: string; iniciativaId?: string; plan?: string }) => Promise<string | null>
 }) {
   useEffect(() => {
     const h = (ev: KeyboardEvent) => { if (ev.key === 'Escape' && !tapada) cerrar() }
@@ -1265,64 +1286,127 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
   const av = avanceEpica(e, hoy)
   const vencidas = abiertas.filter(t => t.due && t.due < hoy)
   const atrasadas = abiertas.filter(t => t.status !== 'Esperando' && t.plan && t.plan < hoy && !(t.due && t.due < hoy))
-  const esperando = abiertas.filter(t => t.status === 'Esperando')
   const enCurso = abiertas.filter(t => t.status === 'En curso').length
-  // Última vez que se movió algo (terminada, editada o creada).
+  const minPend = abiertas.filter(t => t.status !== 'Esperando').reduce((n, t) => n + minDe(t), 0)
   const ult = vivas.map(t => (t.doneAt || t.updatedAt || t.createdAt || '').slice(0, 10)).filter(Boolean).sort().pop()
   const diasQuieta = ult ? Math.max(0, diasHasta(ult, hoy)) : null
-  // Terminadas por semana (8 semanas, la última es la actual).
+  const proxVence = abiertas.filter(t => t.due && t.due >= hoy).sort((a, b) => a.due!.localeCompare(b.due!))[0]
   const semanas = Array.from({ length: 8 }, (_, i) => {
     const fin = sumarDias(hoy, -7 * (7 - i)), ini = sumarDias(fin, -6)
     return { ini, n: vivas.filter(t => { const d = (t.doneAt || '').slice(0, 10); return t.status === 'Terminada' && d >= ini && d <= fin }).length }
   })
   const maxSem = Math.max(1, ...semanas.map(x => x.n))
-  // Lo que sigue: vencidas, atrasadas, agendadas (por fecha), luego por prioridad.
+  const objetivos = (e.kpis || []).filter(k => k.t)
+  const features = (e.features || [])
+  const idsFeat = new Set(features.map(f => f.id))
+  const nombreF = (id?: string) => id ? features.find(f => f.id === id)?.t : undefined
+  const iniDe = (t: EpicaTask) => t.iniciativaId ? features.flatMap(f => f.iniciativas || []).find(i => i.id === t.iniciativaId) : undefined
+  const personas = [...new Set(vivas.map(quienDe).filter(Boolean))].sort()
   const pr = (p?: string) => (p === 'alta' ? 0 : p === 'baja' ? 2 : 1)
   const rango = (t: EpicaTask) => (t.due && t.due < hoy ? 0 : t.plan && t.plan < hoy ? 1 : t.plan === hoy ? 2 : t.plan ? 3 : 4)
   const porque = (t: EpicaTask) => t.due && t.due < hoy ? `venció el ${corta(t.due)}` : t.plan && t.plan < hoy ? `agendada el ${corta(t.plan)}` : t.plan === hoy ? 'hoy' : t.plan ? corta(t.plan) : t.due ? `vence ${corta(t.due)}` : 'sin fecha'
-  const nombreF = (id?: string) => id ? (e.features || []).find(f => f.id === id)?.t : undefined
-  // Lista de tareas con filtros: qué ver, de qué feature, buscar y cómo ordenar. Empieza en lo abierto, por urgencia.
+
+  // ── Lista con filtros ──
   const [vista, setVista] = useState<VistaTab>('abiertas')
-  const [feat, setFeat] = useState<string | null>(null)   // id de feature, '' = sin feature, null = todos
-  const [orden, setOrden] = useState<'urgencia' | 'fecha' | 'prioridad' | 'feature'>('urgencia')
+  const [f, setF] = useState<FiltrosEp>(SIN_FILTROS)
+  const [panel, setPanel] = useState(false)
+  const [orden, setOrden] = useState<'urgencia' | 'fecha' | 'prioridad' | 'feature' | 'reciente'>('urgencia')
   const [q, setQ] = useState('')
   const [mas, setMas] = useState(false)
-  const idsFeat = new Set((e.features || []).map(f => f.id))
+  const poner = (k: Partial<FiltrosEp>) => { setF(x => ({ ...x, ...k })); setMas(false) }
+  const finSemana = sumarDias(hoy, 6)
   const esAtrasada = (t: EpicaTask) => ABIERTA(t) && t.status !== 'Esperando' && ((!!t.due && t.due < hoy) || (!!t.plan && t.plan < hoy))
   const DE_VISTA: Record<VistaTab, (t: EpicaTask) => boolean> = {
-    abiertas: t => ABIERTA(t) && t.status !== 'Esperando',
-    atrasadas: esAtrasada,
-    esperando: t => t.status === 'Esperando',
-    hechas: t => t.status === 'Terminada',
-    todas: () => true,
+    abiertas: t => ABIERTA(t) && t.status !== 'Esperando', atrasadas: esAtrasada, esperando: t => t.status === 'Esperando', hechas: t => t.status === 'Terminada', todas: () => true,
   }
-  const cuenta = (v: VistaTab) => vivas.filter(DE_VISTA[v]).length
+  const pasa = (t: EpicaTask, sin?: keyof FiltrosEp) => {
+    const ds = diasDe(t)
+    if (sin !== 'cuando' && f.cuando) {
+      if (f.cuando === 'sin' && ds.length) return false
+      if (f.cuando === 'hoy' && !ds.includes(hoy)) return false
+      if (f.cuando === 'semana' && !ds.some(d => d >= hoy && d <= finSemana)) return false
+      if (f.cuando === 'despues' && !ds.some(d => d > finSemana)) return false
+      if (f.cuando === 'atrasada' && !esAtrasada(t)) return false
+      if (f.cuando.startsWith('dia:') && !ds.includes(f.cuando.slice(4))) return false
+    }
+    if (sin !== 'feat' && f.feat !== null && (f.feat === '' ? !!t.featureId && idsFeat.has(t.featureId) : t.featureId !== f.feat)) return false
+    if (sin !== 'ini' && f.ini !== null && (f.ini === '' ? !!t.iniciativaId : t.iniciativaId !== f.ini)) return false
+    if (sin !== 'prio' && f.prio && (f.prio === 'sin' ? !!t.priority : t.priority !== f.prio)) return false
+    if (sin !== 'estado' && f.estado && t.status !== f.estado) return false
+    if (sin !== 'dif' && f.dif && t.difficulty !== f.dif) return false
+    if (sin !== 'quien' && f.quien && quienDe(t) !== f.quien) return false
+    return true
+  }
   const qn = sinAcentos(q.trim())
-  const lista = vivas.filter(DE_VISTA[vista])
-    .filter(t => feat === null || (feat === '' ? !t.featureId || !idsFeat.has(t.featureId) : t.featureId === feat))
-    .filter(t => !qn || sinAcentos(`${t.t} ${t.note || ''} ${t.resumen || ''}`).includes(qn))
-    .sort((a, b) => {
-      if (vista === 'hechas' && orden === 'urgencia') return (b.doneAt || '').localeCompare(a.doneAt || '')
-      if (ABIERTA(a) !== ABIERTA(b)) return ABIERTA(a) ? -1 : 1
-      if (orden === 'fecha') return (a.plan || a.due || '9').localeCompare(b.plan || b.due || '9')
-      if (orden === 'prioridad') return pr(a.priority) - pr(b.priority) || rango(a) - rango(b)
-      if (orden === 'feature') return (nombreF(a.featureId) || '~').localeCompare(nombreF(b.featureId) || '~') || rango(a) - rango(b)
-      return rango(a) - rango(b) || (a.due || a.plan || '9').localeCompare(b.due || b.plan || '9') || pr(a.priority) - pr(b.priority)
-    })
-  const VISIBLES = 8
+  const base = vivas.filter(t => pasa(t)).filter(t => !qn || sinAcentos(`${t.t} ${t.note || ''} ${t.resumen || ''}`).includes(qn))
+  const cuenta = (v: VistaTab) => base.filter(DE_VISTA[v]).length
+  const lista = base.filter(DE_VISTA[vista]).sort((a, b) => {
+    if (orden === 'reciente' || (vista === 'hechas' && orden === 'urgencia')) return (b.doneAt || b.updatedAt || b.createdAt || '').localeCompare(a.doneAt || a.updatedAt || a.createdAt || '')
+    if (ABIERTA(a) !== ABIERTA(b)) return ABIERTA(a) ? -1 : 1
+    if (orden === 'fecha') return (a.plan || a.due || '9').localeCompare(b.plan || b.due || '9')
+    if (orden === 'prioridad') return pr(a.priority) - pr(b.priority) || rango(a) - rango(b)
+    if (orden === 'feature') return (nombreF(a.featureId) || '~').localeCompare(nombreF(b.featureId) || '~') || (iniDe(a)?.nombre || '~').localeCompare(iniDe(b)?.nombre || '~') || rango(a) - rango(b)
+    return rango(a) - rango(b) || (a.due || a.plan || '9').localeCompare(b.due || b.plan || '9') || pr(a.priority) - pr(b.priority)
+  })
+  const VISIBLES = 10
   const visibles = mas ? lista : lista.slice(0, VISIBLES)
+  const minLista = lista.filter(ABIERTA).reduce((n, t) => n + minDe(t), 0)
   const irA = (v: VistaTab) => { setVista(v); setMas(false) }
-  const metaDe = (t: EpicaTask) => t.status === 'Terminada'
-    ? [t.doneAt ? `cerrada el ${corta(t.doneAt.slice(0, 10))}` : 'terminada', nombreF(t.featureId)].filter(Boolean).join(' · ')
-    : t.status === 'Esperando'
-    ? [`esperando${t.personaNombre || (t.responsable && t.responsable.toLowerCase() !== 'yo') ? ` a ${t.personaNombre || t.responsable}` : ''}`, t.waitingSince ? `desde el ${corta(t.waitingSince.slice(0, 10))}` : null, nombreF(t.featureId)].filter(Boolean).join(' · ')
-    : [porque(t), orden === 'feature' ? null : nombreF(t.featureId), t.status === 'En curso' ? 'en curso' : null, t.priority === 'alta' ? 'alta' : null].filter(Boolean).join(' · ')
-  const feats = (e.features || []).map(f => {
-    const ts = vivas.filter(t => t.featureId === f.id)
-    return { f, total: ts.length, hechas: ts.filter(t => t.status === 'Terminada').length, abiertas: ts.filter(ABIERTA).length }
-  }).filter(x => x.total > 0 || x.f.estado !== 'cerrado')
-  const sinFeature = vivas.filter(t => !t.featureId || !(e.features || []).some(f => f.id === t.featureId))
-  const objetivos = (e.kpis || []).filter(k => k.t)
+  // Qué hay en cada opción (con los demás filtros puestos), para no ofrecer filtros que dejan la lista vacía.
+  const nCon = (k: keyof FiltrosEp, val: FiltrosEp[keyof FiltrosEp]) => vivas.filter(DE_VISTA[vista])
+    .filter(t => pasa(t, k) && pasaCon(t, { ...f, [k]: val } as FiltrosEp, k) && (!qn || sinAcentos(`${t.t} ${t.note || ''} ${t.resumen || ''}`).includes(qn))).length
+  function pasaCon(t: EpicaTask, g: FiltrosEp, k: keyof FiltrosEp) {
+    const ds = diasDe(t)
+    switch (k) {
+      case 'cuando': return !g.cuando || (g.cuando === 'sin' ? !ds.length : g.cuando === 'hoy' ? ds.includes(hoy) : g.cuando === 'semana' ? ds.some(d => d >= hoy && d <= finSemana) : g.cuando === 'despues' ? ds.some(d => d > finSemana) : g.cuando === 'atrasada' ? esAtrasada(t) : ds.includes(g.cuando.slice(4)))
+      case 'feat': return g.feat === null || (g.feat === '' ? !t.featureId || !idsFeat.has(t.featureId) : t.featureId === g.feat)
+      case 'ini': return g.ini === null || (g.ini === '' ? !t.iniciativaId : t.iniciativaId === g.ini)
+      case 'prio': return !g.prio || (g.prio === 'sin' ? !t.priority : t.priority === g.prio)
+      case 'estado': return !g.estado || t.status === g.estado
+      case 'dif': return !g.dif || t.difficulty === g.dif
+      default: return !g.quien || quienDe(t) === g.quien
+    }
+  }
+  const iniciativas = (f.feat ? features.filter(x => x.id === f.feat) : features).flatMap(x => (x.iniciativas || []).map(i => ({ i, fT: x.t })))
+  const activos: { k: keyof FiltrosEp; t: string }[] = [
+    f.cuando ? { k: 'cuando' as const, t: f.cuando === 'sin' ? 'Sin fecha' : f.cuando === 'hoy' ? 'Hoy' : f.cuando === 'semana' ? 'Esta semana' : f.cuando === 'despues' ? 'Más adelante' : f.cuando === 'atrasada' ? 'Atrasadas' : cap(diaLargo(f.cuando.slice(4))) } : null,
+    f.feat !== null ? { k: 'feat' as const, t: f.feat === '' ? 'Sin feature' : nombreF(f.feat) || 'Feature' } : null,
+    f.ini !== null ? { k: 'ini' as const, t: f.ini === '' ? 'Sin iniciativa' : iniciativas.find(x => x.i.id === f.ini)?.i.nombre || 'Iniciativa' } : null,
+    f.prio ? { k: 'prio' as const, t: f.prio === 'sin' ? 'Sin prioridad' : `Prioridad ${f.prio}` } : null,
+    f.estado ? { k: 'estado' as const, t: f.estado } : null,
+    f.dif ? { k: 'dif' as const, t: f.dif === 'facil' ? 'Fácil' : f.dif === 'media' ? 'Dificultad media' : 'Difícil' } : null,
+    f.quien ? { k: 'quien' as const, t: f.quien } : null,
+  ].filter(Boolean) as { k: keyof FiltrosEp; t: string }[]
+  const quitar = (k: keyof FiltrosEp) => poner(k === 'feat' ? { feat: null, ini: null } : { [k]: SIN_FILTROS[k] } as Partial<FiltrosEp>)
+  const metaDe = (t: EpicaTask) => {
+    const sub = t.subtasks?.length ? `${t.subtasks.filter(x => x.done).length}/${t.subtasks.length} subtareas` : null
+    const ubic = [orden === 'feature' ? null : nombreF(t.featureId), iniDe(t)?.nombre].filter(Boolean).join(' › ')
+    if (t.status === 'Terminada') return [t.doneAt ? `cerrada el ${corta(t.doneAt.slice(0, 10))}` : 'terminada', ubic].filter(Boolean).join(' · ')
+    if (t.status === 'Esperando') return [`esperando${quienDe(t) ? ` a ${quienDe(t)}` : ''}`, t.waitingSince ? `desde el ${corta(t.waitingSince.slice(0, 10))}` : null, ubic].filter(Boolean).join(' · ')
+    return [porque(t), ubic, t.status === 'En curso' ? 'en curso' : null, t.priority === 'alta' ? 'alta' : null, sub, minDe(t) ? horas(minDe(t)) : null].filter(Boolean).join(' · ')
+  }
+  // Próximos 14 días: cuántas tareas hay agendadas cada día (toca uno para ver solo ese).
+  const dias14 = Array.from({ length: 14 }, (_, i) => { const d = sumarDias(hoy, i); return { d, n: abiertas.filter(t => diasDe(t).includes(d)).length } })
+  const max14 = Math.max(1, ...dias14.map(x => x.n))
+  const feats = features.map(x => {
+    const ts = vivas.filter(t => t.featureId === x.id)
+    return { x, total: ts.length, hechas: ts.filter(t => t.status === 'Terminada').length, abiertas: ts.filter(ABIERTA).length }
+  }).filter(y => y.total > 0 || y.x.estado !== 'cerrado')
+  const sinFeatureAb = abiertas.filter(t => !t.featureId || !idsFeat.has(t.featureId)).length
+
+  // ── Agregar tarea rápida (con el feature/iniciativa del filtro) ──
+  const [nueva, setNueva] = useState('')
+  const [nuevaHoy, setNuevaHoy] = useState(false)
+  const [guardando, setGuardando] = useState(false)
+  const agregar = async () => {
+    const t = nueva.trim(); if (!t || guardando) return
+    setGuardando(true)
+    try {
+      const id = await crear(e.id, t, { featureId: f.feat || undefined, iniciativaId: f.ini || undefined, plan: nuevaHoy ? hoy : undefined })
+      setNueva(''); if (id && vista !== 'abiertas' && vista !== 'todas') setVista('abiertas')
+    } finally { setGuardando(false) }
+  }
+  const destino = `/epicas?e=${encodeURIComponent(e.id)}${f.feat ? `&fe=${encodeURIComponent(f.feat)}` : ''}&ir=epica`
 
   return (
     <div className="md-velo" onClick={cerrar}>
@@ -1332,18 +1416,20 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
             <p className="md-kicker" style={{ color }}>Épica · {e.status || 'En curso'}</p>
             <h2 className="md-tab-tit">{e.name}</h2>
             {e.description && <p className="md-sub md-mt4">{e.description}</p>}
+            <p className="md-meta md-mt4">{[minPend ? `~${horas(minPend)} de trabajo pendiente` : null, proxVence ? `próximo vencimiento: ${proxVence.t} (${corta(proxVence.due!)})` : null, diasQuieta != null ? (diasQuieta === 0 ? 'se movió hoy' : `último movimiento hace ${diasQuieta} ${diasQuieta === 1 ? 'día' : 'días'}`) : null].filter(Boolean).join(' · ')}</p>
           </div>
+          <Link className="md-btn md-chico md-tab-ir" href={destino}>Ir a la épica →</Link>
           <button type="button" className="md-icobtn" onClick={cerrar} aria-label="Cerrar">✕</button>
         </div>
 
         <div className="md-kpis">
-          <div className="md-kpi" role="button" tabIndex={0} onClick={() => irA('hechas')} onKeyDown={ev => ev.key === 'Enter' && irA('hechas')}>
+          <div className="md-kpi" role="button" tabIndex={0} data-on={vista === 'hechas'} onClick={() => irA('hechas')} onKeyDown={ev => ev.key === 'Enter' && irA('hechas')}>
             <div className="md-anillo" style={{ background: `conic-gradient(${color} ${av.pct * 3.6}deg, var(--md-linea2) 0)` }}><span>{av.pct}%</span></div>
             <div><b>{av.hechas} de {av.total}</b><span>terminadas</span></div>
           </div>
-          <div className="md-kpi" role="button" tabIndex={0} onClick={() => irA('abiertas')} onKeyDown={ev => ev.key === 'Enter' && irA('abiertas')}><b>{abiertas.length}</b><span>abiertas{enCurso ? ` · ${enCurso} en curso` : ''}</span></div>
-          <div className="md-kpi" role="button" tabIndex={0} onClick={() => irA('atrasadas')} onKeyDown={ev => ev.key === 'Enter' && irA('atrasadas')} data-tono={vencidas.length ? 'rojo' : atrasadas.length ? 'ambar' : undefined}><b>{vencidas.length + atrasadas.length}</b><span>{vencidas.length ? `${vencidas.length} vencidas` : ''}{vencidas.length && atrasadas.length ? ' · ' : ''}{atrasadas.length ? `${atrasadas.length} atrasadas` : ''}{!vencidas.length && !atrasadas.length ? 'nada atrasado' : ''}</span></div>
-          <div className="md-kpi" data-tono={av.semana ? 'verde' : undefined}><b>{av.semana ? `+${av.semana}` : '0'}</b><span>esta semana{diasQuieta != null && !av.semana ? ` · quieta ${diasQuieta} d` : ''}</span></div>
+          <div className="md-kpi" role="button" tabIndex={0} data-on={vista === 'abiertas'} onClick={() => irA('abiertas')} onKeyDown={ev => ev.key === 'Enter' && irA('abiertas')}><b>{abiertas.length}</b><span>abiertas{enCurso ? ` · ${enCurso} en curso` : ''}</span></div>
+          <div className="md-kpi" role="button" tabIndex={0} data-on={vista === 'atrasadas'} onClick={() => irA('atrasadas')} onKeyDown={ev => ev.key === 'Enter' && irA('atrasadas')} data-tono={vencidas.length ? 'rojo' : atrasadas.length ? 'ambar' : undefined}><b>{vencidas.length + atrasadas.length}</b><span>{vencidas.length ? `${vencidas.length} vencidas` : ''}{vencidas.length && atrasadas.length ? ' · ' : ''}{atrasadas.length ? `${atrasadas.length} atrasadas` : ''}{!vencidas.length && !atrasadas.length ? 'nada atrasado' : ''}</span></div>
+          <div className="md-kpi" data-tono={av.semana ? 'verde' : undefined}><b>{av.semana ? `+${av.semana}` : '0'}</b><span>terminadas esta semana</span></div>
         </div>
 
         <div className="md-tab-grid">
@@ -1351,25 +1437,84 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
             <div className="md-filtros" role="tablist" aria-label="Qué tareas ver">
               {([['abiertas', 'Abiertas'], ['atrasadas', 'Atrasadas'], ['esperando', 'Esperando'], ['hechas', 'Terminadas'], ['todas', 'Todas']] as [VistaTab, string][]).map(([v, l]) => {
                 const n = cuenta(v)
-                return (v === 'abiertas' || v === 'todas' || n > 0) && (
+                return (v === 'abiertas' || v === 'todas' || v === vista || n > 0) && (
                   <button key={v} type="button" role="tab" aria-selected={vista === v} data-on={vista === v} data-tono={v === 'atrasadas' ? 'rojo' : undefined} onClick={() => irA(v)}>{l}<span>{n}</span></button>
                 )
               })}
             </div>
             <div className="md-herr">
-              <input className="md-buscar" type="search" value={q} onChange={ev => { setQ(ev.target.value); setMas(false) }} placeholder="Buscar en la épica" aria-label="Buscar tareas" />
+              <input className="md-buscar" type="search" value={q} onChange={ev => { setQ(ev.target.value); setMas(false) }} placeholder="Buscar" aria-label="Buscar tareas" />
+              <button type="button" className="md-btn md-chico md-fbtn" data-on={panel || activos.length > 0} aria-expanded={panel} onClick={() => setPanel(v => !v)}>Filtros{activos.length ? ` · ${activos.length}` : ''}</button>
               <select className="md-orden" value={orden} onChange={ev => setOrden(ev.target.value as typeof orden)} aria-label="Ordenar">
-                <option value="urgencia">{vista === 'hechas' ? 'Más recientes' : 'Más urgentes'}</option>
-                <option value="fecha">Por fecha</option>
-                <option value="prioridad">Por prioridad</option>
-                <option value="feature">Por feature</option>
+                <option value="urgencia">{vista === 'hechas' ? 'Recientes' : 'Urgentes'}</option>
+                <option value="fecha">Fecha</option>
+                <option value="prioridad">Prioridad</option>
+                <option value="feature">Feature</option>
+                <option value="reciente">Movidas hace poco</option>
               </select>
             </div>
-            {feat !== null && (
-              <div className="md-fila md-mt8"><button type="button" className="md-chip md-tono-azul md-quitar" onClick={() => setFeat(null)} aria-label="Quitar filtro de feature">{feat === '' ? 'Sin feature' : nombreF(feat)} ✕</button></div>
+
+            {panel && (
+              <div className="md-fpanel md-fade">
+                <FGrupo t="Cuándo">
+                  {([['', 'Todas'], ['hoy', 'Hoy'], ['semana', 'Esta semana'], ['despues', 'Más adelante'], ['sin', 'Sin fecha'], ['atrasada', 'Atrasadas']] as [CuandoF, string][]).map(([v, l]) => (
+                    <FChip key={l} on={f.cuando === v} n={v ? nCon('cuando', v) : undefined} onClick={() => poner({ cuando: v })}>{l}</FChip>
+                  ))}
+                </FGrupo>
+                {features.length > 0 && (
+                  <FGrupo t="Feature">
+                    <FChip on={f.feat === null} onClick={() => poner({ feat: null, ini: null })}>Todos</FChip>
+                    {features.map(x => { const n = nCon('feat', x.id); return (n > 0 || f.feat === x.id) && <FChip key={x.id} on={f.feat === x.id} n={n} dot={x.color || color} onClick={() => poner({ feat: f.feat === x.id ? null : x.id, ini: null })}>{x.t}</FChip> })}
+                    {nCon('feat', '') > 0 && <FChip on={f.feat === ''} n={nCon('feat', '')} onClick={() => poner({ feat: f.feat === '' ? null : '', ini: null })}>Sin feature</FChip>}
+                  </FGrupo>
+                )}
+                {iniciativas.length > 0 && (
+                  <FGrupo t="Iniciativa">
+                    <FChip on={f.ini === null} onClick={() => poner({ ini: null })}>Todas</FChip>
+                    {iniciativas.map(({ i, fT }) => { const n = nCon('ini', i.id); return (n > 0 || f.ini === i.id) && <FChip key={i.id} on={f.ini === i.id} n={n} onClick={() => poner({ ini: f.ini === i.id ? null : i.id })}>{f.feat ? i.nombre : `${fT} › ${i.nombre}`}</FChip> })}
+                    {nCon('ini', '') > 0 && <FChip on={f.ini === ''} n={nCon('ini', '')} onClick={() => poner({ ini: f.ini === '' ? null : '' })}>Sin iniciativa</FChip>}
+                  </FGrupo>
+                )}
+                <FGrupo t="Prioridad">
+                  {([['', 'Todas'], ['alta', 'Alta'], ['media', 'Media'], ['baja', 'Baja'], ['sin', 'Sin prioridad']] as [FiltrosEp['prio'], string][]).map(([v, l]) => (
+                    <FChip key={l} on={f.prio === v} n={v ? nCon('prio', v) : undefined} onClick={() => poner({ prio: v })}>{l}</FChip>
+                  ))}
+                </FGrupo>
+                {vista !== 'esperando' && vista !== 'hechas' && (
+                  <FGrupo t="Estado">
+                    {([['', 'Todos'], ['Por hacer', 'Por hacer'], ['En curso', 'En curso']] as [FiltrosEp['estado'], string][]).map(([v, l]) => (
+                      <FChip key={l} on={f.estado === v} n={v ? nCon('estado', v) : undefined} onClick={() => poner({ estado: v })}>{l}</FChip>
+                    ))}
+                  </FGrupo>
+                )}
+                <FGrupo t="Dificultad">
+                  {([['', 'Todas'], ['facil', 'Fácil'], ['media', 'Media'], ['dificil', 'Difícil']] as [FiltrosEp['dif'], string][]).map(([v, l]) => (
+                    <FChip key={l} on={f.dif === v} n={v ? nCon('dif', v) : undefined} onClick={() => poner({ dif: v })}>{l}</FChip>
+                  ))}
+                </FGrupo>
+                {personas.length > 0 && (
+                  <FGrupo t="Persona">
+                    <FChip on={!f.quien} onClick={() => poner({ quien: '' })}>Todas</FChip>
+                    {personas.map(x => <FChip key={x} on={f.quien === x} n={nCon('quien', x)} onClick={() => poner({ quien: f.quien === x ? '' : x })}>{x}</FChip>)}
+                  </FGrupo>
+                )}
+                <div className="md-entre md-mt8">
+                  <button type="button" className="md-link" disabled={!activos.length} onClick={() => { setF(SIN_FILTROS); setMas(false) }}>Quitar filtros</button>
+                  <button type="button" className="md-btn md-chico" onClick={() => setPanel(false)}>Ver {lista.length}</button>
+                </div>
+              </div>
             )}
+
+            {!panel && activos.length > 0 && (
+              <div className="md-activos">
+                {activos.map(a => <button key={a.k} type="button" className="md-activo" onClick={() => quitar(a.k)} aria-label={`Quitar filtro ${a.t}`}>{a.t}<span aria-hidden>✕</span></button>)}
+                <button type="button" className="md-link" onClick={() => { setF(SIN_FILTROS); setMas(false) }}>Quitar todos</button>
+              </div>
+            )}
+
+            <p className="md-meta md-conteo">{lista.length} {lista.length === 1 ? 'tarea' : 'tareas'}{minLista ? ` · ~${horas(minLista)}` : ''}{q ? ` con «${q}»` : ''}</p>
             {visibles.length
-              ? <div className="md-card md-lista md-mt8">{visibles.map((t, i) => {
+              ? <div className="md-card md-lista">{visibles.map((t, i) => {
                   const grupo = orden === 'feature' && (i === 0 || visibles[i - 1].featureId !== t.featureId) ? (nombreF(t.featureId) || 'Sin feature') : null
                   return (
                     <Fragment key={t.id || i}>
@@ -1381,12 +1526,32 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
                     </Fragment>
                   )
                 })}</div>
-              : <div className="md-card md-mt8"><p className="md-sub">{q || feat !== null ? 'Nada con ese filtro.' : vista === 'atrasadas' ? 'Nada atrasado. Bien.' : 'No hay tareas aquí.'}</p></div>}
+              : <div className="md-card"><p className="md-sub">{q || activos.length ? 'Nada con esos filtros.' : vista === 'atrasadas' ? 'Nada atrasado. Bien.' : 'No hay tareas aquí.'}</p></div>}
             {lista.length > VISIBLES && <button type="button" className="md-btn md-ancho md-mt8" onClick={() => setMas(v => !v)}>{mas ? 'Ver menos' : `Ver las ${lista.length}`}</button>}
+
+            <form className="md-agregar" onSubmit={ev => { ev.preventDefault(); agregar() }}>
+              <input value={nueva} onChange={ev => setNueva(ev.target.value)} placeholder={`＋ Agregar tarea${f.feat ? ` en ${nombreF(f.feat)}` : ` a ${e.name}`}`} aria-label="Nueva tarea" maxLength={200} />
+              <button type="button" className="md-btn md-chico" data-on={nuevaHoy} onClick={() => setNuevaHoy(v => !v)} title="Agendarla para hoy">{nuevaHoy ? '✓ Hoy' : 'Hoy'}</button>
+              <button type="submit" className="md-btn md-chico md-primario" disabled={!nueva.trim() || guardando}>{guardando ? '…' : 'Agregar'}</button>
+            </form>
           </div>
 
           <div>
-            <div className="md-lbl"><span>Ritmo · 8 semanas</span><span>{semanas.reduce((n, x) => n + x.n, 0)} terminadas</span></div>
+            <div className="md-lbl"><span>Próximos 14 días</span>{f.cuando.startsWith('dia:') ? <button type="button" className="md-link" onClick={() => poner({ cuando: '' })}>Ver todos</button> : <span>{dias14.reduce((n, x) => n + x.n, 0)} agendadas</span>}</div>
+            <div className="md-card md-dias14">
+              {dias14.map(x => {
+                const dt = fechaDe(x.d)
+                return (
+                  <button key={x.d} type="button" className="md-dia14" data-on={f.cuando === `dia:${x.d}`} data-hoy={x.d === hoy} disabled={!x.n} onClick={() => poner({ cuando: f.cuando === `dia:${x.d}` ? '' : `dia:${x.d}` })} title={`${cap(diaLargo(x.d))}: ${x.n} ${x.n === 1 ? 'tarea' : 'tareas'}`}>
+                    <span className="md-dia14-l">{DN3[dt.getDay()]}</span>
+                    <span className="md-dia14-barra"><i style={{ height: `${x.n ? Math.max(18, x.n / max14 * 100) : 0}%` }} /></span>
+                    <span className="md-dia14-n">{dt.getDate()}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="md-lbl md-mt12"><span>Ritmo · 8 semanas</span><span>{semanas.reduce((n, x) => n + x.n, 0)} terminadas</span></div>
             <div className="md-card md-ritmo" aria-label="Tareas terminadas por semana">
               {semanas.map((x, i) => (
                 <div key={x.ini} className="md-ritmo-col" title={`Semana del ${corta(x.ini)}: ${x.n}`}>
@@ -1397,20 +1562,30 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
               ))}
             </div>
 
-            {(feats.length > 0 || sinFeature.length > 0) && <>
-              <div className="md-lbl md-mt12"><span>Por feature</span><span className="md-meta">toca uno para filtrar</span></div>
+            {(feats.length > 0 || sinFeatureAb > 0) && <>
+              <div className="md-lbl md-mt12"><span>Por feature</span><span className="md-meta">toca para filtrar</span></div>
               <div className="md-card md-lista">
-                {feats.map(({ f, total, hechas, abiertas: ab }) => (
-                  <button type="button" key={f.id} className="md-row md-feat md-feat-btn" data-on={feat === f.id} onClick={() => { setFeat(feat === f.id ? null : f.id); setMas(false) }} title="Ver solo las tareas de este feature">
-                    <span className="md-dot" style={{ background: f.color || color }} />
-                    <div className="md-grow">
-                      <div className="md-entre"><span>{f.t}</span><span className="md-meta">{total ? `${hechas}/${total}` : 'sin tareas'}</span></div>
-                      <div className="md-ep-barra md-feat-barra"><div style={{ width: `${total ? Math.round(hechas / total * 100) : 0}%`, background: f.color || color }} /></div>
-                      {ab > 0 && <span className="md-meta">{ab} abiertas{f.estado === 'en_riesgo' ? ' · en riesgo' : f.estado === 'en_pausa' ? ' · en pausa' : ''}</span>}
-                    </div>
-                  </button>
+                {feats.map(({ x, total, hechas, abiertas: ab }) => (
+                  <div key={x.id} className="md-feat-caja" data-on={f.feat === x.id}>
+                    <button type="button" className="md-row md-feat md-feat-btn" onClick={() => poner({ feat: f.feat === x.id ? null : x.id, ini: null })} title="Ver solo las tareas de este feature">
+                      <span className="md-dot" style={{ background: x.color || color }} />
+                      <div className="md-grow">
+                        <div className="md-entre"><span>{x.t}</span><span className="md-meta">{total ? `${hechas}/${total}` : 'sin tareas'}</span></div>
+                        <div className="md-ep-barra md-feat-barra"><div style={{ width: `${total ? Math.round(hechas / total * 100) : 0}%`, background: x.color || color }} /></div>
+                        {ab > 0 && <span className="md-meta">{ab} abiertas{x.estado === 'en_riesgo' ? ' · en riesgo' : x.estado === 'en_pausa' ? ' · en pausa' : ''}</span>}
+                      </div>
+                    </button>
+                    {!!x.iniciativas?.length && (
+                      <div className="md-inis">
+                        {x.iniciativas.map(i => {
+                          const ts = vivas.filter(t => t.iniciativaId === i.id)
+                          return <button key={i.id} type="button" className="md-ini" data-on={f.ini === i.id} onClick={() => poner({ feat: x.id, ini: f.ini === i.id ? null : i.id })} title={`Iniciativa · ${i.estado}`}>{i.nombre}<span>{ts.filter(t => t.status === 'Terminada').length}/{ts.length}</span></button>
+                        })}
+                      </div>
+                    )}
+                  </div>
                 ))}
-                {sinFeature.filter(ABIERTA).length > 0 && <button type="button" className="md-link md-feat-sin" onClick={() => { setFeat(feat === '' ? null : ''); setMas(false) }}>{sinFeature.filter(ABIERTA).length} abiertas sin feature{feat === '' ? ' · quitar filtro' : ' · ver'}</button>}
+                {sinFeatureAb > 0 && <button type="button" className="md-link md-feat-sin" onClick={() => poner({ feat: f.feat === '' ? null : '', ini: null })}>{sinFeatureAb} abiertas sin feature{f.feat === '' ? ' · quitar filtro' : ' · ver'}</button>}
               </div>
             </>}
 
@@ -1434,16 +1609,26 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
                 })}
               </div>
             </>}
-
           </div>
         </div>
 
         <div className="md-tab-pie">
           <button type="button" className="md-btn" onClick={cerrar}>Cerrar</button>
-          <Link className="md-btn md-primario" href={`/epicas?e=${encodeURIComponent(e.id)}`}>Ir a la épica en Épicas →</Link>
+          <Link className="md-btn md-primario" href={destino}>Ir a {f.feat && nombreF(f.feat) ? `${nombreF(f.feat)} en` : 'la épica en'} Épicas →</Link>
         </div>
       </div>
     </div>
+  )
+}
+
+function FGrupo({ t, children }: { t: string; children: React.ReactNode }) {
+  return <div className="md-fgrupo"><span className="md-fgrupo-t">{t}</span><div className="md-fgrupo-ops">{children}</div></div>
+}
+function FChip({ on, n, dot, onClick, children }: { on: boolean; n?: number; dot?: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" className="md-fchip" data-on={on} onClick={onClick} disabled={!on && n === 0}>
+      {dot && <i style={{ background: dot }} />}{children}{n != null && <span>{n}</span>}
+    </button>
   )
 }
 
@@ -2241,8 +2426,8 @@ button.md-chip{border:none;cursor:pointer;font-family:inherit}
 .md-tono-gris,.md-tipo-limpieza,.md-tipo-mover{background:#f1ebe1;color:var(--md-tinta2)}
 .md-lbl{display:flex;justify-content:space-between;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--md-tenue);margin:22px 2px 8px}
 .md-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:0 28px;margin-top:14px}
-@media(min-width:900px){.md-grid{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}.md-solo-mac{display:inline}}
 .md-solo-mac{display:none}
+@media(min-width:900px){.md-grid{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}.md-solo-mac{display:inline}}
 .md-col{min-width:0}
 .md-ahora{background:var(--md-papel);border-color:#e6d6bf}
 .md-listo{background:var(--md-verde-bg);border-color:#cfd8bf}.md-listo .md-h3,.md-listo .md-sub{color:var(--md-verde)}
@@ -2361,6 +2546,42 @@ button.md-titulo-ahora{display:block;width:100%;font-family:var(--dia-serif),Geo
 .md-tab-pie{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--md-linea2)}
 button.md-fuerte{font-weight:600}
 @media(max-width:760px){.md-velo{padding:0;align-items:stretch}.md-tablero{border-radius:0;min-height:100%;padding:18px 16px calc(90px + env(safe-area-inset-bottom))}.md-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.md-tab-grid{grid-template-columns:minmax(0,1fr)}.md-tab-tit{font-size:25px}}
+.md-tablero{max-width:1080px}
+.md-tab-cab .md-btn{align-self:flex-start;margin-top:2px}
+.md-tab-ir{display:none}@media(min-width:761px){.md-tab-ir{display:inline-flex}}
+.md-kpi[data-on=true]{border-color:var(--ep);box-shadow:0 0 0 1px var(--ep) inset}
+.md-fbtn[data-on=true]{border-color:var(--md-tinta);color:var(--md-tinta)}
+.md-fpanel{margin-top:8px;background:#fff;border:1px solid var(--md-linea);border-radius:14px;padding:10px 14px 12px}
+.md-fgrupo{display:grid;grid-template-columns:86px minmax(0,1fr);gap:8px;padding:7px 0;border-bottom:1px solid var(--md-linea2);align-items:start}
+.md-fgrupo-t{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--md-tenue);font-weight:600;padding-top:6px}
+.md-fgrupo-ops{display:flex;flex-wrap:wrap;gap:5px}
+.md-fchip{border:1px solid var(--md-linea);background:#fff;border-radius:999px;padding:4px 10px;font:inherit;font-size:12.5px;color:var(--md-tinta2);cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.md-fchip i{width:7px;height:7px;border-radius:50%}.md-fchip span{font-size:10.5px;color:var(--md-tenue);font-weight:600}
+.md-fchip:hover:not(:disabled){border-color:var(--md-tinta2)}.md-fchip:disabled{opacity:.4;cursor:default}
+.md-fchip[data-on=true]{background:var(--md-tinta);border-color:var(--md-tinta);color:#fff}.md-fchip[data-on=true] span{color:rgba(255,255,255,.7)}
+.md-activos{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:8px}
+.md-activo{border:0;background:var(--md-azul-bg);color:var(--md-azul);border-radius:999px;padding:4px 6px 4px 10px;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.md-activo span{font-size:10px;opacity:.7;padding:0 3px}.md-activo:hover span{opacity:1}
+.md-conteo{margin:10px 2px 6px}
+.md-agregar{display:flex;gap:6px;margin-top:10px;align-items:center}
+.md-agregar input{flex:1;min-width:0;border:1px dashed var(--md-linea);border-radius:10px;padding:9px 12px;font:inherit;font-size:13.5px;background:transparent;color:var(--md-tinta)}
+.md-agregar input:focus{border-style:solid;background:#fff;outline:none;border-color:var(--ep)}
+.md-agregar .md-btn[data-on=true]{background:var(--md-verde-bg);border-color:var(--md-verde);color:var(--md-verde)}
+.md-dias14{display:flex;gap:3px;padding:10px 10px 8px}
+.md-dia14{flex:1;min-width:0;border:0;background:none;border-radius:8px;padding:4px 0;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;font:inherit}
+.md-dia14:disabled{cursor:default}.md-dia14:hover:not(:disabled){background:var(--md-suave)}
+.md-dia14[data-on=true]{background:var(--md-tinta)}.md-dia14[data-on=true] span{color:#fff}.md-dia14[data-on=true] i{background:#fff}
+.md-dia14-l{font-size:10px;color:var(--md-tenue)}.md-dia14-n{font-size:12px;color:var(--md-tinta2);font-weight:600}
+.md-dia14[data-hoy=true] .md-dia14-n{color:var(--ep)}
+.md-dia14-barra{height:46px;width:10px;display:flex;align-items:flex-end;background:var(--md-linea2);border-radius:5px;overflow:hidden}
+.md-dia14-barra i{width:100%;background:var(--ep);border-radius:5px}
+.md-feat-caja{border-bottom:1px solid var(--md-linea2)}.md-feat-caja:last-of-type{border-bottom:0}
+.md-feat-caja .md-feat-btn{border-bottom:0}
+.md-feat-caja[data-on=true] .md-feat-btn{background:var(--md-azul-bg)}
+.md-inis{display:flex;flex-wrap:wrap;gap:4px;padding:0 0 9px 19px}
+.md-ini{border:1px solid var(--md-linea2);background:var(--md-papel);border-radius:999px;padding:2px 8px;font:inherit;font-size:11.5px;color:var(--md-tinta2);cursor:pointer;display:inline-flex;gap:5px}
+.md-ini span{color:var(--md-tenue)}.md-ini[data-on=true]{background:var(--md-tinta);color:#fff;border-color:var(--md-tinta)}.md-ini[data-on=true] span{color:rgba(255,255,255,.7)}
+@media(max-width:760px){.md-fgrupo{grid-template-columns:minmax(0,1fr);gap:4px}.md-fgrupo-t{padding-top:0}.md-herr{flex-wrap:wrap}.md-buscar{flex-basis:100%}}
 .md-abriendo{position:fixed;inset:0;z-index:98;display:grid;place-items:center;background:rgba(16,35,64,.35);color:#fff;font:700 13px var(--font-ui)}
 .md-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:var(--md-tinta);color:var(--md-papel);padding:11px 16px;border-radius:12px;display:flex;gap:14px;align-items:center;font-size:14px;z-index:100;max-width:calc(100% - 32px)}
 @media(max-width:700px){.md-toast{bottom:calc(150px + env(safe-area-inset-bottom))}}

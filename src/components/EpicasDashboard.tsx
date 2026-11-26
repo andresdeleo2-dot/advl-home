@@ -595,6 +595,12 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
       const e = q.get('e'); if (e) setFeaturedId(e)
       const fe = q.get('fe'); if (fe && e) pendingFeatureRef.current = fe
       const tsk = q.get('t'); if (tsk && e) setTimeout(() => openTaskEditRef.current?.(e, tsk), 0)
+      // ?ir=epica (desde el tablero de Mi día): bajar directo a «Elige una épica» con esa épica ya destacada.
+      if (q.get('ir') === 'epica' && e) {
+        let n = 0
+        const bajar = () => { const el = document.getElementById('elige-epica'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); else if (n++ < 20) setTimeout(bajar, 150) }
+        setTimeout(bajar, 250)
+      }
       const f = q.get('f'); if (f && ['todas', 'alta', 'vencidas', 'avance', 'estancada', 'multidia', 'arrastre'].includes(f)) setPlanFilter(f as typeof planFilter)
       const ep = q.get('ep'); if (ep) setWeekEpica(ep)
       const df = q.get('df'); if (df && ['todas', 'facil', 'media', 'dificil'].includes(df)) setWeekDif(df as typeof weekDif)
@@ -9540,7 +9546,7 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
         )}
 
         {/* SELECTOR DE ÉPICA — elige el frente a ver (justo arriba de la destacada) */}
-        <div style={{ marginBottom: 22 }}>
+        <div id="elige-epica" style={{ marginBottom: 22, scrollMarginTop: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 9, flexWrap: 'wrap' }}>
             <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: 'rgba(15,35,64,0.55)' }}>Elige una épica</div>
             <button onClick={openNew} style={{ cursor: 'pointer', border: '1px dashed rgba(15,35,64,0.22)', background: 'transparent', borderRadius: 10, padding: '6px 12px', fontSize: 11.5, fontWeight: 700, color: 'rgba(20,35,61,0.55)' }}>+ Nueva épica</button>
