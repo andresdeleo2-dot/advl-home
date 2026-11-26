@@ -2016,14 +2016,6 @@ export default function TiempoClient() {
     const gap = V.freeGaps.find(g => g.len >= d && g.e > now)
     setScheduleAt(gap ? Math.min(1425, Math.max(q, Math.round(gap.s / 15) * 15)) : q)
   }
-  // "Lo más importante hoy" (MIT): hasta 3 tareas foco del día (persiste en el estado).
-  const todayISO = iso(new Date())
-  const mitIds = (data.mit && data.mit.date === todayISO) ? data.mit.ids : []
-  const toggleMit = (taskId: string) => {
-    const cur = mitIds
-    const ids = cur.includes(taskId) ? cur.filter(x => x !== taskId) : (cur.length >= 3 ? cur : [...cur, taskId])
-    save({ mit: { date: todayISO, ids } })
-  }
   const scheduleActivity = (b: ScheduledBlock, createInCal = false) => {
     save({ scheduled: [...(data.scheduled || []), { ...b, date: taskDay }] }); setScheduleAt(null); setSchedulePreset(null)
     if (createInCal) {
@@ -2280,33 +2272,11 @@ export default function TiempoClient() {
                    <button onClick={() => setHoyPanel('tareas')} title="Minimizar el resumen (ver solo tareas)" style={{ border: '1px solid #e2d9cb', background: '#faf7f1', borderRadius: 8, width: 30, height: 30, fontSize: 18, color: '#6b645b', cursor: 'pointer', lineHeight: 1 }}>–</button>
                  </>}
              </div>
-            {isTodayView && (() => {
-              const gHr = Math.floor(now / 60)
-              const greeting = gHr < 12 ? 'Buenos días' : gHr < 19 ? 'Buenas tardes' : 'Buenas noches'
-              const mitTasks = mitIds.map(id => (allTasks || []).find(t => t.task.id === id)).filter(Boolean) as NonNullable<typeof allTasks>
-              const nTasksToday = (tasks || []).length
-              const next = (meetInfo.next && meetInfo.next.start > now)
-                ? { name: meetInfo.next.name, at: meetInfo.next.start, kind: 'junta' as const }
-                : (() => { const r = V.routineNext.find(x => !x.past && x.when !== 'en curso'); return r ? { name: r.name, at: null as number | null, kind: 'rutina' as const, when: r.when } : null })()
-              return (
+            {/* Saludo, «lo más importante» y «lo siguiente» ya viven en Mi día (tus 3 y la agenda): aquí sólo
+                queda lo que es de Tiempo — la meta de trabajo profundo y su racha. */}
+            {isTodayView && (data.focusGoal ?? 0) > 0 && (
                 <div style={{ ...card(24), background: 'linear-gradient(135deg,#faf7f1,#f4ece0)', gap: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <span style={{ fontFamily: SERIF, fontSize: 30, lineHeight: 1.05, color: '#1c1a17' }}>{greeting}, Andrés.</span>
-                      <span style={{ fontSize: 13.5, color: '#8b8379', textTransform: 'capitalize' }}>{longDayOf(today)}</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                      <span style={{ fontFamily: SERIF, fontSize: 34, lineHeight: .9, color: '#8a4b28' }}>{V.freeLabel}</span>
-                      <span style={{ fontSize: 11.5, color: '#a49b90', textTransform: 'uppercase', letterSpacing: '.06em' }}>de tiempo útil</span>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    <span style={{ fontSize: 13, color: '#4c4741', background: '#fff', border: '1px solid #ece3d5', borderRadius: 999, padding: '6px 13px' }}>📋 {nTasksToday} {nTasksToday === 1 ? 'tarea' : 'tareas'} para hoy</span>
-                    {meetInfo.count > 0 && <span style={{ fontSize: 13, color: '#2E5A9E', background: 'rgba(46,90,158,0.06)', border: '1px solid rgba(46,90,158,0.2)', borderRadius: 999, padding: '6px 13px' }}>🗓 {meetInfo.count} {meetInfo.count === 1 ? 'junta' : 'juntas'} · {hm(meetInfo.totalMin)}</span>}
-                    {dayWorkedMin > 0 && <span style={{ fontSize: 13, color: '#4f6238', background: '#eef1e7', border: '1px solid #cfe0c4', borderRadius: 999, padding: '6px 13px' }}>✓ {hm(dayWorkedMin)} ya trabajado</span>}
-                    {insights.streak > 1 && <span style={{ fontSize: 13, color: '#8a4b28', background: '#f7ece2', border: '1px solid #ecd9cb', borderRadius: 999, padding: '6px 13px' }}>🔥 racha de {insights.streak} días</span>}
-                  </div>
-                  {(data.focusGoal ?? 0) > 0 && (() => {
+                  {(() => {
                     const goal = data.focusGoal!, pct = Math.min(100, Math.round((dayWorkedMin / goal) * 100)), met = dayWorkedMin >= goal
                     // Racha de días CUMPLIENDO la meta (hasta hoy, o ayer si hoy aún no) + esta semana.
                     const workOn = (day: string) => (data.history || []).filter(h => h.date === day && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
@@ -2316,7 +2286,7 @@ export default function TiempoClient() {
                     let weekMet = 0, weekElapsed = 0
                     for (const d of weekOfISO(t0)) { if (d > t0) break; weekElapsed++; if (workOn(d) >= goal) weekMet++ }
                     return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                           <span style={LBL}>meta de trabajo profundo</span>
                           <span style={{ fontSize: 13, fontWeight: 600, color: met ? '#4f6238' : '#8a4b28' }}>{met ? '✓ cumplida' : `${hm(dayWorkedMin)} / ${hm(goal)}`}</span>
@@ -2332,28 +2302,8 @@ export default function TiempoClient() {
                       </div>
                     )
                   })()}
-                  {mitTasks.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7, borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
-                      <span style={LBL}>lo más importante hoy</span>
-                      {mitTasks.map(t => (
-                        <div key={t!.task.id} onClick={() => setEditTask({ epicaId: t!.epicaId, epicaName: t!.epicaName, color: t!.color, task: { ...t!.task } })} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14.5, cursor: 'pointer' }}>
-                          <span style={{ width: 8, height: 8, borderRadius: 999, background: t!.color, display: 'block', flexShrink: 0 }} />
-                          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t!.task.t || 'Tarea'}</span>
-                          <button onClick={e => { e.stopPropagation(); startTask({ epicaId: t!.epicaId, task: t!.task }, durByDiff(t!.task)) }} style={{ border: '1px solid #e6cfa4', background: '#f7ece2', borderRadius: 999, padding: '4px 12px', fontSize: 12.5, color: '#8a4b28', cursor: 'pointer', flexShrink: 0 }}>▶ Empezar</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {next && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, color: '#6b645b', borderTop: '1px solid #ece3d5', paddingTop: 13 }}>
-                      <span style={{ color: '#a49b90' }}>Lo siguiente:</span>
-                      <b style={{ fontWeight: 600, color: '#1c1a17' }}>{next.name}</b>
-                      <span style={{ color: '#a49b90' }}>{next.kind === 'junta' && next.at != null ? `· ${clock(next.at)} · en ${hm(next.at - now)}` : next.kind === 'rutina' ? `· ${next.when}` : ''}</span>
-                    </div>
-                  )}
                 </div>
-              )
-            })()}
+            )}
               {/* Tarjeta A — Tiempo útil */}
               <div style={card(26)}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -2629,7 +2579,7 @@ export default function TiempoClient() {
                       )
                     })()}
                     {V.nextGapLabel && <div style={{ fontSize: 12.5, color: '#6f8256', display: 'flex', alignItems: 'center', gap: 6 }}>🕓 Próximo hueco libre: <b style={{ fontWeight: 600 }}>{V.nextGapLabel}</b>. Arrastra una tarea a la cinta de abajo o usa ⏰ para agendarla.</div>}
-                    <TaskPicker tasks={workTasks} epicas={epicasList} rank={manualRank} stale={staleByTask} selId={selTaskId} draggable={sortBy === 'manual'} mitIds={mitIds} onToggleMit={t => toggleMit(t.task.id!)} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
+                    <TaskPicker tasks={workTasks} epicas={epicasList} rank={manualRank} stale={staleByTask} selId={selTaskId} draggable={sortBy === 'manual'} onReorder={reorderTasks} onQuick={t => startTask({ epicaId: t.epicaId, task: t.task }, 0)} onSchedule={t => scheduleTaskAt(t.task.id!)} onRemove={removeFromDayList} onPick={t => { setSelTaskId(t.task.id!); setSelMeetingId(null); setDur(durByDiff(t.task)); setCostOpen(true) }} onEdit={t => setEditTask({ epicaId: t.epicaId, epicaName: t.epicaName, color: t.color, task: { ...t.task } })} />
                     {/* "🔔 Por revisar · en espera": tareas que esperas (no se trabajan, solo se checan). */}
                     {waitTasks.length > 0 && (
                       <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -5398,7 +5348,7 @@ function ScheduleModal({ tasks, defaultStart, presetTaskId, presetName, existing
 }
 
 /** Tareas del día (de Épicas): elegir una para trabajarla, editarla, o arrastrarla para reordenar. */
-function TaskPicker({ tasks, epicas, rank, stale, selId, draggable, mitIds, onToggleMit, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; epicas: { id: string; features?: EpicaFeature[] }[]; rank?: Record<string, number>; stale?: Record<string, number>; selId: string | null; draggable: boolean; mitIds: string[]; onToggleMit: (t: TodayTask) => void; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
+function TaskPicker({ tasks, epicas, rank, stale, selId, draggable, onReorder, onQuick, onSchedule, onRemove, onPick, onEdit }: { tasks: TodayTask[] | null; epicas: { id: string; features?: EpicaFeature[] }[]; rank?: Record<string, number>; stale?: Record<string, number>; selId: string | null; draggable: boolean; onReorder: (ids: string[]) => void; onQuick: (t: TodayTask) => void; onSchedule: (t: TodayTask) => void; onRemove: (t: TodayTask) => void; onPick: (t: TodayTask) => void; onEdit: (t: TodayTask) => void }) {
   const [order, setOrder] = useState<string[] | null>(null)
   const [open, setOpen] = useState(true)
   const orderRef = useRef<string[] | null>(null)
@@ -5459,10 +5409,9 @@ function TaskPicker({ tasks, epicas, rank, stale, selId, draggable, mitIds, onTo
         const on = t.task.id === selId
         const ts = taskStyle(t.task.status)
         const dragging = dragId.current === t.task.id
-        const isMit = mitIds.includes(t.task.id!)
         const pos = display.findIndex(x => x.task.id === t.task.id); const n = display.length
         return (
-          <div key={t.task.id} data-taskid={t.task.id} draggable onDragStart={e => { e.dataTransfer.setData('text/taskid', t.task.id!); e.dataTransfer.effectAllowed = 'copy' }} title="Arrástrala a la cinta “el día” para agendarla" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, borderLeft: isMit ? '3px solid #c2933a' : undefined, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : isMit ? '#f8efdc' : on ? '#f7ece2' : 'transparent' }}>
+          <div key={t.task.id} data-taskid={t.task.id} draggable onDragStart={e => { e.dataTransfer.setData('text/taskid', t.task.id!); e.dataTransfer.effectAllowed = 'copy' }} title="Arrástrala a la cinta “el día” para agendarla" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderRadius: 12, border: `1px solid ${on ? '#b4653a' : 'transparent'}`, background: dragging ? '#efe6d8' : on ? '#f7ece2' : 'transparent' }}>
             <div className="t-dayrow" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {draggable && (
                 <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
@@ -5473,7 +5422,6 @@ function TaskPicker({ tasks, epicas, rank, stale, selId, draggable, mitIds, onTo
                   <span onPointerDown={e => startDrag(e, t.task.id!)} title="Arrastrar para reordenar" style={{ cursor: 'grab', color: '#c2b9ab', fontSize: 15, touchAction: 'none', padding: '0 2px' }}>⠿</span>
                 </span>
               )}
-              <button onClick={() => onToggleMit(t)} title={isMit ? 'Quitar de foco de hoy' : 'Marcar como foco de hoy (máx 3)'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, flexShrink: 0, padding: 0, lineHeight: 1, color: isMit ? '#c2933a' : '#c9c0b3' }}>{isMit ? '★' : '☆'}</button>
               <span onClick={() => onPick(t)} className="t-dayrow-name" style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, cursor: 'pointer', minWidth: 0 }}>
                 {draggable && (() => { const num = rank?.[t.task.id!] ?? (pos + 1); return <span title={`Lugar ${num} en tu orden del día`} style={{ flexShrink: 0, width: 20, height: 20, borderRadius: 999, background: '#efe6d8', color: '#8a4b28', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', fontVariantNumeric: 'tabular-nums', marginTop: 1 }}>{num}</span> })()}
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: t.color, display: 'block', flexShrink: 0, marginTop: 5 }} />

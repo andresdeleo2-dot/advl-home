@@ -645,12 +645,12 @@ export type Prefs = {
   estadoFilter: 'activas' | 'archivadas' | 'todas'; catFilter: string
   planSort: 'plan' | 'prioridad' | 'entrega' | 'avance' | 'epica' | 'roadmap' | 'feature'
   planFilter: 'todas' | 'alta' | 'vencidas' | 'avance' | 'estancada' | 'multidia' | 'arrastre'
-  planMode: 'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'calendario' | 'timeline' | 'resumen' | 'agenda' | 'detalle'
+  planMode: 'dia' | 'semana' | 'ajuste' | '2sem' | '3sem' | 'mes' | 'resumen' | 'detalle'
   weekEpica: string; weekDif: 'todas' | Dif; routinesOpen: boolean; boardHideDone: boolean; dayView: 'lista' | 'tabla'; boardView: 'tablero' | 'tabla'; epicView: 'lista' | 'tabla'; dayCapacity: number
   epicSort: 'grupo' | 'manual' | 'feature' | 'prioridad' | 'entrega' | 'hacer' | 'progreso' | 'nombre' | 'creada'
   epicFilter: 'todas' | 'planeadas' | 'sinplan' | 'vencidas' | 'alta' | 'estancada' | 'multidia' | 'arrastre'
   backlogOpen: boolean; backlogSort: { key: string; dir: 'asc' | 'desc' }
-  backlogView: 'tabla' | 'tablero' | 'tarjetas' | 'semana' | 'detalle' | 'calendario'
+  backlogView: 'tabla' | 'tablero' | 'tarjetas' | 'detalle'
   backlogDone: boolean; backlogFEpica: string; backlogFStatus: string; backlogFPrio: string
   featuredId: string | null
   vistaOpen: boolean
@@ -664,9 +664,18 @@ export const DEFAULT_PREFS: Prefs = {
   featuredId: null,
   vistaOpen: true,
 }
+export const PLAN_MODES: Prefs['planMode'][] = ['dia', 'semana', 'ajuste', '2sem', '3sem', 'mes', 'resumen', 'detalle']
+export const BACKLOG_VIEWS: Prefs['backlogView'][] = ['tabla', 'tablero', 'tarjetas', 'detalle']
 export function loadPrefs(): Prefs {
   if (typeof window === 'undefined') return DEFAULT_PREFS
-  try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') } }
+  try {
+    const p = { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') } as Prefs
+    // Vistas retiradas (2026-11-25): Agenda, Calendario y Timeline del Enfoque, y Calendario y Semana del
+    // Backlog repetían el Roadmap (Calendario y Tablero). Quien las tenía guardadas cae en la más cercana.
+    if (!PLAN_MODES.includes(p.planMode)) p.planMode = 'semana'
+    if (!BACKLOG_VIEWS.includes(p.backlogView)) p.backlogView = 'tabla'
+    return p
+  }
   catch { return DEFAULT_PREFS }
 }
 
