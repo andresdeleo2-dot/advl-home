@@ -29,7 +29,7 @@ const RITUAL_KEY = 'dia.ritual.v1'
 const ponerLS = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* sin almacenamiento */ } }
 const enDias = (n: number) => (n === 0 ? 'hoy' : n === 1 ? 'mañana' : n < 0 ? `hace ${-n} días` : `en ${n} días`)
 const hora = (iso: string) => new Date(iso).toLocaleTimeString('es-MX', { hour: 'numeric', minute: '2-digit' })
-type TipoCaptura = 'nota' | 'cierre' | 'pregunta' | 'tarea'
+type TipoCaptura = 'nota' | 'inbox' | 'cierre' | 'pregunta' | 'tarea'
 type PlanRapido = '' | 'hoy' | 'manana'
 const ABIERTA = (t?: EpicaTask | null) => !!t && t.status !== 'Terminada' && t.status !== 'Archivada'
 const milTokens = (n?: number | null) => (n == null ? null : n >= 1000 ? `${Math.round(n / 100) / 10} mil tokens` : `${n} tokens`)
@@ -1051,9 +1051,10 @@ function sugerirEpica(texto: string, epicas: Epica[]): Epica | null {
 
 const CUANDO: [PlanRapido, string][] = [['', 'Sin fecha'], ['hoy', 'Hoy'], ['manana', 'Mañana']]
 
-/** Cuadro de abajo: anota una idea (llega a Obsidian a las 3:00) o, con «＋ Tarea», la vuelve tarea YA en una épica. */
+/** Cuadro de abajo. Sin botón: va al inbox de Obsidian (00-inbox) a las 3:00, donde el cierre revisa cada idea.
+ *  «Diario»: va a la nota del día. «＋ Tarea»: la vuelve tarea YA en una épica. «Idea»: a la libreta /ideas. */
 function Anotar({ capturar, pendientes, epicas, crearRapida }: {
-  capturar: (t: string) => Promise<void>; pendientes: number; epicas: Epica[] | null
+  capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; pendientes: number; epicas: Epica[] | null
   crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
 }) {
   const [t, setT] = useState('')
@@ -1061,6 +1062,7 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
   const [ok, setOk] = useState('')
   const [comoTarea, setComoTarea] = useState(false)
   const [comoIdea, setComoIdea] = useState(false)    // va directo a Ideas (/ideas), no al diario
+  const [comoDiario, setComoDiario] = useState(false) // a la nota del día (08-diario) en vez del inbox
   const [epicaId, setEpicaId] = useState('')        // '' = «Del diario»
   const [elegida, setElegida] = useState(false)     // ya la escogiste tú: no se cambia sola
   const [cuando, setCuando] = useState<PlanRapido>('')
@@ -1083,8 +1085,14 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
       } else if (comoTarea) {
         const nombre = await crearRapida(v, epicaId, cuando)
         setOk(`Tarea creada en «${nombre}»${cuando ? (cuando === 'hoy' ? ', para hoy' : ', para mañana') : ''}. Queda anotada en tu nota de Obsidian a las 3:00.`)
-      } else setOk('Guardado. Llega a tu nota de Obsidian a las 3:00 y, si es un pendiente, Claude te lo propone como tarea mañana.')
-      setT(''); setEstado(''); setComoTarea(false); setElegida(false); setCuando('')
+      } else if (comoDiario) {
+        await capturar(v, 'nota')
+        setOk('Guardado. Llega a tu nota del día en Obsidian a las 3:00.')
+      } else {
+        await capturar(v, 'inbox')
+        setOk('Guardado. Llega a tu inbox de Obsidian a las 3:00; ahí se revisa si ya la tenías o si es un pendiente.')
+      }
+      setT(''); setEstado(''); setComoTarea(false); setComoDiario(false); setElegida(false); setCuando('')
       setTimeout(() => setOk(''), 5000)
     } catch (e) { setEstado(e instanceof Error ? e.message : String(e)) }
   }
@@ -1113,10 +1121,12 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
         <BotonMic d={d} />
         <input value={mostrado} onChange={e => { setT(e.target.value); if (estado && !guardando) setEstado('') }}
           placeholder={d.escuchando ? 'Te escucho…' : comoTarea ? 'La tarea, con verbo: «Llamar al abogado…»' : 'Anotar algo… o toca el micrófono y habla'} aria-label={comoTarea ? 'Tarea nueva' : 'Anotar algo'} />
-        <button type="button" className="md-tarea-tog" data-on={comoTarea} aria-pressed={comoTarea} onClick={() => { setComoTarea(v => !v); setComoIdea(false); setEstado('') }}
+        <button type="button" className="md-tarea-tog" data-on={comoTarea} aria-pressed={comoTarea} onClick={() => { setComoTarea(v => !v); setComoIdea(false); setComoDiario(false); setEstado('') }}
           title="Volverla tarea en una épica">{comoTarea ? 'Tarea ✓' : '＋ Tarea'}</button>
-        <button type="button" className="md-tarea-tog" data-on={comoIdea} aria-pressed={comoIdea} onClick={() => { setComoIdea(v => !v); setComoTarea(false); setEstado('') }}
+        <button type="button" className="md-tarea-tog" data-on={comoIdea} aria-pressed={comoIdea} onClick={() => { setComoIdea(v => !v); setComoTarea(false); setComoDiario(false); setEstado('') }}
           title="Guardarla en tu libreta de Ideas">{comoIdea ? 'Idea ✓' : 'Idea'}</button>
+        <button type="button" className="md-tarea-tog" data-on={comoDiario} aria-pressed={comoDiario} onClick={() => { setComoDiario(v => !v); setComoTarea(false); setComoIdea(false); setEstado('') }}
+          title="Mandarla a tu nota del día en vez del inbox">{comoDiario ? 'Diario ✓' : 'Diario'}</button>
         <button className="md-enviar" aria-label={comoTarea ? 'Crear tarea' : 'Guardar'} disabled={guardando}>↑</button>
       </form>
       <p className="md-meta md-centro-txt" aria-live="polite">
@@ -1127,7 +1137,8 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
           : ok ? <span className="md-ok-txt">{ok}</span>
           : comoTarea ? '↑ crea la tarea ahora mismo en esa épica.'
           : comoIdea ? <>↑ la guarda en <Link className="md-link" href="/ideas">Ideas</Link>.</>
-          : pendientes ? `${pendientes} ${pendientes === 1 ? 'nota' : 'notas'} esperando el cierre de las 3:00` : ' '}
+          : comoDiario ? '↑ la manda a tu nota del día (llega a las 3:00).'
+          : pendientes ? `${pendientes} ${pendientes === 1 ? 'nota' : 'notas'} esperando el cierre de las 3:00 · sin botón va a tu inbox` : 'Sin botón va a tu inbox de Obsidian.'}
       </p>
     </div>
   )
@@ -1631,7 +1642,7 @@ code{font-size:.9em;background:#f1ebe1;padding:1px 5px;border-radius:5px}
 .md-anotar .md-enviar{width:36px;height:36px;border-radius:50%;border:0;background:var(--md-tinta);color:var(--md-papel);font-size:16px;cursor:pointer;flex:none}
 .md-anotar{padding:6px}.md-anotar input{padding-left:4px}
 .md-tarea-tog{flex:none;border:1px solid var(--md-linea);background:transparent;color:var(--md-tinta);border-radius:999px;padding:7px 11px;font:500 13px var(--dia-ui);cursor:pointer;white-space:nowrap}
-@media (max-width:420px){.md-tarea-tog{padding:6px 8px;font-size:12px}}
+@media (max-width:420px){.md-tarea-tog{padding:6px 7px;font-size:11.5px}.md-anotar{gap:5px}}
 .md-tarea-tog[data-on="true"]{background:#f3e6cf;border-color:#e6cfa4}
 .md-anotar[data-tarea="true"]{border-color:#e6cfa4}
 .md-anotar-tarea{max-width:640px;margin:0 auto 8px;background:#fff;border:1px solid var(--md-linea);border-radius:16px;padding:12px;display:flex;gap:14px;flex-wrap:wrap;box-shadow:0 10px 30px -18px rgba(28,26,23,.45)}
