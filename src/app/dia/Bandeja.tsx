@@ -73,9 +73,11 @@ const SECCIONES: { f: Exclude<Filtro, 'todo'>; t: string; sub: string; color: st
   { f: 'mover', t: 'Notas del inbox', sub: 'A qué carpeta de tu bóveda van.', color: '#8a8378' },
 ]
 
-export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn, avisar }: {
+export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn, avisar, tapada }: {
   data: DiaData; hoy: string; respuestas: Map<string, DiaRespuesta>; epicas: Epica[] | null
   acc: AccionesBandeja; alTerminar: () => void; volver: () => void; abrirEn?: string | null; avisar?: Avisar
+  /** La ficha completa de una tarea está abierta encima (tras «Guardar tarea»): la de aquí espera, para no tapar ni robar el teclado. */
+  tapada?: boolean
 }) {
   const [filtro, setFiltro] = useState<Filtro>('todo')
   const [abierto, setAbierto] = useState<string | null>(abrirEn ?? null)
@@ -179,7 +181,7 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
         </div>
       )}
 
-      {actual && (
+      {actual && !tapada && (
         <Ficha key={actual.id} it={actual} ideas={data.ideasInbox} pos={Math.max(1, idx + 1)} total={Math.max(1, lista.length)} r={respuestas.get(actual.id)} hoy={hoy} epicas={epicas} acc={acc}
           cerrar={() => setAbierto(null)} anterior={() => ir(-1)} siguienteItem={() => ir(1)} hecho={() => siguiente(actual.id)} />
       )}

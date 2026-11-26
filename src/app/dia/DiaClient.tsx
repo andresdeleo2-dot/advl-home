@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import SiteHeader from '@/components/SiteHeader'
 import type { Epica, EpicaTask } from '@/lib/supabase'
@@ -13,6 +13,14 @@ import {
   obsidianUrl, saludEpicas, esperandoAOtros, racha, sumarDias, resolverPlan, diasHasta, textoRecordatorio,
   type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica, type DiaAprendido, type CerebroDatos, type CerebroTarea, type DiaSalud,
 } from '@/lib/dia'
+
+/* La ficha de una tarea es LA MISMA que en Épicas y el Roadmap (resumen, feature, fechas, subtareas, bitácora,
+   Comenzar/Terminar…): se monta Épicas en «modo ficha», encima de Mi día, sin salir de aquí. Carga perezosa;
+   si la descarga falla, se manda a Épicas con la tarea abierta. */
+type FichaProps = { initialEpics: Epica[]; ficha: { eId: string; tid: string; onClose: (escrituras?: Promise<unknown>) => void } }
+const FichaEpicas = lazy<React.ComponentType<FichaProps>>(() => import('@/components/EpicasDashboard')
+  .then(m => ({ default: m.default as unknown as React.ComponentType<FichaProps> }))
+  .catch(() => ({ default: ({ ficha }: FichaProps) => { if (typeof window !== 'undefined') window.location.assign(`/epicas?e=${ficha.eId}&t=${ficha.tid}`); return null } })))
 
 /* ── Utilidades ── */
 const DN = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
@@ -85,9 +93,17 @@ export default function DiaClient() {
       setDia(j as DiaGet); setError(null)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }, [hoy])
-  const cargarEpicas = useCallback(async () => {
-    try { const j = await (await fetch('/api/epicas')).json(); if (j?.ok) setEpicas(j.data as Epica[]) } catch { /* se queda lo anterior */ }
+  const cargarEpicas = useCallback(async (): Promise<Epica[] | null> => {
+    try { const j = await (await fetch('/api/epicas')).json(); if (j?.ok) { setEpicas(j.data as Epica[]); return j.data as Epica[] } } catch { /* se queda lo anterior */ }
+    return null
   }, [])
+  // Ficha completa de una tarea, abierta encima de Mi día (sin irse a Épicas).
+  const [ficha, setFicha] = useState<{ eId: string; tid: string; epics: Epica[] } | null>(null)
+  const cerrarFicha = useCallback((escrituras?: Promise<unknown>) => {
+    setFicha(null)
+    // Se relee DESPUÉS de que lo que cambiaste en la ficha llegó al servidor (si no, se vería el valor viejo).
+    Promise.resolve(escrituras).catch(() => {}).then(() => cargarEpicas())
+  }, [cargarEpicas])
 
   useEffect(() => {
     cargarDia(); cargarEpicas()
@@ -162,6 +178,11 @@ export default function DiaClient() {
     for (const e of epicas || []) for (const t of e.tasks || []) if (t.id) m.set(t.id, { e, t })
     return m
   }, [epicas])
+
+  const abrirTarea = useCallback((tid: string) => {
+    const hit = todas.get(tid)
+    if (hit && epicas) setFicha({ eId: hit.e.id, tid, epics: epicas })
+  }, [todas, epicas])
 
   const sync = useCallback(async (epicaId: string, cambios: { create?: EpicaTask[]; update?: EpicaTask[]; remove?: string[] }) => {
     const j = await postJSON<{ ok: boolean; error?: string; conflicts?: string[] }>('/api/tareas/sync', { epicaId, create: cambios.create || [], update: cambios.update || [], remove: cambios.remove || [] })
@@ -255,6 +276,21 @@ export default function DiaClient() {
     catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
     finally { enCurso.current.delete(tareaId) }
   }, [todas, hoy, sync, cargarEpicas, mostrarAviso])
+
+  /** Palomita de una tarea suelta (Quedó pendiente, También agendado hoy…): queda terminada y sale de la lista,
+   *  con «Deshacer» por si fue sin querer. Si ya estaba hecha hoy, la reabre. */
+  const terminarTarea = useCallback(async (tareaId: string) => {
+    const hit = todas.get(tareaId); if (!hit || enCurso.current.has(tareaId)) return
+    if (!ABIERTA(hit.t) || hechaHoy(hit.t, hoy)) return toggleHecha(tareaId)
+    enCurso.current.add(tareaId)
+    const t = completeRecurring(hit.t, hoy, () => 0)
+    setEpicas(es => es ? es.map(e => e.id !== hit.e.id ? e : { ...e, tasks: e.tasks.map(x => x.id === tareaId ? t : x) }) : es)
+    try {
+      await sync(hit.e.id, { update: [t] }); cargarEpicas()
+      mostrarAviso({ texto: `Hecha: ${hit.t.t}`, deshacer: () => { sync(hit.e.id, { update: [hit.t] }).then(() => cargarEpicas()).catch(() => {}) } })
+    } catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
+    finally { enCurso.current.delete(tareaId) }
+  }, [todas, hoy, toggleHecha, sync, cargarEpicas, mostrarAviso])
 
   /** Cerrar día: lo que no hiciste se mueve ya (mañana u otro día) o se suelta del plan. */
   const reprogramar = useCallback(async (tareaId: string, plan: string | null) => {
@@ -384,6 +420,12 @@ export default function DiaClient() {
       if (c.tipo === 'nuevo') {
         const r = await crearConCampos(k, data?.diario ? `De tu diario del ${diaLargo(data.diario)}.` : '')
         await responder(c.id, c.tipo, 'aceptada', { tareaId: r.tareaId, respuesta: { plan: k.plan || null, featureId: r.featureId } })
+        // «Guardar tarea»: enseguida su ficha completa, aquí mismo, para terminar de llenarla (estimado, subtareas…).
+        if (r.tareaId) {
+          const es = await cargarEpicas()
+          if (es?.some(e => e.id === r.epicaId && e.tasks?.some(t => t.id === r.tareaId))) setFicha({ eId: r.epicaId, tid: r.tareaId, epics: es })
+        }
+        return
       } else {
         const hit = c.tareaId ? todas.get(c.tareaId) : undefined
         if (!hit) throw new Error('Ya no encuentro esa tarea en tus épicas')
@@ -435,9 +477,13 @@ export default function DiaClient() {
     },
     decidir: async (d, texto, k) => {
       let ids: { tareaId?: string; featureId?: string } = {}
-      if (k) { ids = await crearConCampos(k, `Decisión: ${d.pregunta}${texto ? ` → ${texto}` : ''}`); cargarEpicas() }
+      if (k) { ids = await crearConCampos(k, `Decisión: ${d.pregunta}${texto ? ` → ${texto}` : ''}`); if (!ids.tareaId) cargarEpicas() }
       const txt = texto || (k ? `${k.comoFeature ? 'Feature' : 'Tarea'} creada: ${k.titulo}` : '')
       await responder(d.id, 'decision', 'respondida', { tareaId: ids.tareaId, respuesta: { texto: txt, ...ids } })
+      if (ids.tareaId) {
+        const es = await cargarEpicas(); const ep = es?.find(e => e.tasks?.some(t => t.id === ids.tareaId))
+        if (es && ep) setFicha({ eId: ep.id, tid: ids.tareaId, epics: es })
+      }
     },
     contestar: async (q, texto) => { await responder(q.id, 'cerebro', 'respondida', { respuesta: { texto } }) },
   }), [responder, decidirTarjeta, crearConCampos, data, todas, sync, hoy, epicas, cargarEpicas, deshacerRespuesta, epicaDelDiario, respuestas])
@@ -493,7 +539,7 @@ export default function DiaClient() {
         )}
 
         {dia && fecha === hoy && modo === 'ritual' && data && (
-          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} volver={() => ir('hoy')}
+          <Bandeja data={data} hoy={hoy} respuestas={respuestas} epicas={epicas} acc={accBandeja} tapada={!!ficha} alTerminar={() => { setModo('tus3'); window.scrollTo({ top: 0 }) }} volver={() => ir('hoy')}
             avisar={(texto, id) => mostrarAviso({ texto, deshacer: () => { accBandeja.deshacer(id).catch(e => mostrarAviso({ texto: e instanceof Error ? e.message : String(e) })) } })} />
         )}
         {dia && fecha === hoy && modo === 'tus3' && data && (
@@ -506,7 +552,8 @@ export default function DiaClient() {
             prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar}
             pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas} porDecidir={porDecidir.length}
             abrirRitual={() => ir('ritual')} ordenar={() => { setModo('tus3'); setModoElegido(true); window.scrollTo({ top: 0 }) }} irBoveda={() => ir('boveda')} responder={responder} capturar={capturar} aviso={mostrarAviso}
-            cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} ayerPri={ayerPri} reprogramar={reprogramar} moverVarias={moverVarias} />
+            cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} ayerPri={ayerPri} reprogramar={reprogramar} moverVarias={moverVarias}
+            abrirTarea={abrirTarea} terminarTarea={terminarTarea} />
         )}
 
         {dia && fecha === hoy && modo === 'noche' && (
@@ -519,6 +566,11 @@ export default function DiaClient() {
 
         {dia && fecha === hoy && <Pie dia={dia} />}
       </main>
+      {ficha && (
+        <Suspense fallback={<div role="status" aria-live="polite" className="md-abriendo">Abriendo la tarea…</div>}>
+          <FichaEpicas key={ficha.tid} initialEpics={ficha.epics} ficha={{ eId: ficha.eId, tid: ficha.tid, onClose: cerrarFicha }} />
+        </Suspense>
+      )}
       {aviso && (
         <div className="md-toast" role="status">
           <span>{aviso.texto}</span>
@@ -701,6 +753,7 @@ function VistaHoy(p: {
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; aviso: (a: Aviso) => void
   cerebroAbiertas: number; porDecidir: number; crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
   ayerPri: DiaPrioridad[]; reprogramar: (tareaId: string, plan: string | null) => Promise<void>; moverVarias: (ids: string[], plan: string | null) => Promise<void>
+  abrirTarea: (id: string) => void; terminarTarea: (id: string) => Promise<void>
 }) {
   const { dia, data, hoy, epicas } = p
   // Tus 3: lo que propuso Claude, ya ligado a tareas reales; si no hay, lo agendado para hoy.
@@ -769,6 +822,17 @@ function VistaHoy(p: {
         <h1 className="md-fecha">{cap(diaLargo(hoy))}</h1>
         {tres.length > 0 && <span className="md-meta">{hechas} de {tres.length} hechas{p.prioridades.length > 1 && <> · <button type="button" className="md-link" onClick={p.ordenar}>Ordenar</button></>}</span>}
       </div>
+      {tres.length > 0 && <div className="md-avance" role="progressbar" aria-label="Tus 3 de hoy" aria-valuenow={hechas} aria-valuemin={0} aria-valuemax={tres.length}><div style={{ width: `${Math.round(hechas / tres.length * 100)}%` }} /></div>}
+      {/* Avisos (fechas, cumpleaños, salud, automatización) arriba: es lo primero que hay que ver, no algo a media columna. */}
+      {chips.length > 0 && (
+        <div className="md-chips">
+          {chips.map((c, i) => c.accion
+            ? <button key={i} type="button" onClick={c.accion} className={`md-chip md-tono-${c.tono}`}>{c.t}</button>
+            : c.href
+            ? <a key={i} href={c.href} className={`md-chip md-tono-${c.tono}`}>{c.t}</a>
+            : <span key={i} className={`md-chip md-tono-${c.tono}`}>{c.t}</span>)}
+        </div>
+      )}
       {data && (data.frase || data.hechos.length > 0) && <AyerCorto data={data} />}
       {noCorrio && (
         <div className="md-card md-aviso md-mt12">
@@ -785,7 +849,9 @@ function VistaHoy(p: {
           {siguiente ? (
             <div className="md-card md-ahora">
               <p className="md-kicker">Ahora</p>
-              <p className="md-titulo-ahora">{siguiente.hit?.t.t || siguiente.p.t}</p>
+              {siguiente.hit?.t.id
+                ? <button type="button" className="md-titulo-ahora md-abrir" onClick={() => p.abrirTarea(siguiente.hit!.t.id!)} title="Ver la ficha completa">{siguiente.hit.t.t}</button>
+                : <p className="md-titulo-ahora">{siguiente.p.t}</p>}
               <p className="md-meta">{[siguiente.p.epica || siguiente.hit?.e.name, siguiente.p.min ? `${siguiente.p.min} min` : null, siguiente.p.porque].filter(Boolean).join(' · ')}</p>
               <div className="md-fila md-mt12">
                 <Link href={siguiente.hit?.t.id ? `/tiempo?start=${encodeURIComponent(siguiente.hit.t.id)}` : '/tiempo'} className="md-btn md-primario md-grow" title={siguiente.hit ? 'Abre Tiempo con el cronómetro de esta tarea corriendo' : 'Abrir Tiempo'}>▶ Foco{siguiente.p.min ? ` ${siguiente.p.min} min` : ''}</Link>
@@ -801,32 +867,22 @@ function VistaHoy(p: {
             <div className="md-otras">
               {tres.filter(x => x !== siguiente).map((x, i) => {
                 const hecha = !!x.hit && hechaHoy(x.hit.t, hoy)
+                const id = x.hit?.t.id
                 return (
-                  <button key={i} className="md-check" data-hecha={hecha} disabled={!p.puedeMarcar(x.p)} onClick={() => p.marcar(x.p)} title={hecha ? 'Reabrir' : 'Marcar como hecha'}>
-                    <span className="md-caja" aria-hidden>{hecha ? '✓' : ''}</span><span className="md-grow">{x.hit?.t.t || x.p.t}</span>
-                  </button>
+                  <FilaTarea key={i} hecha={hecha} titulo={x.hit?.t.t || x.p.t} meta={x.hit?.e.name || x.p.epica} color={x.hit?.e.color}
+                    marcar={p.puedeMarcar(x.p) ? () => p.marcar(x.p) : undefined} abrir={id ? () => p.abrirTarea(id) : undefined} />
                 )
               })}
             </div>
           )}
 
-          <QuedoPendiente pend={pend} hoy={hoy} epicas={epicas} toggleHecha={p.toggleHecha} reprogramar={p.reprogramar} moverVarias={p.moverVarias} crearRapida={p.crearRapida} />
-
-          {chips.length > 0 && (
-            <div className="md-chips">
-              {chips.map((c, i) => c.accion
-                ? <button key={i} type="button" onClick={c.accion} className={`md-chip md-tono-${c.tono}`}>{c.t}</button>
-                : c.href
-                ? <a key={i} href={c.href} className={`md-chip md-tono-${c.tono}`}>{c.t}</a>
-                : <span key={i} className={`md-chip md-tono-${c.tono}`}>{c.t}</span>)}
-            </div>
-          )}
-
+          <TambienHoy tambien={pend.tambien} terminar={p.terminarTarea} abrir={p.abrirTarea} />
           <Agenda eventos={p.eventos} hoy={hoy} />
+          <QuedoPendiente pend={pend} hoy={hoy} epicas={epicas} terminar={p.terminarTarea} abrir={p.abrirTarea} reprogramar={p.reprogramar} moverVarias={p.moverVarias} crearRapida={p.crearRapida} />
         </div>
 
         <div className="md-col">
-          {salud.length > 0 && <EpicasAtencion salud={salud} hoy={hoy} todas={todasEpicas} setTodas={setTodasEpicas} reprogramar={p.reprogramar} />}
+          {salud.length > 0 && <EpicasAtencion salud={salud} hoy={hoy} todas={todasEpicas} setTodas={setTodasEpicas} reprogramar={p.reprogramar} abrir={p.abrirTarea} />}
           {!epicas && <div className="md-card md-sk" style={{ height: 180 }} />}
 
           {esperando.length > 0 && (
@@ -839,7 +895,7 @@ function VistaHoy(p: {
                   return (
                     <div key={w.t.id} className="md-row">
                       <span className="md-dot" style={{ background: (w.dias ?? 0) >= 4 ? 'var(--md-ambar)' : 'var(--md-linea2)' }} />
-                      <div className="md-grow">{w.t.t}<div className="md-meta">{[w.quien, w.e.name, w.dias != null ? `${w.dias} ${w.dias === 1 ? 'día' : 'días'}` : null].filter(Boolean).join(' · ')}</div></div>
+                      <div className="md-grow">{w.t.id ? <button type="button" className="md-abrir" onClick={() => p.abrirTarea(w.t.id!)}>{w.t.t}</button> : w.t.t}<div className="md-meta">{[w.quien, w.e.name, w.dias != null ? `${w.dias} ${w.dias === 1 ? 'día' : 'días'}` : null].filter(Boolean).join(' · ')}</div></div>
                       <a className="md-btn md-chico" href={wa} target="_blank" rel="noopener noreferrer">Recordarle</a>
                     </div>
                   )
@@ -884,10 +940,40 @@ function PorDecidir({ n, pendientes, decisiones, cerebro, abrir }: { n: number; 
   )
 }
 
+/** Renglón de tarea: la palomita la termina (o la reabre) y el texto abre su ficha completa aquí mismo. */
+function FilaTarea({ titulo, meta, color, hecha, marcar, abrir, children }: {
+  titulo: string; meta?: string | null; color?: string; hecha?: boolean; marcar?: () => void; abrir?: () => void; children?: React.ReactNode
+}) {
+  return (
+    <div className="md-row md-row-pend md-tarea" data-hecha={hecha || undefined}>
+      <button type="button" className="md-circ" style={{ ['--c' as string]: color || 'var(--md-linea)' }} disabled={!marcar} onClick={marcar}
+        aria-label={hecha ? `Reabrir «${titulo}»` : `Marcar «${titulo}» como hecha`} title={hecha ? 'Reabrir' : 'Marcar como hecha'}>{hecha ? '✓' : ''}</button>
+      <div className="md-grow">
+        {abrir ? <button type="button" className="md-abrir" onClick={abrir} title="Ver la ficha completa">{titulo}</button> : <span className="md-tarea-tit">{titulo}</span>}
+        {meta && <div className="md-meta">{meta}</div>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/** Lo agendado hoy que no está en tus 3. */
+function TambienHoy({ tambien, terminar, abrir }: { tambien: Hit[]; terminar: (id: string) => Promise<void>; abrir: (id: string) => void }) {
+  if (!tambien.length) return null
+  return (
+    <section>
+      <div className="md-lbl"><span>También agendado hoy</span><span>{tambien.length}</span></div>
+      <div className="md-card md-lista">
+        {tambien.map(({ e, t }) => <FilaTarea key={t.id} titulo={t.t} meta={e.name} color={e.color} marcar={() => terminar(t.id)} abrir={() => abrir(t.id)} />)}
+      </div>
+    </section>
+  )
+}
+
 /** Lo que se quedó sin hacer: lo agendado hoy fuera de tus 3, lo de ayer y lo atrasado de antes. Cada una se mueve a hoy, mañana o se suelta. */
-function QuedoPendiente({ pend, hoy, epicas, toggleHecha, reprogramar, moverVarias, crearRapida }: {
+function QuedoPendiente({ pend, hoy, epicas, terminar, abrir, reprogramar, moverVarias, crearRapida }: {
   pend: { tambien: Hit[]; deAyer: (Hit & { porque: string })[]; antes: Hit[]; sueltas: DiaPrioridad[] }; hoy: string; epicas: Epica[] | null
-  toggleHecha: (id: string) => Promise<void>; reprogramar: (id: string, plan: string | null) => Promise<void>; moverVarias: (ids: string[], plan: string | null) => Promise<void>
+  terminar: (id: string) => Promise<void>; abrir: (id: string) => void; reprogramar: (id: string, plan: string | null) => Promise<void>; moverVarias: (ids: string[], plan: string | null) => Promise<void>
   crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
 }) {
   const CLAVE = 'dia.sueltas.vistas.v1'
@@ -903,27 +989,11 @@ function QuedoPendiente({ pend, hoy, epicas, toggleHecha, reprogramar, moverVari
     </div>
   )
   const Fila = ({ e, t, meta }: Hit & { meta: string }) => (
-    <div className="md-row md-row-pend">
-      <span className="md-dot" style={{ background: e.color || 'var(--md-linea)' }} />
-      <div className="md-grow"><Link className="md-fila-link md-tinta" href={`/epicas?e=${encodeURIComponent(e.id)}&t=${encodeURIComponent(t.id)}`}>{t.t}</Link><div className="md-meta">{meta}</div></div>
-      <Botones id={t.id} />
-    </div>
+    <FilaTarea titulo={t.t} meta={meta} color={e.color} marcar={() => terminar(t.id)} abrir={() => abrir(t.id)}><Botones id={t.id} /></FilaTarea>
   )
   const nAyer = pend.deAyer.length + sueltas.length
   return (
     <>
-      {pend.tambien.length > 0 && (
-        <section>
-          <div className="md-lbl"><span>También agendado hoy</span><span>{pend.tambien.length}</span></div>
-          <div className="md-otras">
-            {pend.tambien.map(({ e, t }) => (
-              <button key={t.id} type="button" className="md-check" onClick={() => toggleHecha(t.id)} title="Marcar como hecha">
-                <span className="md-caja" aria-hidden /><span className="md-grow">{t.t}<span className="md-meta"> · {e.name}</span></span>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
       {(nAyer > 0 || pend.antes.length > 0) && (
         <section>
           <div className="md-lbl"><span>Quedó pendiente</span><span>{nAyer + pend.antes.length}</span></div>
@@ -962,23 +1032,39 @@ function QuedoPendiente({ pend, hoy, epicas, toggleHecha, reprogramar, moverVari
   )
 }
 
-/** Épicas que piden atención (vencidas, atrasadas, quietas, esperando). Las que van al día se resumen en una línea. */
-function EpicasAtencion({ salud, hoy, todas, setTodas, reprogramar }: { salud: SaludEpica[]; hoy: string; todas: boolean; setTodas: (f: (v: boolean) => boolean) => void; reprogramar: (id: string, plan: string | null) => Promise<void> }) {
+/** Avance de una épica: terminadas del total (sin archivadas) y cuántas cerraste en los últimos 7 días. */
+function avanceEpica(e: Epica, hoy: string) {
+  const vivas = (e.tasks || []).filter(t => t.status !== 'Archivada')
+  const hechas = vivas.filter(t => t.status === 'Terminada')
+  const desde = sumarDias(hoy, -6)
+  const semana = hechas.filter(t => (t.doneAt || '').slice(0, 10) >= desde).length
+  return { total: vivas.length, hechas: hechas.length, pct: vivas.length ? Math.round(hechas.length / vivas.length * 100) : 0, semana }
+}
+
+/** Épicas que piden atención (vencidas, atrasadas, quietas, esperando), con su avance y lo que se movió esta semana.
+ *  Las que van al día se resumen en una línea. El paso a mover abre su ficha aquí mismo. */
+function EpicasAtencion({ salud, hoy, todas, setTodas, reprogramar, abrir }: { salud: SaludEpica[]; hoy: string; todas: boolean; setTodas: (f: (v: boolean) => boolean) => void; reprogramar: (id: string, plan: string | null) => Promise<void>; abrir: (id: string) => void }) {
   const atencion = salud.filter(s => s.estado !== 'al_dia' && s.estado !== 'pausa')
   const resto = salud.length - atencion.length
   const lista = todas ? salud : atencion
+  // La semana en una línea: cuánto cerraste y dónde. Da contexto sin otra tarjeta.
+  const semana = salud.map(s => ({ s, n: avanceEpica(s.e, hoy).semana })).filter(x => x.n > 0).sort((a, b) => b.n - a.n)
+  const totalSemana = semana.reduce((n, x) => n + x.n, 0)
   return (
     <section>
-      <div className="md-lbl"><span>Épicas que piden atención</span><Link className="md-link" href="/epicas">Épicas ↗</Link></div>
+      <div className="md-lbl"><span>Tus épicas</span><Link className="md-link" href="/epicas">Épicas ↗</Link></div>
+      <p className="md-meta md-semana-ep">{totalSemana
+        ? <>Esta semana cerraste <b>{totalSemana}</b> {totalSemana === 1 ? 'tarea' : 'tareas'} en {semana.length} {semana.length === 1 ? 'épica' : 'épicas'} · más en <b>{semana[0].s.e.name}</b> ({semana[0].n})</>
+        : <>Esta semana todavía no cierras tareas en tus épicas.</>}</p>
       {lista.length > 0
-        ? <div className="md-card md-lista">{lista.map(s => <FilaEpica key={s.e.id} s={s} hoy={hoy} reprogramar={reprogramar} />)}</div>
+        ? <div className="md-card md-lista">{lista.map(s => <FilaEpica key={s.e.id} s={s} hoy={hoy} reprogramar={reprogramar} abrir={abrir} />)}</div>
         : <div className="md-card"><p className="md-sub">Todas tus épicas van al día.</p></div>}
       {resto > 0 && <p className="md-meta md-mt8">{todas ? 'Viendo todas' : `${resto} van al día o en pausa`} · <button type="button" className="md-link" onClick={() => setTodas(v => !v)}>{todas ? 'Solo las que piden atención' : 'Ver todas'}</button></p>}
     </section>
   )
 }
 
-function FilaEpica({ s, hoy, reprogramar }: { s: SaludEpica; hoy: string; reprogramar: (id: string, plan: string | null) => Promise<void> }) {
+function FilaEpica({ s, hoy, reprogramar, abrir }: { s: SaludEpica; hoy: string; reprogramar: (id: string, plan: string | null) => Promise<void>; abrir: (id: string) => void }) {
   const color = s.estado === 'vencidas' ? 'var(--md-rojo)' : s.estado === 'al_dia' ? 'var(--md-verde)' : s.estado === 'quieta' || s.estado === 'pausa' ? 'var(--md-tenue)' : 'var(--md-ambar)'
   // Lo que conviene mover: la vencida o atrasada más vieja; si no hay, el siguiente paso.
   const abiertas = (s.e.tasks || []).filter(t => ABIERTA(t) && t.status !== 'Esperando')
@@ -987,13 +1073,20 @@ function FilaEpica({ s, hoy, reprogramar }: { s: SaludEpica; hoy: string; reprog
     : s.siguiente
   const t = foco || s.siguiente
   const porque = !t ? null : t.due && t.due < hoy ? `venció el ${corta(t.due)}` : t.plan && t.plan < hoy ? `agendada el ${corta(t.plan)}` : t.plan === hoy ? 'agendada hoy' : t.plan ? `agendada el ${corta(t.plan)}` : null
+  const av = avanceEpica(s.e, hoy)
   return (
-    <div className="md-row">
-      <span className="md-dot" style={{ background: color }} />
+    <div className="md-row md-ep">
+      <span className="md-dot" style={{ background: s.e.color || color }} />
       <div className="md-grow">
         <div className="md-entre"><Link href={`/epicas?e=${encodeURIComponent(s.e.id)}`} className="md-fila-link"><span className="md-fuerte">{s.e.name}</span></Link><span className="md-meta" style={{ color }}>{s.etiqueta}</span></div>
+        {av.total > 0 && (
+          <div className="md-ep-av" title={`${av.hechas} de ${av.total} tareas terminadas`}>
+            <div className="md-ep-barra"><div style={{ width: `${av.pct}%`, background: s.e.color || 'var(--md-verde)' }} /></div>
+            <span className="md-meta">{av.hechas}/{av.total}{av.semana > 0 && <span className="md-ep-sem"> · +{av.semana} esta semana</span>}</span>
+          </div>
+        )}
         {t
-          ? <div className="md-meta"><Link className="md-fila-link md-tinta2" href={`/epicas?e=${encodeURIComponent(s.e.id)}&t=${encodeURIComponent(t.id || '')}`}>{t.t}</Link>{porque ? ` · ${porque}` : ''}</div>
+          ? <div className="md-meta">Siguiente: {t.id ? <button type="button" className="md-abrir md-abrir-chico" onClick={() => abrir(t.id!)}>{t.t}</button> : t.t}{porque ? ` · ${porque}` : ''}</div>
           : <div className="md-meta">Sin siguiente paso · <Link className="md-link" href={`/epicas?e=${encodeURIComponent(s.e.id)}`}>agregar uno</Link></div>}
       </div>
       {t?.id && t.plan !== hoy && <button type="button" className="md-btn md-chico" title="Agendar este paso para hoy" onClick={() => reprogramar(t.id!, hoy)}>Hoy</button>}
@@ -1790,7 +1883,7 @@ button.md-chip{border:none;cursor:pointer;font-family:inherit}
 .md-acciones{display:flex;gap:4px;flex:none;flex-wrap:wrap;justify-content:flex-end}
 .md-btn-tenue{color:var(--md-tinta2)}
 .md-row-pend{align-items:center}
-@media(max-width:700px){.md-row-pend{flex-wrap:wrap}.md-row-pend .md-acciones{width:100%;justify-content:flex-start;padding-left:19px}}
+@media(max-width:700px){.md-row-pend{flex-wrap:wrap}.md-row-pend .md-acciones{width:100%;justify-content:flex-start;padding-left:19px}.md-tarea .md-acciones{padding-left:32px}}
 .md-antes{margin-top:10px}
 .md-tinta{color:var(--md-tinta)}.md-tinta2{color:var(--md-tinta2)}
 .md-pendientes{display:flex;justify-content:space-between;align-items:center;width:100%;margin-bottom:12px;cursor:pointer;background:var(--md-suave);border-color:#ead8c3;font:inherit;color:inherit;text-align:left}
@@ -1842,6 +1935,22 @@ button.md-chip{border:none;cursor:pointer;font-family:inherit}
 .md-aviso{background:var(--md-suave);border-color:#ead8c3}
 .md-error{background:var(--md-rojo-bg);border-color:#e8cbc2;color:var(--md-rojo);margin-bottom:12px}
 .md-pie{text-align:center;font-size:12px;color:var(--md-tenue);margin:26px 0 0}
+.md-avance{height:4px;border-radius:4px;background:var(--md-linea2);overflow:hidden;margin-top:8px}.md-avance>div{height:100%;background:var(--md-verde);border-radius:4px;transition:width .3s}
+.md-abrir{background:none;border:0;padding:0;margin:0;font:inherit;color:var(--md-tinta);text-align:left;cursor:pointer;line-height:1.35}
+.md-abrir:hover{color:var(--md-acento);text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+.md-abrir-chico{font-size:inherit;color:var(--md-tinta2)}
+button.md-titulo-ahora{display:block;width:100%;font-family:var(--dia-serif),Georgia,serif;font-size:25px;line-height:1.2;margin:6px 0 4px}
+.md-tarea .md-grow{min-width:0}
+.md-tarea[data-hecha] .md-abrir,.md-tarea[data-hecha] .md-tarea-tit{color:var(--md-tenue);text-decoration:line-through}
+.md-circ{flex:none;width:22px;height:22px;border-radius:50%;border:2px solid var(--c);background:transparent;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;cursor:pointer;padding:0;transition:background .15s,border-color .15s}
+.md-circ:hover:not(:disabled){background:color-mix(in srgb,var(--c) 22%,transparent)}
+.md-circ:disabled{opacity:.4;cursor:default}
+.md-tarea[data-hecha] .md-circ{background:var(--md-verde);border-color:var(--md-verde)}
+.md-semana-ep{margin:-2px 0 8px}
+.md-ep-av{display:flex;align-items:center;gap:8px;margin:5px 0 3px}
+.md-ep-barra{flex:1;max-width:160px;height:4px;border-radius:4px;background:var(--md-linea2);overflow:hidden}.md-ep-barra>div{height:100%;border-radius:4px}
+.md-ep-sem{color:var(--md-verde);font-weight:600}
+.md-abriendo{position:fixed;inset:0;z-index:98;display:grid;place-items:center;background:rgba(16,35,64,.35);color:#fff;font:700 13px var(--font-ui)}
 .md-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:var(--md-tinta);color:var(--md-papel);padding:11px 16px;border-radius:12px;display:flex;gap:14px;align-items:center;font-size:14px;z-index:100;max-width:calc(100% - 32px)}
 @media(max-width:700px){.md-toast{bottom:calc(150px + env(safe-area-inset-bottom))}}
 .md-sk{background:linear-gradient(90deg,#f3eee6,#faf7f1,#f3eee6);background-size:200% 100%;animation:md-brillo 1.3s infinite;border:0}
