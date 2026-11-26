@@ -202,6 +202,7 @@ export default function TiempoClient() {
   const [sortBy, setSortBy] = useState<'manual' | 'plan' | 'alfa' | 'prioridad' | 'dificultad'>('plan')
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
+  const pushFallos = useRef(0)   // reintentos seguidos del PUT fallido (espera creciente)
   // Hasta la PRIMERA lectura válida del servidor no se sube nada: un blob viejo o recién creado
   // en este dispositivo pisaría el historial real (y los demás dispositivos lo adoptarían).
   const syncedRef = useRef(false)
@@ -522,7 +523,9 @@ export default function TiempoClient() {
         const sess = (localSess && inc.session)
           ? ((localSess.mod || 0) >= (inc.session.mod || 0) ? localSess : inc.session)
           : (localSess && !inc.session) ? (endedElsewhere ? null : localSess) : inc.session
-        setData({ ...inc, session: sess })
+        const next = { ...inc, session: sess }
+        dataRef.current = next   // un save() antes del siguiente render ya mezcla sobre esto, no sobre la copia vieja
+        setData(next)
       } catch {}
     }
     document.addEventListener('visibilitychange', onVis)
@@ -686,6 +689,7 @@ export default function TiempoClient() {
   // Sube lo pendiente (debounce o flush). Con keepalive (ocultar/cerrar/desmontar) la respuesta igual se
   // procesa si la página sigue viva: sin eso los renglones pendientes nunca se daban por confirmados.
   function pushNow(keepalive = false) {
+    if (pushTimer.current) { clearTimeout(pushTimer.current); pushTimer.current = null }
     const body = pendingPush.current; pendingPush.current = null
     if (!body) return   // ya lo subió flush(): un PUT de `null` dejaría el estado del server VACÍO
     const json = JSON.stringify({ data: body })
@@ -703,7 +707,16 @@ export default function TiempoClient() {
         }
         setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('')
       })
-      .catch(e => { setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] guardado de estado falló:', e) })
+      .then(() => { pushFallos.current = 0 })
+      .catch(e => {
+        setSaveErr(true); setSaveErrMsg(String(e?.message || e).slice(0, 180)); console.error('[tiempo] guardado de estado falló:', e)
+        // Sin reintento, lo que no subió (p. ej. una sesión terminada sin señal) se quedaba sólo en este equipo
+        // y otro equipo lo pisaba después. Se vuelve a intentar (5 s, 15 s, 45 s… hasta 2 min) con lo más nuevo.
+        if (!pendingPush.current) pendingPush.current = body
+        const espera = Math.min(120_000, 5000 * 3 ** pushFallos.current); pushFallos.current++
+        if (pushTimer.current) clearTimeout(pushTimer.current)
+        pushTimer.current = setTimeout(() => pushNow(), espera)
+      })
       .finally(() => { pushingRef.current = false })
   }
   const patchBlock = (id: string, patch: Partial<AppData['blocks'][number]>) =>
@@ -718,7 +731,6 @@ export default function TiempoClient() {
 
   /* ── Cálculo (portado de renderVals, tono "cuidadora") ─────────────────── */
   const V = useMemo(() => {
-    const caring = true
     const bed = data.bed, sleepGoal = data.sleep, session = data.session
     // Sólo los bloques protegidos que aplican HOY (según sus días) + reuniones del calendario.
     const dow = new Date().getDay()
@@ -731,7 +743,10 @@ export default function TiempoClient() {
 
     // Tiempo útil: minutos libres entre ahora y dormir. UNIÓN de bloques (blocks ya
     // está ordenado), para no restar dos veces lo que una reunión y la rutina comparten.
-    let free = Math.max(0, bed - now)
+    // Entre la medianoche y la hora de despertar (con hora de dormir de noche) ya es tiempo de sueño: sin esto,
+    // a las 00:30 con cama a las 22:30 decía «te quedan 21 h 50 min».
+    const deMadrugada = bed > 720 && now < (bed + sleepGoal) % 1440
+    let free = deMadrugada ? 0 : Math.max(0, bed - now)
     let coveredEnd = now
     for (const b of blocks) {
       const s = Math.max(b.start, now), e = Math.min(b.start + b.dur, bed)
@@ -740,12 +755,12 @@ export default function TiempoClient() {
       if (e > from) free -= (e - from)
       coveredEnd = Math.max(coveredEnd, e)
     }
-    free = Math.max(0, free)
+    free = deMadrugada ? 0 : Math.max(0, free)
 
     // Cap en `bed`: un bloque/reunión que empieza DESPUÉS de dormir no cuenta como
     // "próxima interrupción" (si no, la ventana se pasaría del sueño).
     const nextBlock = blocks.find(b => b.start + b.dur > now && b.start < bed)
-    const windowMins = nextBlock ? Math.max(0, nextBlock.start - now) : Math.max(0, bed - now)
+    const windowMins = deMadrugada ? 0 : nextBlock ? Math.max(0, nextBlock.start - now) : Math.max(0, bed - now)
     // Redondea HACIA ABAJO a múltiplos de 15 (malla del slider): la duración "segura"
     // nunca excede la ventana; si la ventana es <15, safeMax=0 y la píldora se deshabilita.
     const safeMax = Math.floor(windowMins / 15) * 15
@@ -793,17 +808,17 @@ export default function TiempoClient() {
     if (!hitAny) {
       verdictKicker = 'cabe sin costo'
       verdictTitle = 'Terminas a las ' + clock(simEnd) + ' y no tocas nada.'
-      verdictText = (caring ? 'Después te quedan ' : 'Margen posterior: ') + hm(Math.max(0, free - dur)) + ' de tiempo útil, y tu rutina sigue intacta.'
+      verdictText = 'Después te quedan ' + hm(Math.max(0, free - dur)) + ' de tiempo útil, y tu rutina sigue intacta.'
       verdictBg = '#eef1e7'; verdictBorder = '#dbe2cd'; verdictFg = '#4f6238'
     } else if (sleepDebt < 1) {
       verdictKicker = 'cabe con costo'
       verdictTitle = 'Terminas a las ' + clock(simEnd) + ' invadiendo ' + hm(invaded) + ' de tiempo protegido.'
-      verdictText = (caring ? 'Duermes igual, pero lo pagas con ' : 'Costo: ') + afectados.map(a => a.name.toLowerCase()).join(' y ') + '.'
+      verdictText = 'Duermes igual, pero lo pagas con ' + afectados.map(a => a.name.toLowerCase()).join(' y ') + '.'
       verdictBg = '#f7ece2'; verdictBorder = '#ecd9cb'; verdictFg = '#8a4b28'
     } else {
       verdictKicker = 'sale de tu sueño'
       verdictTitle = 'Terminarías a las ' + clock(simEnd) + ' y dormirías ' + hm(sleepGoal - sleepDebt) + '.'
-      verdictText = (caring ? 'Esto ya no se paga con ocio: se paga con mañana. ' : 'Déficit de sueño: ' + hm(sleepDebt) + '. ') + (safeMax >= 1 ? hm(safeMax) + ' ahora deja el día intacto.' : 'Ahora ya no queda margen sin costo.')
+      verdictText = 'Esto ya no se paga con ocio: se paga con mañana. ' + (safeMax >= 1 ? hm(safeMax) + ' ahora deja el día intacto.' : 'Ahora ya no queda margen sin costo.')
       verdictBg = '#f6e3dd'; verdictBorder = '#e8cabf'; verdictFg = '#8a3c2a'
     }
 
@@ -1235,6 +1250,9 @@ export default function TiempoClient() {
       dot: AREAS[x.h.area] ? AREAS[x.h.area].color : '#8b8379', done: x.h.done !== false, taskId: x.h.taskId,
     })), [data.history, taskDay])
   const dayWorkedMin = useMemo(() => data.history.filter(h => h.date === taskDay && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0), [data.history, taskDay])
+  // Con la sesión de trabajo en curso: la meta y «Llevas…» la cuentan mientras corre (antes sólo al terminarla,
+  // y el widget de foco de Épicas, que sí la cuenta, decía otra cosa).
+  const dayWorkedLive = dayWorkedMin + (data.session && data.session.area === 'trabajo' && taskDay === iso(new Date()) ? Math.max(0, Math.round(sessionElapsed(data.session, now))) : 0)
   // CALIBRACIÓN de estimados (real-vs-estimado por dificultad) — misma lógica y misma bitácora que
   // ya usa Épicas (core.tsx): antes sólo Épicas la calculaba y Tiempo estimaba a ciegas.
   const calibration = useMemo(() => calcCalibration((allTasks || []).map(t => t.task)), [allTasks])
@@ -1633,9 +1651,19 @@ export default function TiempoClient() {
     const rawSegs = (s.segs && s.segs.length) ? allSegs.map(([a, b]) => [toMin(a), toMin(b)] as [number, number]) : []
     const segments = rawSegs.length && rawSegs.every(([a, b]) => b > a) ? rawSegs : undefined   // omite si alguno cruza medianoche
     const entry: HistoryRow = { date: entryDay, name: s.name, area: s.area, start: startMin, dur: elapsed, done: s.taskId ? markDone : true, ...(segments ? { segments } : {}), ...(s.taskId ? { epicaId: s.epicaId, taskId: s.taskId, logId } : {}), ...(s.routineRef ? { routineRef: s.routineRef } : {}) }
-    save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat([entry]) })
-    setTaskDay(entryDay)   // salta al día donde cayó el registro (normalmente hoy)
-    showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}`, () => { save({ history: dataRef.current.history.filter(h => h !== entry) }); revertLogToEpica(entry, markDone) })
+    // Cruzó la medianoche: lo de antes de las 12 queda en el día en que empezó y el resto en hoy (antes todo
+    // caía en ayer: la meta y el «trabajado» de hoy no lo veían y la línea de ayer se dibujaba pasadas las 24:00).
+    const rows: HistoryRow[] = [entry]
+    if (entryDay !== today && startMin + elapsed > 1440) {
+      const antes = Math.max(1, 1440 - startMin), despues = elapsed - antes
+      rows[0] = { ...entry, dur: antes }; delete rows[0].segments
+      if (despues > 0) { const { logId: _l, segments: _s, ...resto } = entry; void _l; void _s; rows.push({ ...resto, date: today, start: 0, dur: despues }) }
+    }
+    const claves = new Set(rows.map(rowKey))
+    save({ session: null, sessionEnd: Date.now(), history: dataRef.current.history.concat(rows) })
+    setTaskDay(rows[rows.length - 1].date)   // salta al día donde terminó el registro (normalmente hoy)
+    // Deshacer por clave (no por identidad del objeto: si otra pestaña o el servidor reemplazó el historial, no borraba nada).
+    showUndo(`✓ Registré ${hm(elapsed)} en «${s.name}»${markDone ? ' · marcada hecha' : ''}${rows.length > 1 ? ' · repartido entre ayer y hoy' : ''}`, () => { save({ history: dataRef.current.history.filter(h => !claves.has(rowKey(h))) }); revertLogToEpica(entry, markDone) })
     if (s.taskId && s.epicaId) {
       const tt = tasksRef.current.find(x => x.task.id === s.taskId)
       if (tt) {
@@ -2277,7 +2305,7 @@ export default function TiempoClient() {
             {isTodayView && (data.focusGoal ?? 0) > 0 && (
                 <div style={{ ...card(24), background: 'linear-gradient(135deg,#faf7f1,#f4ece0)', gap: 16 }}>
                   {(() => {
-                    const goal = data.focusGoal!, pct = Math.min(100, Math.round((dayWorkedMin / goal) * 100)), met = dayWorkedMin >= goal
+                    const goal = data.focusGoal!, pct = Math.min(100, Math.round((dayWorkedLive / goal) * 100)), met = dayWorkedLive >= goal
                     // Racha de días CUMPLIENDO la meta (hasta hoy, o ayer si hoy aún no) + esta semana.
                     const workOn = (day: string) => (data.history || []).filter(h => h.date === day && h.area === 'trabajo').reduce((s, h) => s + h.dur, 0)
                     const t0 = iso(new Date())
@@ -2289,7 +2317,7 @@ export default function TiempoClient() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                           <span style={LBL}>meta de trabajo profundo</span>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: met ? '#4f6238' : '#8a4b28' }}>{met ? '✓ cumplida' : `${hm(dayWorkedMin)} / ${hm(goal)}`}</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: met ? '#4f6238' : '#8a4b28' }}>{met ? '✓ cumplida' : `${hm(dayWorkedLive)} / ${hm(goal)}`}</span>
                         </div>
                         <div style={{ height: 8, background: '#efe7d9', borderRadius: 999, overflow: 'hidden' }}>
                           <div style={{ width: `${pct}%`, height: '100%', background: met ? 'linear-gradient(90deg,#6f8256,#8fae74)' : 'linear-gradient(90deg,#b4653a,#d98a55)', borderRadius: 999, transition: 'width .4s' }} />
@@ -2298,7 +2326,7 @@ export default function TiempoClient() {
                           {streak > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: streak >= 5 ? '#b4653a' : '#8a4b28' }}>🔥 Racha {streak} {streak === 1 ? 'día' : 'días'}</span>}
                           <span style={{ fontSize: 12, color: '#8b8379' }}>Esta semana <b style={{ color: '#4f6238' }}>{weekMet}</b>/{weekElapsed} días cumplidos</span>
                         </div>
-                        {!met && <span style={{ fontSize: 12.5, color: '#8b8379' }}>Te faltan {hm(goal - dayWorkedMin)} para tu meta de hoy.</span>}
+                        {!met && <span style={{ fontSize: 12.5, color: '#8b8379' }}>Te faltan {hm(goal - dayWorkedLive)} para tu meta de hoy.</span>}
                       </div>
                     )
                   })()}
@@ -2352,15 +2380,15 @@ export default function TiempoClient() {
                   <Row label="Ventana continua sin interrupciones" value={V.windowLabel} />
                   <Row label="Hora de dormir" value={V.bedLabel} />
                   <Row label={`Planeado ${dayLabel} · estimado`} value={plannedDay.min ? '~' + hm(plannedDay.min) : '—'} />
-                  <Row label={`Trabajo registrado ${dayLabel}`} value={dayWorkedMin ? hm(dayWorkedMin) : '—'} />
+                  <Row label={`Trabajo registrado ${dayLabel}`} value={dayWorkedLive ? hm(dayWorkedLive) : '—'} />
                   {plannedDay.min > 0 && (() => {
-                    const pct = Math.min(100, Math.round((dayWorkedMin / plannedDay.min) * 100)); const over = dayWorkedMin > plannedDay.min
+                    const pct = Math.min(100, Math.round((dayWorkedLive / plannedDay.min) * 100)); const over = dayWorkedLive > plannedDay.min
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <div style={{ height: 6, background: '#eee6da', borderRadius: 999, overflow: 'hidden' }}>
                           <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: over ? '#8a4b28' : '#6f8256', borderRadius: 999 }} />
                         </div>
-                        <span style={{ fontSize: 12.5, color: '#8b8379' }}>{over ? `Llevas ${hm(dayWorkedMin)} · te pasaste ${hm(dayWorkedMin - plannedDay.min)} de lo planeado` : `Llevas ${hm(dayWorkedMin)} de ~${hm(plannedDay.min)} planeadas · ${pct}%`}</span>
+                        <span style={{ fontSize: 12.5, color: '#8b8379' }}>{over ? `Llevas ${hm(dayWorkedLive)} · te pasaste ${hm(dayWorkedLive - plannedDay.min)} de lo planeado` : `Llevas ${hm(dayWorkedLive)} de ~${hm(plannedDay.min)} planeadas · ${pct}%`}</span>
                       </div>
                     )
                   })()}
@@ -2953,7 +2981,7 @@ export default function TiempoClient() {
         const generalRows = [...omap.entries()].map(([name, min]) => ({ name, min })).filter(o => !routineNames.has(o.name.trim().toLowerCase())).sort((a, b) => b.min - a.min)
         const othersMin = generalRows.reduce((s, o) => s + o.min, 0) + routines.reduce((s, r) => s + r.min, 0)
         // Break (área 'ocio') de ESTE día — aparte de dayWorkedMin a propósito, nunca cuenta como trabajado.
-        const dayBreakMin = data.history.filter(h => h.date === dcDay && h.area === 'ocio').reduce((s, h) => s + h.dur, 0) + (isTodayView && data.session?.area === 'ocio' ? Math.max(0, Math.round(data.session.dur || 0)) : 0)
+        const dayBreakMin = data.history.filter(h => h.date === dcDay && h.area === 'ocio').reduce((s, h) => s + h.dur, 0) + (isTodayView && data.session?.area === 'ocio' ? Math.max(0, Math.round(sessionElapsed(data.session, now))) : 0)
         // Planeadas ese día que NO se tocaron.
         const planned = (allTasks || []).filter(t => t.task.status !== 'Terminada' && t.task.status !== 'Archivada' && (taskOnDay(t.task, dcDay) || recurringDueToday(t.task, dcDay)) && !dayPlanDoneT(t.task, dcDay) && !workedSet.has(t.task.id!))
         // Subtareas que marcaste hechas ESE día (resumen de logros del día).

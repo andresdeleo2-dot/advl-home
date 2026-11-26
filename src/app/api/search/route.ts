@@ -75,7 +75,7 @@ export async function GET(req: Request) {
       }
     })
     const ideas = filasOVacio(ideasRes).map(i => ({
-      id: i.id as string, title: (i.texto as string) || '', creada: (i.creada as string) || '', convertida: !!i.tarea_id, href: '/ideas',
+      id: i.id as string, title: (i.texto as string) || '', creada: (i.creada as string) || '', convertida: !!i.tarea_id, href: `/ideas?i=${enc(i.id as string)}`,
     }))
 
     return NextResponse.json({ ok: true, tasks, items, features, iniciativas, ideas })

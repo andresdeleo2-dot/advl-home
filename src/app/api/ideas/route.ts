@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic'
 
 // 42P01 = undefined_table (Postgres): sql/ideas.sql aún no se ha corrido. Se distingue del resto
 // de errores para que el cliente muestre "corre la migración" en vez de un error genérico.
-const isMissingTable = (code?: string) => code === '42P01'
+const isMissingTable = (code?: string) => code === '42P01' || code === 'PGRST205'   // PGRST205 = PostgREST nuevo
 
 export async function GET() {
   const { data, error } = await supabase.from('ideas').select('*').order('creada', { ascending: false })

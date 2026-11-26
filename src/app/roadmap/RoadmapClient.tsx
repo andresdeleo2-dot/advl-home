@@ -21,7 +21,7 @@ import CalendarioRoadmap, { type ZoomCal } from './CalendarioRoadmap'
 /* El popup de una tarea es EL MISMO que el de Épicas (la ficha completa: resumen, feature, iniciativa, fechas, subtareas,
    bitácora…): se monta el propio componente de Épicas en «modo ficha» (sin su página). Carga perezosa: el código de Épicas
    sólo se descarga al abrir la primera tarea. Si la descarga falla, se manda a Épicas con la tarea abierta. */
-type FichaProps = { initialEpics: Epica[]; ficha: { eId: string; tid: string; onClose: () => void } }
+type FichaProps = { initialEpics: Epica[]; ficha: { eId: string; tid: string; onClose: (escrituras?: Promise<unknown>) => void } }
 const FichaEpicas = lazy<React.ComponentType<FichaProps>>(() => import('@/components/EpicasDashboard')
   .then(m => ({ default: m.default as unknown as React.ComponentType<FichaProps> }))
   .catch(() => ({ default: ({ ficha }: FichaProps) => { if (typeof window !== 'undefined') window.location.assign(`/epicas?e=${ficha.eId}&t=${ficha.tid}`); return null } })))
@@ -1102,7 +1102,11 @@ export default function RoadmapClient() {
 
   /** Cierra la ficha de la tarea (el popup de Épicas, montado en modo ficha). Épicas escribe por su cuenta (su propio estado
    *  y su propia cola), así que al cerrar el Roadmap relee todo para ver lo que se cambió ahí. */
-  const cerrarFicha = useCallback(() => { setTareaPeek(null); void revalidar(true) }, [revalidar])
+  const cerrarFicha = useCallback((escrituras?: Promise<unknown>) => {
+    setTareaPeek(null)
+    // Relee cuando lo que guardó la ficha ya llegó (con tope de 8 s por si una escritura se queda colgada).
+    Promise.race([Promise.resolve(escrituras).catch(() => {}), new Promise(r => setTimeout(r, 8000))]).then(() => { void revalidar(true) })
+  }, [revalidar])
 
   /** Cambia el FEATURE y/o la INICIATIVA de una tarea desde su fila (lista «Prioridad»). Son de la épica de la tarea:
    *   · al cambiar de feature, la iniciativa se limpia si no cuelga del nuevo;

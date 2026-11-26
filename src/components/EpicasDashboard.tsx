@@ -130,7 +130,9 @@ const FEATURE_COLORS = ['#C2933A', '#3E8E8E', '#2E5A9E', '#7A6FB0', '#5B6B86', '
 /** Modo «ficha»: el Roadmap monta este mismo componente SÓLO para mostrar el popup de una tarea (idéntico al de Épicas,
  *  con todas sus acciones). Sin la página, sin preferencias ni URL ni recordatorios: nada de lo que hace Épicas por su
  *  cuenta toca al Roadmap. `onClose` se llama cuando ya no queda ficha ni editor abiertos (o la tarea dejó de existir). */
-export type FichaEmbebida = { eId: string; tid: string; onClose: () => void }
+/** onClose recibe una promesa que se cumple cuando las escrituras de la ficha ya llegaron al servidor: el Roadmap
+ *  relee DESPUÉS de eso (si releía al instante, veía el valor viejo y su siguiente cambio a esa tarea chocaba). */
+export type FichaEmbebida = { eId: string; tid: string; onClose: (escrituras?: Promise<unknown>) => void }
 
 export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics: Epica[]; ficha?: FichaEmbebida }) {
   const [epics, setEpics] = useState<Epica[]>(initialEpics.map(normalize))
@@ -461,6 +463,9 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
       objetivosTableReady.current = !!j.objetivosTableReady
       iniciativasTableReady.current = !!j.iniciativasTableReady
       iniciativaIdReady.current = !!j.iniciativaIdReady
+      // Ficha dentro del Roadmap: los datos ya vienen frescos del Roadmap (con lo que acabas de arrastrar). Esta
+      // lectura sólo sirve para los «xReady»; reemplazarlos con ella mostraba la fecha vieja y el primer cambio chocaba.
+      if (ficha && epicsRef.current.length) { setLoadError(null); return }
       {
         const raw = j.data as Epica[]
         const normed = raw.map(normalize).map(conLinksLocales)
@@ -2558,12 +2563,16 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
     if (ins === from) return
     const seq = ordered.map(x => e.tasks[x._i]) // orden visible actual
     const [m] = seq.splice(from, 1); seq.splice(ins, 0, m)
-    // Reasigna `orden` a TODA la épica respetando el nuevo orden visible + el resto
-    const rest = e.tasks.filter(t => !seq.some(s => s.id === t.id))
-    const full = [...seq, ...rest]
+    // Sólo se reparten los lugares de las tareas VISIBLES (las que el filtro esconde no se mueven): antes se
+    // renumeraba toda la épica como [visibles, …resto] y eso desordenaba Roadmap › Prioridad. Con «Deshacer».
+    if (!ordenReady.current) return
+    const cambios = reordenarSubconjunto(e.tasks, seq.map(t => t.id!).filter(Boolean))
+    if (!cambios.size) return
+    const snaps = snapshot([e.id])
     const tasks = clone(e.tasks)
-    if (ordenReady.current) full.forEach((t, k) => { const idx = tasks.findIndex(x => x.id === t.id); if (idx >= 0) tasks[idx].orden = k * 10 })
+    tasks.forEach(t => { const o = t.id ? cambios.get(t.id) : undefined; if (o !== undefined) t.orden = o })
     patchEpic(e.id, { tasks })
+    undoToast(`Moviste «${m.t}»`, snaps)
   }
   /** Fija como el orden del Roadmap (`tareas.orden`) el orden con que se ve la lista: `ids` = las tareas visibles
    *  en ese orden. Las que el filtro esconde no se mueven (se reparten SUS lugares entre las visibles). */
@@ -2599,14 +2608,6 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
   }
   const onEpicGripCancel = () => { epicDragRef.current = null; setEpicDrag(null); setEpicDropTo(null) }
 
-  const moveTaskInEpic = (e: Epica, from: number, dir: 'up' | 'down') => {
-    const to = dir === 'up' ? from - 1 : from + 1
-    if (to < 0 || to >= e.tasks.length) return
-    const tasks = clone(e.tasks)
-    const [m] = tasks.splice(from, 1); tasks.splice(to, 0, m)
-    if (ordenReady.current) tasks.forEach((t, k) => { t.orden = k * 10 })
-    patchEpic(e.id, { tasks })
-  }
 
   /* ─── Objetivos: avance rápido y vínculo con tareas ──────── */
   /** Mueve el valor actual de un objetivo sin abrir el editor. Si al hacerlo
@@ -4956,7 +4957,7 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           {pos === 0 && !orderTapMode && <div style={{ font: '700 10px/1 var(--font-ui)', letterSpacing: '.2em', textTransform: 'uppercase', color: '#A87A2C', marginBottom: 3 }}>Empieza aquí</div>}
-          <div className="plan-title" onClick={() => { if (orderTapMode && orderList) orderTapToggle(key); else setTaskView({ eId: e.id, tid: t.id! }) }} title={orderTapMode && orderList ? 'Tócala en el orden que la harás' : 'Ver tarea'} style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id && focus.mitIds.includes(t.id) && <span title="Lo más importante hoy (fijado en Tiempo)" style={{ color: '#C2933A' }}>★ </span>}{t.t}</div>
+          <div className="plan-title" onClick={() => { if (orderTapMode && orderList) orderTapToggle(key); else setTaskView({ eId: e.id, tid: t.id! }) }} title={orderTapMode && orderList ? 'Tócala en el orden que la harás' : 'Ver tarea'} style={{ fontSize: 15, fontWeight: 600, color: '#16365F', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.t}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
             <button onClick={() => setFeaturedId(e.id)} title={`Ver ${e.name}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11, color: 'rgba(20,35,61,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: e.color }} />{e.name}
@@ -6870,7 +6871,7 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
                 })}
               </div>
               {/* El calendario del mes y la línea de tiempo viven en el Roadmap (antes había copias aquí). */}
-              <a href="/roadmap?v=calendario" title="El calendario del mes y la línea de tiempo están en Roadmap" style={{ font: '700 12px var(--font-ui)', color: '#A87A2C', textDecoration: 'none', whiteSpace: 'nowrap', padding: '6px 4px' }}>📅 Calendario en Roadmap ↗</a>
+              <a href={`/roadmap?v=calendario&cz=${week || ajuste || resumen ? 'semana' : multi ? 'mes' : 'dia'}&d=${viewDate}${weekEpica !== 'todas' ? `&ep=${encodeURIComponent(weekEpica)}` : ''}`} title="El calendario del mes y la línea de tiempo están en Roadmap" style={{ font: '700 12px var(--font-ui)', color: '#A87A2C', textDecoration: 'none', whiteSpace: 'nowrap', padding: '6px 4px' }}>📅 Calendario en Roadmap ↗</a>
               {/* Navegación por horizonte, o "‹ Hoy" en modo día */}
               {board ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -9449,7 +9450,14 @@ export default function EpicasDashboard({ initialEpics, ficha }: { initialEpics:
   const fichaCerrada = useRef(false)
   useEffect(() => {
     if (!ficha || fichaCerrada.current) return
-    if (!taskEdit && (!taskView || !findTask(taskView.eId, taskView.tid))) { fichaCerrada.current = true; ficha.onClose() }
+    if (!taskEdit && (!taskView || !findTask(taskView.eId, taskView.tid))) {
+      fichaCerrada.current = true
+      // Un avance a medio teclear se manda ya (no esperar al desmontaje) y entra en lo que el Roadmap espera.
+      if (progressTimer.current) clearTimeout(progressTimer.current)
+      const p = progressPending.current; progressPending.current = null
+      const avance = p ? fetch('/api/tareas/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ epicaId: p.id, update: p.tasks }), keepalive: true }).catch(() => {}) : null
+      ficha.onClose(Promise.all([...writeChain.current.values(), avance]))
+    }
   }, [ficha, taskView, taskEdit, epics])
 
   return (

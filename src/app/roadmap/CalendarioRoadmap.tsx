@@ -219,6 +219,14 @@ export default function CalendarioRoadmap({ epicas, lista, epicaFilter, featureF
     onAplicar(items2, msg)
   }, [porKey, abiertasDelDia, today, planHistReady, onAplicar, onAviso])
 
+  /** ⏳ Atrasadas → todas a hoy, al final de lo que ya tienes hoy (un solo «Deshacer»). */
+  const todoAHoy = useCallback((xs: Item[]) => {
+    if (!xs.length) return
+    let orden = Math.max(0, ...abiertasDelDia(today).map(x => x.t.planOrder ?? 0))
+    const items2: ParcheTarea[] = xs.map(it => ({ epicaId: it.e.id, taskId: it.t.id!, patch: parcheAgendar(it.t, today, { hoy: today, planOrder: (orden += 1000), prioPorDefecto: prioFromDue(it.t.due), guardarHistorial: planHistReady }) }))
+    onAplicar(items2, `${xs.length} ${xs.length === 1 ? 'atrasada pasó' : 'atrasadas pasaron'} a hoy`)
+  }, [abiertasDelDia, today, planHistReady, onAplicar])
+
   const quitarFecha = useCallback((key: string) => {
     const it = porKey.get(key)
     if (!it || !it.t.plan) return
@@ -674,6 +682,10 @@ export default function CalendarioRoadmap({ epicas, lista, epicaFilter, featureF
         {atrasadas.length > 0 && (
           <div style={{ marginBottom: 12 }}>
             {cabGrupo('atr', <span style={{ ...eb, color: '#B0522E' }}>⏳ Atrasadas</span>, atrasadas.length)}
+            {abierto('atr') && atrasadas.length > 1 && (
+              <button type="button" onClick={() => todoAHoy(atrasadas)} title="Agenda todas las atrasadas para hoy (con Deshacer)"
+                style={{ margin: '2px 0 4px', border: '1px solid rgba(176,82,46,0.3)', background: 'rgba(176,82,46,0.06)', color: '#B0522E', borderRadius: 8, padding: '4px 10px', font: '700 11.5px var(--font-ui)', cursor: 'pointer' }}>Todas a hoy</button>
+            )}
             {abierto('atr') && <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>{atrasadas.map(it => pieza({ it, sesion: false }, null, 'bandeja'))}</div>}
           </div>
         )}

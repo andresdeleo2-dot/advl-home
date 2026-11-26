@@ -162,25 +162,30 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
         searchRef.current?.blur()
         return
       }
-      if (e.key === 'Enter' && document.activeElement === searchRef.current && filtered.length > 0) {
-        const first = filtered[0]
+      if (e.key === 'Enter' && document.activeElement === searchRef.current) {
+        // Con lo que está escrito AHORA (no con la búsqueda de hace 200 ms) y la primera tarjeta que ves en pantalla.
+        const ahora = items.filter(it => (!showFav || it.featured) && (activeCat === 'all' || it.section === activeCat) && matchesQuery(it, rawQuery))
+        const first = groupItems(ahora)[0]?.subgroups[0]?.items[0] ?? ahora[0]
+        if (!first) return
         trackOpen(first)
         window.open(first.url, '_blank', 'noopener')
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [filtered, trackOpen])
+  }, [items, rawQuery, showFav, activeCat, trackOpen])
 
   // ---- CRUD optimista ----
   const toggleFav = async (item: Item) => {
     const prev = items
     const next = !item.featured
-    setItems(items.map(i => i.id === item.id ? { ...i, featured: next } : i))
+    // Un favorito nuevo va al final de la barra (con fav_order); sin él quedaba detrás de todos y, con la barra llena, no se veía.
+    const favOrder = next ? Math.max(0, ...items.filter(i => i.featured).map(i => i.fav_order ?? 0)) + 10 : item.fav_order
+    setItems(items.map(i => i.id === item.id ? { ...i, featured: next, fav_order: favOrder } : i))
     try {
       const r = await fetch(`/api/items/${item.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ featured: next }),
+        body: JSON.stringify(next ? { featured: next, fav_order: favOrder } : { featured: next }),
       })
       if (!r.ok) throw new Error('fallo')
       showToast(next ? '⭐ Agregado a favoritos' : 'Quitado de favoritos')
@@ -203,12 +208,15 @@ export default function Dashboard({ initialItems }: { initialItems: Item[] }) {
     } else {
       const prev = items
       setItems(items.map(i => i.id === draft.id ? { ...i, ...draft } as Item : i))
-      const r = await fetch(`/api/items/${draft.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(draft),
-      })
-      const j = await r.json()
-      if (!j.ok) { setItems(prev); throw new Error(j.error || 'No se pudo guardar') }
+      let j: { ok?: boolean; error?: string } | null = null
+      try {
+        const r = await fetch(`/api/items/${draft.id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(draft),
+        })
+        j = await r.json()
+      } catch { j = null }
+      if (!j?.ok) { setItems(prev); throw new Error(j?.error || 'No se pudo guardar (revisa tu conexión)') }
       showToast('Acceso guardado')
     }
   }

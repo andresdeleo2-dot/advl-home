@@ -50,12 +50,15 @@ export default function EditModal({
       setError('Título y URL principal son obligatorios.')
       return
     }
+    // «gmail.com» sin https:// se volvía un enlace dentro de la app (acababa en /login o 404) y sin ícono.
+    const conEsquema = (u?: string | null) => { const t = (u || '').trim(); return !t || /^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t.replace(/^\/+/, '')}` }
+    const listo = { ...draft, url: conEsquema(draft.url), ...(draft.url2 != null ? { url2: conEsquema(draft.url2) } : {}), ...(draft.url3 != null ? { url3: conEsquema(draft.url3) } : {}) }
     setSaving(true)
     try {
-      await onSave(draft, isNew)
+      await onSave(listo, isNew)
       onClose()
     } catch (e) {
-      setError(String(e))
+      setError(e instanceof Error ? e.message : String(e))
       setSaving(false)
     }
   }

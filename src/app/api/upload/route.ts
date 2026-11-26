@@ -11,14 +11,16 @@ export async function POST(req: Request) {
     if (!(file instanceof File)) {
       return NextResponse.json({ ok: false, error: 'falta el archivo' }, { status: 400 })
     }
-    if (!file.type.startsWith('image/')) {
-      return NextResponse.json({ ok: false, error: 'solo se permiten imágenes' }, { status: 400 })
+    // Sólo formatos de foto (SVG puede llevar código y el bucket es público); la extensión sale del tipo, no del nombre.
+    const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
+    if (!EXT[file.type]) {
+      return NextResponse.json({ ok: false, error: 'solo imágenes PNG, JPG, WebP o GIF' }, { status: 400 })
     }
     if (file.size > 5 * 1024 * 1024) {
       return NextResponse.json({ ok: false, error: 'máximo 5 MB' }, { status: 400 })
     }
 
-    const ext = (file.name.split('.').pop() || 'png').toLowerCase()
+    const ext = EXT[file.type]
     const path = `items/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
 
     const { error } = await supabase.storage

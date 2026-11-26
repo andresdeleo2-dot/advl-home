@@ -21,6 +21,10 @@ const MN = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'ago
 const fechaDe = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d) }
 const diaLargo = (iso: string) => { const d = fechaDe(iso); return `${DN[d.getDay()]} ${d.getDate()} de ${MN[d.getMonth()]}` }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+/** El día que estás viviendo: hasta las 3:00 (cuando corre el cierre) sigue siendo ayer. */
+const diaVivido = () => (new Date().getHours() < 3 ? sumarDias(todayISO(), -1) : todayISO())
+/** Hecha hoy: terminada, o recurrente que hoy cumpliste (sigue abierta porque ya pasó a su siguiente fecha). */
+const hechaHoy = (t: EpicaTask, hoy: string) => !ABIERTA(t) || !!t.repeatDone?.includes(hoy)
 const RITUAL_KEY = 'dia.ritual.v1'
 const ponerLS = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* sin almacenamiento */ } }
 const enDias = (n: number) => (n === 0 ? 'hoy' : n === 1 ? 'mañana' : n < 0 ? `hace ${-n} días` : `en ${n} días`)
@@ -43,7 +47,9 @@ type Aviso = { texto: string; deshacer?: () => void } | null
 
 /* ── Página ── */
 export default function DiaClient() {
-  const hoy = todayISO()
+  // Hasta las 3:00 (cuando corre el cierre) sigues en «ayer»: cerrar el día a la 1:00 lo guarda en el día que viviste.
+  const [, setTick] = useState(0)
+  const hoy = diaVivido()
   const [dia, setDia] = useState<DiaGet | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [epicas, setEpicas] = useState<Epica[] | null>(null)
@@ -98,14 +104,39 @@ export default function DiaClient() {
     return () => { vivo = false }
   }, [fecha, hoy])
 
+  // La página puede quedarse abierta horas (app del iPhone, pestaña de la Mac): al volver se recalcula «hoy» y se
+  // relee el día y las épicas, para no marcar con la fecha de ayer ni chocar con lo que cambiaste en otro lado.
+  const recargar = useRef<() => void>(() => {})
+  recargar.current = () => { cargarDia(); cargarEpicas() }
+  useEffect(() => {
+    let ultima = Date.now()
+    const alVolver = () => {
+      if (document.visibilityState !== 'visible') return
+      setTick(t => t + 1)
+      if (Date.now() - ultima > 60_000) { ultima = Date.now(); recargar.current() }
+    }
+    document.addEventListener('visibilitychange', alVolver)
+    window.addEventListener('focus', alVolver)
+    const iv = setInterval(() => setTick(t => t + 1), 5 * 60_000)
+    return () => { document.removeEventListener('visibilitychange', alVolver); window.removeEventListener('focus', alVolver); clearInterval(iv) }
+  }, [])
+  // Si cambió el día mientras veías «hoy», sigues viendo el nuevo hoy.
+  const hoyPrevio = useRef(hoy)
+  useEffect(() => {
+    if (hoyPrevio.current === hoy) return
+    setFecha(f => (f === hoyPrevio.current ? hoy : f))
+    hoyPrevio.current = hoy
+  }, [hoy])
+
   const data: DiaData | null = dia?.resumen?.data ?? null
   const respuestas = useMemo(() => new Map((dia?.respuestas || []).map(r => [r.item_id, r])), [dia])
 
-  // Siempre abre en Hoy. De noche (20:00 en adelante) abre en Cerrar día, si todavía no lo cierras.
+  // Siempre abre en Hoy. De noche (20:00 a 3:00) abre en Cerrar día, si todavía no lo cierras.
   useEffect(() => {
     if (!dia || modoElegido) return
     const cerrado = dia.cierres.some(c => c.fecha === hoy && c.calificacion != null)
-    if (new Date().getHours() >= 20 && !cerrado) setModo('noche')
+    const h = new Date().getHours()
+    if ((h >= 20 || h < 3) && !cerrado) setModo('noche')
   }, [dia, hoy, modoElegido])
   // ?modo=noche|semana|boveda|hoy: otras secciones (Tiempo, Épicas, avisos) abren directo esa vista.
   useEffect(() => {
@@ -145,7 +176,8 @@ export default function DiaClient() {
     setDia(d => d ? { ...d, respuestas: [...d.respuestas.filter(r => r.item_id !== itemId), { item_id: itemId, tipo, estado, respuesta: extra?.respuesta, tarea_id: extra?.tareaId ?? null }] } : d)
   }, [hoy])
   const deshacerRespuesta = useCallback(async (itemId: string) => {
-    await postJSON('/api/dia', { accion: 'responder', fecha: hoy, itemId, estado: 'descartada', deshacer: true })
+    const j = await postJSON('/api/dia', { accion: 'responder', fecha: hoy, itemId, estado: 'descartada', deshacer: true })
+    if (!j.ok) throw new Error(j.error || 'No se pudo deshacer')
     setDia(d => d ? { ...d, respuestas: d.respuestas.filter(r => r.item_id !== itemId) } : d)
   }, [hoy])
 
@@ -201,14 +233,31 @@ export default function DiaClient() {
   }, [responder, crearDeTarjeta, aplicarCambio, hoy, cargarEpicas, mostrarAviso])
 
   /** Marca una tarea como hecha (o la reabre). */
+  const enCurso = useRef(new Set<string>())   // candado contra el doble toque (crearía o reabriría de más)
   const toggleHecha = useCallback(async (tareaId: string) => {
-    const hit = todas.get(tareaId); if (!hit) return
-    const t = ABIERTA(hit.t) ? completeRecurring(hit.t, hoy, () => 0) : { ...hit.t, status: hit.t.planPrev && hit.t.planPrev !== 'Terminada' ? hit.t.planPrev : 'Por hacer', doneAt: undefined }
+    const hit = todas.get(tareaId); if (!hit || enCurso.current.has(tareaId)) return
+    enCurso.current.add(tareaId)
+    const hecha = hechaHoy(hit.t, hoy)
+    const t: EpicaTask = !hecha ? completeRecurring(hit.t, hoy, () => 0)
+      // Recurrente que ya cumpliste hoy: sigue abierta (se movió a la siguiente fecha); reabrir la devuelve a hoy.
+      : ABIERTA(hit.t) ? { ...hit.t, plan: hoy, repeatDone: (hit.t.repeatDone || []).filter(d => d !== hoy) }
+      : { ...hit.t, status: hit.t.planPrev && hit.t.planPrev !== 'Terminada' ? hit.t.planPrev : 'Por hacer', doneAt: undefined }
     // Optimista: que se vea al instante.
     setEpicas(es => es ? es.map(e => e.id !== hit.e.id ? e : { ...e, tasks: e.tasks.map(x => x.id === tareaId ? t : x) }) : es)
     try { await sync(hit.e.id, { update: [t] }); cargarEpicas() }
     catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
+    finally { enCurso.current.delete(tareaId) }
   }, [todas, hoy, sync, cargarEpicas, mostrarAviso])
+
+  /** Cerrar día: lo que no hiciste se mueve ya (mañana u otro día) o se suelta del plan. */
+  const reprogramar = useCallback(async (tareaId: string, plan: string | null) => {
+    const hit = todas.get(tareaId); if (!hit) return
+    const t: EpicaTask = { ...hit.t }
+    if (plan) { t.plan = plan; delete t.planOrder } else { delete t.plan; delete t.planOrder }
+    setEpicas(es => es ? es.map(e => e.id !== hit.e.id ? e : { ...e, tasks: e.tasks.map(x => x.id === tareaId ? t : x) }) : es)
+    try { await sync(hit.e.id, { update: [t] }); cargarEpicas(); mostrarAviso({ texto: plan ? `«${t.t}» pasó al ${diaLargo(plan)}` : `«${t.t}» ya no está agendada`, deshacer: () => { sync(hit.e.id, { update: [hit.t] }).then(cargarEpicas).catch(() => {}) } }) }
+    catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
+  }, [todas, sync, cargarEpicas, mostrarAviso])
 
   /* ── Tus 3 de hoy ── */
   const prioridades: DiaPrioridad[] = useMemo(() => {
@@ -374,11 +423,13 @@ export default function DiaClient() {
     const hit = tareaDePrioridad(x)
     if (hit?.t.id) return toggleHecha(hit.t.id)
     const c = x.itemId ? data?.tarjetas.find(k => k.id === x.itemId) : undefined
-    if (!c || respuestas.has(c.id)) return
+    if (!c || respuestas.has(c.id) || enCurso.current.has(c.id)) return
+    enCurso.current.add(c.id)
     try {
       await accBandeja.terminar(c)
       mostrarAviso({ texto: `Hecha: ${c.cambio?.titulo || c.titulo}`, deshacer: () => { accBandeja.deshacer(c.id).catch(e => mostrarAviso({ texto: e instanceof Error ? e.message : String(e) })) } })
     } catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }) }
+    finally { enCurso.current.delete(c.id) }
   }, [tareaDePrioridad, toggleHecha, data, respuestas, accBandeja, mostrarAviso])
   const puedeMarcar = useCallback((x: DiaPrioridad) => !!tareaDePrioridad(x)?.t.id || (!!x.itemId && !!data?.tarjetas.some(k => k.id === x.itemId) && !respuestas.has(x.itemId)),
     [tareaDePrioridad, data, respuestas])
@@ -435,7 +486,7 @@ export default function DiaClient() {
 
         {dia && fecha === hoy && modo === 'noche' && (
           <VistaNoche dia={dia} data={data} hoy={hoy} prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad}
-            toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar} capturar={capturar} calificar={calificar} />
+            toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar} capturar={capturar} calificar={calificar} reprogramar={reprogramar} />
         )}
 
         {dia && modo === 'semana' && <VistaSemana dia={dia} hoy={hoy} epicas={epicas} />}
@@ -457,12 +508,12 @@ export default function DiaClient() {
 function minutosLibres(eventos: Evento[] | null, hoy: string): number | null {
   if (!eventos) return null
   const ini = fechaDe(hoy).setHours(9, 0, 0, 0), fin = fechaDe(hoy).setHours(19, 0, 0, 0)
-  let ocupado = 0
-  for (const e of eventos) {
-    if (e.allDay || !e.start || !e.end) continue
-    const a = Math.max(ini, new Date(e.start).getTime()), b = Math.min(fin, new Date(e.end).getTime())
-    if (b > a) ocupado += b - a
-  }
+  // Las juntas encimadas se juntan antes de sumar (10–11 y 10:30–11:30 son 1.5 h, no 2 h).
+  const tramos = eventos.filter(e => !e.allDay && e.start && e.end)
+    .map(e => [Math.max(ini, new Date(e.start).getTime()), Math.min(fin, new Date(e.end!).getTime())] as [number, number])
+    .filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])
+  let ocupado = 0, hasta = -Infinity
+  for (const [a, b] of tramos) { const desde = Math.max(a, hasta); if (b > desde) ocupado += b - desde; hasta = Math.max(hasta, b) }
   return Math.max(0, Math.round((fin - ini - ocupado) / 60000))
 }
 const hhmm = (min: number) => (min >= 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}` : `${min} min`)
@@ -632,9 +683,9 @@ function VistaHoy(p: {
     if (desdeClaude.length) return desdeClaude
     return p.respaldo.map(hit => ({ p: { t: hit.t.t, tareaId: hit.t.id, epica: hit.e.name, porque: hit.t.due ? `vence ${hit.t.due}` : 'agendada para hoy' } as DiaPrioridad, hit }))
   }, [p.prioridades, p.respaldo, p.tareaDe])
-  const hechas = tres.filter(x => x.hit && !ABIERTA(x.hit.t)).length
+  const hechas = tres.filter(x => x.hit && hechaHoy(x.hit.t, hoy)).length
   // «Ahora» = la primera que puedes hacer tú: lo que está en Esperando no va primero.
-  const siguiente = tres.find(x => !x.hit || (ABIERTA(x.hit.t) && x.hit.t.status !== 'Esperando')) || tres.find(x => !x.hit || ABIERTA(x.hit.t))
+  const siguiente = tres.find(x => !x.hit || (!hechaHoy(x.hit.t, hoy) && x.hit.t.status !== 'Esperando')) || tres.find(x => !x.hit || !hechaHoy(x.hit.t, hoy))
 
   const salud = useMemo(() => (epicas ? saludEpicas(epicas, hoy) : []), [epicas, hoy])
   const esperando = useMemo(() => (epicas ? esperandoAOtros(epicas, hoy) : []), [epicas, hoy])
@@ -704,7 +755,7 @@ function VistaHoy(p: {
           {tres.filter(x => x !== siguiente).length > 0 && (
             <div className="md-otras">
               {tres.filter(x => x !== siguiente).map((x, i) => {
-                const hecha = !!x.hit && !ABIERTA(x.hit.t)
+                const hecha = !!x.hit && hechaHoy(x.hit.t, hoy)
                 return (
                   <button key={i} className="md-check" data-hecha={hecha} disabled={!p.puedeMarcar(x.p)} onClick={() => p.marcar(x.p)} title={hecha ? 'Reabrir' : 'Marcar como hecha'}>
                     <span className="md-caja" aria-hidden>{hecha ? '✓' : ''}</span><span className="md-grow">{x.hit?.t.t || x.p.t}</span>
@@ -1078,12 +1129,14 @@ function Anotar({ capturar, pendientes, epicas, crearRapida }: {
 }
 
 /* ── Noche ── */
-function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, puedeMarcar, capturar, calificar }: {
+function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, puedeMarcar, capturar, calificar, reprogramar }: {
   dia: DiaGet; data: DiaData | null; hoy: string; prioridades: DiaPrioridad[]; respaldo: { e: Epica; t: EpicaTask }[]
   tareaDe: (p: DiaPrioridad) => { e: Epica; t: EpicaTask } | null; toggleHecha: (id: string) => Promise<void>
   marcar: (x: DiaPrioridad) => Promise<void>; puedeMarcar: (x: DiaPrioridad) => boolean
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; calificar: (n: number) => Promise<void>
+  reprogramar: (tareaId: string, plan: string | null) => Promise<void>
 }) {
+  const manana = sumarDias(hoy, 1)
   const previa = dia.cierres.find(c => c.fecha === hoy)?.calificacion ?? null
   const [nota, setNota] = useState<number | null>(previa)
   const [texto, setTexto] = useState('')
@@ -1093,7 +1146,7 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, pu
   const [listo, setListo] = useState(false)
   const [guardando, setGuardando] = useState(false)
   const tres = prioridades.length ? prioridades.map(p => ({ p, hit: tareaDe(p) })) : respaldo.map(hit => ({ p: { t: hit.t.t, tareaId: hit.t.id, porque: '' } as DiaPrioridad, hit }))
-  const hechas = tres.filter(x => x.hit && !ABIERTA(x.hit.t)).length
+  const hechas = tres.filter(x => x.hit && hechaHoy(x.hit.t, hoy)).length
 
   const cerrar = async () => {
     if (!nota) { setErr('Elige cómo estuvo tu día (1 a 10)'); return }
@@ -1124,15 +1177,25 @@ function VistaNoche({ dia, data, hoy, prioridades, respaldo, tareaDe, marcar, pu
         <>
           <div className="md-card md-lista md-mt12">
             {tres.map((x, i) => {
-              const hecha = !!x.hit && !ABIERTA(x.hit.t)
+              const hecha = !!x.hit && hechaHoy(x.hit.t, hoy)
               return (
-                <button key={i} className="md-check md-row" data-hecha={hecha} disabled={!puedeMarcar(x.p)} onClick={() => marcar(x.p)}>
-                  <span className="md-caja" aria-hidden>{hecha ? '✓' : ''}</span><span className="md-grow">{x.hit?.t.t || x.p.t}</span><span className="md-meta">{hecha ? 'hecha' : 'mañana'}</span>
-                </button>
+                <div key={i} className="md-row md-noche-fila">
+                  <button className="md-check md-grow" data-hecha={hecha} disabled={!puedeMarcar(x.p)} onClick={() => marcar(x.p)}>
+                    <span className="md-caja" aria-hidden>{hecha ? '✓' : ''}</span><span className="md-grow">{x.hit?.t.t || x.p.t}</span>
+                  </button>
+                  {hecha ? <span className="md-meta">hecha</span>
+                    : x.hit?.t.id && x.hit.t.plan === manana ? <span className="md-meta">pasa a mañana</span>
+                    : x.hit?.t.id ? (
+                      <span className="md-noche-mover">
+                        <button type="button" className="md-link" onClick={() => reprogramar(x.hit!.t.id!, manana)} title="Agendarla para mañana">Mañana</button>
+                        <button type="button" className="md-link md-tenue" onClick={() => reprogramar(x.hit!.t.id!, null)} title="Quitarla del plan (sigue en su épica)">Soltar</button>
+                      </span>
+                    ) : <span className="md-meta">mañana</span>}
+                </div>
               )
             })}
           </div>
-          <p className="md-meta md-mt8">{hechas} de {tres.length}. Las que no hiciste te las vuelve a proponer Claude mañana.</p>
+          <p className="md-meta md-mt8">{hechas} de {tres.length}. Lo que no hiciste: pásalo a mañana o suéltalo; si no, Claude te lo vuelve a proponer.</p>
         </>
       )}
       <div className="md-lbl"><span>¿Cómo estuvo?</span><span>{nota ?? ''}</span></div>
@@ -1266,6 +1329,7 @@ const CSS = `
 .md-entre{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .md-base{align-items:baseline}
 .md-fila{display:flex;gap:8px;align-items:center}.md-envuelve{flex-wrap:wrap}
+.md-row.md-noche-fila{display:flex;align-items:center;gap:10px;padding:2px 0}.md-noche-mover{display:inline-flex;gap:12px;flex-shrink:0;font-size:13px}.md-link.md-tenue{color:var(--md-tenue)}
 .md-meta{font-size:12.5px;color:var(--md-tenue)}
 .md-sub{color:var(--md-tinta2);margin:4px 0 0}
 .md-h3{font-weight:600;margin:0}

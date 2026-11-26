@@ -85,6 +85,7 @@ export function useFocusSession(hooks: FocusHooks) {
   const [sessionMin, setSessionMin] = useState(false)
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
+  const fallos = useRef(0)
   const readyRef = useRef(false)   // ya hubo una lectura VÁLIDA del servidor: recién ahí se permite tocar la sesión (evita pisar los datos reales de /tiempo)
   const lastOkRef = useRef(0)      // última lectura/escritura confirmada con el server: si es vieja, lo local puede estar viejo
   const kickRef = useRef<() => void>(() => {})   // relanza YA la lectura (sin esperar la espera creciente)
@@ -205,19 +206,27 @@ export function useFocusSession(hooks: FocusHooks) {
   // Sube lo pendiente (debounce o flush). Con keepalive (ocultar/cerrar) la respuesta igual se procesa si
   // la página sigue viva, para fijar el ts y dar por confirmados los renglones pendientes.
   function pushNow(keepalive = false) {
+    if (pushTimer.current) { clearTimeout(pushTimer.current); pushTimer.current = null }
     const body = pendingPush.current; if (!body) return; pendingPush.current = null
     const json = JSON.stringify({ data: body })
     pushingRef.current = true
     // keepalive rechaza cuerpos de más de 64 KB: arriba de eso va como petición normal.
     fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: json, keepalive: keepalive && new Blob([json]).size < 60000 })
-      .then(r => r.json()).then(j => {
-        if (!j?.ts) return
+      .then(r => { if (!r.ok) throw new Error('estado ' + r.status); return r.json() }).then(j => {
+        if (!j?.ts) throw new Error('sin ts')
+        fallos.current = 0
         try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {}
         lastOkRef.current = Date.now()
         // Los renglones que /tiempo dejó pendientes (DIRTY_KEY) y que este blob ya subió dejan de estarlo
         // (si no, al abrir /tiempo se re-anexarían aunque otro dispositivo los hubiera borrado/editado).
         settleDirty(body.history || [])
-      }).catch(() => {}).finally(() => { pushingRef.current = false })
+      }).catch(() => {
+        // Falló (sin señal, servidor): se reintenta con lo más nuevo; antes se perdía en silencio.
+        if (!pendingPush.current) pendingPush.current = body
+        const espera = Math.min(120_000, 5000 * 3 ** fallos.current); fallos.current++
+        if (pushTimer.current) clearTimeout(pushTimer.current)
+        pushTimer.current = setTimeout(() => pushNow(), espera)
+      }).finally(() => { pushingRef.current = false })
   }
 
   // Registra a Épicas el tiempo de una sesión ligada a una tarea (bitácora + opcional terminar).
@@ -544,7 +553,6 @@ export function useFocusSession(hooks: FocusHooks) {
   // `busy` = el overlay de Modo foco está abierto (editando subtareas/extras): el contenedor
   // debe pausar sus refrescos (loadEpics) para no revertir esas ediciones en vuelo.
   // "Lo más importante hoy" (MIT) que fijaste en /tiempo — para estelarlo en Épicas (mismo margen.v1).
-  const mitIds = data.mit?.date === iso(new Date()) ? (data.mit.ids || []) : []
   // Total de TRABAJO registrado hoy (mismo cálculo que /tiempo: área 'trabajo' del historial de hoy)
   // MÁS la sesión EN CURSO (si corre hoy y es trabajo). Incluye general y rutinas → reconcilia en Épicas.
   const day0 = iso(new Date())
@@ -599,7 +607,7 @@ export function useFocusSession(hooks: FocusHooks) {
       Cargando tu estado… intenta de nuevo en unos segundos
     </div>
   ) : null
-  return { session, active: !!session, busy: focusOpen, mitIds, begin, card: <>{card}{syncNotice}</>, workedTodayMin, runningTodayMin, breakTodayMin, runningBreakMin, breakOnDay, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
+  return { session, active: !!session, busy: focusOpen, begin, card: <>{card}{syncNotice}</>, workedTodayMin, runningTodayMin, breakTodayMin, runningBreakMin, breakOnDay, todayOther, otherOnDay, minByNameOn, totalMinByName, schedOnDay, workedTasksOnDay }
 }
 
 const LBL: CSSProperties = { fontSize: 12, letterSpacing: '.12em', textTransform: 'uppercase', color: '#a49b90', fontWeight: 600 }

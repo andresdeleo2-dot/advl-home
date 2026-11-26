@@ -27,6 +27,16 @@ const eb: CSSProperties = { font: '700 10px/1 var(--font-ui)', letterSpacing: '.
 
 type PatchFn = (id: string, body: Record<string, unknown>) => Promise<{ ok?: boolean; error?: string } | null>
 
+/** Lo que el usuario cambió DESPUÉS de mandar `body` (otra edición optimista en vuelo) no lo pisa la respuesta vieja. */
+function pendienteDe(local: Idea, servidor: Idea, body: Record<string, unknown>): Partial<Idea> {
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(local) as (keyof Idea)[]) {
+    if (k in body) continue
+    if (JSON.stringify(local[k]) !== JSON.stringify(servidor[k]) && (k === 'comentarios' || k === 'links')) out[k] = local[k]
+  }
+  return out as Partial<Idea>
+}
+
 export default function IdeasClient() {
   const [ideas, setIdeas] = useState<Idea[] | null>(null)
   const [needsMigration, setNeedsMigration] = useState(false)
@@ -61,12 +71,23 @@ export default function IdeasClient() {
     else setErr(r?.error || 'No se pudo guardar la idea')
   }
 
+  // Optimista: el cambio se ve (y la siguiente edición parte de él) antes de que responda el servidor. Antes dos
+  // comentarios seguidos se pisaban: el segundo se armaba con la lista vieja. Si falla, vuelve lo que había.
   const patch: PatchFn = async (id, body) => {
+    const antes = (ideas || []).find(x => x.id === id)
+    setIdeas(prev => (prev || []).map(x => (x.id === id ? { ...x, ...body } as Idea : x)))
     const r = await fetch(`/api/ideas/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => null)
-    if (r?.ok) setIdeas(prev => (prev || []).map(x => (x.id === id ? r.data : x)))
-    else if (r?.error) setErr(r.error)
+    if (r?.ok) setIdeas(prev => (prev || []).map(x => (x.id === id ? { ...r.data, ...pendienteDe(x, r.data, body) } : x)))
+    else {
+      if (antes) setIdeas(prev => (prev || []).map(x => (x.id === id ? { ...x, ...Object.fromEntries(Object.keys(body).map(k => [k, (antes as Record<string, unknown>)[k]])) } as Idea : x)))
+      setErr(r?.error || 'No se guardó el cambio. Revisa tu conexión.')
+    }
     return r
   }
+  // Abrir una idea por enlace (/ideas?i=<id>, p. ej. desde ⌘K).
+  useEffect(() => {
+    try { const i = new URLSearchParams(window.location.search).get('i'); if (i) { setOpenId(i); window.history.replaceState({}, '', '/ideas') } } catch { /* sin URL */ }
+  }, [])
   // Borrar es definitivo: se pregunta antes, y si el servidor falla la idea regresa a la lista.
   const remove = async (id: string): Promise<boolean> => {
     const idea = (ideas || []).find(x => x.id === id)
@@ -160,7 +181,7 @@ export default function IdeasClient() {
         </div>
 
         {/* Filtros: sólo aparecen si ya hay ideas etiquetadas con alguna épica */}
-        {filterEpicaOpts.length > 0 && (
+        {(filterEpicaOpts.length > 0 || filterEpica !== 'todas') && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
             <span style={eb}>Filtrar</span>
             <button onClick={() => { setFilterEpica('todas'); setFilterFeature('todas') }} style={{ cursor: 'pointer', borderRadius: 99, padding: '4px 10px', fontSize: 11, fontWeight: 700, border: filterEpica === 'todas' ? '1px solid #10233F' : '1px solid rgba(15,35,64,0.12)', background: filterEpica === 'todas' ? '#10233F' : '#fff', color: filterEpica === 'todas' ? '#fff' : 'rgba(20,35,61,0.55)' }}>Todas</button>
@@ -231,7 +252,9 @@ function IdeaPopup({ idea, epicas, richReady, onPatch, onDelete, onClose }: {
   const [commentDraft, setCommentDraft] = useState('')
   const [converting, setConverting] = useState(false)
   const [convErr, setConvErr] = useState('')
-  const creada = useRef<string | null>(null)   // tarea ya creada si falló solo el paso de ligarla (no crear otra)
+  const creada = useRef<string | null>(null)
+  const textoRef = useRef<HTMLTextAreaElement | null>(null)   // «Convertir» usa lo que está escrito, aunque aún no se guarde
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k) }, [onClose])   // tarea ya creada si falló solo el paso de ligarla (no crear otra)
   const converted = !!idea.tareaId
   const tagEpica = epicas.find(e => e.id === idea.epicaId)
   const feats = tagEpica?.features || []
@@ -251,7 +274,7 @@ function IdeaPopup({ idea, epicas, richReady, onPatch, onDelete, onClose }: {
       body: JSON.stringify({
         epicaId: idea.epicaId,
         create: [{
-          id: taskId, t: idea.texto, status: 'Por hacer', due: '', note: '', links: idea.links, createdAt: todayISO(),
+          id: taskId, t: textoRef.current?.value.trim() || idea.texto, status: 'Por hacer', due: '', note: '', links: idea.links, createdAt: todayISO(),
           ...(idea.featureId ? { featureId: idea.featureId } : {}),
           ...(idea.comentarios.length ? { comentarios: idea.comentarios } : {}),
         }],
@@ -283,7 +306,7 @@ function IdeaPopup({ idea, epicas, richReady, onPatch, onDelete, onClose }: {
             <button aria-label="Cerrar" onClick={onClose} style={{ cursor: 'pointer', border: 'none', background: 'rgba(15,35,64,0.06)', borderRadius: 9, height: 30, width: 30, color: 'rgba(20,35,61,0.55)', fontSize: 15 }}>✕</button>
           </div>
 
-          <textarea key={idea.id} defaultValue={idea.texto} rows={3}
+          <textarea key={idea.id} ref={textoRef} defaultValue={idea.texto} rows={3}
             onBlur={e => { const v = e.target.value.trim(); if (v && v !== idea.texto) onPatch(idea.id, { texto: v }) }}
             style={{ ...field, width: '100%', boxSizing: 'border-box', resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
 
