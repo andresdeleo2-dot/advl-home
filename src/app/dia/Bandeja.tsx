@@ -73,16 +73,19 @@ const SECCIONES: { f: Exclude<Filtro, 'todo'>; t: string; sub: string; color: st
   { f: 'mover', t: 'Notas del inbox', sub: 'A qué carpeta de tu bóveda van.', color: '#8a8378' },
 ]
 
-export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn, avisar, tapada }: {
+export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver, abrirEn, avisar, tapada, creadas }: {
   data: DiaData; hoy: string; respuestas: Map<string, DiaRespuesta>; epicas: Epica[] | null
   acc: AccionesBandeja; alTerminar: () => void; volver: () => void; abrirEn?: string | null; avisar?: Avisar
   /** La ficha completa de una tarea está abierta encima (tras «Guardar tarea»): la de aquí espera, para no tapar ni robar el teclado. */
   tapada?: boolean
+  /** Lo que ya se creó solo en tus épicas (pendientes nuevos del diario), para revisarlo arriba. */
+  creadas?: React.ReactNode
 }) {
   const [filtro, setFiltro] = useState<Filtro>('todo')
   const [abierto, setAbierto] = useState<string | null>(abrirEn ?? null)
   const [verHechas, setVerHechas] = useState(false)
-  const todos = useMemo(() => itemsDe(data), [data])
+  // Los pendientes nuevos que se crearon solos no se deciden aquí: van en «Ya las puse en tus épicas».
+  const todos = useMemo(() => itemsDe(data).filter(it => !(respuestas.get(it.id)?.respuesta as { auto?: boolean } | null)?.auto), [data, respuestas])
   const pendientes = todos.filter(it => !respuestas.has(it.id))
   const hechas = todos.filter(it => respuestas.has(it.id))
   // La ficha recorre las que faltan (en el orden de las secciones) para que ‹ › no te regrese a lo ya decidido.
@@ -120,6 +123,8 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
         </div>
         <div className="bd-falta" aria-live="polite"><b>{pendientes.length}</b><span>{pendientes.length === 1 ? 'falta' : 'faltan'}</span></div>
       </div>
+
+      {creadas}
 
       {pendientes.length > 0 && (
         <div className="bd-filtros" role="tablist" aria-label="Filtrar">
