@@ -11,7 +11,7 @@ import { Preguntale, SaludDia, TuSemana, type PanelExtra } from '@/app/panel/Pan
 import { Bandeja, TuCerebro, itemsDe, type CamposTarea, type AccionesBandeja } from './Bandeja'
 import {
   obsidianUrl, saludEpicas, esperandoAOtros, racha, sumarDias, resolverPlan, diasHasta, textoRecordatorio,
-  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica, type CerebroDatos, type CerebroTarea,
+  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica, type CerebroDatos, type CerebroTarea, type DiaSalud,
 } from '@/lib/dia'
 
 /* ── Utilidades ── */
@@ -708,6 +708,8 @@ function VistaHoy(p: {
     // Cuida tu cerebro: arreglos de un minuto para la bóveda que aún no contestas hoy.
     const cb = dia.cerebro
     if (cb) { const n = [...cb.tareas, ...cb.repaso].filter(t => !p.respuestas.has(`jardin:${t.id}`)).length; if (n) out.push({ t: `Tu cerebro · ${n} de 1 min`, tono: 'azul', accion: p.irBoveda }) }
+    const fallas = (data?.salud || []).filter(x => x.tono === 'rojo').length
+    if (fallas) out.push({ t: `Revisar la automatización · ${fallas}`, tono: 'rojo', accion: p.irBoveda })
     return out
   }, [data, hoy, p.cumples, p.saludHoy, dia.boveda, dia.cerebro, p.respuestas, p.irBoveda])
 
@@ -1275,7 +1277,10 @@ function VistaBoveda({ dia, hoy, respuestas, responder, deshacer, aviso }: {
   deshacer: (itemId: string) => Promise<void>; aviso: (a: Aviso) => void
 }) {
   const b = dia.boveda
-  const cerebro = dia.cerebro ? <CuidaCerebro c={dia.cerebro} hoy={hoy} respuestas={respuestas} responder={responder} deshacer={deshacer} aviso={aviso} /> : null
+  const cerebro = <>
+    {dia.cerebro ? <CuidaCerebro c={dia.cerebro} hoy={hoy} respuestas={respuestas} responder={responder} deshacer={deshacer} aviso={aviso} /> : null}
+    <TodoFunciona salud={dia.resumen?.data.salud} />
+  </>
   if (!b) return <div className="md-fade" id="boveda">{cerebro}<div className="md-card md-mt12"><p className="md-h3">Lo que tienes que revisar en tu bóveda</p><p className="md-sub">Aparece después del primer cierre de las 3:00 (sale de <code>por-revisar</code>, en tarjetas).</p></div></div>
   return (
     <div className="md-fade" id="boveda">
@@ -1300,6 +1305,28 @@ function VistaBoveda({ dia, hoy, respuestas, responder, deshacer, aviso }: {
       ))}
       <a className="md-btn md-ancho" href={obsidianUrl('por-revisar')}>Abrir por-revisar en Obsidian ↗</a>
     </div>
+  )
+}
+
+/* ── ¿Todo funciona? Lo que revisa el cierre de las 3:00 (salud.mjs, 0 tokens) ── */
+function TodoFunciona({ salud }: { salud?: DiaSalud[] }) {
+  if (!salud?.length) return null
+  const mal = salud.filter(x => x.tono !== 'verde').length
+  const orden = { rojo: 0, ambar: 1, verde: 2 } as const
+  return (
+    <section id="todo-funciona">
+      <div className="md-lbl"><span>¿Todo funciona?</span><span>{mal ? `${mal} por revisar` : 'todo bien'}</span></div>
+      <div className="md-card md-lista">
+        {[...salud].sort((a, b) => orden[a.tono] - orden[b.tono]).map((x, i) => (
+          <div key={i} className="md-row">
+            <span className="md-dot" style={{ background: x.tono === 'rojo' ? 'var(--md-rojo)' : x.tono === 'ambar' ? 'var(--md-ambar)' : 'var(--md-verde)' }} />
+            <div className="md-grow">{x.t}{x.detalle && <div className="md-meta">{x.detalle}</div>}</div>
+            {x.nota && <a className="md-icobtn" href={obsidianUrl(x.nota)} aria-label={`Abrir ${x.nota}`}>↗</a>}
+          </div>
+        ))}
+      </div>
+      <p className="md-meta md-mt4">Lo revisa el cierre de las 3:00 sin gastar tokens. Lo pendiente de aplicar te lo pregunto en «Por decidir».</p>
+    </section>
   )
 }
 

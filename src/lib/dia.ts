@@ -34,7 +34,17 @@ export type DiaTarjeta = {
 export type DiaDecision = { id: string; pregunta: string; nota?: string; opciones: string[] }
 /** Pregunta para tu cerebro: llena un hueco de la bóveda (cómo haces las cosas, datos por confirmar).
  *  La respuesta la guarda el cierre de las 3:00 en `nota`. */
-export type DiaPreguntaCerebro = { id: string; pregunta: string; nota?: string; porque?: string }
+export type DiaPreguntaCerebro = {
+  id: string; pregunta: string; nota?: string; porque?: string
+  /** conocer = cómo haces las cosas; conexion = ¿estas dos notas tienen que ver? (si sí, el cierre las liga);
+   *  salud = «¿Ya quedó?» de un pendiente de aplicar (si sí, pasa a «Ya aplicado»). */
+  tipo?: 'conocer' | 'conexion' | 'salud'
+  liga?: string          // conexion: la otra nota
+  opciones?: string[]    // respuestas de un toque
+  pendiente?: string     // salud: la línea exacta del pendiente
+}
+/** ¿Todo funciona? Señales que arma el cierre de las 3:00 sin tokens (salud.mjs). */
+export type DiaSalud = { t: string; detalle?: string; nota?: string; tono: 'verde' | 'ambar' | 'rojo' }
 export type DiaCambio = { nota: string; que: string }
 export type DiaFecha = { t: string; fecha: string; nota?: string }
 
@@ -49,6 +59,7 @@ export type DiaData = {
   fechas: DiaFecha[]
   pregunta?: string        // la pregunta de la noche para conocerte mejor
   cerebro?: DiaPreguntaCerebro[] // preguntas para que la bóveda aprenda cómo haces las cosas
+  salud?: DiaSalud[]       // ¿todo funciona? (corrida, pendientes de aplicar, notas atrasadas)
   inbox?: number           // notas en 00-inbox
   sinDictado?: boolean     // no hubo texto nuevo: no se llamó a Claude
   modelo?: string

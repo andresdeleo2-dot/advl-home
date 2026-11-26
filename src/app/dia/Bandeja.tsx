@@ -44,6 +44,9 @@ const FILTROS: [Filtro, string][] = [['todo', 'Todo'], ['nuevo', 'Pendientes nue
 const SUGERENCIA = new Set(['sugerencia', 'limpieza', 'evitando', 'esperando'])
 const filtroDe = (it: Item): Filtro => it.kind === 'decision' ? 'decision' : it.kind === 'cerebro' ? 'cerebro' : it.c.tipo === 'nuevo' ? 'nuevo' : it.c.tipo === 'mover' ? 'mover' : 'sugerencia'
 const ETIQUETA: Record<string, string> = { nuevo: 'Nuevo del diario', sugerencia: 'Sugerencia', limpieza: 'Limpieza', evitando: 'Lo vienes evitando', esperando: 'Esperando a otros', mover: 'Nota del inbox', decision: 'Decisión', cerebro: 'Para tu cerebro' }
+/** Subtipo de una pregunta para tu cerebro. */
+const SUB_Q: Record<string, string> = { conexion: 'Conexión entre notas', salud: '¿Ya quedó?' }
+const etiquetaDe = (it: Item) => (it.kind === 'cerebro' && it.q.tipo && SUB_Q[it.q.tipo]) || ETIQUETA[tipoDe(it)]
 const tipoDe = (it: Item) => (it.kind === 'tarjeta' ? it.c.tipo : it.kind)
 const tituloDe = (it: Item) => (it.kind === 'tarjeta' ? it.c.titulo : it.kind === 'decision' ? it.d.pregunta : it.q.pregunta)
 const ESTADO_TXT: Record<string, string> = { aceptada: 'Aceptada', pospuesta: 'Pospuesta', descartada: 'Descartada', respondida: 'Contestada' }
@@ -202,10 +205,11 @@ function Fila({ it, hoy, acc, abrir, avisar }: { it: Item; hoy: string; acc: Acc
   }
   const corto = (t: string) => (t.length > 48 ? `${t.slice(0, 46)}…` : t)
   const tit = tituloDe(it)
-  const sub = it.kind === 'tarjeta' ? SUBTIPO[it.c.tipo] : undefined
+  const sub = it.kind === 'tarjeta' ? SUBTIPO[it.c.tipo] : it.kind === 'cerebro' && it.q.tipo ? SUB_Q[it.q.tipo] : undefined
   const epica = it.kind === 'tarjeta' ? it.c.epica || (it.c.tipo === 'nuevo' ? 'Del diario' : '') : ''
   const meta = it.kind === 'tarjeta'
     ? (it.c.tipo === 'mover' ? `→ ${it.c.destino}` : '')
+    : it.kind === 'cerebro' && it.q.tipo === 'conexion' && it.q.liga ? `si dices que sí, ligo ${it.q.nota} con ${it.q.liga}`
     : (it.kind === 'decision' ? it.d.nota : it.q.nota) ? `se guarda en ${it.kind === 'decision' ? it.d.nota : it.q.nota}` : ''
   const puedeMarcar = marcable(it)
   const terminar = () => { if (it.kind !== 'tarjeta') return; setHecha(true); correr(() => acc.terminar(it.c), `Hecha: ${corto(tit)}`) }
@@ -229,7 +233,13 @@ function Fila({ it, hoy, acc, abrir, avisar }: { it: Item; hoy: string; acc: Acc
             <button className="bd-op bd-op-luego" disabled={ocupado} onClick={() => correr(() => acc.descartar(it), 'Lo dejas para después')}>Todavía no</button>
           </div>
         )}
-        {(it.kind === 'cerebro' || (it.kind === 'decision' && escribir)) && (
+        {it.kind === 'cerebro' && !!it.q.opciones?.length && (
+          <div className="bd-opciones">
+            {it.q.opciones.map(o => <button key={o} className="bd-op" disabled={ocupado} onClick={() => correr(() => acc.contestar(it.q, o), `Guardado: ${corto(o)}`)}>{o}</button>)}
+            <button className="bd-op bd-op-otra" disabled={ocupado} onClick={() => setEscribir(v => !v)} aria-expanded={escribir}>Otra…</button>
+          </div>
+        )}
+        {((it.kind === 'cerebro' && (!it.q.opciones?.length || escribir)) || (it.kind === 'decision' && escribir)) && (
           <form className="bd-responder" onSubmit={e => { e.preventDefault(); const v = txt.trim(); if (!v) return; correr(() => it.kind === 'cerebro' ? acc.contestar(it.q, v) : acc.decidir((it as Extract<Item, { kind: 'decision' }>).d, v, null), 'Guardado para tu cerebro') }}>
             <input className="md-input md-grow" value={txt} onChange={e => setTxt(e.target.value)} placeholder={it.kind === 'cerebro' ? 'Tu respuesta, en una línea' : 'Tu decisión'} aria-label="Tu respuesta" />
             <button className="md-btn md-chico md-primario" disabled={ocupado || !txt.trim()}>Guardar</button>
@@ -289,7 +299,7 @@ function Ficha({ it, pos, total, r, hoy, epicas, acc, cerrar, anterior, siguient
           <span className="md-grow" />
           <button className="md-btn md-chico" onClick={cerrar}>← Lista</button>
         </div>
-        <span className={`md-chip md-tipo-${tipoDe(it) === 'decision' ? 'nuevo' : tipoDe(it) === 'cerebro' ? 'esperando' : tipoDe(it)}`}>{ETIQUETA[tipoDe(it)]}</span>
+        <span className={`md-chip md-tipo-${tipoDe(it) === 'decision' ? 'nuevo' : tipoDe(it) === 'cerebro' ? 'esperando' : tipoDe(it)}`}>{etiquetaDe(it)}</span>
         <p className="md-titulo-tarjeta">{tituloDe(it)}</p>
         {it.kind === 'tarjeta' && it.c.detalle && <p className="md-sub">{it.c.detalle}</p>}
         {it.kind === 'cerebro' && it.q.porque && <p className="md-sub">{it.q.porque}</p>}
@@ -401,6 +411,13 @@ function FichaCerebro({ q, it, ocupado, correr, acc }: { q: DiaPreguntaCerebro; 
   const dict = useDictado(f => setTexto(v => juntar(v, f)))
   return (
     <>
+      {!!q.opciones?.length && (
+        <div className="bd-opciones md-mt12">
+          {q.opciones.map(o => <button key={o} className="bd-op" disabled={ocupado} onClick={() => correr(() => acc.contestar(q, o))}>{o}</button>)}
+        </div>
+      )}
+      {q.tipo === 'conexion' && q.liga && <p className="md-meta md-mt4">Si dices que sí, a las 3:00 ligo [[{q.nota}]] con [[{q.liga}]] en las dos notas.</p>}
+      {q.tipo === 'salud' && <p className="md-meta md-mt4">«Ya quedó» lo pasa a «Ya aplicado» en {q.nota}.</p>}
       <textarea className="md-input md-area md-mt12" rows={3} value={dict.parcial ? juntar(texto, dict.parcial) : texto} onChange={e => setTexto(e.target.value)} placeholder="Con una o dos líneas basta" aria-label="Tu respuesta" />
       <div className="md-fila md-mt4"><MicChico d={dict} /><span className="md-meta">{dict.error || (dict.escuchando ? 'Te escucho…' : q.nota ? `Se guarda en ${q.nota} a las 3:00` : 'Se guarda en tu bóveda a las 3:00')}</span></div>
       <div className="md-tres">
