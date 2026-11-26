@@ -16,7 +16,8 @@ const DN3 = ['D', 'L', 'M', 'M', 'J', 'V', 'S']
 const fecha0 = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d) }
 const tarjeta: CSSProperties = { borderRadius: 16, background: '#fff', border: '1px solid var(--md-linea, rgba(15,35,64,0.09))' }
 
-export type PanelExtra = { salud: null | { peso: number; fecha: string; cambioSemana: number | null; hace: number; anotadoHoy: boolean | null }; sinContacto: null | { id: string; nombre: string; dias: number }[] }
+export type PanelExtra = { salud: null | { peso: number; fecha: string; cambioSemana: number | null; hace: number; anotadoHoy: boolean | null }; gente?: Gente[] }
+export type Gente = { id: string; tipo: 'cumple' | 'momento' | 'plan'; fecha: string; dias: number; titulo: string; detalle: string | null; celular?: string | null }
 
 /** Tu semana: calificación por día y planeado contra trabajado (Tiempo). */
 export function TuSemana({ dia, epics, hoy }: { dia: DiaGet | null; epics: Epica[] | null; hoy: string }) {

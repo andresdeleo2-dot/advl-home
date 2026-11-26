@@ -7,11 +7,11 @@ import type { Epica, EpicaTask } from '@/lib/supabase'
 import { todayISO, uid, completeRecurring } from '@/components/epicas/core'
 import { waNumero } from '@/lib/cumple'
 import { useDictado, juntar } from '@/lib/useDictado'
-import { Preguntale, SaludDia, TuSemana, type PanelExtra } from '@/app/panel/PanelDia'
-import { Bandeja, TuCerebro, itemsDe, type CamposTarea, type AccionesBandeja } from './Bandeja'
+import { Preguntale, SaludDia, TuSemana, type PanelExtra, type Gente } from '@/app/panel/PanelDia'
+import { Bandeja, itemsDe, type CamposTarea, type AccionesBandeja } from './Bandeja'
 import {
   obsidianUrl, saludEpicas, esperandoAOtros, racha, sumarDias, resolverPlan, diasHasta, textoRecordatorio,
-  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica, type CerebroDatos, type CerebroTarea, type DiaSalud,
+  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica, type DiaAprendido, type CerebroDatos, type CerebroTarea, type DiaSalud,
 } from '@/lib/dia'
 
 /* ── Utilidades ── */
@@ -61,6 +61,13 @@ export default function DiaClient() {
   const [modoElegido, setModoElegido] = useState(false)
   const [fecha, setFecha] = useState(hoy)            // el día que estás viendo (tira de la semana)
   const [diaOtro, setDiaOtro] = useState<DiaGet | null>(null)
+  // Tus 3 de ayer: lo que no hiciste de ahí sale hoy en «Quedó pendiente».
+  const [ayerPri, setAyerPri] = useState<DiaPrioridad[]>([])
+  useEffect(() => {
+    let vivo = true
+    fetch(`/api/dia?fecha=${sumarDias(hoy, -1)}`).then(r => r.json()).then(j => { if (vivo && j?.ok) setAyerPri((j as DiaGet).resumen?.data?.prioridades || []) }).catch(() => {})
+    return () => { vivo = false }
+  }, [hoy])
   const [aviso, setAviso] = useState<Aviso>(null)
   const avisoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -257,6 +264,24 @@ export default function DiaClient() {
     setEpicas(es => es ? es.map(e => e.id !== hit.e.id ? e : { ...e, tasks: e.tasks.map(x => x.id === tareaId ? t : x) }) : es)
     try { await sync(hit.e.id, { update: [t] }); cargarEpicas(); mostrarAviso({ texto: plan ? `«${t.t}» pasó al ${diaLargo(plan)}` : `«${t.t}» ya no está agendada`, deshacer: () => { sync(hit.e.id, { update: [hit.t] }).then(cargarEpicas).catch(() => {}) } }) }
     catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
+  }, [todas, sync, cargarEpicas, mostrarAviso])
+
+  /** Varias de golpe («Quedó pendiente › De antes»): todas a una fecha o fuera del plan. Con deshacer. */
+  const moverVarias = useCallback(async (ids: string[], plan: string | null) => {
+    const porEpica = new Map<string, { nuevas: EpicaTask[]; viejas: EpicaTask[] }>()
+    for (const id of ids) {
+      const hit = todas.get(id); if (!hit) continue
+      const t: EpicaTask = { ...hit.t }
+      if (plan) t.plan = plan; else delete t.plan
+      delete t.planOrder
+      const g = porEpica.get(hit.e.id) || { nuevas: [], viejas: [] }
+      g.nuevas.push(t); g.viejas.push(hit.t); porEpica.set(hit.e.id, g)
+    }
+    try {
+      for (const [eid, g] of porEpica) await sync(eid, { update: g.nuevas })
+      cargarEpicas()
+      mostrarAviso({ texto: plan ? `${ids.length} tareas pasaron al ${diaLargo(plan)}` : `${ids.length} tareas ya no están agendadas (siguen en su épica)`, deshacer: () => { Promise.all([...porEpica].map(([eid, g]) => sync(eid, { update: g.viejas }))).then(cargarEpicas).catch(() => {}) } })
+    } catch (e) { mostrarAviso({ texto: e instanceof Error ? e.message : String(e) }); cargarEpicas() }
   }, [todas, sync, cargarEpicas, mostrarAviso])
 
   /* ── Tus 3 de hoy ── */
@@ -481,7 +506,7 @@ export default function DiaClient() {
             prioridades={prioridades} respaldo={tresDeRespaldo} tareaDe={tareaDePrioridad} toggleHecha={toggleHecha} marcar={marcarPrioridad} puedeMarcar={puedeMarcar}
             pendientes={pendientes} decisiones={decisionesAbiertas} respuestas={respuestas} porDecidir={porDecidir.length}
             abrirRitual={() => ir('ritual')} ordenar={() => { setModo('tus3'); setModoElegido(true); window.scrollTo({ top: 0 }) }} irBoveda={() => ir('boveda')} responder={responder} capturar={capturar} aviso={mostrarAviso}
-            cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} />
+            cerebroAbiertas={cerebroAbiertas} crearRapida={crearRapida} ayerPri={ayerPri} reprogramar={reprogramar} moverVarias={moverVarias} />
         )}
 
         {dia && fecha === hoy && modo === 'noche' && (
@@ -675,6 +700,7 @@ function VistaHoy(p: {
   abrirRitual: () => void; ordenar: () => void; irBoveda: () => void; responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown; tareaId?: string }) => Promise<void>
   capturar: (t: string, tipo?: TipoCaptura) => Promise<void>; aviso: (a: Aviso) => void
   cerebroAbiertas: number; porDecidir: number; crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
+  ayerPri: DiaPrioridad[]; reprogramar: (tareaId: string, plan: string | null) => Promise<void>; moverVarias: (ids: string[], plan: string | null) => Promise<void>
 }) {
   const { dia, data, hoy, epicas } = p
   // Tus 3: lo que propuso Claude, ya ligado a tareas reales; si no hay, lo agendado para hoy.
@@ -686,6 +712,29 @@ function VistaHoy(p: {
   const hechas = tres.filter(x => x.hit && hechaHoy(x.hit.t, hoy)).length
   // «Ahora» = la primera que puedes hacer tú: lo que está en Esperando no va primero.
   const siguiente = tres.find(x => !x.hit || (!hechaHoy(x.hit.t, hoy) && x.hit.t.status !== 'Esperando')) || tres.find(x => !x.hit || !hechaHoy(x.hit.t, hoy))
+
+  // Lo que se quedó: agendado hoy fuera de tus 3, lo de ayer sin terminar y lo atrasado de antes.
+  const pend = useMemo(() => {
+    const ayer = sumarDias(hoy, -1)
+    const enTres = new Set(tres.map(x => x.hit?.t.id).filter(Boolean) as string[])
+    const ayerIds = new Set(p.ayerPri.map(x => x.tareaId).filter(Boolean) as string[])
+    const tambien: Hit[] = [], deAyer: (Hit & { porque: string })[] = [], antes: Hit[] = []
+    for (const e of epicas || []) {
+      if (e.archived) continue
+      for (const t of e.tasks || []) {
+        if (!t.id || !ABIERTA(t) || enTres.has(t.id) || t.status === 'Esperando') continue
+        if (t.plan === hoy || t.dayPlans?.some(d => d.day === hoy)) { tambien.push({ e, t: t as Hit['t'] }); continue }
+        if ((t.plan && t.plan > hoy) || t.dayPlans?.some(d => d.day > hoy)) continue   // ya tiene otro día
+        if (ayerIds.has(t.id)) deAyer.push({ e, t: t as Hit['t'], porque: 'estaba en tus 3 de ayer' })
+        else if (t.plan === ayer) deAyer.push({ e, t: t as Hit['t'], porque: 'agendada ayer' })
+        else if (t.plan && t.plan < ayer) antes.push({ e, t: t as Hit['t'] })
+      }
+    }
+    antes.sort((a, b) => (b.t.plan || '').localeCompare(a.t.plan || ''))
+    // De tus 3 de ayer que Claude sacó del diario sin tarea ligada: no sé si las hiciste.
+    const sueltas = p.ayerPri.filter(x => !x.tareaId && !p.prioridades.some(y => y.t === x.t))
+    return { tambien, deAyer, antes, sueltas }
+  }, [epicas, hoy, tres, p.ayerPri, p.prioridades])
 
   const salud = useMemo(() => (epicas ? saludEpicas(epicas, hoy) : []), [epicas, hoy])
   const esperando = useMemo(() => (epicas ? esperandoAOtros(epicas, hoy) : []), [epicas, hoy])
@@ -699,7 +748,7 @@ function VistaHoy(p: {
       const [, m, d] = c.cumple.split('-').map(Number); if (!m || !d) continue
       let f = `${hoy.slice(0, 4)}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
       if (f < hoy) f = `${Number(hoy.slice(0, 4)) + 1}${f.slice(4)}`
-      const n = diasHasta(hoy, f); if (n <= 7) out.push({ t: `Cumple de ${c.apodo || c.nombre.split(' ')[0]} · ${enDias(n)}`, tono: n === 0 ? 'rojo' : 'verde' })
+      const n = diasHasta(hoy, f); if (n === 0) out.push({ t: `Hoy cumple ${c.apodo || c.nombre.split(' ')[0]}`, tono: 'rojo' })
     }
     if (data?.inbox) out.push({ t: `Inbox · ${data.inbox}`, tono: 'gris' })
     if (p.saludHoy === false) out.push({ t: 'Registrar salud', tono: 'ambar', href: '/peso' })
@@ -729,19 +778,10 @@ function VistaHoy(p: {
       )}
       {data?.sinDictado && <p className="md-meta md-mt8">No dictaste nada ayer; tus épicas sí están al día.</p>}
 
+      {p.porDecidir > 0 && <PorDecidir n={p.porDecidir} pendientes={p.pendientes} decisiones={p.decisiones} cerebro={p.cerebroAbiertas} abrir={p.abrirRitual} />}
+
       <div className="md-grid">
         <div className="md-col">
-          {p.porDecidir > 0 && (
-            <button className="md-card md-pendientes" onClick={p.abrirRitual}>
-              <span><b>Por decidir · {p.porDecidir}</b>
-                <span className="md-meta md-bloque">{[p.pendientes.filter(c => c.tipo === 'nuevo').length ? `${p.pendientes.filter(c => c.tipo === 'nuevo').length} pendientes nuevos` : null,
-                  p.pendientes.filter(c => c.tipo !== 'nuevo').length ? `${p.pendientes.filter(c => c.tipo !== 'nuevo').length} sugerencias` : null,
-                  p.decisiones.length ? `${p.decisiones.length} ${p.decisiones.length === 1 ? 'decisión' : 'decisiones'}` : null,
-                  p.cerebroAbiertas ? `${p.cerebroAbiertas} para tu cerebro` : null].filter(Boolean).join(' · ')}</span></span>
-              <span className="md-link">Revisar →</span>
-            </button>
-          )}
-
           {siguiente ? (
             <div className="md-card md-ahora">
               <p className="md-kicker">Ahora</p>
@@ -770,6 +810,8 @@ function VistaHoy(p: {
             </div>
           )}
 
+          <QuedoPendiente pend={pend} hoy={hoy} epicas={epicas} toggleHecha={p.toggleHecha} reprogramar={p.reprogramar} moverVarias={p.moverVarias} crearRapida={p.crearRapida} />
+
           {chips.length > 0 && (
             <div className="md-chips">
               {chips.map((c, i) => c.accion
@@ -781,20 +823,10 @@ function VistaHoy(p: {
           )}
 
           <Agenda eventos={p.eventos} hoy={hoy} />
-
-          <TuCerebro aprendido={dia.aprendido || []} />
         </div>
 
         <div className="md-col">
-          {salud.length > 0 && (
-            <section>
-              <div className="md-lbl"><span>Tus épicas</span><span>siguiente paso</span></div>
-              <div className="md-card md-lista">
-                {(todasEpicas ? salud : salud.slice(0, 6)).map(s => <FilaEpica key={s.e.id} s={s} />)}
-              </div>
-              {salud.length > 6 && <button className="md-link md-mt8" onClick={() => setTodasEpicas(v => !v)}>{todasEpicas ? 'Ver menos' : `Ver las ${salud.length}`}</button>}
-            </section>
-          )}
+          {salud.length > 0 && <EpicasAtencion salud={salud} hoy={hoy} todas={todasEpicas} setTodas={setTodasEpicas} reprogramar={p.reprogramar} />}
           {!epicas && <div className="md-card md-sk" style={{ height: 180 }} />}
 
           {esperando.length > 0 && (
@@ -816,29 +848,10 @@ function VistaHoy(p: {
             </section>
           )}
 
-          {(data?.cambios.length ?? 0) > 0 && (
-            <details className="md-card md-plegable">
-              <summary><span>Qué cambió Claude anoche</span><span className="md-meta">{data!.cambios.length} {data!.cambios.length === 1 ? 'nota' : 'notas'}</span></summary>
-              <div className="md-lista md-mt8">
-                {data!.cambios.map((c, i) => (
-                  <div key={i} className="md-row"><div className="md-grow">{c.que}<div className="md-meta">{c.nota}</div></div><a className="md-icobtn" href={obsidianUrl(c.nota)} aria-label={`Abrir ${c.nota}`}>↗</a></div>
-                ))}
-              </div>
-            </details>
-          )}
-
           <SaludDia extra={p.extra} />
-          {(p.extra?.sinContacto?.length ?? 0) > 0 && (
-            <section>
-              <div className="md-lbl"><span>Sin verse hace tiempo</span><a className="md-link" href="https://mi-vida-neon.vercel.app/vida?vista=personas" target="_blank" rel="noopener noreferrer">Personas ↗</a></div>
-              <div className="md-card md-lista">
-                {p.extra!.sinContacto!.map(x => (
-                  <div key={x.id} className="md-row"><span className="md-grow">{x.nombre}</span><span className="md-meta">{x.dias >= 60 ? `${Math.round(x.dias / 30)} meses` : `${x.dias} días`}</span></div>
-                ))}
-              </div>
-            </section>
-          )}
+          <TuGente gente={p.extra?.gente} hoy={hoy} />
           <Preguntale />
+          <AnocheBoveda cambios={data?.cambios || []} aprendido={dia.aprendido || []} />
         </div>
       </div>
 
@@ -847,16 +860,206 @@ function VistaHoy(p: {
   )
 }
 
-function FilaEpica({ s }: { s: SaludEpica }) {
-  const color = s.estado === 'vencidas' ? 'var(--md-rojo)' : s.estado === 'al_dia' ? 'var(--md-verde)' : s.estado === 'quieta' || s.estado === 'pausa' ? 'var(--md-tenue)' : 'var(--md-ambar)'
+type Hit = { e: Epica; t: EpicaTask & { id: string } }
+const corta = (iso: string) => { const d = fechaDe(iso); return `${d.getDate()} ${MN[d.getMonth()].slice(0, 3)}` }
+
+/** «Por decidir»: arriba y a todo lo ancho. Enseña lo primero que hay que decidir para que no se quede como un renglón más. */
+function PorDecidir({ n, pendientes, decisiones, cerebro, abrir }: { n: number; pendientes: DiaTarjeta[]; decisiones: DiaDecision[]; cerebro: number; abrir: () => void }) {
+  const nuevos = pendientes.filter(c => c.tipo === 'nuevo').length
+  const sug = pendientes.length - nuevos
+  const primeros = [...pendientes.map(c => c.titulo), ...decisiones.map(d => d.pregunta)].slice(0, 3)
+  const min = Math.max(1, Math.round(n * 20 / 60))   // ~20 s por tarjeta
+  const desglose = [nuevos ? `${nuevos} ${nuevos === 1 ? 'pendiente nuevo' : 'pendientes nuevos'}` : null, sug ? `${sug} ${sug === 1 ? 'sugerencia' : 'sugerencias'}` : null,
+    decisiones.length ? `${decisiones.length} ${decisiones.length === 1 ? 'decisión' : 'decisiones'}` : null, cerebro ? `${cerebro} para tu cerebro` : null].filter(Boolean).join(' · ')
   return (
-    <Link href="/epicas" className="md-row md-fila-link">
+    <button type="button" className="md-card md-decidir md-mt12" onClick={abrir}>
+      <div className="md-grow">
+        <p className="md-kicker">Antes de empezar</p>
+        <p className="md-decidir-num">{n} por decidir <span className="md-meta">· unos {min} min</span></p>
+        {primeros.length > 0 && <ul className="md-decidir-lista">{primeros.map((t, i) => <li key={i}>{t}</li>)}{n > primeros.length && <li className="md-meta">y {n - primeros.length} más</li>}</ul>}
+        <p className="md-meta md-mt4">{desglose}. Lo que decidas se guarda en Obsidian y Claude lo usa para tu día.</p>
+      </div>
+      <span className="md-btn md-primario md-decidir-btn">Decidir ahora →</span>
+    </button>
+  )
+}
+
+/** Lo que se quedó sin hacer: lo agendado hoy fuera de tus 3, lo de ayer y lo atrasado de antes. Cada una se mueve a hoy, mañana o se suelta. */
+function QuedoPendiente({ pend, hoy, epicas, toggleHecha, reprogramar, moverVarias, crearRapida }: {
+  pend: { tambien: Hit[]; deAyer: (Hit & { porque: string })[]; antes: Hit[]; sueltas: DiaPrioridad[] }; hoy: string; epicas: Epica[] | null
+  toggleHecha: (id: string) => Promise<void>; reprogramar: (id: string, plan: string | null) => Promise<void>; moverVarias: (ids: string[], plan: string | null) => Promise<void>
+  crearRapida: (titulo: string, epicaId: string, cuando: PlanRapido) => Promise<string>
+}) {
+  const CLAVE = 'dia.sueltas.vistas.v1'
+  const [vistas, setVistas] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem(CLAVE) || '[]') } catch { return [] } })
+  const ocultar = (t: string) => { const v = [...vistas, t].slice(-40); setVistas(v); try { localStorage.setItem(CLAVE, JSON.stringify(v)) } catch { /* sin almacenamiento */ } }
+  const sueltas = pend.sueltas.filter(x => !vistas.includes(x.t))
+  const manana = sumarDias(hoy, 1)
+  const Botones = ({ id }: { id: string }) => (
+    <div className="md-acciones">
+      <button type="button" className="md-btn md-chico" onClick={() => reprogramar(id, hoy)}>Hoy</button>
+      <button type="button" className="md-btn md-chico" onClick={() => reprogramar(id, manana)}>Mañana</button>
+      <button type="button" className="md-btn md-chico md-btn-tenue" title="Quitarla del plan; sigue en su épica" onClick={() => reprogramar(id, null)}>Soltar</button>
+    </div>
+  )
+  const Fila = ({ e, t, meta }: Hit & { meta: string }) => (
+    <div className="md-row md-row-pend">
+      <span className="md-dot" style={{ background: e.color || 'var(--md-linea)' }} />
+      <div className="md-grow"><Link className="md-fila-link md-tinta" href={`/epicas?e=${encodeURIComponent(e.id)}&t=${encodeURIComponent(t.id)}`}>{t.t}</Link><div className="md-meta">{meta}</div></div>
+      <Botones id={t.id} />
+    </div>
+  )
+  const nAyer = pend.deAyer.length + sueltas.length
+  return (
+    <>
+      {pend.tambien.length > 0 && (
+        <section>
+          <div className="md-lbl"><span>También agendado hoy</span><span>{pend.tambien.length}</span></div>
+          <div className="md-otras">
+            {pend.tambien.map(({ e, t }) => (
+              <button key={t.id} type="button" className="md-check" onClick={() => toggleHecha(t.id)} title="Marcar como hecha">
+                <span className="md-caja" aria-hidden /><span className="md-grow">{t.t}<span className="md-meta"> · {e.name}</span></span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+      {(nAyer > 0 || pend.antes.length > 0) && (
+        <section>
+          <div className="md-lbl"><span>Quedó pendiente</span><span>{nAyer + pend.antes.length}</span></div>
+          {nAyer > 0 && (
+            <div className="md-card md-lista">
+              {pend.deAyer.map(h => <Fila key={h.t.id} {...h} meta={`${h.e.name} · ${h.porque}`} />)}
+              {sueltas.map(x => {
+                const ep = (epicas || []).find(e => !e.archived && e.name === x.epica)
+                return (
+                  <div key={x.t} className="md-row md-row-pend">
+                    <span className="md-dot" style={{ background: 'var(--md-linea)' }} />
+                    <div className="md-grow">{x.t}<div className="md-meta">estaba en tus 3 de ayer · no tiene tarea</div></div>
+                    <div className="md-acciones">
+                      <button type="button" className="md-btn md-chico" title="Crear la tarea agendada para hoy" onClick={() => crearRapida(x.t, ep?.id || '', 'hoy').then(() => ocultar(x.t)).catch(() => {})}>＋ Hoy</button>
+                      <button type="button" className="md-btn md-chico md-btn-tenue" title="Ya la hice o ya no va" onClick={() => ocultar(x.t)}>Ya quedó</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {pend.antes.length > 0 && (
+            <details className="md-card md-plegable md-antes">
+              <summary><span>De días anteriores · {pend.antes.length}</span><span className="md-meta">desde el {corta(pend.antes[pend.antes.length - 1].t.plan!)}</span></summary>
+              <div className="md-fila md-mt8">
+                <button type="button" className="md-btn md-chico" onClick={() => { if (window.confirm(`¿Quitar del plan las ${pend.antes.length}? Siguen en su épica sin fecha; puedes deshacer.`)) moverVarias(pend.antes.map(h => h.t.id), null) }}>Soltar las {pend.antes.length}</button>
+              </div>
+              <div className="md-lista md-mt8">
+                {pend.antes.map(h => <Fila key={h.t.id} {...h} meta={`${h.e.name} · agendada el ${corta(h.t.plan!)}`} />)}
+              </div>
+            </details>
+          )}
+        </section>
+      )}
+    </>
+  )
+}
+
+/** Épicas que piden atención (vencidas, atrasadas, quietas, esperando). Las que van al día se resumen en una línea. */
+function EpicasAtencion({ salud, hoy, todas, setTodas, reprogramar }: { salud: SaludEpica[]; hoy: string; todas: boolean; setTodas: (f: (v: boolean) => boolean) => void; reprogramar: (id: string, plan: string | null) => Promise<void> }) {
+  const atencion = salud.filter(s => s.estado !== 'al_dia' && s.estado !== 'pausa')
+  const resto = salud.length - atencion.length
+  const lista = todas ? salud : atencion
+  return (
+    <section>
+      <div className="md-lbl"><span>Épicas que piden atención</span><Link className="md-link" href="/epicas">Épicas ↗</Link></div>
+      {lista.length > 0
+        ? <div className="md-card md-lista">{lista.map(s => <FilaEpica key={s.e.id} s={s} hoy={hoy} reprogramar={reprogramar} />)}</div>
+        : <div className="md-card"><p className="md-sub">Todas tus épicas van al día.</p></div>}
+      {resto > 0 && <p className="md-meta md-mt8">{todas ? 'Viendo todas' : `${resto} van al día o en pausa`} · <button type="button" className="md-link" onClick={() => setTodas(v => !v)}>{todas ? 'Solo las que piden atención' : 'Ver todas'}</button></p>}
+    </section>
+  )
+}
+
+function FilaEpica({ s, hoy, reprogramar }: { s: SaludEpica; hoy: string; reprogramar: (id: string, plan: string | null) => Promise<void> }) {
+  const color = s.estado === 'vencidas' ? 'var(--md-rojo)' : s.estado === 'al_dia' ? 'var(--md-verde)' : s.estado === 'quieta' || s.estado === 'pausa' ? 'var(--md-tenue)' : 'var(--md-ambar)'
+  // Lo que conviene mover: la vencida o atrasada más vieja; si no hay, el siguiente paso.
+  const abiertas = (s.e.tasks || []).filter(t => ABIERTA(t) && t.status !== 'Esperando')
+  const foco = s.estado === 'vencidas' ? abiertas.filter(t => t.due && t.due < hoy).sort((a, b) => a.due!.localeCompare(b.due!))[0]
+    : s.estado === 'atrasadas' ? abiertas.filter(t => t.plan && t.plan < hoy).sort((a, b) => a.plan!.localeCompare(b.plan!))[0]
+    : s.siguiente
+  const t = foco || s.siguiente
+  const porque = !t ? null : t.due && t.due < hoy ? `venció el ${corta(t.due)}` : t.plan && t.plan < hoy ? `agendada el ${corta(t.plan)}` : t.plan === hoy ? 'agendada hoy' : t.plan ? `agendada el ${corta(t.plan)}` : null
+  return (
+    <div className="md-row">
       <span className="md-dot" style={{ background: color }} />
       <div className="md-grow">
-        <div className="md-entre"><span className="md-fuerte">{s.e.name}</span><span className="md-meta" style={{ color }}>{s.etiqueta}</span></div>
-        <div className="md-meta">{s.siguiente ? s.siguiente.t : 'Sin siguiente paso'}</div>
+        <div className="md-entre"><Link href={`/epicas?e=${encodeURIComponent(s.e.id)}`} className="md-fila-link"><span className="md-fuerte">{s.e.name}</span></Link><span className="md-meta" style={{ color }}>{s.etiqueta}</span></div>
+        {t
+          ? <div className="md-meta"><Link className="md-fila-link md-tinta2" href={`/epicas?e=${encodeURIComponent(s.e.id)}&t=${encodeURIComponent(t.id || '')}`}>{t.t}</Link>{porque ? ` · ${porque}` : ''}</div>
+          : <div className="md-meta">Sin siguiente paso · <Link className="md-link" href={`/epicas?e=${encodeURIComponent(s.e.id)}`}>agregar uno</Link></div>}
       </div>
-    </Link>
+      {t?.id && t.plan !== hoy && <button type="button" className="md-btn md-chico" title="Agendar este paso para hoy" onClick={() => reprogramar(t.id!, hoy)}>Hoy</button>}
+    </div>
+  )
+}
+
+/** Tu gente: cumpleaños, aniversarios de momentos y planes que vienen (Mi Vida). */
+function TuGente({ gente, hoy }: { gente?: Gente[]; hoy: string }) {
+  if (!gente) return null
+  const COLOR = { cumple: 'var(--md-verde)', plan: 'var(--md-azul)', momento: 'var(--md-ambar)' }
+  const cuando = (g: Gente) => g.dias === 0 ? 'hoy' : g.dias === 1 ? 'mañana' : g.dias < 7 ? DN[fechaDe(g.fecha).getDay()] : `${corta(g.fecha)} · en ${g.dias} días`
+  return (
+    <section>
+      <div className="md-lbl"><span>Tu gente · lo que viene</span><a className="md-link" href="https://mi-vida-neon.vercel.app/vida?vista=personas" target="_blank" rel="noopener noreferrer">Personas ↗</a></div>
+      {gente.length === 0
+        ? <div className="md-card"><p className="md-sub">Sin cumpleaños, aniversarios ni planes en las próximas semanas. <a className="md-link" href="https://mi-vida-neon.vercel.app/vida?vista=planes" target="_blank" rel="noopener noreferrer">Armar un plan ↗</a></p></div>
+        : (
+          <div className="md-card md-lista">
+            {gente.map(g => {
+              const tel = g.tipo === 'cumple' ? waNumero(g.celular) : null
+              return (
+                <div key={g.id} className="md-row" data-hoy={g.fecha === hoy}>
+                  <span className="md-dot" style={{ background: COLOR[g.tipo] }} />
+                  <div className="md-grow">{g.titulo}<div className="md-meta"><span className={g.dias <= 1 ? 'md-fuerte' : ''}>{cuando(g)}</span>{g.detalle ? ` · ${g.detalle}` : ''}</div></div>
+                  {g.tipo === 'cumple' && g.dias <= 1 && <a className="md-btn md-chico" href={`https://wa.me/${tel || ''}?text=${encodeURIComponent('¡Feliz cumpleaños! 🎉')}`} target="_blank" rel="noopener noreferrer">{g.dias === 0 ? 'Felicitar' : 'Preparar'}</a>}
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </section>
+  )
+}
+
+/** Lo que Claude cambió anoche en tus notas y lo que guardó de tus respuestas, en un solo plegable. */
+function AnocheBoveda({ cambios, aprendido }: { cambios: { que: string; nota: string }[]; aprendido: DiaAprendido[] }) {
+  if (!cambios.length && !aprendido.length) return null
+  const resumen = [cambios.length ? `${cambios.length} ${cambios.length === 1 ? 'nota cambiada' : 'notas cambiadas'}` : null,
+    aprendido.length ? `${aprendido.length} ${aprendido.length === 1 ? 'respuesta guardada' : 'respuestas guardadas'}` : null].filter(Boolean).join(' · ')
+  return (
+    <details className="md-card md-plegable">
+      <summary><span>Anoche en tu bóveda</span><span className="md-meta">{resumen}</span></summary>
+      {cambios.length > 0 && (
+        <>
+          <p className="md-kicker md-mt12">Qué cambió Claude</p>
+          <div className="md-lista">
+            {cambios.map((c, i) => <div key={i} className="md-row"><div className="md-grow">{c.que}<div className="md-meta">{c.nota}</div></div><a className="md-icobtn" href={obsidianUrl(c.nota)} aria-label={`Abrir ${c.nota}`}>↗</a></div>)}
+          </div>
+        </>
+      )}
+      {aprendido.length > 0 && (
+        <>
+          <p className="md-kicker md-mt12">Lo que aprendió de tus respuestas</p>
+          <div className="md-lista">
+            {aprendido.slice(0, 8).map(a => (
+              <div key={a.id} className="md-row">
+                <span className="md-ico" aria-hidden style={{ color: a.guardadoAt ? 'var(--md-verde)' : 'var(--md-tenue)' }}>{a.guardadoAt ? '✓' : '◷'}</span>
+                <div className="md-grow">{a.pregunta}<div className="md-meta">«{a.respuesta}» · {a.guardadoAt ? <>en {a.nota ? <a className="md-link" href={obsidianUrl(a.nota)}>{a.nota}</a> : 'tu bóveda'}</> : <>se guarda a las 3:00</>}</div></div>
+              </div>
+            ))}
+          </div>
+          <p className="md-meta md-mt8">Claude relee esto cada madrugada: no te vuelve a preguntar lo mismo.</p>
+        </>
+      )}
+    </details>
   )
 }
 
@@ -965,7 +1168,8 @@ function VistaOtroDia({ fecha, hoy, otro, epicas, cumples, cierre, volver }: {
                     <p className="md-kicker md-mt12">Tus 3 de ese día</p>
                     <ul className="md-ul">{data.prioridades.map((x, i) => {
                       const t = x.tareaId ? (epicas || []).flatMap(e => e.tasks || []).find(tt => tt.id === x.tareaId) : undefined
-                      return <li key={i}>{t && !ABIERTA(t) ? '✓ ' : ''}{t?.t || x.t}</li>
+                      const estado = !t ? (x.tareaId ? null : 'sin tarea ligada') : !ABIERTA(t) ? null : t.plan && t.plan > fecha ? (t.plan === hoy ? 'sigue hoy' : `pasó al ${corta(t.plan)}`) : 'quedó sin terminar'
+                      return <li key={i}>{t && !ABIERTA(t) ? '✓ ' : ''}{t?.t || x.t}{estado && <span className="md-meta"> · {estado}</span>}</li>
                     })}</ul>
                   </>
                 )}
@@ -1577,6 +1781,18 @@ button.md-chip{border:none;cursor:pointer;font-family:inherit}
 .md-col{min-width:0}
 .md-ahora{background:var(--md-papel);border-color:#e6d6bf}
 .md-listo{background:var(--md-verde-bg);border-color:#cfd8bf}.md-listo .md-h3,.md-listo .md-sub{color:var(--md-verde)}
+.md-decidir{display:flex;gap:16px;align-items:center;width:100%;cursor:pointer;background:var(--md-suave);border:1.5px solid var(--md-acento2);font:inherit;color:inherit;text-align:left;padding:16px 18px}
+.md-decidir:hover{background:#f1e4d6}
+.md-decidir-num{font-family:var(--dia-serif),Georgia,serif;font-size:24px;margin:2px 0 6px;color:var(--md-acento)}
+.md-decidir-lista{margin:0;padding-left:18px;font-size:14.5px;line-height:1.5}.md-decidir-lista li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.md-decidir-btn{flex:none;white-space:nowrap}
+@media(max-width:700px){.md-decidir{flex-direction:column;align-items:stretch}.md-decidir-btn{text-align:center}}
+.md-acciones{display:flex;gap:4px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.md-btn-tenue{color:var(--md-tinta2)}
+.md-row-pend{align-items:center}
+@media(max-width:700px){.md-row-pend{flex-wrap:wrap}.md-row-pend .md-acciones{width:100%;justify-content:flex-start;padding-left:19px}}
+.md-antes{margin-top:10px}
+.md-tinta{color:var(--md-tinta)}.md-tinta2{color:var(--md-tinta2)}
 .md-pendientes{display:flex;justify-content:space-between;align-items:center;width:100%;margin-bottom:12px;cursor:pointer;background:var(--md-suave);border-color:#ead8c3;font:inherit;color:inherit;text-align:left}
 .md-otras{margin-top:6px}
 .md-check{display:flex;gap:10px;align-items:center;width:100%;background:none;border:0;padding:8px 2px;font:inherit;color:var(--md-tinta);cursor:pointer;text-align:left}

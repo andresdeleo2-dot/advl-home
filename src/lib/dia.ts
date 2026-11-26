@@ -120,13 +120,15 @@ const diasEntre = (a: string, b: string) => {
   return Math.round((u(b) - u(a)) / 86400000)
 }
 
-export type EstadoEpica = 'vencidas' | 'quieta' | 'detenida' | 'pausa' | 'al_dia'
+export type EstadoEpica = 'vencidas' | 'atrasadas' | 'quieta' | 'detenida' | 'pausa' | 'al_dia'
 export type SaludEpica = {
   e: Epica
   estado: EstadoEpica
   etiqueta: string
   abiertas: number
   vencidas: number
+  /** Abiertas con fecha de trabajo (plan) ya pasada: se agendaron y no se hicieron. */
+  atrasadas: number
   diasQuieta: number | null
   siguiente: EpicaTask | null
 }
@@ -163,18 +165,20 @@ export function saludEpicas(epicas: Epica[], hoy: string): SaludEpica[] {
     const abiertas = (e.tasks || []).filter(ABIERTA)
     if (!abiertas.length) continue
     const vencidas = abiertas.filter(t => t.due && t.due < hoy).length
+    const atrasadas = abiertas.filter(t => t.status !== 'Esperando' && t.plan && t.plan < hoy && !t.dayPlans?.some(d => d.day >= hoy)).length
     const ult = ultimaActividad(e)
     const diasQuieta = ult ? Math.max(0, diasEntre(ult, hoy)) : null
     const soloEsperando = abiertas.every(t => t.status === 'Esperando')
     let estado: EstadoEpica = 'al_dia', etiqueta = 'al día'
     if (e.status === 'En pausa') { estado = 'pausa'; etiqueta = 'en pausa' }
     else if (vencidas) { estado = 'vencidas'; etiqueta = vencidas === 1 ? '1 vencida' : `${vencidas} vencidas` }
+    else if (atrasadas) { estado = 'atrasadas'; etiqueta = atrasadas === 1 ? '1 atrasada' : `${atrasadas} atrasadas` }
     else if (soloEsperando) { estado = 'detenida'; etiqueta = 'esperando a otros' }
     else if (diasQuieta != null && diasQuieta >= DIAS_QUIETA) { estado = 'quieta'; etiqueta = `${diasQuieta} días quieta` }
-    out.push({ e, estado, etiqueta, abiertas: abiertas.length, vencidas, diasQuieta, siguiente: siguienteDe(e, hoy) })
+    out.push({ e, estado, etiqueta, abiertas: abiertas.length, vencidas, atrasadas, diasQuieta, siguiente: siguienteDe(e, hoy) })
   }
-  const rango: Record<EstadoEpica, number> = { vencidas: 0, quieta: 1, detenida: 2, al_dia: 3, pausa: 4 }
-  return out.sort((a, b) => rango[a.estado] - rango[b.estado] || b.vencidas - a.vencidas || (b.diasQuieta ?? 0) - (a.diasQuieta ?? 0))
+  const rango: Record<EstadoEpica, number> = { vencidas: 0, atrasadas: 1, quieta: 2, detenida: 3, al_dia: 4, pausa: 5 }
+  return out.sort((a, b) => rango[a.estado] - rango[b.estado] || b.vencidas - a.vencidas || b.atrasadas - a.atrasadas || (b.diasQuieta ?? 0) - (a.diasQuieta ?? 0))
 }
 
 export type Esperando = { e: Epica; t: EpicaTask; dias: number | null; quien: string | null }
