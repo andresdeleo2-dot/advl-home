@@ -1234,6 +1234,7 @@ function FilaEpica({ s, hoy, reprogramar, abrir, abrirEpica }: { s: SaludEpica; 
   )
 }
 
+type VistaTab = 'abiertas' | 'atrasadas' | 'esperando' | 'hechas' | 'todas'
 /** Avance de un objetivo de la épica (0–100). */
 function pctObjetivo(k: EpicaMilestone, e: Epica): number {
   if (k.done) return 100
@@ -1278,16 +1279,50 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
   // Lo que sigue: vencidas, atrasadas, agendadas (por fecha), luego por prioridad.
   const pr = (p?: string) => (p === 'alta' ? 0 : p === 'baja' ? 2 : 1)
   const rango = (t: EpicaTask) => (t.due && t.due < hoy ? 0 : t.plan && t.plan < hoy ? 1 : t.plan === hoy ? 2 : t.plan ? 3 : 4)
-  const sigue = abiertas.filter(t => t.status !== 'Esperando').sort((a, b) => rango(a) - rango(b) || (a.due || a.plan || '9').localeCompare(b.due || b.plan || '9') || pr(a.priority) - pr(b.priority)).slice(0, 6)
-  const recientes = vivas.filter(t => t.status === 'Terminada' && t.doneAt).sort((a, b) => b.doneAt!.localeCompare(a.doneAt!)).slice(0, 4)
+  const porque = (t: EpicaTask) => t.due && t.due < hoy ? `venció el ${corta(t.due)}` : t.plan && t.plan < hoy ? `agendada el ${corta(t.plan)}` : t.plan === hoy ? 'hoy' : t.plan ? corta(t.plan) : t.due ? `vence ${corta(t.due)}` : 'sin fecha'
+  const nombreF = (id?: string) => id ? (e.features || []).find(f => f.id === id)?.t : undefined
+  // Lista de tareas con filtros: qué ver, de qué feature, buscar y cómo ordenar. Empieza en lo abierto, por urgencia.
+  const [vista, setVista] = useState<VistaTab>('abiertas')
+  const [feat, setFeat] = useState<string | null>(null)   // id de feature, '' = sin feature, null = todos
+  const [orden, setOrden] = useState<'urgencia' | 'fecha' | 'prioridad' | 'feature'>('urgencia')
+  const [q, setQ] = useState('')
+  const [mas, setMas] = useState(false)
+  const idsFeat = new Set((e.features || []).map(f => f.id))
+  const esAtrasada = (t: EpicaTask) => ABIERTA(t) && t.status !== 'Esperando' && ((!!t.due && t.due < hoy) || (!!t.plan && t.plan < hoy))
+  const DE_VISTA: Record<VistaTab, (t: EpicaTask) => boolean> = {
+    abiertas: t => ABIERTA(t) && t.status !== 'Esperando',
+    atrasadas: esAtrasada,
+    esperando: t => t.status === 'Esperando',
+    hechas: t => t.status === 'Terminada',
+    todas: () => true,
+  }
+  const cuenta = (v: VistaTab) => vivas.filter(DE_VISTA[v]).length
+  const qn = sinAcentos(q.trim())
+  const lista = vivas.filter(DE_VISTA[vista])
+    .filter(t => feat === null || (feat === '' ? !t.featureId || !idsFeat.has(t.featureId) : t.featureId === feat))
+    .filter(t => !qn || sinAcentos(`${t.t} ${t.note || ''} ${t.resumen || ''}`).includes(qn))
+    .sort((a, b) => {
+      if (vista === 'hechas' && orden === 'urgencia') return (b.doneAt || '').localeCompare(a.doneAt || '')
+      if (ABIERTA(a) !== ABIERTA(b)) return ABIERTA(a) ? -1 : 1
+      if (orden === 'fecha') return (a.plan || a.due || '9').localeCompare(b.plan || b.due || '9')
+      if (orden === 'prioridad') return pr(a.priority) - pr(b.priority) || rango(a) - rango(b)
+      if (orden === 'feature') return (nombreF(a.featureId) || '~').localeCompare(nombreF(b.featureId) || '~') || rango(a) - rango(b)
+      return rango(a) - rango(b) || (a.due || a.plan || '9').localeCompare(b.due || b.plan || '9') || pr(a.priority) - pr(b.priority)
+    })
+  const VISIBLES = 8
+  const visibles = mas ? lista : lista.slice(0, VISIBLES)
+  const irA = (v: VistaTab) => { setVista(v); setMas(false) }
+  const metaDe = (t: EpicaTask) => t.status === 'Terminada'
+    ? [t.doneAt ? `cerrada el ${corta(t.doneAt.slice(0, 10))}` : 'terminada', nombreF(t.featureId)].filter(Boolean).join(' · ')
+    : t.status === 'Esperando'
+    ? [`esperando${t.personaNombre || (t.responsable && t.responsable.toLowerCase() !== 'yo') ? ` a ${t.personaNombre || t.responsable}` : ''}`, t.waitingSince ? `desde el ${corta(t.waitingSince.slice(0, 10))}` : null, nombreF(t.featureId)].filter(Boolean).join(' · ')
+    : [porque(t), orden === 'feature' ? null : nombreF(t.featureId), t.status === 'En curso' ? 'en curso' : null, t.priority === 'alta' ? 'alta' : null].filter(Boolean).join(' · ')
   const feats = (e.features || []).map(f => {
     const ts = vivas.filter(t => t.featureId === f.id)
     return { f, total: ts.length, hechas: ts.filter(t => t.status === 'Terminada').length, abiertas: ts.filter(ABIERTA).length }
   }).filter(x => x.total > 0 || x.f.estado !== 'cerrado')
   const sinFeature = vivas.filter(t => !t.featureId || !(e.features || []).some(f => f.id === t.featureId))
   const objetivos = (e.kpis || []).filter(k => k.t)
-  const porque = (t: EpicaTask) => t.due && t.due < hoy ? `venció el ${corta(t.due)}` : t.plan && t.plan < hoy ? `agendada el ${corta(t.plan)}` : t.plan === hoy ? 'hoy' : t.plan ? corta(t.plan) : t.due ? `vence ${corta(t.due)}` : 'sin fecha'
-  const nombreF = (id?: string) => id ? (e.features || []).find(f => f.id === id)?.t : undefined
 
   return (
     <div className="md-velo" onClick={cerrar}>
@@ -1302,32 +1337,52 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
         </div>
 
         <div className="md-kpis">
-          <div className="md-kpi">
+          <div className="md-kpi" role="button" tabIndex={0} onClick={() => irA('hechas')} onKeyDown={ev => ev.key === 'Enter' && irA('hechas')}>
             <div className="md-anillo" style={{ background: `conic-gradient(${color} ${av.pct * 3.6}deg, var(--md-linea2) 0)` }}><span>{av.pct}%</span></div>
             <div><b>{av.hechas} de {av.total}</b><span>terminadas</span></div>
           </div>
-          <div className="md-kpi"><b>{abiertas.length}</b><span>abiertas{enCurso ? ` · ${enCurso} en curso` : ''}</span></div>
-          <div className="md-kpi" data-tono={vencidas.length ? 'rojo' : atrasadas.length ? 'ambar' : undefined}><b>{vencidas.length + atrasadas.length}</b><span>{vencidas.length ? `${vencidas.length} vencidas` : ''}{vencidas.length && atrasadas.length ? ' · ' : ''}{atrasadas.length ? `${atrasadas.length} atrasadas` : ''}{!vencidas.length && !atrasadas.length ? 'nada atrasado' : ''}</span></div>
+          <div className="md-kpi" role="button" tabIndex={0} onClick={() => irA('abiertas')} onKeyDown={ev => ev.key === 'Enter' && irA('abiertas')}><b>{abiertas.length}</b><span>abiertas{enCurso ? ` · ${enCurso} en curso` : ''}</span></div>
+          <div className="md-kpi" role="button" tabIndex={0} onClick={() => irA('atrasadas')} onKeyDown={ev => ev.key === 'Enter' && irA('atrasadas')} data-tono={vencidas.length ? 'rojo' : atrasadas.length ? 'ambar' : undefined}><b>{vencidas.length + atrasadas.length}</b><span>{vencidas.length ? `${vencidas.length} vencidas` : ''}{vencidas.length && atrasadas.length ? ' · ' : ''}{atrasadas.length ? `${atrasadas.length} atrasadas` : ''}{!vencidas.length && !atrasadas.length ? 'nada atrasado' : ''}</span></div>
           <div className="md-kpi" data-tono={av.semana ? 'verde' : undefined}><b>{av.semana ? `+${av.semana}` : '0'}</b><span>esta semana{diasQuieta != null && !av.semana ? ` · quieta ${diasQuieta} d` : ''}</span></div>
         </div>
 
         <div className="md-tab-grid">
           <div>
-            <div className="md-lbl"><span>Lo que sigue</span><span>{abiertas.length - esperando.length}</span></div>
-            {sigue.length
-              ? <div className="md-card md-lista">{sigue.map(t => (
-                  <FilaTarea key={t.id} titulo={t.t} meta={[porque(t), nombreF(t.featureId), t.priority === 'alta' ? 'alta' : null].filter(Boolean).join(' · ')} color={color}
-                    marcar={t.id ? () => terminar(t.id!) : undefined} abrir={t.id ? () => abrir(t.id!) : undefined}>
-                    {t.id && t.plan !== hoy && <div className="md-acciones"><button type="button" className="md-btn md-chico" onClick={() => reprogramar(t.id!, hoy)}>Hoy</button></div>}
-                  </FilaTarea>
-                ))}</div>
-              : <div className="md-card"><p className="md-sub">No hay pasos abiertos.</p></div>}
-            {esperando.length > 0 && <>
-              <div className="md-lbl md-mt12"><span>Esperando a otros</span><span>{esperando.length}</span></div>
-              <div className="md-card md-lista">{esperando.slice(0, 4).map(t => (
-                <FilaTarea key={t.id} titulo={t.t} meta={[t.personaNombre || t.responsable, t.waitingSince ? `desde el ${corta(t.waitingSince.slice(0, 10))}` : null].filter(Boolean).join(' · ') || 'esperando'} color="var(--md-linea)" abrir={t.id ? () => abrir(t.id!) : undefined} />
-              ))}</div>
-            </>}
+            <div className="md-filtros" role="tablist" aria-label="Qué tareas ver">
+              {([['abiertas', 'Abiertas'], ['atrasadas', 'Atrasadas'], ['esperando', 'Esperando'], ['hechas', 'Terminadas'], ['todas', 'Todas']] as [VistaTab, string][]).map(([v, l]) => {
+                const n = cuenta(v)
+                return (v === 'abiertas' || v === 'todas' || n > 0) && (
+                  <button key={v} type="button" role="tab" aria-selected={vista === v} data-on={vista === v} data-tono={v === 'atrasadas' ? 'rojo' : undefined} onClick={() => irA(v)}>{l}<span>{n}</span></button>
+                )
+              })}
+            </div>
+            <div className="md-herr">
+              <input className="md-buscar" type="search" value={q} onChange={ev => { setQ(ev.target.value); setMas(false) }} placeholder="Buscar en la épica" aria-label="Buscar tareas" />
+              <select className="md-orden" value={orden} onChange={ev => setOrden(ev.target.value as typeof orden)} aria-label="Ordenar">
+                <option value="urgencia">{vista === 'hechas' ? 'Más recientes' : 'Más urgentes'}</option>
+                <option value="fecha">Por fecha</option>
+                <option value="prioridad">Por prioridad</option>
+                <option value="feature">Por feature</option>
+              </select>
+            </div>
+            {feat !== null && (
+              <div className="md-fila md-mt8"><button type="button" className="md-chip md-tono-azul md-quitar" onClick={() => setFeat(null)} aria-label="Quitar filtro de feature">{feat === '' ? 'Sin feature' : nombreF(feat)} ✕</button></div>
+            )}
+            {visibles.length
+              ? <div className="md-card md-lista md-mt8">{visibles.map((t, i) => {
+                  const grupo = orden === 'feature' && (i === 0 || visibles[i - 1].featureId !== t.featureId) ? (nombreF(t.featureId) || 'Sin feature') : null
+                  return (
+                    <Fragment key={t.id || i}>
+                      {grupo && <p className="md-grupo">{grupo}</p>}
+                      <FilaTarea titulo={t.t} meta={metaDe(t)} color={t.status === 'Esperando' ? 'var(--md-linea)' : color} hecha={t.status === 'Terminada'}
+                        marcar={t.id && t.status !== 'Esperando' ? () => terminar(t.id!) : undefined} abrir={t.id ? () => abrir(t.id!) : undefined}>
+                        {t.id && ABIERTA(t) && t.status !== 'Esperando' && t.plan !== hoy && <div className="md-acciones"><button type="button" className="md-btn md-chico" onClick={() => reprogramar(t.id!, hoy)}>Hoy</button></div>}
+                      </FilaTarea>
+                    </Fragment>
+                  )
+                })}</div>
+              : <div className="md-card md-mt8"><p className="md-sub">{q || feat !== null ? 'Nada con ese filtro.' : vista === 'atrasadas' ? 'Nada atrasado. Bien.' : 'No hay tareas aquí.'}</p></div>}
+            {lista.length > VISIBLES && <button type="button" className="md-btn md-ancho md-mt8" onClick={() => setMas(v => !v)}>{mas ? 'Ver menos' : `Ver las ${lista.length}`}</button>}
           </div>
 
           <div>
@@ -1343,19 +1398,19 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
             </div>
 
             {(feats.length > 0 || sinFeature.length > 0) && <>
-              <div className="md-lbl md-mt12"><span>Por feature</span><span>{feats.length}</span></div>
+              <div className="md-lbl md-mt12"><span>Por feature</span><span className="md-meta">toca uno para filtrar</span></div>
               <div className="md-card md-lista">
                 {feats.map(({ f, total, hechas, abiertas: ab }) => (
-                  <div key={f.id} className="md-row md-feat">
+                  <button type="button" key={f.id} className="md-row md-feat md-feat-btn" data-on={feat === f.id} onClick={() => { setFeat(feat === f.id ? null : f.id); setMas(false) }} title="Ver solo las tareas de este feature">
                     <span className="md-dot" style={{ background: f.color || color }} />
                     <div className="md-grow">
                       <div className="md-entre"><span>{f.t}</span><span className="md-meta">{total ? `${hechas}/${total}` : 'sin tareas'}</span></div>
                       <div className="md-ep-barra md-feat-barra"><div style={{ width: `${total ? Math.round(hechas / total * 100) : 0}%`, background: f.color || color }} /></div>
                       {ab > 0 && <span className="md-meta">{ab} abiertas{f.estado === 'en_riesgo' ? ' · en riesgo' : f.estado === 'en_pausa' ? ' · en pausa' : ''}</span>}
                     </div>
-                  </div>
+                  </button>
                 ))}
-                {sinFeature.filter(ABIERTA).length > 0 && <p className="md-meta md-feat-sin">{sinFeature.filter(ABIERTA).length} abiertas sin feature</p>}
+                {sinFeature.filter(ABIERTA).length > 0 && <button type="button" className="md-link md-feat-sin" onClick={() => { setFeat(feat === '' ? null : ''); setMas(false) }}>{sinFeature.filter(ABIERTA).length} abiertas sin feature{feat === '' ? ' · quitar filtro' : ' · ver'}</button>}
               </div>
             </>}
 
@@ -1380,12 +1435,6 @@ function EpicaTablero({ e, hoy, tapada, cerrar, abrir, terminar, reprogramar }: 
               </div>
             </>}
 
-            {recientes.length > 0 && <>
-              <div className="md-lbl md-mt12"><span>Lo último que cerraste</span></div>
-              <div className="md-card md-lista">{recientes.map(t => (
-                <div key={t.id} className="md-row"><span className="md-ok" aria-hidden>✓</span><div className="md-grow">{t.id ? <button type="button" className="md-abrir" onClick={() => abrir(t.id!)}>{t.t}</button> : t.t}<div className="md-meta">{corta(t.doneAt!.slice(0, 10))}</div></div></div>
-              ))}</div>
-            </>}
           </div>
         </div>
 
@@ -2292,7 +2341,22 @@ button.md-titulo-ahora{display:block;width:100%;font-family:var(--dia-serif),Geo
 .md-ritmo-bar{width:100%;max-width:26px;border-radius:5px 5px 2px 2px;background:var(--ep)}
 .md-ritmo-n{font-size:11px;color:var(--md-tinta2);font-weight:600;min-height:13px}.md-ritmo-l{font-size:10.5px;color:var(--md-tenue)}
 .md-feat .md-grow{display:flex;flex-direction:column;gap:3px}.md-feat-barra{max-width:none;margin:2px 0}
-.md-feat-sin{padding:8px 0 2px}
+.md-feat-sin{padding:8px 0 2px;font-size:12.5px}
+.md-feat-btn{width:100%;background:none;border:0;border-bottom:1px solid var(--md-linea2);font:inherit;color:inherit;text-align:left;cursor:pointer;border-radius:8px}
+.md-feat-btn:hover{background:var(--md-suave)}.md-feat-btn[data-on=true]{background:var(--md-azul-bg)}
+.md-kpi[role=button]{cursor:pointer;transition:border-color .15s}.md-kpi[role=button]:hover{border-color:var(--ep)}
+.md-filtros{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;padding:2px;background:var(--md-linea2);border-radius:12px;width:max-content;max-width:100%}
+.md-filtros::-webkit-scrollbar{display:none}
+.md-filtros button{border:0;background:none;font:inherit;font-size:13px;color:var(--md-tinta2);padding:6px 11px;border-radius:9px;cursor:pointer;white-space:nowrap;display:inline-flex;gap:6px;align-items:center}
+.md-filtros button span{font-size:11px;color:var(--md-tenue);font-weight:600}
+.md-filtros button[data-on=true]{background:#fff;color:var(--md-tinta);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.md-filtros button[data-tono=rojo] span{color:var(--md-rojo)}
+.md-herr{display:flex;gap:8px;margin-top:8px}
+.md-buscar{flex:1;min-width:0;border:1px solid var(--md-linea);border-radius:10px;padding:8px 11px;font:inherit;font-size:13.5px;background:#fff;color:var(--md-tinta)}
+.md-buscar:focus,.md-orden:focus{outline:2px solid color-mix(in srgb,var(--ep) 40%,transparent);outline-offset:0}
+.md-orden{border:1px solid var(--md-linea);border-radius:10px;padding:8px 10px;font:inherit;font-size:13px;background:#fff;color:var(--md-tinta2);cursor:pointer}
+.md-quitar{cursor:pointer;border:0}
+.md-grupo{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--md-tenue);margin:10px 0 0;font-weight:600}.md-grupo:first-child{margin-top:2px}
 .md-ok{color:var(--md-verde);font-weight:700;width:22px;text-align:center;flex:none}
 .md-tab-pie{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--md-linea2)}
 button.md-fuerte{font-weight:600}
