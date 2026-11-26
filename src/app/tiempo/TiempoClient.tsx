@@ -8,6 +8,7 @@ import {
   AREAS, ACTIVITIES, DAY_NAMES, KEY, defaults, hm, clock, parse, iso,
   DOW_CHIPS, blockActiveOn, daysLabel, DIRTY_KEY, rowKey, addRows, settleDirty, corregirInicio,
   type AppData, type Area, type ScheduledBlock, type Block, type HistoryRow, type ResultadoInicio,
+  pickSession, sameJ, mergeLocal, reconciliar,
 } from '@/lib/tiempo'
 import HoraInicioInput from '@/components/HoraInicioInput'
 import type { Epica, EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment, EpicaProgressEntry, EpicaMilestone, EpicaRoutine, EpicaLink, EpicaFeature } from '@/lib/supabase'
@@ -32,35 +33,6 @@ const PRIO_TONE: Record<string, string> = { alta: '#B0522E', media: '#A87A2C', b
 type Filters = { epica: string | null; prio: Set<string>; diff: Set<string>; estado: Set<string> }
 
 const TS_KEY = KEY + '.ts'
-// Sesión a conservar al adoptar un blob entrante (misma regla que adopt/onStorage): gana la de `mod`
-// más nuevo; la local se descarta si ya terminó en otro lado (tombstone sessionEnd posterior a su inicio).
-const pickSession = (local: AppData['session'], inc: AppData): AppData['session'] => {
-  if (local && inc.session) return (local.mod || 0) >= (inc.session.mod || 0) ? local : inc.session
-  if (local && !inc.session) return (Number(inc.sessionEnd) || 0) > (local.startedAt || 0) ? null : local
-  return inc.session
-}
-// Reconciliar lo editado aquí SIN sincronizar (de `base` a `local`) con un blob más nuevo (`other`):
-// se aplica encima sólo lo que cambió aquí, sin tirar lo demás de `other`. Listas por identidad
-// (historial por rowKey, agendados y bloques por id: borrados, ediciones y nuevos); lo demás (MIT,
-// meta, sueño…) gana lo de aquí si cambió. La sesión va aparte (pickSession).
-const sameJ = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b)
-function diffList<T>(b: T[], l: T[], o: T[], id: (x: T) => string): [T[], T[]] {
-  const bm = new Map(b.map(x => [id(x), x])), lm = new Map(l.map(x => [id(x), x]))
-  const kept = o.filter(x => !bm.has(id(x)) || lm.has(id(x)))   // fuera lo que se borró aquí
-    .map(x => { const k = id(x), lx = lm.get(k); return lx !== undefined && bm.has(k) && !sameJ(bm.get(k), lx) ? lx : x })   // lo editado aquí gana
-  return [kept, l.filter(x => !bm.has(id(x)))]   // + lo nuevo de aquí
-}
-function mergeLocal(base: AppData, local: AppData, other: AppData): AppData {
-  const out: AppData = { ...other }
-  for (const k of Object.keys(local) as (keyof AppData)[]) {
-    if (k === 'session' || k === 'sessionEnd' || sameJ(base[k], local[k])) continue
-    if (k === 'history') { const [kept, add] = diffList(base.history || [], local.history || [], other.history || [], rowKey); out.history = addRows(kept, add) }
-    else if (k === 'scheduled') { const [kept, add] = diffList(base.scheduled || [], local.scheduled || [], other.scheduled || [], x => x.id); out.scheduled = kept.concat(add.filter(a => !kept.some(x => x.id === a.id))) }
-    else if (k === 'blocks') { const [kept, add] = diffList(base.blocks || [], local.blocks || [], other.blocks || [], x => x.id); out.blocks = kept.concat(add.filter(a => !kept.some(x => x.id === a.id))) }
-    else (out as Record<string, unknown>)[k] = local[k]
-  }
-  return out
-}
 // Minutos transcurridos de una sesión, tolerando cruce de medianoche (now se reinicia
 // a minutos-del-día). Si la resta es fuertemente negativa (cruzó medianoche), +1440.
 const elapsedMin = (start: number, nowMin: number) => { let d = nowMin - start; if (d < -1) d += 1440; return d }
@@ -203,6 +175,9 @@ export default function TiempoClient() {
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
   const pushFallos = useRef(0)   // reintentos seguidos del PUT fallido (espera creciente)
+  // Versión del servidor desde la que guarda este equipo, y cómo era (base para juntar si alguien guardó antes).
+  const serverTsRef = useRef(0)
+  const confirmadoRef = useRef<AppData | null>(null)
   // Hasta la PRIMERA lectura válida del servidor no se sube nada: un blob viejo o recién creado
   // en este dispositivo pisaría el historial real (y los demás dispositivos lo adoptarían).
   const syncedRef = useRef(false)
@@ -291,6 +266,7 @@ export default function TiempoClient() {
       if (!sameJ(merged.history.map(rowKey), local.history.map(rowKey))) setHistIdx(null)
       dataRef.current = merged; setData(merged)
       try { localStorage.setItem(KEY, JSON.stringify(merged)); if (fromServer) localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
+      serverTsRef.current = serverTs; confirmadoRef.current = j.data && Object.keys(j.data).length ? Object.assign(defaults(), j.data) as AppData : null
       syncedRef.current = true; dirtyRef.current = false; lastOkRef.current = Date.now(); setSyncNote(false)
       setSaveErr(pendingSync.current.size > 0); if (pendingSync.current.size === 0) setSaveErrMsg('')
       // Se sube si aquí hubo cambios, si se rescataron renglones o la sesión de aquí, o si lo local es más
@@ -486,6 +462,7 @@ export default function TiempoClient() {
             : (localSess && !sv.session) ? (endedElsewhere ? null : localSess) : sv.session
           const merged = { ...sv, session: sess }
           dataRef.current = merged; setData(merged)
+          serverTsRef.current = serverTs; confirmadoRef.current = sv
           try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTs)) } catch {}
         }
         lastOkRef.current = Date.now()
@@ -692,13 +669,32 @@ export default function TiempoClient() {
     if (pushTimer.current) { clearTimeout(pushTimer.current); pushTimer.current = null }
     const body = pendingPush.current; pendingPush.current = null
     if (!body) return   // ya lo subió flush(): un PUT de `null` dejaría el estado del server VACÍO
-    const json = JSON.stringify({ data: body })
+    const json = JSON.stringify({ data: body, ...(serverTsRef.current ? { baseTs: serverTsRef.current } : {}) })
     pushingRef.current = true
     // keepalive rechaza cuerpos de más de 64 KB: arriba de eso va como petición normal.
     fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: json, keepalive: keepalive && new Blob([json]).size < 60000 })
-      .then(async r => { if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('estado ' + r.status + ' ' + t.slice(0, 160)) } return r.json() })
+      .then(async r => {
+        if (r.status === 409) {
+          // Otro equipo guardó una versión más nueva: se junta lo de aquí encima de la suya y se vuelve a subir.
+          const j = await r.json().catch(() => null)
+          if (!j?.conflict || !aliveRef.current) throw new Error('choque de versiones')
+          const sv = Object.assign(defaults(), j.data || {}) as AppData
+          const merged = reconciliar(confirmadoRef.current, dataRef.current, sv, pendRowsRef.current)
+          serverTsRef.current = Number(j.ts) || 0; confirmadoRef.current = sv
+          if (!sameJ(merged.history.map(rowKey), dataRef.current.history.map(rowKey))) setHistIdx(null)
+          dataRef.current = merged; setData(merged)
+          try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTsRef.current)) } catch {}
+          pendingPush.current = merged
+          setTimeout(() => pushNow(), 0)   // después del finally de esta subida (que suelta pushingRef)
+          return null
+        }
+        if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('estado ' + r.status + ' ' + t.slice(0, 160)) }
+        return r.json()
+      })
       .then(j => {
+        if (j === null) return
         if (j?.ts) {
+          serverTsRef.current = Number(j.ts) || serverTsRef.current; confirmadoRef.current = body
           try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {}
           lastOkRef.current = Date.now()
           // Confirmado: los renglones pendientes que este blob llevaba dejan de estarlo (y sin pendientes se

@@ -7,7 +7,7 @@
    La escritura a Épicas (sumar tiempo a la bitácora / marcar terminada) se delega al
    contenedor por callbacks, para no duplicar la lógica de tareas. */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { KEY, hm, clock, iso, defaults, settleDirty, corregirInicio, type AppData, type Session, type Area, type HistoryRow, type ResultadoInicio } from '@/lib/tiempo'
+import { KEY, hm, clock, iso, defaults, settleDirty, corregirInicio, reconciliar, type AppData, type Session, type Area, type HistoryRow, type ResultadoInicio } from '@/lib/tiempo'
 import HoraInicioInput from './HoraInicioInput'
 import type { EpicaTask, EpicaSubtask, EpicaTaskLink, EpicaTaskComment } from '@/lib/supabase'
 import { safeUrl, uid as coreUid } from '@/components/epicas/core'
@@ -86,6 +86,9 @@ export function useFocusSession(hooks: FocusHooks) {
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPush = useRef<AppData | null>(null)
   const fallos = useRef(0)
+  // Versión del servidor desde la que guarda este equipo y cómo era (para juntar si otro guardó antes).
+  const serverTsRef = useRef(0)
+  const confirmadoRef = useRef<AppData | null>(null)
   const readyRef = useRef(false)   // ya hubo una lectura VÁLIDA del servidor: recién ahí se permite tocar la sesión (evita pisar los datos reales de /tiempo)
   const lastOkRef = useRef(0)      // última lectura/escritura confirmada con el server: si es vieja, lo local puede estar viejo
   const kickRef = useRef<() => void>(() => {})   // relanza YA la lectura (sin esperar la espera creciente)
@@ -121,6 +124,7 @@ export function useFocusSession(hooks: FocusHooks) {
       if (readyRef.current && (pendingPush.current || pushingRef.current)) return   // subida propia pendiente/en vuelo: esta lectura no la trae
       const serverTs = Number(j.ts) || 0
       const localTs = Number(localStorage.getItem(TS_KEY) || 0)
+      if (serverTs >= serverTsRef.current && j.data && Object.keys(j.data).length) { serverTsRef.current = serverTs; confirmadoRef.current = Object.assign(defaults(), j.data) as AppData }
       if (serverTs > localTs) {
         // Adopta lo del server, PERO conserva una sesión local viva (no la pises); así un blob
         // viejo de este equipo no borra history/blocks más nuevos de otro dispositivo.
@@ -208,13 +212,31 @@ export function useFocusSession(hooks: FocusHooks) {
   function pushNow(keepalive = false) {
     if (pushTimer.current) { clearTimeout(pushTimer.current); pushTimer.current = null }
     const body = pendingPush.current; if (!body) return; pendingPush.current = null
-    const json = JSON.stringify({ data: body })
+    const json = JSON.stringify({ data: body, ...(serverTsRef.current ? { baseTs: serverTsRef.current } : {}) })
     pushingRef.current = true
     // keepalive rechaza cuerpos de más de 64 KB: arriba de eso va como petición normal.
     fetch('/api/tiempo-estado', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: json, keepalive: keepalive && new Blob([json]).size < 60000 })
-      .then(r => { if (!r.ok) throw new Error('estado ' + r.status); return r.json() }).then(j => {
+      .then(async r => {
+        if (r.status === 409) {
+          // Otro equipo guardó antes: lo de aquí se aplica encima de su versión y se vuelve a subir.
+          const j = await r.json().catch(() => null)
+          if (!j?.conflict) throw new Error('choque de versiones')
+          const sv = Object.assign(defaults(), j.data || {}) as AppData
+          const merged = reconciliar(confirmadoRef.current, dataRef.current, sv)
+          serverTsRef.current = Number(j.ts) || 0; confirmadoRef.current = sv
+          dataRef.current = merged; setData(merged)
+          try { localStorage.setItem(KEY, JSON.stringify(merged)); localStorage.setItem(TS_KEY, String(serverTsRef.current)) } catch {}
+          pendingPush.current = merged
+          setTimeout(() => pushNow(), 0)
+          return null
+        }
+        if (!r.ok) throw new Error('estado ' + r.status)
+        return r.json()
+      }).then(j => {
+        if (j === null) return
         if (!j?.ts) throw new Error('sin ts')
         fallos.current = 0
+        serverTsRef.current = Number(j.ts) || serverTsRef.current; confirmadoRef.current = body
         try { localStorage.setItem(TS_KEY, String(j.ts)) } catch {}
         lastOkRef.current = Date.now()
         // Los renglones que /tiempo dejó pendientes (DIRTY_KEY) y que este blob ya subió dejan de estarlo

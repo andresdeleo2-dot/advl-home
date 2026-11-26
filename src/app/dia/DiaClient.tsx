@@ -11,7 +11,7 @@ import { Preguntale, SaludDia, TuSemana, type PanelExtra } from '@/app/panel/Pan
 import { Bandeja, TuCerebro, itemsDe, type CamposTarea, type AccionesBandeja } from './Bandeja'
 import {
   obsidianUrl, saludEpicas, esperandoAOtros, racha, sumarDias, resolverPlan, diasHasta, textoRecordatorio,
-  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica,
+  type DiaGet, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPrioridad, type DiaRespuesta, type EstadoRespuesta, type SaludEpica, type CerebroDatos, type CerebroTarea,
 } from '@/lib/dia'
 
 /* ── Utilidades ── */
@@ -490,7 +490,7 @@ export default function DiaClient() {
         )}
 
         {dia && modo === 'semana' && <VistaSemana dia={dia} hoy={hoy} epicas={epicas} />}
-        {dia && modo === 'boveda' && <VistaBoveda dia={dia} />}
+        {dia && modo === 'boveda' && <VistaBoveda dia={dia} hoy={hoy} respuestas={respuestas} responder={responder} deshacer={deshacerRespuesta} aviso={mostrarAviso} />}
 
         {dia && fecha === hoy && <Pie dia={dia} />}
       </main>
@@ -705,8 +705,11 @@ function VistaHoy(p: {
     if (p.saludHoy === false) out.push({ t: 'Registrar salud', tono: 'ambar', href: '/peso' })
     const erp = dia.boveda?.resumen.find(r => /ERP/.test(r) && /vivo/i.test(r))
     if (erp) { const n = erp.match(/\d+/)?.[0]; out.push({ t: n ? `ERP en vivo · ${n}` : 'ERP en vivo', tono: 'rojo', accion: p.irBoveda }) }
+    // Cuida tu cerebro: arreglos de un minuto para la bóveda que aún no contestas hoy.
+    const cb = dia.cerebro
+    if (cb) { const n = [...cb.tareas, ...cb.repaso].filter(t => !p.respuestas.has(`jardin:${t.id}`)).length; if (n) out.push({ t: `Tu cerebro · ${n} de 1 min`, tono: 'azul', accion: p.irBoveda }) }
     return out
-  }, [data, hoy, p.cumples, p.saludHoy, dia.boveda, p.irBoveda])
+  }, [data, hoy, p.cumples, p.saludHoy, dia.boveda, dia.cerebro, p.respuestas, p.irBoveda])
 
   const noCorrio = !dia.resumen && dia.disponible
   return (
@@ -1266,12 +1269,18 @@ function VistaSemana({ dia, hoy, epicas }: { dia: DiaGet; hoy: string; epicas: E
 }
 
 /* ── Bóveda ── */
-function VistaBoveda({ dia }: { dia: DiaGet }) {
+function VistaBoveda({ dia, hoy, respuestas, responder, deshacer, aviso }: {
+  dia: DiaGet; hoy: string; respuestas: Map<string, DiaRespuesta>
+  responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown; tareaId?: string }) => Promise<void>
+  deshacer: (itemId: string) => Promise<void>; aviso: (a: Aviso) => void
+}) {
   const b = dia.boveda
-  if (!b) return <div className="md-card md-fade" id="boveda"><p className="md-h3">Lo que tienes que revisar en tu bóveda</p><p className="md-sub">Aparece después del primer cierre de las 3:00 (sale de <code>por-revisar</code>, en tarjetas).</p></div>
+  const cerebro = dia.cerebro ? <CuidaCerebro c={dia.cerebro} hoy={hoy} respuestas={respuestas} responder={responder} deshacer={deshacer} aviso={aviso} /> : null
+  if (!b) return <div className="md-fade" id="boveda">{cerebro}<div className="md-card md-mt12"><p className="md-h3">Lo que tienes que revisar en tu bóveda</p><p className="md-sub">Aparece después del primer cierre de las 3:00 (sale de <code>por-revisar</code>, en tarjetas).</p></div></div>
   return (
     <div className="md-fade" id="boveda">
-      <h1 className="md-fecha">Tu bóveda</h1>
+      {cerebro}
+      <h1 className="md-fecha md-mt24">Por revisar</h1>
       <p className="md-meta">Al {diaLargo(b.fecha)} · se corrige en la nota de origen, no aquí</p>
       <div className="md-card md-lista md-mt12">{b.resumen.map((r, i) => <div key={i} className="md-row"><span className="md-grow">{r}</span></div>)}</div>
       {b.grupos.map(g => (
@@ -1290,6 +1299,147 @@ function VistaBoveda({ dia }: { dia: DiaGet }) {
         </section>
       ))}
       <a className="md-btn md-ancho" href={obsidianUrl('por-revisar')}>Abrir por-revisar en Obsidian ↗</a>
+    </div>
+  )
+}
+
+/* ── Cuida tu cerebro: salud de la bóveda y arreglos de un minuto (jardin.mjs los arma y los aplica a las 3:00) ── */
+const QUE_APLICA: Record<string, (o: string) => string> = {
+  inbox: o => `Se mueve a ${o}`, props: o => `Queda como «${o}»`, huerfana: o => `[[${o}]] la va a enlazar`, salida: o => `Va a enlazar a [[${o}]]`,
+}
+function CuidaCerebro({ c, hoy, respuestas, responder, deshacer, aviso }: {
+  c: CerebroDatos; hoy: string; respuestas: Map<string, DiaRespuesta>
+  responder: (itemId: string, tipo: string, estado: EstadoRespuesta, extra?: { respuesta?: unknown }) => Promise<void>
+  deshacer: (itemId: string) => Promise<void>; aviso: (a: Aviso) => void
+}) {
+  const hist = (c.historial || []).slice(-30)
+  const antes = hist.length > 1 ? hist[Math.max(0, hist.length - 8)].puntaje : null
+  const delta = antes != null ? c.puntaje - antes : null
+  const dias14 = Array.from({ length: 14 }, (_, i) => sumarDias(hoy, i - 13))
+  const todas = [...c.tareas, ...c.repaso]
+  const abiertas = todas.filter(t => !respuestas.has(`jardin:${t.id}`)).length
+  const contestar = async (t: CerebroTarea, estado: EstadoRespuesta, extra: Record<string, unknown> = {}) => {
+    try {
+      await responder(`jardin:${t.id}`, 'jardin', estado, { respuesta: { tipo: t.tipo, ruta: t.ruta, nombre: t.nombre, menciones: t.menciones, ...extra } })
+      aviso({ texto: estado === 'descartada' ? 'Listo, no te la vuelvo a sugerir' : 'Anotado: se aplica en tu bóveda a las 3:00', deshacer: () => { deshacer(`jardin:${t.id}`).catch(e => aviso({ texto: e instanceof Error ? e.message : String(e) })) } })
+    } catch (e) { aviso({ texto: e instanceof Error ? e.message : String(e) }) }
+  }
+  const cuenta = [
+    c.cuenta.inbox ? `${c.cuenta.inbox} en el inbox` : null,
+    c.cuenta.sinProps ? `${c.cuenta.sinProps} sin tipo` : null,
+    c.cuenta.huerfanas ? `${c.cuenta.huerfanas} sin quién las enlace` : null,
+    c.cuenta.rotos ? `${c.cuenta.rotos} enlaces rotos` : null,
+    c.cuenta.sinSalida ? `${c.cuenta.sinSalida} sin enlaces` : null,
+    c.cuenta.viejas ? `${c.cuenta.viejas} sin tocar en 90 días` : null,
+  ].filter(Boolean)
+  return (
+    <section>
+      <h1 className="md-fecha">Tu cerebro</h1>
+      <p className="md-meta">{c.notas} notas · al {diaLargo(c.fecha)} · los cambios se escriben en Obsidian a las 3:00</p>
+      <div className="md-card md-mt12 md-cb-salud">
+        <div className="md-cb-num">
+          <span className="md-cb-puntaje">{c.puntaje}</span><span className="md-meta">/100</span>
+          {delta != null && delta !== 0 && <span className={`md-chip ${delta > 0 ? 'md-tono-verde' : 'md-tono-ambar'}`}>{delta > 0 ? '+' : ''}{delta} en la semana</span>}
+        </div>
+        {hist.length > 1 && (
+          <svg className="md-cb-linea" viewBox={`0 0 ${hist.length - 1} 100`} preserveAspectRatio="none" aria-label="Puntaje de los últimos días">
+            <polyline fill="none" stroke="var(--md-acento2)" strokeWidth="3" vectorEffect="non-scaling-stroke" points={hist.map((h, i) => `${i},${100 - h.puntaje}`).join(' ')} />
+          </svg>
+        )}
+        <div className="md-cb-stats">
+          <div><b>{c.orden}</b><span>orden</span></div>
+          <div><b>{c.frescura}%</b><span>al día</span></div>
+          <div><b>{c.diario.racha}</b><span>{c.diario.racha === 1 ? 'día de diario' : 'días de diario'}</span></div>
+        </div>
+        <div className="md-cb-dias" aria-label="Diario de los últimos 14 días">
+          {dias14.map(d => <span key={d} title={diaLargo(d)} data-si={c.diario.dias.includes(d)} data-hoy={d === hoy} />)}
+        </div>
+        {cuenta.length > 0 && <p className="md-meta md-mt8">{cuenta.join(' · ')}</p>}
+      </div>
+
+      {todas.length > 0 && (
+        <>
+          <div className="md-lbl"><span>Cuida tu cerebro hoy</span><span>{abiertas ? `${abiertas} de 1 min` : 'todo listo'}</span></div>
+          <div className="md-cb-lista">
+            {c.tareas.map(t => <TareaCerebro key={t.id} t={t} r={respuestas.get(`jardin:${t.id}`)} contestar={contestar} deshacer={() => deshacer(`jardin:${t.id}`)} />)}
+          </div>
+          {c.repaso.length > 0 && (
+            <>
+              <div className="md-lbl"><span>Repasa</span><span>lo que hace más que no tocas</span></div>
+              <div className="md-cb-lista">
+                {c.repaso.map(t => <TareaCerebro key={t.id} t={t} r={respuestas.get(`jardin:${t.id}`)} contestar={contestar} deshacer={() => deshacer(`jardin:${t.id}`)} />)}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function TareaCerebro({ t, r, contestar, deshacer }: {
+  t: CerebroTarea; r?: DiaRespuesta
+  contestar: (t: CerebroTarea, estado: EstadoRespuesta, extra?: Record<string, unknown>) => Promise<void>
+  deshacer: () => Promise<void>
+}) {
+  const [texto, setTexto] = useState('')
+  const [abierto, setAbierto] = useState(false)
+  const [ocupado, setOcupado] = useState(false)
+  const dictado = useDictado(f => setTexto(v => juntar(v, f)))
+  const hacer = async (estado: EstadoRespuesta, extra?: Record<string, unknown>) => {
+    if (ocupado) return
+    if (dictado.escuchando) dictado.parar()
+    setOcupado(true); try { await contestar(t, estado, extra) } finally { setOcupado(false) }
+  }
+  const nota = t.tipo === 'roto' ? null : t.nombre
+  if (r) {
+    const x = (r.respuesta || {}) as { destino?: string; accion?: string; texto?: string }
+    const op = t.opciones.find(o => o.ruta === x.destino)?.nombre || x.destino || ''
+    const que = r.estado === 'descartada' ? (t.tipo === 'repaso' ? 'Otro día' : 'Ignorada')
+      : t.tipo === 'repaso' ? (x.accion === 'cerrar' ? 'Se marca como cerrada' : x.accion === 'cambio' ? 'Se agrega tu actualización' : 'Sigue vigente')
+      : t.tipo === 'roto' ? 'Se crea la nota en el inbox' : QUE_APLICA[t.tipo]?.(op) || 'Anotado'
+    return (
+      <div className="md-card md-cb-tarea" data-hecha="true">
+        <div className="md-entre"><span className="md-grow"><span className="md-meta">✓ {t.titulo}</span><br />{que}{r.aplicada_at ? ' · ya quedó en Obsidian' : ' · a las 3:00'}</span>
+          {!r.aplicada_at && <button type="button" className="md-link" onClick={() => { deshacer().catch(() => {}) }}>Deshacer</button>}</div>
+      </div>
+    )
+  }
+  return (
+    <div className="md-card md-cb-tarea">
+      <div className="md-entre md-base">
+        <p className="md-h3 md-grow">{t.titulo}</p>
+        {nota && <a className="md-icobtn" href={obsidianUrl(nota)} aria-label={`Abrir ${nota} en Obsidian`} title="Abrir en Obsidian">↗</a>}
+      </div>
+      <p className="md-sub">{t.detalle}</p>
+      {t.resumen && <p className="md-cb-resumen">{t.resumen}</p>}
+
+      {(t.tipo === 'inbox' || t.tipo === 'props' || t.tipo === 'huerfana' || t.tipo === 'salida') && (
+        <div className="md-chips">
+          {t.opciones.map(o => <button key={o.ruta} type="button" className="md-chip md-chip-btn" disabled={ocupado} onClick={() => hacer('respondida', { destino: o.ruta })}>{o.nombre}</button>)}
+        </div>
+      )}
+
+      {(t.tipo === 'roto' || (t.tipo === 'repaso' && abierto)) && (
+        <div className="md-mt8">
+          <textarea className="md-input" rows={2} value={texto} onChange={e => setTexto(e.target.value)}
+            placeholder={t.tipo === 'roto' ? `¿Qué es «${t.nombre}»? Una línea basta.` : '¿Qué cambió? Lo agrego al final de la nota.'} />
+          <div className="md-fila md-mt8">
+            {dictado.soportado && <button type="button" className="md-btn md-chico" onClick={dictado.escuchando ? dictado.parar : dictado.iniciar}>{dictado.escuchando ? '■ Parar' : '🎙 Dictar'}</button>}
+            <button type="button" className="md-btn md-chico md-primario" disabled={ocupado || texto.trim().length < 3}
+              onClick={() => hacer('respondida', t.tipo === 'roto' ? { texto: texto.trim() } : { accion: 'cambio', texto: texto.trim() })}>{t.tipo === 'roto' ? 'Crear la nota' : 'Guardar'}</button>
+          </div>
+        </div>
+      )}
+
+      <div className="md-fila md-envuelve md-mt8">
+        {t.tipo === 'repaso' && !abierto && <>
+          <button type="button" className="md-btn md-chico" disabled={ocupado} onClick={() => hacer('respondida', { accion: 'igual' })}>✓ Sigue igual</button>
+          <button type="button" className="md-btn md-chico" disabled={ocupado} onClick={() => setAbierto(true)}>Cambió algo</button>
+          <button type="button" className="md-btn md-chico" disabled={ocupado} onClick={() => hacer('respondida', { accion: 'cerrar' })}>Ya no aplica</button>
+        </>}
+        <button type="button" className="md-link md-tenue" disabled={ocupado} onClick={() => hacer('descartada')}>{t.tipo === 'repaso' ? 'Otro día' : 'Está bien así'}</button>
+      </div>
     </div>
   )
 }
@@ -1330,6 +1480,16 @@ const CSS = `
 .md-base{align-items:baseline}
 .md-fila{display:flex;gap:8px;align-items:center}.md-envuelve{flex-wrap:wrap}
 .md-row.md-noche-fila{display:flex;align-items:center;gap:10px;padding:2px 0}.md-noche-mover{display:inline-flex;gap:12px;flex-shrink:0;font-size:13px}.md-link.md-tenue{color:var(--md-tenue)}
+.md-mt24{margin-top:28px}
+.md-cb-salud{display:grid;gap:10px}.md-cb-num{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.md-cb-puntaje{font-family:var(--dia-serif),Georgia,serif;font-size:44px;line-height:1;color:var(--md-acento)}
+.md-cb-linea{width:100%;height:38px;display:block}
+.md-cb-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.md-cb-stats div{display:flex;flex-direction:column}.md-cb-stats b{font-size:19px;font-weight:600}.md-cb-stats span{font-size:12px;color:var(--md-tenue)}
+.md-cb-dias{display:flex;gap:4px}.md-cb-dias span{flex:1;height:8px;border-radius:3px;background:var(--md-linea2)}.md-cb-dias span[data-si="true"]{background:var(--md-verde)}.md-cb-dias span[data-hoy="true"]{outline:1.5px solid var(--md-acento2);outline-offset:1px}
+.md-cb-lista{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.md-cb-tarea[data-hecha="true"]{background:var(--md-papel);border-style:dashed}
+.md-cb-resumen{font-size:13px;color:var(--md-tinta2);background:var(--md-papel);border-radius:10px;padding:8px 10px;margin:8px 0 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+button.md-chip-btn{cursor:pointer;border:1px solid var(--md-linea);background:#fff;font:inherit;font-size:12.5px}button.md-chip-btn:hover{border-color:var(--md-acento2);color:var(--md-acento)}
 .md-meta{font-size:12.5px;color:var(--md-tenue)}
 .md-sub{color:var(--md-tinta2);margin:4px 0 0}
 .md-h3{font-weight:600;margin:0}

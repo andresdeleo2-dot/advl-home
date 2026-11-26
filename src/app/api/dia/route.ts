@@ -29,7 +29,7 @@ export async function GET(req: Request) {
     supabase.from('dia_respuestas').select('item_id,tipo,estado,respuesta,tarea_id,aplicada_at').eq('fecha', fecha),
     supabase.from('dia_cierre').select('fecha,calificacion').gte('fecha', sumarDias(fecha, -60)).lte('fecha', fecha).order('fecha'),
     supabase.from('dia_resumen').select('fecha,data').gte('fecha', desde).lte('fecha', fecha).order('fecha', { ascending: false }),
-    supabase.from('dia_kv').select('clave,data').in('clave', ['corrida', 'boveda']),
+    supabase.from('dia_kv').select('clave,data').in('clave', ['corrida', 'boveda', 'cerebro']),
     supabase.from('dia_capturas').select('id', { count: 'exact', head: true }).is('procesada_at', null),
   ])
 
@@ -71,6 +71,7 @@ export async function GET(req: Request) {
     semana: (sem.data || []) as DiaGet['semana'],
     corrida: (kvMap.get('corrida') as DiaGet['corrida']) ?? null,
     boveda: (kvMap.get('boveda') as DiaGet['boveda']) ?? null,
+    cerebro: (kvMap.get('cerebro') as DiaGet['cerebro']) ?? null,
     capturasPendientes: caps.count ?? 0,
     aprendido,
   }

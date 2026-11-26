@@ -86,6 +86,47 @@ export function settleDirty(uploaded: HistoryRow[]): HistoryRow[] {
   } catch { return [] }
 }
 
+// Sesión a conservar al adoptar un blob entrante (misma regla que adopt/onStorage): gana la de `mod`
+// más nuevo; la local se descarta si ya terminó en otro lado (tombstone sessionEnd posterior a su inicio).
+export const pickSession = (local: AppData['session'], inc: AppData): AppData['session'] => {
+  if (local && inc.session) return (local.mod || 0) >= (inc.session.mod || 0) ? local : inc.session
+  if (local && !inc.session) return (Number(inc.sessionEnd) || 0) > (local.startedAt || 0) ? null : local
+  return inc.session
+}
+// Reconciliar lo editado aquí SIN sincronizar (de `base` a `local`) con un blob más nuevo (`other`):
+// se aplica encima sólo lo que cambió aquí, sin tirar lo demás de `other`. Listas por identidad
+// (historial por rowKey, agendados y bloques por id: borrados, ediciones y nuevos); lo demás (MIT,
+// meta, sueño…) gana lo de aquí si cambió. La sesión va aparte (pickSession).
+export const sameJ = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b)
+function diffList<T>(b: T[], l: T[], o: T[], id: (x: T) => string): [T[], T[]] {
+  const bm = new Map(b.map(x => [id(x), x])), lm = new Map(l.map(x => [id(x), x]))
+  const kept = o.filter(x => !bm.has(id(x)) || lm.has(id(x)))   // fuera lo que se borró aquí
+    .map(x => { const k = id(x), lx = lm.get(k); return lx !== undefined && bm.has(k) && !sameJ(bm.get(k), lx) ? lx : x })   // lo editado aquí gana
+  return [kept, l.filter(x => !bm.has(id(x)))]   // + lo nuevo de aquí
+}
+export function mergeLocal(base: AppData, local: AppData, other: AppData): AppData {
+  const out: AppData = { ...other }
+  for (const k of Object.keys(local) as (keyof AppData)[]) {
+    if (k === 'session' || k === 'sessionEnd' || sameJ(base[k], local[k])) continue
+    if (k === 'history') { const [kept, add] = diffList(base.history || [], local.history || [], other.history || [], rowKey); out.history = addRows(kept, add) }
+    else if (k === 'scheduled') { const [kept, add] = diffList(base.scheduled || [], local.scheduled || [], other.scheduled || [], x => x.id); out.scheduled = kept.concat(add.filter(a => !kept.some(x => x.id === a.id))) }
+    else if (k === 'blocks') { const [kept, add] = diffList(base.blocks || [], local.blocks || [], other.blocks || [], x => x.id); out.blocks = kept.concat(add.filter(a => !kept.some(x => x.id === a.id))) }
+    else (out as Record<string, unknown>)[k] = local[k]
+  }
+  return out
+}
+/** Choque entre equipos (el servidor tiene una versión más nueva que la que viste): junta lo que cambiaste aquí
+ *  desde `base` (la última versión confirmada) encima de lo del servidor, más los renglones aún no confirmados.
+ *  Sin base conocida no se borra nada del servidor: el historial se une. */
+export function reconciliar(base: AppData | null, local: AppData, server: AppData, pend: HistoryRow[] = []): AppData {
+  const m = base ? mergeLocal(base, local, server) : { ...mergeLocal(server, local, server), history: addRows(server.history || [], local.history || []) }
+  // Sesión: si aquí se terminó (tombstone sessionEnd posterior a su inicio), no la revive la copia del servidor.
+  const sessionEnd = Math.max(Number(local.sessionEnd) || 0, Number(server.sessionEnd) || 0) || undefined
+  let session = pickSession(local.session, server)
+  if (session && !local.session && (Number(local.sessionEnd) || 0) > (session.startedAt || 0)) session = null
+  return { ...m, history: addRows(m.history || [], pend), session, ...(sessionEnd ? { sessionEnd } : {}) }
+}
+
 export const AREAS: Record<Area, { label: string; color: string }> = {
   trabajo: { label: 'Trabajo', color: '#b4653a' },
   cuerpo: { label: 'Cuerpo', color: '#6f8256' },

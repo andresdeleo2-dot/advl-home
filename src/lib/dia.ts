@@ -62,6 +62,23 @@ export type BovedaItem = { titulo: string; detalle?: string; nota?: string; tono
 export type BovedaGrupo = { titulo: string; items: BovedaItem[] }
 export type BovedaDatos = { fecha: string; resumen: string[]; grupos: BovedaGrupo[] }
 
+/** «Cuida tu cerebro»: salud de la bóveda y arreglos de un minuto. Lo arma jardin.mjs a las 3:00 (0 tokens); lo que
+ *  contestas aquí (dia_respuestas tipo «jardin», item «jardin:<id>») se escribe en la bóveda en la siguiente corrida. */
+export type CerebroTarea = {
+  id: string
+  tipo: 'inbox' | 'props' | 'huerfana' | 'roto' | 'salida' | 'repaso'
+  ruta: string; nombre: string; titulo: string; detalle: string
+  opciones: { ruta: string; nombre: string }[]
+  resumen?: string; actualizado?: string; menciones?: string[]
+}
+export type CerebroDatos = {
+  fecha: string; puntaje: number; orden: number; frescura: number; notas: number
+  cuenta: { huerfanas: number; sinSalida: number; sinProps: number; rotos: number; inbox: number; viejas: number }
+  diario: { dias: string[]; racha: number }
+  tareas: CerebroTarea[]; repaso: CerebroTarea[]
+  historial?: { fecha: string; puntaje: number }[]
+}
+
 /** Lo que decidiste o contestaste en «Por decidir» y dónde quedó en Obsidian (Tu cerebro). */
 export type DiaAprendido = { id: string; fecha: string; tipo: string; pregunta: string; respuesta: string; nota?: string; guardadoAt: string | null }
 
@@ -75,6 +92,7 @@ export type DiaGet = {
   semana: { fecha: string; data: DiaData }[]
   corrida: DiaCorrida | null
   boveda: BovedaDatos | null
+  cerebro?: CerebroDatos | null
   capturasPendientes: number
   aprendido?: DiaAprendido[]   // últimos 14 días
 }

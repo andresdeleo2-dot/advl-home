@@ -20,6 +20,19 @@ export async function PUT(req: Request) {
     if (typeof p !== 'object' || Array.isArray(p) || p === null) {
       return NextResponse.json({ ok: false, error: 'data debe ser un objeto' }, { status: 400 })
     }
+    // 0) Con la versión desde la que guarda este equipo (baseTs): si el servidor ya tiene una más nueva, no se
+    //    escribe y se responde 409 con lo nuevo, para que el cliente junte sus cambios encima (sql/tiempo-03-version.sql).
+    //    Si esa función aún no existe, se sigue como antes (gana el último).
+    const base = Number(body.baseTs) || 0
+    if (base > 0) {
+      const si = await supabase.rpc('tiempo_estado_put_si', { p_data: p, p_base: base })
+      if (!si.error) {
+        const ts = Number(si.data) || 0
+        if (ts > 0) return NextResponse.json({ ok: true, ts, checked: true })
+        const { data: cur } = await supabase.from('tiempo_estado').select('data, ts').eq('id', 'main').maybeSingle()
+        return NextResponse.json({ ok: false, conflict: true, ts: Number(cur?.ts) || 0, data: cur?.data ?? {} }, { status: 409 })
+      }
+    }
     // 1) Preferir la función RPC: el ts lo asigna el SERVIDOR de forma atómica y monótona
     //    (evita carrera TOCTOU y reloj de cliente desfasado). Devuelve el ts asignado.
     const rpc = await supabase.rpc('tiempo_estado_put', { p_data: p })
