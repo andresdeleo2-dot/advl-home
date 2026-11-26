@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Epica, EpicaTask } from '@/lib/supabase'
-import { obsidianUrl, sumarDias, resolverPlan, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPreguntaCerebro, type DiaRespuesta, type DiaAprendido } from '@/lib/dia'
+import { obsidianUrl, sumarDias, resolverPlan, type DiaData, type DiaTarjeta, type DiaDecision, type DiaPreguntaCerebro, type DiaRespuesta, type DiaAprendido, type DiaIdeaInbox } from '@/lib/dia'
 import { useDictado, juntar } from '@/lib/useDictado'
 
 export type CamposTarea = {
@@ -180,7 +180,7 @@ export function Bandeja({ data, hoy, respuestas, epicas, acc, alTerminar, volver
       )}
 
       {actual && (
-        <Ficha key={actual.id} it={actual} pos={Math.max(1, idx + 1)} total={Math.max(1, lista.length)} r={respuestas.get(actual.id)} hoy={hoy} epicas={epicas} acc={acc}
+        <Ficha key={actual.id} it={actual} ideas={data.ideasInbox} pos={Math.max(1, idx + 1)} total={Math.max(1, lista.length)} r={respuestas.get(actual.id)} hoy={hoy} epicas={epicas} acc={acc}
           cerrar={() => setAbierto(null)} anterior={() => ir(-1)} siguienteItem={() => ir(1)} hecho={() => siguiente(actual.id)} />
       )}
       <style>{CSS_BD}</style>
@@ -271,8 +271,8 @@ function Fila({ it, hoy, acc, abrir, avisar }: { it: Item; hoy: string; acc: Acc
 }
 
 /* ── Ficha emergente ── */
-function Ficha({ it, pos, total, r, hoy, epicas, acc, cerrar, anterior, siguienteItem, hecho }: {
-  it: Item; pos: number; total: number; r?: DiaRespuesta; hoy: string; epicas: Epica[] | null; acc: AccionesBandeja
+function Ficha({ it, ideas, pos, total, r, hoy, epicas, acc, cerrar, anterior, siguienteItem, hecho }: {
+  it: Item; ideas?: DiaIdeaInbox[]; pos: number; total: number; r?: DiaRespuesta; hoy: string; epicas: Epica[] | null; acc: AccionesBandeja
   cerrar: () => void; anterior: () => void; siguienteItem: () => void; hecho: () => void
 }) {
   const [ocupado, setOcupado] = useState(false)
@@ -304,6 +304,7 @@ function Ficha({ it, pos, total, r, hoy, epicas, acc, cerrar, anterior, siguient
         {it.kind === 'tarjeta' && it.c.detalle && <p className="md-sub">{it.c.detalle}</p>}
         {it.kind === 'cerebro' && it.q.porque && <p className="md-sub">{it.q.porque}</p>}
         {(() => { const n = it.kind === 'tarjeta' ? it.c.nota : it.kind === 'decision' ? it.d.nota : it.q.nota; return n ? <a className="md-link md-mt4 bd-bloque" href={obsidianUrl(n)}>Abrir {n} en Obsidian ↗</a> : null })()}
+        {it.kind === 'tarjeta' && it.c.tipo === 'mover' && !!ideas?.length && <IdeasRevisadas ideas={ideas} />}
         {r && <p className="bd-ya md-mt8">{estadoTxt(r)}. <button className="md-link" onClick={() => correr(() => acc.deshacer(it.id))}>Deshacer</button></p>}
         {error && <p className="md-err-txt md-mt8" role="alert">{error}</p>}
 
@@ -362,6 +363,37 @@ function FichaTarea({ c, hoy, epicas, ocupado, correr, acc }: { c: DiaTarjeta; h
         <button className="md-btn md-primario" disabled={ocupado || !campos.titulo.trim()} onClick={() => correr(() => acc.aceptar(c, campos))}>{ocupado ? 'Guardando…' : campos.comoFeature ? 'Crear feature' : existente ? 'Aceptar' : 'Guardar tarea'}</button>
       </div>
     </>
+  )
+}
+
+const ESTADO_IDEA: Record<DiaIdeaInbox['estado'], [string, string]> = {
+  nueva: ['Nueva', 'nueva'], relacionada: ['Nueva, relacionada', 'nueva'], repetida: ['Repetida', 'rep'],
+  'ya-tarea': ['Ya es tarea', 'ya'], 'ya-hecha': ['Ya está hecha', 'ya'], 'ya-en-nota': ['Ya está en una nota', 'ya'],
+}
+/** Cómo revisó el cierre cada idea suelta del inbox: cuáles se repiten y cuáles ya existen. */
+function IdeasRevisadas({ ideas }: { ideas: DiaIdeaInbox[] }) {
+  const repetidas = ideas.filter(i => i.veces > 1).length
+  const yaExisten = ideas.filter(i => i.estado.startsWith('ya-')).length
+  return (
+    <div className="bd-ideas md-mt12">
+      <p className="md-kicker">Revisé tus ideas</p>
+      <p className="md-meta md-mt4">{ideas.length} idea{ideas.length === 1 ? '' : 's'}{repetidas ? ` · ${repetidas} escrita${repetidas === 1 ? '' : 's'} más de una vez` : ''}{yaExisten ? ` · ${yaExisten} ya existe${yaExisten === 1 ? '' : 'n'}` : ''}</p>
+      <ul className="bd-ideas-lista">
+        {ideas.map((i, k) => {
+          const [etq, tono] = ESTADO_IDEA[i.estado] || ESTADO_IDEA.nueva
+          return (
+            <li key={k}>
+              <span className={`bd-idea-etq bd-idea-${tono}`}>{etq}{i.veces > 1 ? ` · ${i.veces} veces` : ''}</span>
+              <span className="bd-idea-t">{i.t}</span>
+              {(i.tarea || i.nota) && <span className="md-meta">
+                {i.tarea && <>Tarea «{i.tarea}»</>}{i.tarea && i.nota && ' · '}
+                {i.nota && <a className="md-link" href={obsidianUrl(i.nota)}>{i.nota} ↗</a>}
+              </span>}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
@@ -561,6 +593,11 @@ const CSS_BD = `
 .bd-cab .md-icobtn{font-size:20px;padding:2px 10px}
 .bd-bloque{display:inline-block}
 .bd-ya{color:var(--md-verde)}
+.bd-ideas-lista{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto}
+.bd-ideas-lista li{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:10px;background:var(--md-suave)}
+.bd-idea-etq{font:600 11px var(--dia-ui);letter-spacing:.02em;text-transform:uppercase}
+.bd-idea-nueva{color:#3f6b2c}.bd-idea-rep{color:#a1621c}.bd-idea-ya{color:#8a8378}
+.bd-idea-t{font:500 14px var(--dia-ui);line-height:1.35}
 .bd-editor{display:flex;flex-direction:column;gap:10px;background:var(--md-papel);border:1px solid var(--md-linea2);border-radius:14px;padding:12px}
 .bd-campo{display:flex;flex-direction:column;gap:4px}
 .bd-campo>span{font-size:12px;color:var(--md-tinta2)}

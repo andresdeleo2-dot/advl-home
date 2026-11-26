@@ -61,10 +61,14 @@ export type DiaData = {
   cerebro?: DiaPreguntaCerebro[] // preguntas para que la bóveda aprenda cómo haces las cosas
   salud?: DiaSalud[]       // ¿todo funciona? (corrida, pendientes de aplicar, notas atrasadas)
   inbox?: number           // notas en 00-inbox
+  ideasInbox?: DiaIdeaInbox[] // cómo revisó el cierre cada idea suelta del inbox (repetidas, ya tareas, ya hechas)
   sinDictado?: boolean     // no hubo texto nuevo: no se llamó a Claude
   modelo?: string
   origen?: 'claude' | 'gemini' // gemini = respaldo en la nube (Mac apagada); Claude lo mejora al prender la Mac
 }
+
+/** Una idea (o grupo de ideas iguales) del inbox, como la revisó el cierre de la noche. */
+export type DiaIdeaInbox = { t: string; estado: 'nueva' | 'repetida' | 'ya-tarea' | 'ya-hecha' | 'ya-en-nota' | 'relacionada'; veces: number; tarea?: string; nota?: string }
 
 export type EstadoRespuesta = 'aceptada' | 'pospuesta' | 'descartada' | 'respondida'
 export type DiaRespuesta = { item_id: string; tipo: string; estado: EstadoRespuesta; respuesta?: unknown; tarea_id?: string | null; aplicada_at?: string | null }
